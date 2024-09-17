@@ -29,9 +29,6 @@ from optimum.exporters.onnx.model_configs import (
     MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
-    UNetOnnxConfig,
-    VaeDecoderOnnxConfig,
-    VaeEncoderOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -650,62 +647,6 @@ class FalconOpenVINOConfig(FalconOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return FalconModelPatcher(self, model, model_kwargs=model_kwargs)
-
-
-@register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
-class UNetOpenVINOConfig(UNetOnnxConfig):
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        common_inputs = {
-            "sample": {0: "batch_size", 2: "height", 3: "width"},
-            "timestep": {0: "steps"},
-            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
-        }
-
-        # TODO : add text_image, image and image_embeds
-        if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
-            common_inputs["text_embeds"] = {0: "batch_size"}
-            common_inputs["time_ids"] = {0: "batch_size"}
-
-        if getattr(self._normalized_config, "time_cond_proj_dim", None) is not None:
-            common_inputs["timestep_cond"] = {0: "batch_size"}
-        return common_inputs
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "out_sample": {0: "batch_size", 2: "height", 3: "width"},
-        }
-
-
-@register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
-class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "sample": {0: "batch_size", 2: "height", 3: "width"},
-        }
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "latent_parameters": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
-        }
-
-
-@register_in_tasks_manager("vae-decoder", *["semantic-segmentation"], library_name="diffusers")
-class VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
-        }
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "sample": {0: "batch_size", 2: "height", 3: "width"},
-        }
 
 
 @register_in_tasks_manager(

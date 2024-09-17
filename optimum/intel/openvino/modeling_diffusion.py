@@ -520,21 +520,6 @@ class OVPipeline(OVBaseModel):
             model.reshape(shapes)
         return model
 
-    def _reshape_vae_decoder(self, model: openvino.runtime.Model, height: int = -1, width: int = -1):
-        height = height // self.vae_scale_factor if height > -1 else height
-        width = width // self.vae_scale_factor if width > -1 else width
-        latent_channels = self.vae_decoder.config.get("latent_channels", None)
-        if latent_channels is None:
-            latent_channels = model.inputs[0].get_partial_shape()[1]
-            if latent_channels.is_dynamic:
-                logger.warning(
-                    "Could not identify `latent_channels` from the VAE decoder configuration, to statically reshape the VAE decoder please provide a configuration."
-                )
-                self.is_dynamic = True
-        shapes = {model.inputs[0]: [1, latent_channels, height, width]}
-        model.reshape(shapes)
-        return model
-
     def _reshape_vae_encoder(
         self, model: openvino.runtime.Model, batch_size: int = -1, height: int = -1, width: int = -1
     ):
@@ -547,6 +532,23 @@ class OVPipeline(OVBaseModel):
                 )
                 self.is_dynamic = True
         shapes = {model.inputs[0]: [batch_size, in_channels, height, width]}
+        model.reshape(shapes)
+        return model
+
+    def _reshape_vae_decoder(
+        self, model: openvino.runtime.Model, height: int = -1, width: int = -1, num_images_per_prompt: int = -1
+    ):
+        height = height // self.vae_scale_factor if height > -1 else height
+        width = width // self.vae_scale_factor if width > -1 else width
+        latent_channels = self.vae_decoder.config.get("latent_channels", None)
+        if latent_channels is None:
+            latent_channels = model.inputs[0].get_partial_shape()[1]
+            if latent_channels.is_dynamic:
+                logger.warning(
+                    "Could not identify `latent_channels` from the VAE decoder configuration, to statically reshape the VAE decoder please provide a configuration."
+                )
+                self.is_dynamic = True
+        shapes = {model.inputs[0]: [num_images_per_prompt, latent_channels, height, width]}
         model.reshape(shapes)
         return model
 
@@ -579,7 +581,9 @@ class OVPipeline(OVBaseModel):
             self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
 
         if self.vae_decoder is not None:
-            self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
+            self.vae_decoder.model = self._reshape_vae_decoder(
+                self.vae_decoder.model, height, width, num_images_per_prompt
+            )
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
@@ -855,9 +859,7 @@ class OVModelVaeDecoder(OVModelPart):
     ):
         self._compile()
 
-        model_inputs = {
-            "latent_sample": latent_sample,
-        }
+        model_inputs = {"latent_sample": latent_sample}
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
