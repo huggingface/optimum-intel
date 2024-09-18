@@ -1826,7 +1826,10 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("llava", "llava_next")
+    SUPPORTED_ARCHITECTURES = ["llava", ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next"]
     TASK = "image-text-to-text"
 
     IMAGE = Image.open(
