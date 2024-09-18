@@ -167,6 +167,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion": (242, 34, 42, 64),
     "stable-diffusion-xl": (366, 34, 42, 66),
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
+    "open-clip": (20, 28),
 }
 
 

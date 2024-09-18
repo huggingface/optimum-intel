@@ -15,7 +15,6 @@
 import json
 import logging
 import os
-import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
@@ -32,11 +31,12 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.clip.modeling_clip import CLIPOutput
+from transformers.utils import is_offline_mode
 
 from optimum.exporters.tasks import TasksManager
 
 from ...exporters.openvino import main_export
-from ..utils.modeling_utils import OpenClipForZeroShotImageClassification
+from ..utils.modeling_utils import OpenClipForZeroShotImageClassification, _find_files_matching_pattern
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
 
@@ -46,9 +46,7 @@ logger = logging.getLogger(__name__)
 
 class OVModelOpenCLIPBase(OVModel):
     OPEN_CLIP_CONFIG_NAME = "open_clip_config.json"
-    CONFIG_NAME = "config.json"
     _library_name = "open_clip"
-    export_feature = "zero-shot-image-classification"
 
     def __init__(self, model=None, config=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -72,16 +70,17 @@ class OVModelOpenCLIPBase(OVModel):
             config_name_or_path, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
         )
 
+        transformers_config_name = "config.json"
         config_name = None
         if cls.OPEN_CLIP_CONFIG_NAME in all_files:
             config_name = cls.OPEN_CLIP_CONFIG_NAME
-        elif cls.CONFIG_NAME in all_files:
-            config_name = cls.CONFIG_NAME
+        elif transformers_config_name in all_files:
+            config_name = transformers_config_name
 
         if os.path.isdir(config_dir):
             if config_name is None:
                 raise OSError(
-                    f"neither {cls.OPEN_CLIP_CONFIG_NAME} nor {cls.CONFIG_NAME} was found in {config_dir} local folder"
+                    f"neither {cls.OPEN_CLIP_CONFIG_NAME} nor {transformers_config_name} was found in {config_dir} local folder"
                 )
             config_path = os.path.join(config_dir, config_name)
         else:
@@ -125,7 +124,6 @@ class OVModelOpenCLIPBase(OVModel):
         model_id: Union[str, Path],
         export: bool = False,
         config: Optional["PretrainedConfig"] = None,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -136,31 +134,49 @@ class OVModelOpenCLIPBase(OVModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
+        if is_offline_mode() and not local_files_only:
+            logger.info("Offline mode: forcing local_files_only=True")
+            local_files_only = True
+
+        _export = export
+        try:
+            if local_files_only:
+                object_id = model_id.replace("/", "--")
+                cached_model_dir = os.path.join(cache_dir, f"models--{object_id}")
+                refs_file = os.path.join(os.path.join(cached_model_dir, "refs"), revision or "main")
+                with open(refs_file) as f:
+                    revision = f.read()
+                model_dir = os.path.join(cached_model_dir, "snapshots", revision)
+            else:
+                model_dir = model_id
+
+            ov_files = _find_files_matching_pattern(
+                model_dir,
+                pattern=r"(.*)?openvino(.*)?\_model\_(.*)?.xml",
+                subfolder=subfolder,
+                use_auth_token=token,
+                revision=revision,
             )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
+            _export = len(ov_files) == 0
+            if _export ^ export:
+                if export:
+                    logger.warning(
+                        f"The model {model_id} was already converted to the OpenVINO IR but got `export=True`, the model will be converted to OpenVINO once again. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
+                    _export = True
+                else:
+                    logger.warning(
+                        f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
+        except Exception as exception:
+            logger.warning(
+                f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
+            )
 
         if isinstance(model_id, Path):
             model_id = model_id.as_posix()
-
-        from_transformers = kwargs.pop("from_transformers", None)
-        if from_transformers is not None:
-            logger.warning(
-                "The argument `from_transformers` is deprecated, and will be removed in optimum 2.0.  Use `export` instead"
-            )
-            export = from_transformers
-
-        if len(model_id.split("@")) == 2:
-            if revision is not None:
-                logger.warning(
-                    f"The argument `revision` was set to {revision} but will be ignored for {model_id.split('@')[1]}"
-                )
-            model_id, revision = model_id.split("@")
 
         config_path = config if isinstance(config, (str, os.PathLike)) else model_id
         config = cls._load_config(
@@ -174,7 +190,7 @@ class OVModelOpenCLIPBase(OVModel):
             local_files_only=local_files_only,
         )
 
-        from_pretrained_method = cls._from_transformers if export else cls._from_pretrained
+        from_pretrained_method = cls._from_transformers if _export else cls._from_pretrained
         return from_pretrained_method(
             model_id=model_id,
             config=config,
@@ -197,7 +213,8 @@ class OVModelOpenCLIPBase(OVModel):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPText(OVModelOpenCLIPBase):
-    xml_model_name = "openvino_model_text.xml"
+    _xml_model_name = "openvino_model_text.xml"
+    export_feature = "feature-extraction"
 
     def __init__(self, model=None, config=None, tokenize_cfg=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -208,7 +225,6 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         cls,
         model_id: str,
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -221,15 +237,6 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
@@ -274,7 +281,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls.xml_model_name,
+            file_name=cls._xml_model_name,
             **kwargs,
         )
 
@@ -283,7 +290,6 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -299,7 +305,6 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         return super()._from_pretrained(
             model_id=model_id,
             config=config,
-            use_auth_token=use_auth_token,
             token=token,
             revision=revision,
             force_download=force_download,
@@ -333,7 +338,8 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
-    xml_model_name = "openvino_model_vision.xml"
+    _xml_model_name = "openvino_model_vision.xml"
+    export_feature = "feature-extraction"
 
     def __init__(self, model=None, config=None, preprocess_cfg=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -344,7 +350,6 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         cls,
         model_id: str,
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -357,15 +362,6 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
@@ -410,7 +406,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls.xml_model_name,
+            file_name=cls._xml_model_name,
             **kwargs,
         )
 
@@ -419,7 +415,6 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -435,7 +430,6 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         return super()._from_pretrained(
             model_id=model_id,
             config=config,
-            use_auth_token=use_auth_token,
             token=token,
             revision=revision,
             force_download=force_download,
@@ -469,6 +463,8 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPForZeroShotImageClassification:
+    export_feature = "zero-shot-image-classification"
+
     def __init__(
         self,
         text_model: OVModelOpenCLIPText = None,
@@ -510,7 +506,6 @@ class OVModelOpenCLIPForZeroShotImageClassification:
         model_id: Union[str, Path],
         export: bool = False,
         config: Optional["PretrainedConfig"] = None,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -523,15 +518,6 @@ class OVModelOpenCLIPForZeroShotImageClassification:
         init_logit_bias: Optional[float] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         text_model = OVModelOpenCLIPText.from_pretrained(
             model_id=model_id,
             export=export,
@@ -542,7 +528,7 @@ class OVModelOpenCLIPForZeroShotImageClassification:
             cache_dir=cache_dir,
             subfolder=subfolder,
             local_files_only=local_files_only,
-            task=task,
+            task=task or cls.export_feature,
             trust_remote_code=trust_remote_code,
             **kwargs,
         )
@@ -557,7 +543,7 @@ class OVModelOpenCLIPForZeroShotImageClassification:
             cache_dir=cache_dir,
             subfolder=subfolder,
             local_files_only=local_files_only,
-            task=task,
+            task=task or cls.export_feature,
             trust_remote_code=trust_remote_code,
             **kwargs,
         )
@@ -620,18 +606,8 @@ class OVModelOpenCLIPForZeroShotImageClassification:
         save_directory: str,
         repository_id: str,
         private: Optional[bool] = None,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
     ) -> str:
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         self.text_model.push_to_hub(
             save_directory=save_directory, repository_id=repository_id, private=private, token=token
         )
@@ -659,7 +635,7 @@ class OVModelOpenCLIPForZeroShotImageClassification:
                 The image width.
         """
         self.text_model.reshape(batch_size=batch_size, sequence_length=sequence_length, height=height, width=width)
-        self.visual_model.compile(batch_size=batch_size, sequence_length=sequence_length, height=height, width=width)
+        self.visual_model.reshape(batch_size=batch_size, sequence_length=sequence_length, height=height, width=width)
         return self
 
     def half(self):

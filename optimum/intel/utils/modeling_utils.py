@@ -20,7 +20,7 @@ import platform
 import re
 from glob import glob
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Type, Union
 
 import torch
 from huggingface_hub import HfApi, HfFolder, hf_hub_download
@@ -119,7 +119,7 @@ def _find_files_matching_pattern(
     else:
         token = use_auth_token
 
-    library_name = TasksManager.infer_library_from_model(
+    library_name = infer_library_from_model(
         str(model_name_or_path), subfolder=subfolder, revision=revision, token=token
     )
     if library_name == "diffusers":
@@ -276,6 +276,29 @@ def _infer_library_from_model_or_model_class(
     return library_name
 
 
+def infer_library_from_model(
+    model: Union[str, "PreTrainedModel", "TFPreTrainedModel", "DiffusionPipeline", Type],
+    subfolder: str = "",
+    revision: Optional[str] = None,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+):
+    if isinstance(model, str):
+        library_name = _infer_library_from_model_name_or_path(
+            model_name_or_path=model,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
+    elif type(model) == type:
+        library_name = _infer_library_from_model_or_model_class(model_class=model)
+    else:
+        library_name = _infer_library_from_model_or_model_class(model=model)
+
+    return library_name
+
+
 def collect_open_clip_model_files(model_name_or_path):
     model_files = {}
     if os.path.isdir(model_name_or_path):
@@ -351,7 +374,6 @@ class OpenClipForZeroShotImageClassification(PreTrainedModel):
         cls,
         model_name_or_path: Union[str, Path],
         config: Optional["PretrainedConfig"] = None,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -399,7 +421,14 @@ class OpenClipForZeroShotImageClassification(PreTrainedModel):
 
                 if not getattr(model, "config", None):
                     config_path = hf_hub_download(
-                        repo_id=model_name_or_path, filename="open_clip_config.json", cache_dir=cache_dir
+                        repo_id=model_name_or_path,
+                        filename="open_clip_config.json",
+                        subfolder=subfolder,
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
                     )
                     model_config, config_as_dict = cls.load_config_from_file(config_path, model_name_or_path)
                     setattr(model, "config", model_config)
@@ -413,11 +442,27 @@ class OpenClipForZeroShotImageClassification(PreTrainedModel):
                 else:
                     raise IOError("no model found")
 
-                model_path = hf_hub_download(model_name_or_path, filename=model_file_name, cache_dir=cache_dir)
+                model_path = hf_hub_download(
+                    repo_id=model_name_or_path,
+                    filename=model_file_name,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
 
                 if file_exists(model_name_or_path, "open_clip_config.json"):
                     config_path = hf_hub_download(
-                        repo_id=model_name_or_path, filename="open_clip_config.json", cache_dir=cache_dir
+                        repo_id=model_name_or_path,
+                        filename="open_clip_config.json",
+                        subfolder=subfolder,
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
                     )
                     model_config, config_as_dict = cls.load_config_from_file(config_path, model_name_or_path)
                 else:

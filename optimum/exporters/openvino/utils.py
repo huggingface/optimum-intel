@@ -174,7 +174,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
         visual_model = model.visual
         setattr(visual_model, "config", model.config.vision_config)
         export_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=model.visual, exporter="openvino", task=task, library_name=library_name
+            model=model.visual, exporter="openvino", task="feature-extraction", library_name=library_name
         )
         vision_cfg = export_config_constructor(
             model.config.vision_config,
@@ -188,7 +188,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
         text_model = model.text
         setattr(text_model, "config", model.config.text_config)
         export_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=model.text, exporter="openvino", task=task, library_name=library_name
+            model=model.text, exporter="openvino", task="feature-extraction", library_name=library_name
         )
         text_cfg = export_config_constructor(
             model.config.text_config,

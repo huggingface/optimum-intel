@@ -1128,9 +1128,7 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
         return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager(
-    "clip-text-model", *["zero-shot-image-classification", "feature-extraction"], library_name="open_clip"
-)
+@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1165,9 +1163,7 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager(
-    "clip-vision-model", *["zero-shot-image-classification", "feature-extraction"], library_name="open_clip"
-)
+@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
