@@ -164,22 +164,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "scale_estimation": True,
     },
-    "meta-llama/Meta-Llama-3-8B-Instruct": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.9,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
-    },
-    "meta-llama/Meta-Llama-3-8B": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.9,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
-    },
     "meta-llama/Meta-Llama-3.1-8B-Instruct": {
         "bits": 4,
         "sym": False,
