@@ -803,6 +803,11 @@ def _get_multi_modal_submodels_and_export_configs(
     models_for_export = {}
     stateful_parts = []
 
+    model_type = model.config.model_type.replace("_", "-")
+
+    if model_type == "internvl-chat" and preprocessors is not None:
+        model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
+
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
     main_config_cls = TasksManager.get_exporter_config_constructor(

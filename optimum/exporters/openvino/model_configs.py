@@ -17,7 +17,6 @@ import random
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-
 from packaging import version
 from transformers import PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
@@ -40,7 +39,6 @@ from optimum.exporters.onnx.model_configs import (
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
     VisionOnnxConfig,
-    CLIPVisionModelOnnxConfig
 )
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
@@ -48,6 +46,7 @@ from optimum.utils.input_generators import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummyTextInputGenerator,
+    DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
@@ -69,6 +68,7 @@ from .model_patcher import (
     IBertModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
+    InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
     MistralModelPatcher,
@@ -96,7 +96,7 @@ def init_model_configs():
     )
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
-    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-to-text"]
+    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -1044,7 +1044,6 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
         return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-<<<<<<< HEAD
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -1328,7 +1327,7 @@ class CLIPVisionModeOpenVIONConfig(CLIPVisionModelOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ):
         model_kwargs = model_kwargs or {}
         if self._config.output_hidden_states and "output_hidden_states" not in model_kwargs:
             model_kwargs["output_hidden_states"] = True
@@ -1337,13 +1336,6 @@ class CLIPVisionModeOpenVIONConfig(CLIPVisionModelOnnxConfig):
 
 
 class LlavaConfigBehavior(str, enum.Enum):
-    """
-    Specifies the behavior of the [`~exporters.onnx.base.OnnxSeq2SeqConfigWithPast`]:
-        - MONOLITH: the config can be used to export the whole seq2seq model as a single file.
-        - ENCODER: the config can be used to export the encoder part of the seq2seq model.
-        - DECODER: the config can be used to export the decoder part of the seq2seq model.
-    """
-
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
@@ -1502,7 +1494,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
 
         if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
-            text_embedding.config = model.config.text_config
+            text_embedding.config = model.language_model.config
             return text_embedding
 
         if behavior == LlavaConfigBehavior.MULTI_MODAL_PROJECTOR:
@@ -1514,3 +1506,154 @@ class LlavaOpenVINOConfig(OnnxConfig):
 @register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     pass
+
+
+class InternVLChatConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
+class InternVLChatOpenVINOConfig(OnnxConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in InternVLChatConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: InternVLChatConfigBehavior = InternVLChatConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, InternVLChatConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, InternVLChatConfigBehavior):
+            behavior = InternVLChatConfigBehavior(behavior)
+
+        if behavior == InternVLChatConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = self._orig_config.llm_config.model_type
+            model_type = model_type.replace("_", "-")
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config.llm_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+            export_config = InputEmbedOpenvVINOConfig(
+                self._orig_config.llm_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == InternVLChatConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.llm_config.model_type
+            model_type = model_type.replace("_", "-")
+
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config.llm_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            export_config = LMInputEmbedsConfigHelper(internal_export_config)
+            export_config._normalized_config = internal_export_config._normalized_config
+            return export_config
+
+        if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behaviour(self, model, behavior: Union[str, LlavaConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
+            behavior = InternVLChatConfigBehavior(behavior)
+
+        if behavior == InternVLChatConfigBehavior.LANGUAGE:
+            return model.language_model
+
+        if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == InternVLChatConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.language_model.get_input_embeddings()
+            text_embedding.config = model.language_model.config
+            return text_embedding
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)

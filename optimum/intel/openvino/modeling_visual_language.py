@@ -247,12 +247,14 @@ class OVVisionEmbedding(OVModelPart):
     def forward(self, pixel_values, **kwargs):
         result = self.request({"pixel_values": pixel_values})
         last_hidden_state = result[0]
-        pooler_out = result[1]
         hidden_states = None
-        if self.hidden_states_output_names:
-            hidden_states = []
-            for out in self.hidden_states_output_names:
-                hidden_states.append(result[out])
+        pooler_out = None
+        if len(result) > 1:
+            pooler_out = result[1]
+            if self.hidden_states_output_names:
+                hidden_states = []
+                for out in self.hidden_states_output_names:
+                    hidden_states.append(result[out])
         return BaseModelOutputWithPooling(
             pooler_output=pooler_out, last_hidden_state=last_hidden_state, hidden_states=hidden_states
         )
@@ -825,7 +827,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
         if image_to_overwrite.sum() != image_features.shape[:-1].numel():
             raise ValueError(
-                f"The input provided to the model are wrong. The number of image tokens is {torch.sum(special_image_token_mask)} while"
+                f"The input provided to the model a/pre-releasesre wrong. The number of image tokens is {torch.sum(special_image_token_mask)} while"
                 f" the number of image given to the model is {num_images}. This prevents correct indexing and breaks batch generation."
             )
 
@@ -1133,4 +1135,32 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
 
 
-MODEL_TYPE_TO_CLS_MAPPING = {"llava": _OVLlavaForCausalLM, "llava_next": _OVLlavaNextForCausalLM}
+class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_features = self.vision_embeddings(pixel_values, **kwargs).last_hidden_state
+        return image_features
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, input_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+    ):
+        input_embeds = torch.from_numpy(input_embeds) if isinstance(input_embeds, np.ndarray) else input_embeds
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        B, N, C = input_embeds.shape
+        input_embeds = input_embeds.reshape(B * N, C)
+
+        input_ids = input_ids.reshape(B * N)
+        selected = input_ids == self.config.img_context_token_id
+        assert selected.sum() != 0
+        input_embeds[selected] = vision_embeds.reshape(-1, C)
+
+        input_embeds = input_embeds.reshape(B, N, C)
+        return input_embeds, attention_mask, position_ids
+
+
+MODEL_TYPE_TO_CLS_MAPPING = {
+    "llava": _OVLlavaForCausalLM,
+    "llava_next": _OVLlavaNextForCausalLM,
+    "internvl_chat": _OvInternVLForCausalLM,
+}

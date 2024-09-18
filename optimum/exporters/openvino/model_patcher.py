@@ -2646,3 +2646,20 @@ class IBertModelPatcher(ModelPatcher):
         # model has first inference buffers initialization, it may breaks tracing
         if getattr(embeddings.LayerNorm, "dim_sqrt") is None:
             self._model(torch.ones([1, 1], dtype=torch.long))
+
+
+class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.extract_feature
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward

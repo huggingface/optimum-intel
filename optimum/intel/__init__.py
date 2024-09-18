@@ -290,10 +290,10 @@ if TYPE_CHECKING:
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
             OVModelForVision2Seq,
+            OVModelForVisualCausalLM,
             OVModelOpenCLIPForZeroShotImageClassification,
             OVModelOpenCLIPText,
             OVModelOpenCLIPVisual,
-            OVModelForVisualCausalLM,
         )
 
     try:
