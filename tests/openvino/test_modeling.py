@@ -754,6 +754,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "jais",
         "glm4",
+        "decilm",
     )
 
     if is_transformers_version(">=", "4.40.0"):
@@ -791,6 +792,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arctic",
         "glm4",
         "exaone",
+        "decilm",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

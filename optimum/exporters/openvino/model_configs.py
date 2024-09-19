@@ -53,6 +53,7 @@ from .model_patcher import (
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
     DBRXModelPatcher,
+    DeciLMModelPatcher,
     FalconModelPatcher,
     Gemma2ModelPatcher,
     GptNeoxJapaneseModelPatcher,
@@ -1018,3 +1019,57 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.num_key_value_heads_per_layer = normalized_config.num_key_value_heads_per_layer
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+
+        for layer_id in range(self.num_layers):
+            shape = (
+                self.batch_size,
+                self.num_key_value_heads_per_layer[layer_id],
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+            past_key_values.append(
+                (
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                )
+            )
+        return past_key_values
+
+
+@register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DeciDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DeciDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return DeciLMModelPatcher(self, model, model_kwargs=model_kwargs)

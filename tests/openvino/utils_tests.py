@@ -44,6 +44,7 @@ MODEL_NAMES = {
     "dbrx": "katuni4ka/tiny-random-dbrx",
     "deberta": "hf-internal-testing/tiny-random-deberta",
     "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
+    "decilm": "katuni4ka/tiny-random-decilm",
     "deit": "hf-internal-testing/tiny-random-DeiTModel",
     "convnext": "hf-internal-testing/tiny-random-convnext",
     "convnextv2": "hf-internal-testing/tiny-random-ConvNextV2Model",
