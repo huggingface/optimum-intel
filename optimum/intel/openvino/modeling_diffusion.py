@@ -80,7 +80,7 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-class OVPipeline(OVBaseModel, DiffusionPipeline):
+class OVPipeline(OVBaseModel, ConfigMixin):
     auto_model_class = None
 
     config_name = "model_index.json"
@@ -736,9 +736,9 @@ class OVPipelinePart:
 
         if not config_path.is_file():
             # config is necessary for the model to work
-            raise ValueError(f"Configuration file for {self.model_subfolder} is missing in {self.model_save_dir}")
+            raise ValueError(f"Configuration file for {self.__class__.__name__} not found at {config_path}")
 
-        config_dict = parent_pipeline._dict_from_json_file(self.model_save_dir / CONFIG_NAME)
+        config_dict = parent_pipeline._dict_from_json_file(config_path)
         self.config = FrozenDict(**config_dict)
 
     @property
