@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import importlib
+import inspect
 import logging
 import os
 import shutil
@@ -27,12 +28,12 @@ import numpy as np
 import openvino
 import torch
 from diffusers.configuration_utils import ConfigMixin, FrozenDict
-from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from diffusers.pipelines import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
+    DiffusionPipeline,
     LatentConsistencyModelImg2ImgPipeline,
     LatentConsistencyModelPipeline,
     StableDiffusionImg2ImgPipeline,
@@ -44,7 +45,7 @@ from diffusers.pipelines import (
 )
 from diffusers.schedulers import SchedulerMixin
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
-from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
+from diffusers.utils.constants import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
@@ -63,19 +64,15 @@ from optimum.utils import (
 
 from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
-from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
     _print_compiled_model_properties,
+    model_has_dynamic_inputs,
     np_to_pt_generators,
 )
-
-
-if is_invisible_watermark_available():
-    from diffusers.pipelines.stable_diffusion_xl.watermark import StableDiffusionXLWatermarker
 
 
 core = Core()
@@ -83,7 +80,7 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-class OVPipeline(OVBaseModel):
+class OVPipeline(OVBaseModel, DiffusionPipeline):
     auto_model_class = None
 
     config_name = "model_index.json"
@@ -93,77 +90,105 @@ class OVPipeline(OVBaseModel):
 
     def __init__(
         self,
-        config: Dict[str, Any],
-        scheduler: SchedulerMixin,
-        unet: openvino.runtime.Model,
+        unet: Optional[openvino.runtime.Model] = None,
         vae_encoder: Optional[openvino.runtime.Model] = None,
         vae_decoder: Optional[openvino.runtime.Model] = None,
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
+        image_encoder: Optional[openvino.runtime.Model] = None,
+        safety_checker: Optional[openvino.runtime.Model] = None,
+        scheduler: Optional["SchedulerMixin"] = None,
         tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        requires_aesthetics_score: bool = False,
         device: str = "CPU",
-        compile: bool = True,
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        # This logic is copied from OVBaseModel
+        # TODO: Maybe it should be in an OVMixin class from which OVModel and OVPipeline inherit
+        # because forcing transformers logic onto diffusers causes many development issues
+
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.model_save_dir = model_save_dir
         self.ov_config = {} if ov_config is None else {**ov_config}
-        self._openvino_config = OVConfig(quantization_config=quantization_config) if quantization_config else None
+        self.preprocessors = kwargs.get("preprocessors", [])
         self._compile_only = kwargs.get("compile_only", False)
+        enable_compilation = kwargs.get("compile", True)
 
-        self.unet = OVModelUnet(unet, self)
+        if self._compile_only:
+            if not enable_compilation:
+                raise ValueError(
+                    "`compile_only` mode does not support disabling compilation."
+                    "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
+                )
+
+            if not isinstance(unet, openvino.runtime.CompiledModel):
+                raise ValueError("`compile_only` expect that already compiled model will be provided")
+
+            model_dynamic_shapes = model_has_dynamic_inputs(unet)
+            if dynamic_shapes ^ model_dynamic_shapes:
+                raise ValueError(
+                    f"Provided compiled model with {'dynamic' if model_dynamic_shapes else 'static'} shapes but requested to use {'dynamic' if dynamic_shapes else 'static'}. Please set `compile_only=False` or `dynamic_shapes`={model_dynamic_shapes}"
+                )
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+
+        self._set_ov_config_parameters()
+
+        ############################################################################################################
+        self.unet = OVModelUnet(unet, self) if unet is not None else None
         self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self) if vae_decoder is not None else None
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
         self.text_encoder_2 = OVModelTextEncoder(text_encoder_2, self) if text_encoder_2 is not None else None
+        # We wrap the VAE encoder and decoder in a single object to simplify the API
+        self.vae = OVWrapperVae(self.vae_encoder, self.vae_decoder)
 
-        # We create VAE encoder & decoder and wrap them in one object to
-        # be used by the pipeline mixins with minimal code changes (simulating the diffusers API)
-        self.vae = OVModelVae(self.vae_encoder, self.vae_decoder, self)
+        self.image_encoder = image_encoder  # TODO: maybe mplement OVModelImageEncoder
+        self.safety_checker = safety_checker  # TODO: maybe mplement OVModelSafetyChecker
 
         self.scheduler = scheduler
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
         self.feature_extractor = feature_extractor
-        self.safety_checker = kwargs.get("safety_checker", None)
 
-        if hasattr(self.vae.config, "block_out_channels"):
-            self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        else:
-            self.vae_scale_factor = 8
-
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
-        self.mask_processor = VaeImageProcessor(
-            vae_scale_factor=self.vae_scale_factor, do_normalize=False, do_binarize=True, do_convert_grayscale=True
-        )
-
-        sub_models = {
-            DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
-            DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
-            DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
-            DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
-            DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER: self.text_encoder_2,
+        all_possible_init_args = {
+            "vae": self.vae,
+            "unet": self.unet,
+            "text_encoder": self.text_encoder,
+            "text_encoder_2": self.text_encoder_2,
+            "image_encoder": self.image_encoder,
+            "safety_checker": self.safety_checker,
+            "scheduler": self.scheduler,
+            "tokenizer": self.tokenizer,
+            "tokenizer_2": self.tokenizer_2,
+            "feature_extractor": self.feature_extractor,
         }
-        for name in sub_models.keys():
-            config[name] = (
-                ("optimum", sub_models[name].__class__.__name__) if sub_models[name] is not None else (None, None)
-            )
 
-        self._internal_dict = FrozenDict(config)
+        auto_model_class_args = {}
+        for key in inspect.signature(self.auto_model_class).parameters.keys():
+            if key in all_possible_init_args:
+                auto_model_class_args[key] = all_possible_init_args[key]
 
-        self._set_ov_config_parameters()
+        # inits stuff like config, vae_scale_factor, image_processor, etc.
+        self.auto_model_class.__init__(self, **auto_model_class_args)
+        # ideally, if this class didn't inherit an __init__ method from its parents (e.g. through a mixin)
+        # we could've just called the super().__init__ method in every subclass and it would've been more error-proof
+
+        ############################################################################################################
 
         if self.is_dynamic and not self._compile_only:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
-        if compile and not self._compile_only:
+        if not self._compile_only and enable_compilation:
             self.compile()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -195,19 +220,19 @@ class OVPipeline(OVBaseModel):
                 dst_path = save_directory / dst_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.save_model(ov_model.model, dst_path, compress_to_fp16=False)
-                model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
-                config_path = Path(model_dir) / ov_model.config_name
+                model_dir = ov_model.config.get("_name_or_path", None) or ov_model.model_save_dir
+                config_path = Path(model_dir) / CONFIG_NAME
                 if config_path.is_file():
-                    shutil.copyfile(config_path, dst_path.parent / ov_model.config_name)
+                    shutil.copyfile(config_path, dst_path.parent / CONFIG_NAME)
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
 
-        if self.feature_extractor is not None:
-            self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
             self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
+        if self.feature_extractor is not None:
+            self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
 
         self._save_openvino_config(save_directory)
 
@@ -218,17 +243,17 @@ class OVPipeline(OVBaseModel):
         config: Dict[str, Any],
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        vae_decoder_file_name: Optional[str] = None,
-        text_encoder_file_name: Optional[str] = None,
-        unet_file_name: Optional[str] = None,
-        vae_encoder_file_name: Optional[str] = None,
-        text_encoder_2_file_name: Optional[str] = None,
         local_files_only: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        unet_file_name: Optional[str] = None,
+        vae_decoder_file_name: Optional[str] = None,
+        vae_encoder_file_name: Optional[str] = None,
+        text_encoder_file_name: Optional[str] = None,
+        text_encoder_2_file_name: Optional[str] = None,
         from_onnx: bool = False,
-        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs,
     ):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -247,18 +272,18 @@ class OVPipeline(OVBaseModel):
             allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
             allow_patterns.update(
                 {
+                    unet_file_name,
+                    vae_encoder_file_name,
                     vae_decoder_file_name,
                     text_encoder_file_name,
                     text_encoder_2_file_name,
-                    unet_file_name,
-                    vae_encoder_file_name,
+                    unet_file_name.replace(".xml", ".bin"),
+                    vae_encoder_file_name.replace(".xml", ".bin"),
                     vae_decoder_file_name.replace(".xml", ".bin"),
                     text_encoder_file_name.replace(".xml", ".bin"),
                     text_encoder_2_file_name.replace(".xml", ".bin"),
-                    unet_file_name.replace(".xml", ".bin"),
-                    vae_encoder_file_name.replace(".xml", ".bin"),
+                    cls.sub_component_config_name,
                     SCHEDULER_CONFIG_NAME,
-                    CONFIG_NAME,
                     cls.config_name,
                 }
             )
@@ -351,13 +376,13 @@ class OVPipeline(OVBaseModel):
 
         return cls(
             unet=unet,
-            config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
             **components,
             **kwargs,
         )
 
+    # TODO: use _export instead of _from_transformers
     @classmethod
     def _from_transformers(
         cls,
@@ -459,7 +484,7 @@ class OVPipeline(OVBaseModel):
         return width.get_length() * self.vae_scale_factor
 
     @property
-    def _batch_size(self) -> int:
+    def batch_size(self) -> int:
         batch_size = self.unet.model.inputs[0].get_partial_shape()[0]
         if batch_size.is_dynamic:
             return -1
@@ -641,12 +666,20 @@ class OVPipeline(OVBaseModel):
         self.save_config(save_directory)
 
     @property
-    def _execution_device(self):
-        return self.device
+    def components(self) -> Dict[str, Any]:
+        components = {
+            "vae": self.vae,
+            "unet": self.unet,
+            "text_encoder": self.text_encoder,
+            "text_encoder_2": self.text_encoder_2,
+        }
+        components = {k: v for k, v in components.items() if v is not None}
+        return components
 
     def __call__(self, *args, **kwargs):
-        device = self._execution_device
+        device = self.device
 
+        # we keep numpy random states support for now
         for i in range(len(args)):
             args[i] = np_to_pt_generators(args[i], device)
 
@@ -655,42 +688,45 @@ class OVPipeline(OVBaseModel):
 
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
+    def __getattr__(self, name: str) -> Any:
+        # weird behavior where attributes are not found in the class even though
+        # they are there ; dir(self) shows them but getattr(self, name) does not
+        if name == "do_classifier_free_guidance":
+            return self.do_classifier_free_guidance()
+        elif name == "requires_aesthetics_score":
+            return False
 
-class OVModelPart:
-    model_part_folder: str = None
-    config_name: str = "config.json"
+        return super().__getattr__(name)
 
-    def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
-    ):
+
+class OVPipelinePart:
+    model_subfolder = None
+
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVPipeline):
         self.model = model
-        self.parent_model = parent_model
+        self.parent_pipeline = parent_pipeline
+        self.ov_config = parent_pipeline.ov_config
+        self.request = None if not parent_pipeline._compile_only else self.model
 
-        config_path = self.model_save_dir / self.config_name
-        self.config = FrozenDict(parent_model._dict_from_json_file(config_path))
+        if isinstance(parent_pipeline.model_save_dir, TemporaryDirectory):
+            self.model_save_dir = Path(parent_pipeline.model_save_dir.name) / self.model_subfolder
+        else:
+            self.model_save_dir = Path(parent_pipeline.model_save_dir) / self.model_subfolder
 
-        self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self._compile_only = parent_model._compile_only
-        self.request = None if not self._compile_only else self.model
+        config_dict = parent_pipeline._dict_from_json_file(Path(self.model_save_dir) / CONFIG_NAME)
+        self.config = FrozenDict(**config_dict)
 
     @property
     def _device(self) -> str:
-        return self.parent_model._device
+        return self.parent_pipeline._device
 
     @property
     def device(self) -> torch.device:
-        return self.parent_model.device
+        return self.parent_pipeline.device
 
     @property
     def dtype(self) -> torch.dtype:
         return OV_TO_PT_TYPE[self.ov_config.get("dtype", "f32")]
-
-    @property
-    def model_save_dir(self) -> Optional[Union[str, Path, TemporaryDirectory]]:
-        if isinstance(self.parent_model.model_save_dir, TemporaryDirectory):
-            return Path(self.parent_model.model_save_dir.name) / self.model_part_folder
-        else:
-            return Path(self.parent_model.model_save_dir) / self.model_part_folder
 
     def _compile(self):
         if self.request is None:
@@ -699,7 +735,7 @@ class OVModelPart:
                 and not str(self.model_save_dir).startswith(gettempdir())
                 and "GPU" in self._device
             ):
-                self.ov_config["CACHE_DIR"] = os.path.join(self.model_save_dir, self.model_part_folder, "model_cache")
+                self.ov_config["CACHE_DIR"] = os.path.join(self.model_save_dir, "model_cache")
 
             logger.info(f"Compiling the {self.model_save_dir} to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config)
@@ -708,14 +744,7 @@ class OVModelPart:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.request)
 
-    @abstractmethod
-    def forward(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
-
-    def to(self, *args, device: Optional[Union[str]] = None, dtype: Optional[torch.dtype] = None, **kwargs):
+    def to(self, *args, device: Optional[Union[str]] = None, dtype: Optional[torch.dtype] = None):
         for arg in args:
             if isinstance(arg, str):
                 device = arg
@@ -736,9 +765,16 @@ class OVModelPart:
                 f"Please export the model with the desired dtype."
             )
 
+    @abstractmethod
+    def forward(self, *args, **kwargs):
+        pass
 
-class OVModelTextEncoder(OVModelPart):
-    model_part_folder: str = "text_encoder"
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+
+class OVModelTextEncoder(OVPipelinePart):
+    model_subfolder: str = "text_encoder"
 
     def forward(
         self,
@@ -769,8 +805,24 @@ class OVModelTextEncoder(OVModelPart):
         return ModelOutput(**model_outputs)
 
 
-class OVModelUnet(OVModelPart):
-    model_part_folder: str = "unet"
+class OVModelUnet(OVPipelinePart):
+    model_subfolder: str = "unet"
+
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVPipeline):
+        super().__init__(model, parent_pipeline)
+
+        if not hasattr(self.config, "time_cond_proj_dim"):
+            self.config = FrozenDict(**self.config, time_cond_proj_dim=None)
+
+    @property
+    def add_embedding(self):
+        return FrozenDict(
+            linear_1=FrozenDict(
+                in_features=self.config.addition_time_embed_dim
+                * (5 if self.parent_pipeline.requires_aesthetics_score else 6)
+                + self.parent_pipeline.text_encoder.config.projection_dim
+            )
+        )
 
     def forward(
         self,
@@ -815,8 +867,15 @@ class OVModelUnet(OVModelPart):
         return ModelOutput(**model_outputs)
 
 
-class OVModelVaeEncoder(OVModelPart):
-    model_part_folder: str = "vae_encoder"
+class OVModelVaeEncoder(OVPipelinePart):
+    model_subfolder: str = "vae_encoder"
+
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVBaseModel):
+        super().__init__(model, parent_pipeline)
+
+        if not hasattr(self.config, "scaling_factor"):
+            scaling_factor = 2 ** (len(self.config.block_out_channels) - 1)
+            self.config = FrozenDict(**self.config, scaling_factor=scaling_factor)
 
     def forward(self, sample: Union[np.ndarray, torch.Tensor], return_dict: bool = False):
         self._compile()
@@ -848,8 +907,15 @@ class OVModelVaeEncoder(OVModelPart):
         super()._compile()
 
 
-class OVModelVaeDecoder(OVModelPart):
-    model_part_folder: str = "vae_decoder"
+class OVModelVaeDecoder(OVPipelinePart):
+    model_subfolder: str = "vae_decoder"
+
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVBaseModel):
+        super().__init__(model, parent_pipeline)
+
+        if not hasattr(self.config, "scaling_factor"):
+            scaling_factor = 2 ** (len(self.config.block_out_channels) - 1)
+            self.config = FrozenDict(**self.config, scaling_factor=scaling_factor)
 
     def forward(
         self,
@@ -878,198 +944,115 @@ class OVModelVaeDecoder(OVModelPart):
         super()._compile()
 
 
-class OVModelVae(OVModelPart):
-    model_part_folder: str = "vae_decoder"
+class OVWrapperVae:
+    def __init__(self, encoder: OVModelVaeEncoder, decoder: OVModelVaeDecoder):
+        if encoder is not None:
+            self.encoder = encoder
 
-    def __init__(self, vae_encoder: OVModelVaeEncoder, vae_decoder: OVModelVaeDecoder, parent_model: OVPipeline):
-        super().__init__(vae_decoder.model, parent_model)
+        self.decoder = decoder
 
-        self.encode = vae_encoder.forward
-        self.decode = vae_decoder.forward
+    @property
+    def config(self):
+        return self.decoder.config
+
+    @property
+    def dtype(self):
+        return self.decoder.dtype
+
+    @property
+    def device(self):
+        return self.decoder.device
+
+    def encode(self, *args, **kwargs):
+        return self.encoder(*args, **kwargs)
+
+    def decode(self, *args, **kwargs):
+        return self.decoder(*args, **kwargs)
+
+    def to(self, *args, **kwargs):
+        if self.encoder is not None:
+            self.encoder.to(*args, **kwargs)
+
+        self.decoder.to(*args, **kwargs)
 
 
-class OVStableDiffusionPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionPipeline):
+class OVStableDiffusionPipeline(OVPipeline, StableDiffusionPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion#diffusers.StableDiffusionPipeline).
     """
 
     main_input_name = "prompt"
+    export_feature = "text-to-image"
     auto_model_class = StableDiffusionPipeline
 
 
-class OVStableDiffusionImg2ImgPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionImg2ImgPipeline):
+class OVStableDiffusionImg2ImgPipeline(OVPipeline, StableDiffusionImg2ImgPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_img2img#diffusers.StableDiffusionImg2ImgPipeline).
     """
 
     main_input_name = "image"
+    export_feature = "image-to-image"
     auto_model_class = StableDiffusionImg2ImgPipeline
 
 
-class OVStableDiffusionInpaintPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionInpaintPipeline):
+class OVStableDiffusionInpaintPipeline(OVPipeline, StableDiffusionInpaintPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_inpaint#diffusers.StableDiffusionInpaintPipeline).
     """
 
     main_input_name = "image"
+    export_feature = "inpainting"
     auto_model_class = StableDiffusionInpaintPipeline
 
 
-class OVStableDiffusionXLPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLPipeline):
+class OVStableDiffusionXLPipeline(OVPipeline, StableDiffusionXLPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLPipeline).
     """
 
     main_input_name = "prompt"
+    export_feature = "text-to-image"
     auto_model_class = StableDiffusionXLPipeline
 
-    def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
-        super().__init__(*args, **kwargs)
 
-        requires_aesthetics_score = kwargs.get("requires_aesthetics_score", False)
-        force_zeros_for_empty_prompt = kwargs.get("force_zeros_for_empty_prompt", True)
-        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
-        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
-
-        add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
-
-        if add_watermarker:
-            self.watermark = StableDiffusionXLWatermarker()
-        else:
-            self.watermark = None
-
-    # Adapted from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl.StableDiffusionXLPipeline._get_add_time_ids
-    def _get_add_time_ids(
-        self, original_size, crops_coords_top_left, target_size, dtype, text_encoder_projection_dim=None
-    ):
-        add_time_ids = list(original_size + crops_coords_top_left + target_size)
-
-        add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
-
-        return add_time_ids
-
-
-class OVStableDiffusionXLImg2ImgPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLImg2ImgPipeline):
+class OVStableDiffusionXLImg2ImgPipeline(OVPipeline, StableDiffusionXLImg2ImgPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLImg2ImgPipeline).
     """
 
     main_input_name = "image"
+    export_feature = "image-to-image"
     auto_model_class = StableDiffusionXLImg2ImgPipeline
 
-    def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
-        super().__init__(*args, **kwargs)
 
-        requires_aesthetics_score = kwargs.get("requires_aesthetics_score", False)
-        force_zeros_for_empty_prompt = kwargs.get("force_zeros_for_empty_prompt", True)
-        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
-        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
-
-        add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
-
-        if add_watermarker:
-            self.watermark = StableDiffusionXLWatermarker()
-        else:
-            self.watermark = None
-
-    # Adapted from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_inpaint.StableDiffusionXLInpaintPipeline._get_add_time_ids
-    def _get_add_time_ids(
-        self,
-        original_size,
-        crops_coords_top_left,
-        target_size,
-        aesthetic_score,
-        negative_aesthetic_score,
-        negative_original_size,
-        negative_crops_coords_top_left,
-        negative_target_size,
-        dtype,
-        text_encoder_projection_dim=None,
-    ):
-        if self.config.requires_aesthetics_score:
-            add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
-            add_neg_time_ids = list(
-                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
-            )
-        else:
-            add_time_ids = list(original_size + crops_coords_top_left + target_size)
-            add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
-
-        add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
-        add_neg_time_ids = torch.tensor([add_neg_time_ids], dtype=dtype)
-
-        return add_time_ids, add_neg_time_ids
-
-
-class OVStableDiffusionXLInpaintPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLInpaintPipeline):
+class OVStableDiffusionXLInpaintPipeline(OVPipeline, StableDiffusionXLInpaintPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLInpaintPipeline).
     """
 
     main_input_name = "image"
+    export_feature = "inpainting"
     auto_model_class = StableDiffusionXLInpaintPipeline
 
-    def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
-        super().__init__(*args, **kwargs)
 
-        requires_aesthetics_score = kwargs.get("requires_aesthetics_score", False)
-        force_zeros_for_empty_prompt = kwargs.get("force_zeros_for_empty_prompt", True)
-        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
-        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
-
-        add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
-
-        if add_watermarker:
-            self.watermark = StableDiffusionXLWatermarker()
-        else:
-            self.watermark = None
-
-    # Adapted from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_inpaint.StableDiffusionXLInpaintPipeline._get_add_time_ids
-    def _get_add_time_ids(
-        self,
-        original_size,
-        crops_coords_top_left,
-        target_size,
-        aesthetic_score,
-        negative_aesthetic_score,
-        negative_original_size,
-        negative_crops_coords_top_left,
-        negative_target_size,
-        dtype,
-        text_encoder_projection_dim=None,
-    ):
-        if self.config.requires_aesthetics_score:
-            add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
-            add_neg_time_ids = list(
-                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
-            )
-        else:
-            add_time_ids = list(original_size + crops_coords_top_left + target_size)
-            add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
-
-        add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
-        add_neg_time_ids = torch.tensor([add_neg_time_ids], dtype=dtype)
-
-        return add_time_ids, add_neg_time_ids
-
-
-class OVLatentConsistencyModelPipeline(OVPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelPipeline):
+class OVLatentConsistencyModelPipeline(OVPipeline, LatentConsistencyModelPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency#diffusers.LatentConsistencyModelPipeline).
     """
 
     main_input_name = "prompt"
+    export_feature = "text-to-image"
     auto_model_class = LatentConsistencyModelPipeline
 
 
-class OVLatentConsistencyModelImg2ImgPipeline(
-    OVPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelImg2ImgPipeline
-):
+class OVLatentConsistencyModelImg2ImgPipeline(OVPipeline, LatentConsistencyModelImg2ImgPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency_img2img#diffusers.LatentConsistencyModelImg2ImgPipeline).
     """
 
     main_input_name = "image"
+    export_feature = "image-to-image"
     auto_model_class = LatentConsistencyModelImg2ImgPipeline
 
 
@@ -1085,19 +1068,20 @@ SUPPORTED_OV_PIPELINES = [
 ]
 
 
-def _get_pipeline_class(pipeline_class_name: str, throw_error_if_not_exist: bool = True):
-    for ort_pipeline_class in SUPPORTED_OV_PIPELINES:
+def _get_ov_class(pipeline_class_name: str, throw_error_if_not_exist: bool = True):
+    for ov_pipeline_class in SUPPORTED_OV_PIPELINES:
         if (
-            ort_pipeline_class.__name__ == pipeline_class_name
-            or ort_pipeline_class.auto_model_class.__name__ == pipeline_class_name
+            ov_pipeline_class.__name__ == pipeline_class_name
+            or ov_pipeline_class.auto_model_class.__name__ == pipeline_class_name
         ):
-            return ort_pipeline_class
+            return ov_pipeline_class
 
     if throw_error_if_not_exist:
         raise ValueError(f"OVDiffusionPipeline can't find a pipeline linked to {pipeline_class_name}")
 
 
 class OVDiffusionPipeline(ConfigMixin):
+    auto_model_class = DiffusionPipeline
     config_name = "model_index.json"
 
     @classmethod
@@ -1117,9 +1101,9 @@ class OVDiffusionPipeline(ConfigMixin):
         config = config[0] if isinstance(config, tuple) else config
         class_name = config["_class_name"]
 
-        ort_pipeline_class = _get_pipeline_class(class_name)
+        ov_pipeline_class = _get_ov_class(class_name)
 
-        return ort_pipeline_class.from_pretrained(pretrained_model_or_path, **kwargs)
+        return ov_pipeline_class.from_pretrained(pretrained_model_or_path, **kwargs)
 
 
 OV_TEXT2IMAGE_PIPELINES_MAPPING = OrderedDict(
@@ -1152,13 +1136,13 @@ SUPPORTED_OV_PIPELINES_MAPPINGS = [
 ]
 
 
-def _get_task_class(mapping, pipeline_class_name):
+def _get_task_ov_class(mapping, pipeline_class_name):
     def _get_model_name(pipeline_class_name):
-        for ort_pipelines_mapping in SUPPORTED_OV_PIPELINES_MAPPINGS:
-            for model_name, ort_pipeline_class in ort_pipelines_mapping.items():
+        for ov_pipelines_mapping in SUPPORTED_OV_PIPELINES_MAPPINGS:
+            for model_name, ov_pipeline_class in ov_pipelines_mapping.items():
                 if (
-                    ort_pipeline_class.__name__ == pipeline_class_name
-                    or ort_pipeline_class.auto_model_class.__name__ == pipeline_class_name
+                    ov_pipeline_class.__name__ == pipeline_class_name
+                    or ov_pipeline_class.auto_model_class.__name__ == pipeline_class_name
                 ):
                     return model_name
 
@@ -1173,6 +1157,7 @@ def _get_task_class(mapping, pipeline_class_name):
 
 
 class OVPipelineForTask(ConfigMixin):
+    auto_model_class = DiffusionPipeline
     config_name = "model_index.json"
 
     @classmethod
@@ -1191,21 +1176,21 @@ class OVPipelineForTask(ConfigMixin):
         config = config[0] if isinstance(config, tuple) else config
         class_name = config["_class_name"]
 
-        ort_pipeline_class = _get_task_class(cls.ort_pipelines_mapping, class_name)
+        ov_pipeline_class = _get_task_ov_class(cls.ov_pipelines_mapping, class_name)
 
-        return ort_pipeline_class.from_pretrained(pretrained_model_or_path, **kwargs)
+        return ov_pipeline_class.from_pretrained(pretrained_model_or_path, **kwargs)
 
 
 class OVPipelineForText2Image(OVPipelineForTask):
     auto_model_class = AutoPipelineForText2Image
-    ort_pipelines_mapping = OV_TEXT2IMAGE_PIPELINES_MAPPING
+    ov_pipelines_mapping = OV_TEXT2IMAGE_PIPELINES_MAPPING
 
 
 class OVPipelineForImage2Image(OVPipelineForTask):
     auto_model_class = AutoPipelineForImage2Image
-    ort_pipelines_mapping = OV_IMAGE2IMAGE_PIPELINES_MAPPING
+    ov_pipelines_mapping = OV_IMAGE2IMAGE_PIPELINES_MAPPING
 
 
 class OVPipelineForInpainting(OVPipelineForTask):
     auto_model_class = AutoPipelineForInpainting
-    ort_pipelines_mapping = OV_INPAINT_PIPELINES_MAPPING
+    ov_pipelines_mapping = OV_INPAINT_PIPELINES_MAPPING
