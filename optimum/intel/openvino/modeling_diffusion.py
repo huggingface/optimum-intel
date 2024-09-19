@@ -90,7 +90,8 @@ class OVPipeline(OVBaseModel, DiffusionPipeline):
 
     def __init__(
         self,
-        unet: Optional[openvino.runtime.Model] = None,
+        # diffusers specific arguments
+        unet: Optional[openvino.runtime.Model],
         vae_encoder: Optional[openvino.runtime.Model] = None,
         vae_decoder: Optional[openvino.runtime.Model] = None,
         text_encoder: Optional[openvino.runtime.Model] = None,
@@ -101,8 +102,14 @@ class OVPipeline(OVBaseModel, DiffusionPipeline):
         tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        # stable diffusion xl specific arguments
         requires_aesthetics_score: bool = False,
+        force_zeros_for_empty_prompt: bool = True,
+        add_watermarker: Optional[bool] = None,
+        # openvino specific arguments
         device: str = "CPU",
+        compile: bool = True,
+        compile_only: bool = False,
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
@@ -111,15 +118,16 @@ class OVPipeline(OVBaseModel, DiffusionPipeline):
     ):
         # This logic is copied from OVBaseModel
         # TODO: Maybe it should be in an OVMixin class from which OVModel and OVPipeline inherit
-        # because forcing transformers logic onto diffusers causes many development issues
+        # because forcing transformers logic onto diffusers pipelines causes some development issues
+
+        enable_compilation = compile
 
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
+        self._compile_only = compile_only
         self.model_save_dir = model_save_dir
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
-        self._compile_only = kwargs.get("compile_only", False)
-        enable_compilation = kwargs.get("compile", True)
 
         if self._compile_only:
             if not enable_compilation:
@@ -131,24 +139,37 @@ class OVPipeline(OVBaseModel, DiffusionPipeline):
             if not isinstance(unet, openvino.runtime.CompiledModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
-            model_dynamic_shapes = model_has_dynamic_inputs(unet)
-            if dynamic_shapes ^ model_dynamic_shapes:
+            model_is_dynamic = model_has_dynamic_inputs(unet)
+            if dynamic_shapes ^ model_is_dynamic:
+                requested_shapes = "dynamic" if dynamic_shapes else "static"
+                compiled_shapes = "dynamic" if model_is_dynamic else "static"
                 raise ValueError(
-                    f"Provided compiled model with {'dynamic' if model_dynamic_shapes else 'static'} shapes but requested to use {'dynamic' if dynamic_shapes else 'static'}. Please set `compile_only=False` or `dynamic_shapes`={model_dynamic_shapes}"
+                    f"Provided compiled model with {compiled_shapes} shapes but requested to use {requested_shapes}. "
+                    f"Please set `compile_only=False` or `dynamic_shapes={model_is_dynamic}`"
                 )
 
-        self._openvino_config = None
-        if quantization_config:
-            self._openvino_config = OVConfig(quantization_config=quantization_config)
-
-        self._set_ov_config_parameters()
-
         ############################################################################################################
-        self.unet = OVModelUnet(unet, self) if unet is not None else None
-        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
-        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self) if vae_decoder is not None else None
-        self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
-        self.text_encoder_2 = OVModelTextEncoder(text_encoder_2, self) if text_encoder_2 is not None else None
+        self.unet = OVModelUnet(unet, self, model_subfolder=DIFFUSION_MODEL_UNET_SUBFOLDER)
+        self.vae_encoder = (
+            OVModelVaeEncoder(vae_encoder, self, model_subfolder=DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
+            if vae_encoder is not None
+            else None
+        )
+        self.vae_decoder = (
+            OVModelVaeDecoder(vae_decoder, self, model_subfolder=DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
+            if vae_decoder is not None
+            else None
+        )
+        self.text_encoder = (
+            OVModelTextEncoder(text_encoder, self, model_subfolder=DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)
+            if text_encoder is not None
+            else None
+        )
+        self.text_encoder_2 = (
+            OVModelTextEncoder(text_encoder_2, self, model_subfolder=DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
+            if text_encoder_2 is not None
+            else None
+        )
         # We wrap the VAE encoder and decoder in a single object to simplify the API
         self.vae = OVWrapperVae(self.vae_encoder, self.vae_decoder)
 
@@ -171,19 +192,28 @@ class OVPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer": self.tokenizer,
             "tokenizer_2": self.tokenizer_2,
             "feature_extractor": self.feature_extractor,
+            "requires_aesthetics_score": requires_aesthetics_score,
+            "force_zeros_for_empty_prompt": force_zeros_for_empty_prompt,
+            "add_watermarker": add_watermarker,
         }
 
-        auto_model_class_args = {}
+        diffusers_pipeline_args = {}
         for key in inspect.signature(self.auto_model_class).parameters.keys():
             if key in all_possible_init_args:
-                auto_model_class_args[key] = all_possible_init_args[key]
+                diffusers_pipeline_args[key] = all_possible_init_args[key]
 
         # inits stuff like config, vae_scale_factor, image_processor, etc.
-        self.auto_model_class.__init__(self, **auto_model_class_args)
-        # ideally, if this class didn't inherit an __init__ method from its parents (e.g. through a mixin)
-        # we could've just called the super().__init__ method in every subclass and it would've been more error-proof
-
+        self.auto_model_class.__init__(self, **diffusers_pipeline_args)
+        # not registered correvtly in the config
+        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
+        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
         ############################################################################################################
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+
+        self._set_ov_config_parameters()
 
         if self.is_dynamic and not self._compile_only:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
@@ -677,33 +707,22 @@ class OVPipeline(OVBaseModel, DiffusionPipeline):
         return components
 
     def __call__(self, *args, **kwargs):
-        device = self.device
-
         # we keep numpy random states support for now
+
+        args = list(args)
         for i in range(len(args)):
-            args[i] = np_to_pt_generators(args[i], device)
+            args[i] = np_to_pt_generators(args[i], self.device)
 
         for k, v in kwargs.items():
-            kwargs[k] = np_to_pt_generators(v, device)
+            kwargs[k] = np_to_pt_generators(v, self.device)
 
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
-    def __getattr__(self, name: str) -> Any:
-        # weird behavior where attributes are not found in the class even though
-        # they are there ; dir(self) shows them but getattr(self, name) does not
-        if name == "do_classifier_free_guidance":
-            return self.do_classifier_free_guidance()
-        elif name == "requires_aesthetics_score":
-            return False
-
-        return super().__getattr__(name)
-
 
 class OVPipelinePart:
-    model_subfolder = None
-
-    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVPipeline):
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVPipeline, model_subfolder: str = ""):
         self.model = model
+        self.model_subfolder = model_subfolder
         self.parent_pipeline = parent_pipeline
         self.ov_config = parent_pipeline.ov_config
         self.request = None if not parent_pipeline._compile_only else self.model
@@ -713,7 +732,13 @@ class OVPipelinePart:
         else:
             self.model_save_dir = Path(parent_pipeline.model_save_dir) / self.model_subfolder
 
-        config_dict = parent_pipeline._dict_from_json_file(Path(self.model_save_dir) / CONFIG_NAME)
+        config_path = self.model_save_dir / CONFIG_NAME
+
+        if not config_path.is_file():
+            # config is necessary for the model to work
+            raise ValueError(f"Configuration file for {self.model_subfolder} is missing in {self.model_save_dir}")
+
+        config_dict = parent_pipeline._dict_from_json_file(self.model_save_dir / CONFIG_NAME)
         self.config = FrozenDict(**config_dict)
 
     @property
@@ -774,8 +799,6 @@ class OVPipelinePart:
 
 
 class OVModelTextEncoder(OVPipelinePart):
-    model_subfolder: str = "text_encoder"
-
     def forward(
         self,
         input_ids: Union[np.ndarray, torch.Tensor],
@@ -806,10 +829,8 @@ class OVModelTextEncoder(OVPipelinePart):
 
 
 class OVModelUnet(OVPipelinePart):
-    model_subfolder: str = "unet"
-
-    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVPipeline):
-        super().__init__(model, parent_pipeline)
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVPipeline, model_subfolder: str = ""):
+        super().__init__(model, parent_pipeline, model_subfolder)
 
         if not hasattr(self.config, "time_cond_proj_dim"):
             self.config = FrozenDict(**self.config, time_cond_proj_dim=None)
@@ -818,8 +839,14 @@ class OVModelUnet(OVPipelinePart):
     def add_embedding(self):
         return FrozenDict(
             linear_1=FrozenDict(
+                # this is a hacky way to get the attribute in add_embedding.linear_1.in_features
+                # (StableDiffusionXLImg2ImgPipeline/StableDiffusionXLInpaintPipeline)._get_add_time_ids
                 in_features=self.config.addition_time_embed_dim
-                * (5 if self.parent_pipeline.requires_aesthetics_score else 6)
+                * (
+                    5  # list(original_size + crops_coords_top_left + (aesthetic_score,))
+                    if self.parent_pipeline.config.requires_aesthetics_score
+                    else 6  # list(original_size + crops_coords_top_left + target_size)
+                )
                 + self.parent_pipeline.text_encoder.config.projection_dim
             )
         )
@@ -868,10 +895,8 @@ class OVModelUnet(OVPipelinePart):
 
 
 class OVModelVaeEncoder(OVPipelinePart):
-    model_subfolder: str = "vae_encoder"
-
-    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVBaseModel):
-        super().__init__(model, parent_pipeline)
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVBaseModel, model_subfolder: str = ""):
+        super().__init__(model, parent_pipeline, model_subfolder)
 
         if not hasattr(self.config, "scaling_factor"):
             scaling_factor = 2 ** (len(self.config.block_out_channels) - 1)
@@ -908,10 +933,8 @@ class OVModelVaeEncoder(OVPipelinePart):
 
 
 class OVModelVaeDecoder(OVPipelinePart):
-    model_subfolder: str = "vae_decoder"
-
-    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVBaseModel):
-        super().__init__(model, parent_pipeline)
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVBaseModel, model_subfolder: str = ""):
+        super().__init__(model, parent_pipeline, model_subfolder)
 
         if not hasattr(self.config, "scaling_factor"):
             scaling_factor = 2 ** (len(self.config.block_out_channels) - 1)
