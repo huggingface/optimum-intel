@@ -36,7 +36,7 @@ from transformers.utils import is_offline_mode
 from optimum.exporters.tasks import TasksManager
 
 from ...exporters.openvino import main_export
-from ..utils.modeling_utils import OpenClipForZeroShotImageClassification, _find_files_matching_pattern
+from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
 
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class OVModelOpenCLIPBase(OVModel):
-    OPEN_CLIP_CONFIG_NAME = "open_clip_config.json"
+    config_name = "open_clip_config.json"
     _library_name = "open_clip"
 
     def __init__(self, model=None, config=None, **kwargs):
@@ -72,15 +72,15 @@ class OVModelOpenCLIPBase(OVModel):
 
         transformers_config_name = "config.json"
         config_name = None
-        if cls.OPEN_CLIP_CONFIG_NAME in all_files:
-            config_name = cls.OPEN_CLIP_CONFIG_NAME
+        if cls.config_name in all_files:
+            config_name = cls.config_name
         elif transformers_config_name in all_files:
             config_name = transformers_config_name
 
         if os.path.isdir(config_dir):
             if config_name is None:
                 raise OSError(
-                    f"neither {cls.OPEN_CLIP_CONFIG_NAME} nor {transformers_config_name} was found in {config_dir} local folder"
+                    f"neither {cls.config_name} nor {transformers_config_name} was found in {config_dir} local folder"
                 )
             config_path = os.path.join(config_dir, config_name)
         else:
@@ -96,7 +96,7 @@ class OVModelOpenCLIPBase(OVModel):
                     local_files_only=local_files_only,
                 )
             else:
-                open_clip_config = OpenClipForZeroShotImageClassification.find_config_by_hub_url(config_name_or_path)
+                open_clip_config = _OpenClipForZeroShotImageClassification.find_config_by_hub_url(config_name_or_path)
 
         if config_path:
             open_clip_config = {}

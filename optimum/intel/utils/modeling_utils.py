@@ -310,7 +310,7 @@ def collect_open_clip_model_files(model_name_or_path):
     return model_files
 
 
-class OpenClipForZeroShotImageClassification(PreTrainedModel):
+class _OpenClipForZeroShotImageClassification(PreTrainedModel):
     def __init__(self, config: PretrainedConfig, **kwargs) -> None:
         super().__init__(config, **kwargs)
 
@@ -380,8 +380,6 @@ class OpenClipForZeroShotImageClassification(PreTrainedModel):
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
-        task: Optional[str] = None,
-        trust_remote_code: bool = False,
         dtype: str = "f32",
         **kwargs,
     ):

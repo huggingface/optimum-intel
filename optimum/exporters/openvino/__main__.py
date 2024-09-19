@@ -37,8 +37,8 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
-    OpenClipForZeroShotImageClassification,
     _infer_library_from_model_name_or_path,
+    _OpenClipForZeroShotImageClassification,
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -322,7 +322,7 @@ def main_export(
         GPTQQuantizer.post_init_model = post_init_model
 
     if library_name == "open_clip":
-        model = OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+        model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
     else:
         model = TasksManager.get_model_from_task(
             task,
