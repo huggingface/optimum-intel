@@ -178,12 +178,12 @@ class IPEXModel(OptimizedModel):
         else:
             self._device = torch.device("cpu")
 
+        config = model.config if config is None else config
         # CPU only support jit model for now.
         if export and self._device.type == "cpu":
             if isinstance(model, torch.jit.RecursiveScriptModule):
                 logger.warning("The model has been exported already.")
             else:
-                config = model.config if config is None else config
                 use_cache = kwargs.get("use_cache", True)
                 model = ipex_jit_trace(model, self.export_feature, use_cache)
                 config.torchscript = True

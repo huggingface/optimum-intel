@@ -84,7 +84,7 @@ def padding_attn_mask(attn_mask, alignment):
     return new_attn_mask
 
 
-def _llama_layer_norm_forward(self, hidden_states):
+def _ipex_rms_layer_norm_forward(self, hidden_states):
     if hidden_states.device.type == "xpu":
         return rms_norm(hidden_states, self.weight, self.variance_epsilon)
     else:
