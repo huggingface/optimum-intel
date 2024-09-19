@@ -93,16 +93,16 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
-    def test_ort_pipeline_class_dispatch(self, model_arch: str):
+    def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ort_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
-        self.assertEqual(ort_pipeline.auto_model_class, auto_pipeline.__class__)
+        self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
         auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
-        ort_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
 
-        self.assertEqual(ort_pipeline.auto_model_class, auto_pipeline.__class__)
+        self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -123,16 +123,16 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
-        ort_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
 
-            ort_output = ort_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ort_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -149,19 +149,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                 self.has_been_called = True
                 self.number_of_steps += 1
 
-        ort_callback = Callback()
+        ov_callback = Callback()
         auto_callback = Callback()
 
-        ort_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         # callback_steps=1 to trigger callback every step
-        ort_pipe(**inputs, callback=ort_callback, callback_steps=1)
+        ov_pipe(**inputs, callback=ov_callback, callback_steps=1)
         auto_pipe(**inputs, callback=auto_callback, callback_steps=1)
 
-        self.assertTrue(ort_callback.has_been_called)
+        self.assertTrue(ov_callback.has_been_called)
         self.assertTrue(auto_callback.has_been_called)
-        self.assertEqual(auto_callback.number_of_steps, ort_callback.number_of_steps)
+        self.assertEqual(auto_callback.number_of_steps, ov_callback.number_of_steps)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -195,12 +195,12 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         for generator_framework in ["np", "pt"]:
-            ort_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
-            ort_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
-            ort_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
+            ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
 
-            self.assertFalse(np.array_equal(ort_outputs_1.images[0], ort_outputs_3.images[0]))
-            np.testing.assert_allclose(ort_outputs_1.images[0], ort_outputs_2.images[0], atol=1e-4, rtol=1e-2)
+            self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
+            np.testing.assert_allclose(ov_outputs_1.images[0], ov_outputs_2.images[0], atol=1e-4, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_negative_prompt(self, model_arch: str):
@@ -268,11 +268,11 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
     @parameterized.expand(list(SUPPORTED_ARCHITECTURES))
     @require_diffusers
-    def test_ort_pipeline_class_dispatch(self, model_arch: str):
+    def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ort_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
-        self.assertEqual(ort_pipeline.auto_model_class, auto_pipeline.__class__)
+        self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -303,17 +303,17 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                 self.has_been_called = True
                 self.number_of_steps += 1
 
-        ort_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
-        ort_callback = Callback()
+        ov_callback = Callback()
         auto_callback = Callback()
         # callback_steps=1 to trigger callback every step
-        ort_pipe(**inputs, callback=ort_callback, callback_steps=1)
+        ov_pipe(**inputs, callback=ov_callback, callback_steps=1)
         auto_pipe(**inputs, callback=auto_callback, callback_steps=1)
 
-        self.assertTrue(ort_callback.has_been_called)
-        self.assertEqual(ort_callback.number_of_steps, auto_callback.number_of_steps)
+        self.assertTrue(ov_callback.has_been_called)
+        self.assertEqual(ov_callback.number_of_steps, auto_callback.number_of_steps)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -347,15 +347,15 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ort_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
 
-            ort_output = ort_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ort_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -366,12 +366,12 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         for generator_framework in ["np", "pt"]:
-            ort_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
-            ort_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
-            ort_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
+            ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
 
-            self.assertFalse(np.array_equal(ort_outputs_1.images[0], ort_outputs_3.images[0]))
-            np.testing.assert_allclose(ort_outputs_1.images[0], ort_outputs_2.images[0], atol=1e-4, rtol=1e-2)
+            self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
+            np.testing.assert_allclose(ov_outputs_1.images[0], ov_outputs_2.images[0], atol=1e-4, rtol=1e-2)
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -407,11 +407,11 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
-    def test_ort_pipeline_class_dispatch(self, model_arch: str):
+    def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ort_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
-        self.assertEqual(ort_pipeline.auto_model_class, auto_pipeline.__class__)
+        self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -442,17 +442,17 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                 self.has_been_called = True
                 self.number_of_steps += 1
 
-        ort_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
-        ort_callback = Callback()
+        ov_callback = Callback()
         auto_callback = Callback()
         # callback_steps=1 to trigger callback every step
-        ort_pipe(**inputs, callback=ort_callback, callback_steps=1)
+        ov_pipe(**inputs, callback=ov_callback, callback_steps=1)
         auto_pipe(**inputs, callback=auto_callback, callback_steps=1)
 
-        self.assertTrue(ort_callback.has_been_called)
-        self.assertEqual(ort_callback.number_of_steps, auto_callback.number_of_steps)
+        self.assertTrue(ov_callback.has_been_called)
+        self.assertEqual(ov_callback.number_of_steps, auto_callback.number_of_steps)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -482,7 +482,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        ort_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 64, 64, 1
@@ -491,10 +491,10 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
 
-            ort_output = ort_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ort_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -505,9 +505,9 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         for generator_framework in ["np", "pt"]:
-            ort_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
-            ort_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
-            ort_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
+            ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_2 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
+            ov_outputs_3 = pipeline(**inputs, generator=get_generator(generator_framework, SEED + 1))
 
-            self.assertFalse(np.array_equal(ort_outputs_1.images[0], ort_outputs_3.images[0]))
-            np.testing.assert_allclose(ort_outputs_1.images[0], ort_outputs_2.images[0], atol=1e-4, rtol=1e-2)
+            self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
+            np.testing.assert_allclose(ov_outputs_1.images[0], ov_outputs_2.images[0], atol=1e-4, rtol=1e-2)

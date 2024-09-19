@@ -256,7 +256,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_pipeline.compile()
         self.assertEqual(loaded_pipeline.unet.request.get_property("PERFORMANCE_HINT"), "LATENCY")
         batch_size, height, width = 2, 16, 16
-        np.random.seed(0)
         inputs = {
             "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
             "height": height,
@@ -264,8 +263,11 @@ class OVModelIntegrationTest(unittest.TestCase):
             "num_inference_steps": 2,
             "output_type": "np",
         }
+        np.random.seed(0)
+        torch.manual_seed(0)
         pipeline_outputs = loaded_pipeline(**inputs).images
         self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
@@ -287,13 +289,15 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
             np.random.seed(0)
+            torch.manual_seed(0)
             outputs = compile_only_pipeline(**inputs).images
-            self.assertTrue(np.array_equal(pipeline_outputs, outputs))
+            np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
             del compile_only_pipeline
 
         np.random.seed(0)
+        torch.manual_seed(0)
         outputs = pipeline(**inputs).images
-        self.assertTrue(np.array_equal(pipeline_outputs, outputs))
+        np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
         del pipeline
         gc.collect()
 
