@@ -66,7 +66,6 @@ from .model_patcher import (
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
-    OpenCLIPModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
@@ -1077,7 +1076,6 @@ class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-
         return DeciLMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1122,11 +1120,6 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
             reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
         return super().generate_dummy_inputs_for_validation(reference_model_inputs)
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
@@ -1157,11 +1150,6 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
         return dummy_inputs
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
@@ -1185,8 +1173,3 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
         model_inputs = {}
         model_inputs["x"] = inputs["pixel_values"]
         return model_inputs
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
