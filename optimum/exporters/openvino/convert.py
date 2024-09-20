@@ -386,7 +386,7 @@ def export_pytorch(
             if stateful:
                 # cannot raise because stateful is enabled by default and it would break backward compatibility for models that couldn't convert to OV directly
                 # TODO: Implement stateful for ONNX path as well, not doing it right now because of lack of validation
-                logger.warn(
+                logger.warning(
                     "[ WARNING ] Making stateful models is not supported when exporting to ONNX as an intermediate step. "
                     "A stateless model will be exported instead. It may result in sub-optimal inference performance."
                     "Provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
