@@ -2136,6 +2136,7 @@ class DBRXModelPatcher(DecoderModelPatcher):
                 block.norm_attn_norm.attn.rotary_emb.forward = block.norm_attn_norm.attn.rotary_emb._orig_forward
 
 
+
 # Adapted from https://github.com/huggingface/transformers/blob/v4.41.0/src/transformers/models/persimmon/modeling_persimmon.py#L264
 def _persimmon_self_attn_sdpa_forward(
     self,
@@ -2146,6 +2147,7 @@ def _persimmon_self_attn_sdpa_forward(
     output_attentions: bool = False,
     use_cache: bool = False,
     cache_position: Optional[torch.LongTensor] = None,
+    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.persimmon.modeling_persimmon import apply_rotary_pos_emb
 
@@ -2171,25 +2173,42 @@ def _persimmon_self_attn_sdpa_forward(
     value_states = value_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
 
-    kv_seq_len = key_states.shape[-2]
-    if past_key_value is not None:
-        if self.layer_idx is None:
-            raise ValueError(
-                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                "with a layer index."
+    if is_transformers_version("<", "4.44.99"):
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    else:
+        if position_embeddings is None:
+            log.warning(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
             )
-        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            cos, sin = self.rotary_emb(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
+
+    if is_transformers_version("<", "4.44.99"):
+        rotary_ndims = self.rotary_emb.dim
+    else:
+        rotary_ndims = self.rotary_ndims 
 
     # Partial rotary embedding
     query_rot, query_pass = (
-        query_states[..., : self.rotary_emb.dim],
-        query_states[..., self.rotary_emb.dim :],
+        query_states[..., :rotary_ndims],
+        query_states[..., rotary_ndims:],
     )
     key_rot, key_pass = (
-        key_states[..., : self.rotary_emb.dim],
-        key_states[..., self.rotary_emb.dim :],
+        key_states[..., :rotary_ndims],
+        key_states[..., rotary_ndims:],
     )
     # [batch_size, seq_length, num_heads, head_dim // config.partial_rotary_factor]
     query_rot, key_rot = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
@@ -2203,7 +2222,7 @@ def _persimmon_self_attn_sdpa_forward(
         cache_kwargs = {
             "sin": sin,
             "cos": cos,
-            "partial_rotation_size": self.rotary_emb.dim,
+            "partial_rotation_size": rotary_ndims,
             "cache_position": cache_position,
         }
         key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
