@@ -75,6 +75,7 @@ class OVBaseModel(OptimizedModel):
         **kwargs,
     ):
         self.config = config
+        self.name_or_path = getattr(config, "name_or_path", None)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
