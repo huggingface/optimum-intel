@@ -180,6 +180,14 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "scale_estimation": True,
     },
+    "microsoft/Phi-3-mini-4k-instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_4BIT_CONFIG = {
