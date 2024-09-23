@@ -271,7 +271,18 @@ class INCTrainer(Trainer):
         if not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
-        self.state = TrainerState()
+        if is_transformers_version(">=", "4.44.99"):
+            from transformers.trainer_callback import ExportableState
+
+            self.state = TrainerState(
+                stateful_callbacks=[
+                    cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+                ]
+            )
+
+        else:
+            self.state = TrainerState()
+
         self.state.is_hyper_param_search = trial is not None
         self.state.train_batch_size = self._train_batch_size
 
