@@ -624,7 +624,6 @@ def export_from_model(
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
-    
         if is_transformers_version(">=", "4.44.99"):
             misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
             if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:

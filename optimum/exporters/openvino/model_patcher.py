@@ -2136,7 +2136,6 @@ class DBRXModelPatcher(DecoderModelPatcher):
                 block.norm_attn_norm.attn.rotary_emb.forward = block.norm_attn_norm.attn.rotary_emb._orig_forward
 
 
-
 # Adapted from https://github.com/huggingface/transformers/blob/v4.41.0/src/transformers/models/persimmon/modeling_persimmon.py#L264
 def _persimmon_self_attn_sdpa_forward(
     self,
@@ -2199,7 +2198,7 @@ def _persimmon_self_attn_sdpa_forward(
     if is_transformers_version("<", "4.44.99"):
         rotary_ndims = self.rotary_emb.dim
     else:
-        rotary_ndims = self.rotary_ndims 
+        rotary_ndims = self.rotary_ndims
 
     # Partial rotary embedding
     query_rot, query_pass = (
