@@ -13,14 +13,9 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
-from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2LMHeadModel
-from transformers.models.llama.modeling_llama import (
-    LlamaDecoderLayer,
-    LlamaForCausalLM,
-    LlamaModel,
-    LlamaRMSNorm,
-)
+from transformers.models.falcon.modeling_falcon import FalconDecoderLayer
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaModel, LlamaRMSNorm
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
