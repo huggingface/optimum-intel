@@ -62,6 +62,7 @@ from optimum.intel import (
     OVQuantizationConfig,
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
+    OVModelOpenCLIPForZeroShotImageClassification,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -282,6 +283,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForFeatureExtraction, "blenderbot"),
         (OVStableDiffusionPipeline, "stable-diffusion"),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
+        (OVModelOpenCLIPForZeroShotImageClassification, "open-clip"),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
@@ -406,14 +408,23 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
-        self.assertEqual(model._openvino_config.quantization_config.bits, 8)
-        self.assertEqual(model._openvino_config.dtype, "int8")
+
+        if model_type == "open-clip":
+            self.assertEqual(model.text_model._openvino_config.quantization_config.bits, 8)
+            self.assertEqual(model.text_model._openvino_config.dtype, "int8")
+            self.assertEqual(model.visual_model._openvino_config.quantization_config.bits, 8)
+            self.assertEqual(model.visual_model._openvino_config.dtype, "int8")
+        else:
+            self.assertEqual(model._openvino_config.quantization_config.bits, 8)
+            self.assertEqual(model._openvino_config.dtype, "int8")
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+        elif model_type == "open-clip":
+            models = [model.text_model, model.visual_model]
         else:
             models = [model]
 
@@ -534,6 +545,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+        elif model_type == "open-clip":
+            models = [model.text_model, model.visual_model]
         else:
             models = [model]
 
@@ -732,7 +745,7 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 65, 39),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 64, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):

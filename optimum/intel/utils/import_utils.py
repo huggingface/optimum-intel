@@ -103,6 +103,15 @@ if _diffusers_available:
         _diffusers_available = False
 
 
+_open_clip_available = importlib.util.find_spec("open_clip") is not None
+_open_clip_version = "N/A"
+if _open_clip_available:
+    try:
+        _open_clip_version = importlib_metadata.version("open_clip_torch")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -144,9 +153,18 @@ _numa_available = importlib.util.find_spec("numa") is not None
 
 if _numa_available:
     try:
-        importlib_metadata.version("numa")
+        importlib_metadata.version("py-libnuma")
     except importlib_metadata.PackageNotFoundError:
         _numa_available = False
+
+
+_psutil_available = importlib.util.find_spec("psutil") is not None
+
+if _psutil_available:
+    try:
+        importlib_metadata.version("psutil")
+    except importlib_metadata.PackageNotFoundError:
+        _psutil_available = False
 
 
 _sentence_transformers_available = importlib.util.find_spec("sentence_transformers") is not None
@@ -260,6 +278,10 @@ def is_diffusers_available():
     return _diffusers_available
 
 
+def is_open_clip_available():
+    return _open_clip_available
+
+
 def is_safetensors_available():
     return _safetensors_available
 
@@ -282,6 +304,10 @@ def is_sentence_transformers_available():
 
 def is_numa_available():
     return _numa_available
+
+
+def is_psutil_available():
+    return _psutil_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319

@@ -22,6 +22,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
 
@@ -77,7 +78,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--library",
         type=str,
-        choices=["transformers", "diffusers", "timm", "sentence_transformers"],
+        choices=["transformers", "diffusers", "timm", "sentence_transformers", "open_clip"],
         default=None,
         help="The library used to load the model before export. If not provided, will attempt to infer the local checkpoint's library",
     )
@@ -234,7 +235,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
-            library_name = TasksManager._infer_library_from_model_name_or_path(
+            library_name = _infer_library_from_model_name_or_path(
                 model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
             )
             if library_name == "sentence_transformers":
@@ -280,7 +281,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
-        task = infer_task(self.args.task, self.args.model)
+        task = infer_task(self.args.task, self.args.model, library_name=library_name)
 
         if library_name == "diffusers" and quantize_with_dataset:
             if not is_diffusers_available():
