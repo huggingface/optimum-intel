@@ -33,6 +33,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.utils import _get_submodels_and_export_configs
 from optimum.intel.utils.import_utils import (
     _nncf_version,
+    _open_clip_version,
     _optimum_intel_version,
     _optimum_version,
     _timm_version,
@@ -44,11 +45,13 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available
+from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
     OV_XML_FILE_NAME,
     _get_input_info,
+    _get_open_clip_submodels_fn_and_export_configs,
     clear_class_registry,
     remove_none_from_dummy_inputs,
 )
@@ -183,11 +186,7 @@ def export_tensorflow(
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
 
-    if model.__class__.__module__.startswith("optimum"):
-        # for wrapped models
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-    else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+    library_name = _infer_library_from_model_or_model_class(model=model)
 
     _save_model(
         ov_model,
@@ -248,11 +247,7 @@ def export_pytorch_via_onnx(
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
 
-    if model.__class__.__module__.startswith("optimum"):
-        # for wrapped models
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-    else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+    library_name = _infer_library_from_model_or_model_class(model=model)
 
     _save_model(
         ov_model,
@@ -422,11 +417,7 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        if model.__module__.startswith("optimum"):
-            # for wrapped models like timm in optimum.intel.openvino.modeling_timm
-            library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-        else:
-            library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        library_name = _infer_library_from_model_or_model_class(model=model)
 
         _save_model(
             ov_model,
@@ -535,8 +526,9 @@ def export_from_model(
             f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
         )
 
-    library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
-    TasksManager.standardize_model_attributes(model)
+    library_name = _infer_library_from_model_or_model_class(model)
+    if library_name != "open_clip":
+        TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type"):
         model_type = model.config.export_model_type.replace("_", "-")
@@ -597,6 +589,12 @@ def export_from_model(
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
 
+    if library_name == "open_clip":
+        custom_architecture = True
+        custom_export_configs, fn_get_submodels = _get_open_clip_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
+        )
+
     logging.disable(logging.INFO)
     export_config, models_and_export_configs = _get_submodels_and_export_configs(
         model=model,
@@ -614,7 +612,16 @@ def export_from_model(
     )
     logging.disable(logging.NOTSET)
 
-    if library_name != "diffusers":
+    if library_name == "open_clip":
+        if hasattr(model.config, "save_pretrained"):
+            model.config.save_pretrained(output)
+
+        for preprocess in preprocessors:
+            if hasattr(preprocess, "save_pretrained"):
+                preprocess.save_pretrained(output)
+
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name != "diffusers":
         # Saving the model config and preprocessor as this is needed sometimes.
         model.config.save_pretrained(output)
         generation_config = getattr(model, "generation_config", None)
@@ -744,6 +751,8 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
             model.set_rt_info(_optimum_version, ["optimum", "diffusers_version"])
         elif library_name == "timm":
             model.set_rt_info(_timm_version, ["optimum", "timm_version"])
+        elif library_name == "open_clip":
+            model.set_rt_info(_open_clip_version, ["optimum", "open_clip_version"])
         rt_info = model.get_rt_info()
         if "nncf" in rt_info:
             model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])

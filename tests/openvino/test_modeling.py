@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict
 
 import numpy as np
+import open_clip
 import openvino as ov
 import pytest
 import requests
@@ -78,6 +79,7 @@ from optimum.intel import (
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
+    OVModelOpenCLIPForZeroShotImageClassification,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
 )
@@ -2075,4 +2077,142 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
                 )
         del transformers_model
         del ov_model
+        gc.collect()
+
+
+class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
+    OV_MODEL_ID = MODEL_NAMES["open-clip"]
+    OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
+
+    def _get_sample_image(self):
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        return image
+
+    def test_load_from_hub_and_save_model(self):
+        loaded_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(self.OV_MODEL_ID_IR)
+
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
+        all_text = ["a dog", "a cat", "a frog"]
+        tokens = tokenizer.batch_encode_plus(
+            all_text,
+            return_tensors="pt",
+            max_length=loaded_model.config.text_config.context_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids
+
+        processor_inputs = {
+            "is_train": False,
+            "image_size": (loaded_model.config.vision_config.image_size, loaded_model.config.vision_config.image_size),
+        }
+
+        processor = open_clip.image_transform(**processor_inputs)
+        processed_image = processor(self._get_sample_image()).unsqueeze(0)
+
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+
+        loaded_model_outputs = loaded_model(tokens, processed_image)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(loaded_model.text_model._xml_model_name in folder_contents)
+            self.assertTrue(loaded_model.text_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
+            self.assertTrue(loaded_model.visual_model._xml_model_name in folder_contents)
+            self.assertTrue(loaded_model.visual_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
+            model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(tmpdirname)
+
+        outputs = model(tokens, processed_image)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits_per_image, outputs.logits_per_image))
+        self.assertTrue(torch.equal(loaded_model_outputs.logits_per_text, outputs.logits_per_text))
+
+        del loaded_model
+        del model
+        gc.collect()
+
+    def test_compare_output_open_clip(self):
+        clip_model, clip_preprocessor = open_clip.create_model_from_pretrained(f"hf-hub:{self.OV_MODEL_ID}")
+        clip_tokenizer = open_clip.get_tokenizer(f"hf-hub:{self.OV_MODEL_ID}")
+
+        image = clip_preprocessor(self._get_sample_image()).unsqueeze(0)
+        text = clip_tokenizer(["a dog", "a cat", "a frog"])
+
+        with torch.no_grad():
+            clip_image_features = clip_model.encode_image(image)
+            clip_text_features = clip_model.encode_text(text)
+
+        ov_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(self.OV_MODEL_ID, export=True)
+        ov_outputs = ov_model(text, image)
+
+        self.assertTrue(
+            torch.allclose(
+                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-4
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-4
+            )
+        )
+
+        del ov_model
+        gc.collect()
+
+    def test_functions(self):
+        model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(self.OV_MODEL_ID, export=True)
+
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
+        all_text = ["a dog", "a cat", "a frog"]
+        tokens = tokenizer.batch_encode_plus(
+            all_text,
+            return_tensors="pt",
+            max_length=model.config.text_config.context_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids
+
+        processor_inputs = {
+            "is_train": False,
+            "image_size": (model.config.vision_config.image_size, model.config.vision_config.image_size),
+        }
+
+        processor = open_clip.image_transform(**processor_inputs)
+        processed_image = processor(self._get_sample_image()).unsqueeze(0)
+
+        model_outputs = model(tokens, processed_image)
+
+        model.to("AUTO")
+        self.assertTrue(model.visual_model._device == "AUTO")
+        self.assertTrue(model.text_model._device == "AUTO")
+        self.assertTrue(model.visual_model.request is None)
+        self.assertTrue(model.text_model.request is None)
+        res = model(tokens, processed_image)
+        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+
+        model.compile()
+        self.assertTrue(model.visual_model.request is not None)
+        self.assertTrue(model.text_model.request is not None)
+        res = model(tokens, processed_image)
+        print(model_outputs.logits_per_image, res.logits_per_image)
+        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+
+        model.half()
+        model.compile()
+        res = model(tokens, processed_image)
+        print(model_outputs.logits_per_image, res.logits_per_image)
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-2))
+
+        model.reshape(1, -1)
+        reshaped_tokens = tokenizer.batch_encode_plus(
+            ["a dog"],
+            return_tensors="pt",
+            max_length=model.config.text_config.context_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids
+        model.compile()
+        res = model(reshaped_tokens, processed_image)
+
+        del model
         gc.collect()
