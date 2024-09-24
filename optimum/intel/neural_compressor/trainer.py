@@ -715,7 +715,7 @@ class INCTrainer(Trainer):
                     for param_name, param_value in misplaced_generation_parameters.items():
                         setattr(self.model.generation_config, param_name, param_value)
                         setattr(self.model.config, param_name, None)
-            
+
             self.model.generation_config.save_pretrained(output_dir)
 
         if self.model.config is not None:
