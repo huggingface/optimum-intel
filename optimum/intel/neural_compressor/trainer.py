@@ -703,6 +703,21 @@ class INCTrainer(Trainer):
         output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
 
         # Save the config
+        if self.model.can_generate():
+            if is_transformers_version(">=", "4.44.99"):
+                misplaced_generation_parameters = self.model.config._get_non_default_generation_parameters()
+                if len(misplaced_generation_parameters) > 0:
+                    logger.warning(
+                        "Moving the following attributes in the config to the generation config: "
+                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                        "generation parameters in the model config, as opposed to in the generation config.",
+                    )
+                    for param_name, param_value in misplaced_generation_parameters.items():
+                        setattr(self.model.generation_config, param_name, param_value)
+                        setattr(self.model.config, param_name, None)
+            
+            self.model.generation_config.save_pretrained(output_dir)
+
         if self.model.config is not None:
             self.model.config.save_pretrained(output_dir)
 
