@@ -46,8 +46,6 @@ from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from transformers.utils.generic import ContextManagers
 
-from optimum.intel.generation import BaseModelForCausalLM
-
 from ...modeling_base import OptimizedModel
 from ..utils.import_utils import _torch_version, is_torch_version, is_transformers_version
 from .configuration import INCConfig
@@ -85,6 +83,8 @@ class INCModel(OptimizedModel):
         inc_config: Dict = None,
         **kwargs,
     ):
+        generation_config = kwargs.pop("generation_config", None)
+
         super().__init__(model=model, config=config, **kwargs)
         self.inc_config = inc_config
         self._q_config = q_config
@@ -92,8 +92,6 @@ class INCModel(OptimizedModel):
         self._device = getattr(self.model, "device", None) or torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
-
-        generation_config = kwargs.get("generation_config", None)
         if self.can_generate():
             self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
@@ -149,7 +147,7 @@ class INCModel(OptimizedModel):
         model_path = Path(model_id)
         is_local = model_path.is_dir()
 
-        if generation_config is None and cls.can_generate():
+        if generation_config is None and "text-generation" in cls.export_feature:
             try:
                 generation_config = GenerationConfig.from_pretrained(
                     model_id,
@@ -425,29 +423,6 @@ class INCModelForVision2Seq(INCModel):
     export_feature = "image-to-text"
 
 
-class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
+class INCModelForCausalLM(INCModel):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    forward = BaseModelForCausalLM.forward
-    generate = BaseModelForCausalLM.generate
-    can_generate = BaseModelForCausalLM.can_generate
-
-    def __init__(
-        self,
-        model,
-        config: PretrainedConfig = None,
-        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        q_config: Dict = None,
-        inc_config: Dict = None,
-        use_cache: bool = True,
-        **kwargs,
-    ):
-        super(INCModelForCausalLM, self).__init__(
-            model=model,
-            config=config,
-            model_save_dir=model_save_dir,
-            q_config=q_config,
-            inc_config=inc_config,
-            use_cache=use_cache,
-            **kwargs,
-        )
