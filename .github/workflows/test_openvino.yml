@@ -40,7 +40,6 @@ jobs:
           pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
           pip install transformers==${{ matrix.transformers-version }}
           pip install -U --pre openvino==2024.5.0.dev20240923 openvino-tokenizers==2024.5.0.dev20240923 --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly/
-          pip install git+https://github.com/openvinotoolkit/nncf.git@2efda7dd16276c8d8f70fabfb9a94b4bcd7af08f
 
       - name: Test with Pytest
         env:
