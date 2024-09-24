@@ -384,13 +384,12 @@ class OVQuantizer(OptimumQuantizer):
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config_copy)
-                        sub_model.request = None
 
                     # Apply hybrid quantization to UNet
                     self.model.unet.model = _hybrid_quantization(
                         self.model.unet.model, quantization_config, calibration_dataset
                     )
-                    self.model.unet.request = None
+                    self.model.clear_requests()
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
@@ -401,7 +400,7 @@ class OVQuantizer(OptimumQuantizer):
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config)
-                        sub_model.request = None
+                    self.model.clear_requests()
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
                     self.model.request = None
