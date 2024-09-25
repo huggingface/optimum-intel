@@ -39,6 +39,7 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
           pip install transformers==${{ matrix.transformers-version }}
+          pip install -U --pre openvino==2024.5.0.dev20240923 openvino-tokenizers==2024.5.0.dev20240923 --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly/
 
       - name: Test with Pytest
         env:
