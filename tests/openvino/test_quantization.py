@@ -601,6 +601,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "awq": None,
                     "subset_size": 128,
                     "scale_estimation": None,
+                    "gptq": None,
                 }
                 compress_weights_patch.assert_called_with(
                     unittest.mock.ANY,
@@ -648,6 +649,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "awq": None,
                     "subset_size": 128,
                     "scale_estimation": None,
+                    "gptq": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
