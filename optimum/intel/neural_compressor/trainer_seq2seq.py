@@ -166,7 +166,7 @@ class INCSeq2SeqTrainer(INCTrainer):
             gen_kwargs.pop("max_length")
 
         if "synced_gpus" not in gen_kwargs:
-            gen_kwargs["synced_gpus"] =  is_deepspeed_zero3_enabled()
+            gen_kwargs["synced_gpus"] = is_deepspeed_zero3_enabled()
 
         # prepare generation inputs
         # some encoder-decoder models can have varying encoder's and thus
@@ -216,7 +216,6 @@ class INCSeq2SeqTrainer(INCTrainer):
             labels = None
 
         return loss, generated_tokens, labels
-
 
     def _pad_tensors_to_max_len(self, tensor, max_length):
         if self.tokenizer is not None and hasattr(self.tokenizer, "pad_token_id"):
