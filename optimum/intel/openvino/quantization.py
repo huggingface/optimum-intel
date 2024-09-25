@@ -835,6 +835,7 @@ def _weight_only_quantization(
         dataset=dataset,
         subset_size=config.num_samples if config.num_samples else 128,
         scale_estimation=config.scale_estimation,
+        gptq=config.gptq,
     )
 
 

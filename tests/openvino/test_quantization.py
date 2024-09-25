@@ -269,6 +269,20 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             {"int4": 12, "int8": 8},
         ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset="c4",
+                gptq=True,
+            ),
+            {"int4": 12, "int8": 8},
+        ),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
@@ -510,8 +524,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
-            if quantization_config.quant_method.lower() == "awq" or quantization_config.scale_estimation:
-                # TODO: Check that AWQ and SE was actually applied
+            if quantization_config.quant_method.lower() == "awq":
+                # TODO: Check that AWQ was actually applied
                 pass
 
             tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -522,6 +536,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
+
+            wc_rt_info = model.model.get_rt_info()["nncf"]["weight_compression"]
+            self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
+            self.assertEqual(
+                quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
+            )
+            self.assertEqual(quantization_config.gptq or False, wc_rt_info["gptq"].value == "True")
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)

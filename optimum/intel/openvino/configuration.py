@@ -338,6 +338,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             compressed layers. Providing a dataset is required to run scale estimation.
         weight_format (`str`, defaults to 'int'):
             Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4'].
+        qptq (`bool`, *optional*):
+            Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
+            difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
     """
 
     def __init__(
@@ -356,6 +359,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
         weight_format: Optional[str] = None,
+        gptq: bool = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -369,6 +373,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
         self.weight_format = weight_format
+        self.gptq = gptq
         self.post_init()
 
     def post_init(self):
@@ -422,6 +427,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     "The Scale Estimation algorithm is not supported for 8-bit quantization and got `scale_estimation=True`, please set `scale_estimation=False`"
                 )
+            if self.gptq:
+                raise ValueError(
+                    "The GPTQ algorithm is not supported for 8-bit quantization and got `gptq=True`, please set `gptq=False`"
+                )
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
@@ -441,6 +450,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError("The AWQ algorithm is not supported for 'mxfp4' weight format")
             if self.scale_estimation:
                 raise ValueError("The Scale Estimation algorithm is not supported for 'mxfp4' weight format")
+            if self.gptq:
+                raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
 
 
 @dataclass
