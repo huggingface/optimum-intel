@@ -56,6 +56,9 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
+DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
+
 from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -76,15 +79,18 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def __init__(
         self,
-        unet: openvino.runtime.Model,
         config: Dict[str, Any],
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
+        unet: Optional[openvino.runtime.Model] = None,
         vae_decoder: Optional[openvino.runtime.Model] = None,
         vae_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
+        transformer: Optional[openvino.runtime.Model] = None,
+        text_encoder_3: Optional[openvino.runtime.Model] = None,
         tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
+        tokenizer_3: Optional["CLIPTokenizer"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         safety_checker: Optional["StableDiffusionSafetyChecker"] = None,
         device: str = "CPU",
@@ -113,11 +119,23 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self._model_save_dir = model_save_dir
 
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
-        self.unet = OVModelUnet(unet, self)
+        if unet is not None:
+            self.unet = OVModelUnet(unet, self)
+            self.trasnformer = None
+        elif transformer is not None:
+            self.unet = None
+            self.transformer = OVModelTransfomer(transformer, self)
+        else:
+            raise ValueError("`unet` or `transformer` model should be provided")
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
         self.text_encoder_2 = (
             OVModelTextEncoder(text_encoder_2, self, model_name=DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
             if text_encoder_2 is not None
+            else None
+        )
+        self.text_encoder_3 = (
+            OVModelTextEncoder(text_encoder_3, self, model_name=DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER)
+            if text_encoder_3 is not None
             else None
         )
         self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
@@ -131,6 +149,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
+        self.tokenizer_3 = tokenizer_3
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
         self.safety_checker = safety_checker
@@ -145,6 +164,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
             DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
             DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER: self.text_encoder_2,
+            DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER: self.transformer,
+            DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER: self.text_encoder_3
         }
         for name in sub_models.keys():
             self._internal_dict[name] = (
@@ -183,6 +204,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self.vae_encoder: DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
             self.text_encoder: DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
             self.text_encoder_2: DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
+            self.transformer: DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
+            self.text_encoder_3: DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER
         }
 
         for ov_model, dst_path in sub_models_to_save.items():
@@ -202,7 +225,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
             self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
-
+        if self.tokenizer_3 is not None:
+            self.tokenizer_3.save_pretrained(save_directory / "tokenizer_3")
         self._save_openvino_config(save_directory)
 
     @classmethod
@@ -218,6 +242,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         unet_file_name: Optional[str] = None,
         vae_encoder_file_name: Optional[str] = None,
         text_encoder_2_file_name: Optional[str] = None,
+        text_encoder_3_file_name: Optional[str] = None,
+        transformer_file_name: Optional[str] = None,
         local_files_only: bool = False,
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
@@ -230,10 +256,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         text_encoder_file_name = text_encoder_file_name or default_file_name
         text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
         unet_file_name = unet_file_name or default_file_name
+        transformer_file_name = transformer_file_name or default_file_name
+        text_encoder_3_file_name = text_encoder_3_file_name or default_file_name
         vae_encoder_file_name = vae_encoder_file_name or default_file_name
         model_id = str(model_id)
         patterns = set(config.keys())
-        sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
+        sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler", "tokenizer_3"})
         if not os.path.isdir(model_id):
             patterns.update({"vae_encoder", "vae_decoder"})
             allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
@@ -244,11 +272,15 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                     text_encoder_2_file_name,
                     unet_file_name,
                     vae_encoder_file_name,
+                    transformer_file_name,
+                    text_encoder_3_file_name,
                     vae_decoder_file_name.replace(".xml", ".bin"),
                     text_encoder_file_name.replace(".xml", ".bin"),
                     text_encoder_2_file_name.replace(".xml", ".bin"),
                     unet_file_name.replace(".xml", ".bin"),
                     vae_encoder_file_name.replace(".xml", ".bin"),
+                    transformer_file_name.replace(".xml", ".bin"),
+                    text_encoder_3_file_name.replace(".xml", ".bin"),
                     SCHEDULER_CONFIG_NAME,
                     CONFIG_NAME,
                     cls.config_name,
@@ -285,11 +317,14 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                     kwargs[name] = load_method(new_model_save_dir)
 
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
+        transformer_path = new_model_save_dir / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER / transformer_file_name
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
             "text_encoder": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
             "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
+            "text_encoder_3": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name
+
         }
 
         compile_only = kwargs.get("compile_only", False)
@@ -299,7 +334,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
-            unet = cls.load_model(unet_path, quantization_config)
+            unet = cls.load_model(unet_path, quantization_config) if unet_path.exists() else None
+            transformer = cls.load_model(transformer_path, quantization_config) if transformer_path.exists() else None
             for key, value in components.items():
                 components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
         elif compile_only:
@@ -319,15 +355,17 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 )
         else:
             # Load uncompressed models to apply hybrid quantization further
-            unet = cls.load_model(unet_path)
+            unet = cls.load_model(unet_path) if unet_path.exists() else None
+            transformer = cls.load_model(transformer) if transformer.exists() else None
             for key, value in components.items():
                 components[key] = cls.load_model(value) if value.is_file() else None
-            sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+            sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, transformer=transformer, **components, **kwargs)
 
             supported_pipelines = (
                 OVStableDiffusionPipeline,
                 OVStableDiffusionXLPipeline,
                 OVLatentConsistencyModelPipeline,
+                OVStableDiffusion3Pipeline,
             )
             if not isinstance(sd_model, supported_pipelines):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
@@ -343,6 +381,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         return cls(
             unet=unet,
+            transformer=transformer,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -423,21 +462,24 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     @property
     def height(self) -> int:
-        height = self.unet.model.inputs[0].get_partial_shape()[2]
+        model = self.unet.model if self.unet is not None else self.transformer.model
+        height = model.inputs[0].get_partial_shape()[2] 
         if height.is_dynamic:
             return -1
         return height.get_length() * self.vae_scale_factor
 
     @property
     def width(self) -> int:
-        width = self.unet.model.inputs[0].get_partial_shape()[3]
+        model = self.unet.model if self.unet is not None else self.transformer.model
+        width = model.inputs[0].get_partial_shape()[3]
         if width.is_dynamic:
             return -1
         return width.get_length() * self.vae_scale_factor
 
     @property
     def _batch_size(self) -> int:
-        batch_size = self.unet.model.inputs[0].get_partial_shape()[0]
+        model = self.unet.model if self.unet is not None else self.transformer.model
+        batch_size = model.inputs[0].get_partial_shape()[0]
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
@@ -547,9 +589,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             tokenizer_max_len = (
                 self.tokenizer.model_max_length if self.tokenizer is not None else self.tokenizer_2.model_max_length
             )
-        self.unet.model = self._reshape_unet(
-            self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
-        )
+        if self.unet is not None:
+            self.unet.model = self._reshape_unet(
+                self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+            )
+        if self.transformer is not None:
+            self.transformer.model = self._reshape_transformer(self.transformer.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len)
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
@@ -563,6 +608,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         if self.vae_encoder is not None:
             self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
+        
+        if self.text_encoder_3 is not None:
+            self.text_encoder_3.model = self._reshape_text_encoder(self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1))
 
         self.clear_requests()
         return self
@@ -577,8 +625,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             )
 
         compress_model_transformation(self.vae_decoder.model)
-        compress_model_transformation(self.unet.model)
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder, self.text_encoder_3, self.unet, self.transformer}:
             if component is not None:
                 compress_model_transformation(component.model)
         self.clear_requests()
@@ -591,15 +638,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             )
 
         self.vae_decoder.request = None
-        self.unet.request = None
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder, self.unet, self.transformer}:
             if component is not None:
                 component.request = None
 
     def compile(self):
         self.vae_decoder._compile()
-        self.unet._compile()
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+        for component in {self.unet, self.transformer, self.text_encoder, self.text_encoder_2, self.vae_encoder, self.text_encoder_3}:
             if component is not None:
                 component._compile()
 
@@ -685,6 +730,13 @@ class OVModelUnet(OVDiffusersModelPart):
 
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
+
+
+class OVModelTransformer(OVDiffusersModelPart):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
+        super().__init__(model, parent_model, ov_config, "transformer")
 
 
 class OVModelVaeDecoder(OVDiffusersModelPart):
