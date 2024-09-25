@@ -44,12 +44,10 @@ jobs:
       - name: Test with Pytest
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
-        run: |
-          pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
       - name: Test basic
         run: |
           pip uninstall -y nncf
-          pytest tests/openvino/test_modeling_basic.py
+          pytest tests/openvino/test_modeling.py
       - name: Test openvino-nightly
         run: |
           pip install -U --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
