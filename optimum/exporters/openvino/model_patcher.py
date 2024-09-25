@@ -2615,4 +2615,4 @@ class IBertModelPatcher(ModelPatcher):
             embeddings = self._model.embeddings
         # model has first inference buffers initialization, it may breaks tracing
         if getattr(embeddings.LayerNorm, "dim_sqrt") is None:
-            embeddings.LayerNorm.dim_sqrt = torch.sqrt(torch.tensor(self._model.config.hidden_size))
+            self._model(torch.ones([1, 1], dtype=torch.long))
