@@ -331,7 +331,7 @@ class OVBaseDecoderModel(OVModel):
             config, "original_max_position_embeddings", config.max_position_embeddings
         ):
             config.max_position_embeddings = config.original_max_position_embeddings
-
+        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
