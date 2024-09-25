@@ -61,6 +61,9 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
+DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
+
 from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
@@ -511,14 +514,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def height(self) -> int:
-        height = self.unet.model.inputs[0].get_partial_shape()[2]
+        model = self.unet.model if self.unet is not None else self.transformer.model
+        height = model.inputs[0].get_partial_shape()[2] 
         if height.is_dynamic:
             return -1
         return height.get_length() * self.vae_scale_factor
 
     @property
     def width(self) -> int:
-        width = self.unet.model.inputs[0].get_partial_shape()[3]
+        model = self.unet.model if self.unet is not None else self.transformer.model
+        width = model.inputs[0].get_partial_shape()[3]
         if width.is_dynamic:
             return -1
         return width.get_length() * self.vae_scale_factor

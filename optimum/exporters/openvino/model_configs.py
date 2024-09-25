@@ -15,6 +15,7 @@
 import enum
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+import random
 
 from packaging import version
 from transformers import PretrainedConfig, PreTrainedModel, TFPreTrainedModel
@@ -36,6 +37,7 @@ from optimum.exporters.onnx.model_configs import (
     MPTOnnxConfig,
     PhiOnnxConfig,
     VisionOnnxConfig,
+    UNetOnnxConfig
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -48,7 +50,7 @@ from optimum.utils.input_generators import (
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
-from optimum.utils.normalized_config import NormalizedTextConfig, NormalizedVisionConfig
+from optimum.utils.normalized_config import NormalizedTextConfig, NormalizedVisionConfig, NormalizedConfig
 
 from ...intel.utils.import_utils import _transformers_version, is_transformers_version
 from .model_patcher import (
@@ -1570,3 +1572,57 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         if self._behavior != InternVLChatConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+
+class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "pooled_projection"
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        if random_batch_size_range:
+            low, high = random_batch_size_range
+            self.batch_size = random.randint(low, high)
+        else:
+            self.batch_size = batch_size
+        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+
+        shape = [self.batch_size, self.pooled_projection_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+@register_in_tasks_manager("transformer", *["semantic-segmentation"], library_name="diffusers")
+class TransformerOpenVINOConfig(UNetOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (PooledProjectionsDummyInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="joint_attention_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs["pooled_projections"] = {0: "batch_size"}
+        return common_inputs
+
+    def rename_ambiguous_inputs(self, inputs):
+        #  The input name in the model signature is `x, hence the export input name is updated.
+        hidden_states = inputs.pop("sample", None)
+        if hidden_states is not None:
+            inputs["hidden_states"] = hidden_states
+        print(inputs)
+        return inputs

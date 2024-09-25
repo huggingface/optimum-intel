@@ -18,6 +18,7 @@ import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+import copy
 
 import onnx
 from transformers.generation import GenerationMixin
@@ -31,7 +32,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-from optimum.exporters.utils import _get_submodels_and_export_configs as _default_get_submodels_and_export_configs
+from optimum.exporters.utils import _get_submodels_and_export_configs , get_diffusion_models_for_export, _get_submodels_for_export_diffusion
 from optimum.intel.utils.import_utils import (
     _nncf_version,
     _open_clip_version,
@@ -347,6 +348,7 @@ def export_pytorch(
 
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
+        logger.info(dummy_inputs)
         device = torch.device(device)
         if device.type == "cuda" and torch.cuda.is_available():
             model.to(device)
@@ -618,23 +620,26 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
-    logging.disable(logging.INFO)
-    export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
-        model=model,
-        task=task,
-        monolith=False,
-        custom_export_configs=custom_export_configs if custom_export_configs is not None else {},
-        custom_architecture=custom_architecture,
-        fn_get_submodels=fn_get_submodels,
-        preprocessors=preprocessors,
-        library_name=library_name,
-        model_kwargs=model_kwargs,
-        _variant="default",
-        legacy=False,
-        exporter="openvino",
-        stateful=stateful,
-    )
-    logging.disable(logging.NOTSET)
+    if library_name == "diffusers":
+        export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
+    else:
+        logging.disable(logging.INFO)
+        export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
+            model=model,
+            task=task,
+            monolith=False,
+            custom_export_configs=custom_export_configs if custom_export_configs is not None else {},
+            custom_architecture=custom_architecture,
+            fn_get_submodels=fn_get_submodels,
+            preprocessors=preprocessors,
+            library_name=library_name,
+            model_kwargs=model_kwargs,
+            _variant="default",
+            legacy=False,
+            exporter="openvino",
+            stateful=stateful
+        )
+        logging.disable(logging.NOTSET)
 
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
@@ -699,6 +704,10 @@ def export_from_model(
         tokenizer_2 = getattr(model, "tokenizer_2", None)
         if tokenizer_2 is not None:
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
+        
+        tokenizer_3 = getattr(model, "tokenizer_3", None)
+        if tokenizer_3 is not None:
+            tokenizer_3.save_pretrained(output.joinpath("tokenizer_3"))
 
         model.save_config(output)
 
@@ -888,3 +897,111 @@ def _get_submodels_and_export_configs(
     )
     stateful_per_model = [stateful] * len(models_for_export)
     return export_config, models_for_export, stateful_per_model
+
+
+def get_diffusion_models_for_export_ext(
+    pipeline: "DiffusionPipeline",
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    exporter: str = "openvino"):
+
+    try:
+        from diffusers import StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline, StableDiffusion3InpaintPipeline
+        is_sd3  = isinstance(pipeline, (StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline))
+    except ImportError:
+        is_sd3 = False
+    
+    if not is_sd3:
+        return get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+    
+    models_for_export = {}
+
+    # Text encoder
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        text_encoder.config.output_hidden_states = True
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+
+
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
+    transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="transformer",
+    )
+    transformer_export_config = export_config_constructor(pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    models_for_export["trasnformer"] = (transformer, transformer_export_config)
+
+
+    # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_sample": vae_encoder.encode(x=sample)["latent_dist"].sample()}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+
+    # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype)
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
+    if text_encoder_2 is not None:
+        text_encoder_2.config.output_hidden_states = True
+        text_encoder_2.text_model.config.output_hidden_states = True
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder_2,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="clip-text-with-projection",
+        )
+        export_config = export_config_constructor(
+            text_encoder_2.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
+    
+    text_encoder_3 = getattr(pipeline, "text_encoder_3", None)
+    if text_encoder_3 is not None:
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder_3,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="clip-text-with-projection",
+        )
+        export_config = export_config_constructor(
+            text_encoder_3.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
+
+    return None, models_for_export, False
