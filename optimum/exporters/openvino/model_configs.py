@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import enum
-import random
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -25,7 +24,6 @@ from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, Tex
 from optimum.exporters.onnx.model_configs import (
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
-    CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
@@ -71,6 +69,7 @@ from .model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
+    LlavaImageEmbeddingModelPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -1268,84 +1267,17 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
         return model_inputs
 
 
-class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = ["image_features"]
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        self.task = task
-
-        if random_batch_size_range:
-            low, high = random_batch_size_range
-            self.batch_size = random.randint(low, high)
-        else:
-            self.batch_size = batch_size
-        self.hidden_size = normalized_config.hidden_size
-        self.num_patches = (normalized_config.image_size // normalized_config.patch_size) ** 2
-        self.normalized_config = normalized_config
-
-    def generate(
-        self,
-        input_name: str,
-        framework: str = "pt",
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-    ):
-        shape = [self.batch_size, self.num_patches, self.hidden_size]
-        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-
-class LLavaMultimodalProjectorOpenVINOConfig(OnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLLavaMultiModalProjectorInputGenerator,)
-    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {"image_features": {0: "batch_size"}}
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {"hidden_states": {0: "batch_size"}}
-
-
-@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="transformers")
-class CLIPVisionModeOpenVIONConfig(CLIPVisionModelOnnxConfig):
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        common_outputs = super().outputs
-        if self._config.output_hidden_states:
-            for i in range(self._config.num_hidden_layers + 1):
-                common_outputs[f"hidden_states.{i}"] = {0: "batch_size"}
-
-        return common_outputs
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
-        model_kwargs = model_kwargs or {}
-        if self._config.output_hidden_states and "output_hidden_states" not in model_kwargs:
-            model_kwargs["output_hidden_states"] = True
-
-        return super().patch_model_for_export(model, model_kwargs)
-
-
 class LlavaConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
-    MULTI_MODAL_PROJECTOR = "multi_modal_projector"
 
 
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaConfigBehavior]
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
 
     def __init__(
         self,
@@ -1353,7 +1285,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: LlavaConfigBehavior = LlavaConfigBehavior.LANGUAGE,
+        behavior: LlavaConfigBehavior = LlavaConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -1364,14 +1296,22 @@ class LlavaOpenVINOConfig(OnnxConfig):
             preprocessors=preprocessors,
         )
         self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {}
+        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {}
+        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size"}}
 
     def with_behavior(
         self,
@@ -1388,7 +1328,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
             behavior = LlavaConfigBehavior(behavior)
 
         if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
-            model_type = self._config.text_config.model_type
+            model_type = self._orig_config.text_config.model_type
             model_type = model_type.replace("_", "-")
             if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
                 raise ValueError(
@@ -1403,7 +1343,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
                 "text-generation-with-past"
             ]
             internal_export_config = internal_export_config_class(
-                self._config.text_config,
+                self._orig_config.text_config,
                 use_past=True,
                 use_past_in_inputs=True,
                 int_dtype=self.int_dtype,
@@ -1411,16 +1351,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
             )
             InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
             export_config = InputEmbedOpenvVINOConfig(
-                self._config.text_config,
-                task="feature-extraction",
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
-
-        if behavior == LlavaConfigBehavior.MULTI_MODAL_PROJECTOR:
-            export_config = LLavaMultimodalProjectorOpenVINOConfig(
-                self._config.vision_config,
+                self._orig_config.text_config,
                 task="feature-extraction",
                 int_dtype=self.int_dtype,
                 float_dtype=self.float_dtype,
@@ -1428,7 +1359,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
             return export_config
 
         if behavior == LlavaConfigBehavior.LANGUAGE:
-            model_type = self._config.text_config.model_type
+            model_type = self._orig_config.text_config.model_type
             model_type = model_type.replace("_", "-")
 
             if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
@@ -1444,7 +1375,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
                 "text-generation-with-past"
             ]
             internal_export_config = internal_export_config_class(
-                self._config.text_config,
+                self._orig_config.text_config,
                 use_past=True,
                 use_past_in_inputs=True,
                 int_dtype=self.int_dtype,
@@ -1455,29 +1386,14 @@ class LlavaOpenVINOConfig(OnnxConfig):
             return export_config
 
         if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
-            model_type = self._config.vision_config.model_type
-            model_type = model_type.replace("_", "-")
-            self._config.vision_config.output_hidden_states = True
-
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported vision embedding model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "feature-extraction" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for feature extraction for `{model_type}` is not available. Please define custom export config"
-                )
-
-            export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]["feature-extraction"]
-            export_config = export_config_class(
-                self._config.vision_config,
-                task="feature-extraction",
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
                 int_dtype=self.int_dtype,
                 float_dtype=self.float_dtype,
+                behavior=behavior,
                 preprocessors=self._preprocessors,
             )
-            return export_config
 
     def get_model_for_behaviour(self, model, behavior: Union[str, LlavaConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
@@ -1487,20 +1403,20 @@ class LlavaOpenVINOConfig(OnnxConfig):
             return model.language_model
 
         if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
-            vision_embedding = model.vision_tower
-            vision_embedding.config.output_hidden_states = True
-            vision_embedding.vision_model.config.output_hidden_states = True
-            return vision_embedding
+            return model
 
         if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
             text_embedding.config = model.language_model.config
             return text_embedding
 
-        if behavior == LlavaConfigBehavior.MULTI_MODAL_PROJECTOR:
-            mm_projector = model.multi_modal_projector
-            mm_projector.config = model.config.vision_config
-            return mm_projector
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return LlavaImageEmbeddingModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
@@ -1540,6 +1456,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         self._orig_config = config
         if self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

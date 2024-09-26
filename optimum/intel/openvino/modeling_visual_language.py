@@ -748,24 +748,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
-    additional_parts = ["multi_modal_projector"]
-
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
-        vision_feature_layer = self.config.vision_feature_layer
-        vision_feature_select_strategy = self.config.vision_feature_select_strategy
-        image_outputs = self.vision_embeddings(pixel_values)
-        selected_image_feature = image_outputs.hidden_states[vision_feature_layer]
-
-        if vision_feature_select_strategy == "default":
-            selected_image_feature = selected_image_feature[:, 1:]
-        elif vision_feature_select_strategy == "full":
-            selected_image_feature = selected_image_feature
-        else:
-            raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
-
-        image_features = self.multi_modal_projector(selected_image_feature)
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
 
         return image_features
 

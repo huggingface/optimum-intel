@@ -1550,12 +1550,6 @@ class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
-        if self._model.config.max_position_embeddings != getattr(
-            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
-        ):
-            self._model.config.max_position_embeddings = self._model.config.original_max_position_embe
-
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
@@ -2657,6 +2651,39 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = model.extract_feature
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+def llava_vision_embed_forward(self, pixel_values):
+    image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+    # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
+    selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
+
+    if self.config.vision_feature_select_strategy == "default":
+        selected_image_feature = selected_image_feature[:, 1:]
+    elif self.config.vision_feature_select_strategy == "full":
+        selected_image_feature = selected_image_feature
+    else:
+        raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
+
+    image_features = self.multi_modal_projector(selected_image_feature)
+    return image_features
+
+
+class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(llava_vision_embed_forward, model)
 
         super().__init__(config, model, model_kwargs)
 
