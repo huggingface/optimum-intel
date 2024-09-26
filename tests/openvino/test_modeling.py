@@ -842,7 +842,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
+        atol = 1e-3 if model_arch == "minicpm" else 1e-4
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
 

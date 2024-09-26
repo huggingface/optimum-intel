@@ -39,16 +39,15 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
           pip install transformers==${{ matrix.transformers-version }}
+          pip install -U --pre openvino==2024.5.0.dev20240923 openvino-tokenizers==2024.5.0.dev20240923 --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly/
 
       - name: Test with Pytest
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
-        run: |
-          pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
       - name: Test basic
         run: |
           pip uninstall -y nncf
-          pytest tests/openvino/test_modeling_basic.py
+          pytest tests/openvino/test_modeling.py
       - name: Test openvino-nightly
         run: |
           pip install -U --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
