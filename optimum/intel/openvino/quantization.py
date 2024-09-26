@@ -416,6 +416,7 @@ class OVQuantizer(OptimumQuantizer):
         ignored_scope = quantization_config.get_ignored_scope_instance()
         if model_type == nncf.ModelType.TRANSFORMER:
             ignored_scope.types += ["GroupNormalization"]
+            ignored_scope.validate = False
 
         # Actual model quantization
         quantized_model = nncf.quantize(
@@ -916,6 +917,7 @@ def _hybrid_quantization(
 
     ptq_ignored_scope = quantization_config.get_ignored_scope_instance()
     ptq_ignored_scope.names += ops_to_compress
+    ptq_ignored_scope.validate = False
 
     # TODO: remove after update to NNCF 2.14
     ptq_ignored_scope.types += ["GroupNormalization"]
