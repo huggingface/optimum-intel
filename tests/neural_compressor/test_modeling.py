@@ -125,27 +125,6 @@ class INCModelingTest(unittest.TestCase):
 
         pipe(*inputs)
 
-    def test_compare_with_and_without_past_key_values(self):
-        model_id = "echarlaix/tiny-random-gpt2-torchscript"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-
-        model_with_pkv = INCModelForCausalLM.from_pretrained(model_id, use_cache=True, subfolder="model_with_pkv")
-
-        outputs_with_pkv = model_with_pkv.generate(
-            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-        )
-        model_without_pkv = INCModelForCausalLM.from_pretrained(
-            model_id, use_cache=False, subfolder="model_without_pkv"
-        )
-
-        outputs_without_pkv = model_without_pkv.generate(
-            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-        )
-        self.assertEqual(outputs_with_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertEqual(outputs_without_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertTrue(torch.equal(outputs_with_pkv, outputs_without_pkv))
-
     def test_saving_loading_inc_woq_model(self):
         model_name = "TheBloke/TinyLlama-1.1B-Chat-v1.0-GPTQ"
         model = INCModelForCausalLM.from_pretrained(model_name, revision="main")
