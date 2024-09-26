@@ -1549,6 +1549,12 @@ class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
+        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
+        if self._model.config.max_position_embeddings != getattr(
+            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+        ):
+            self._model.config.max_position_embeddings = self._model.config.original_max_position_embe
+
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
