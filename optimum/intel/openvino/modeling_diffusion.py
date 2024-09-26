@@ -61,6 +61,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
 
@@ -84,6 +85,11 @@ if is_diffusers_version(">=", "0.25.0"):
     from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 else:
     from diffusers.models.vae import DiagonalGaussianDistribution
+
+if is_diffusers_version(">=", "0.29.0"):
+    from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Pipeline
+else:
+    StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline = None, None, None
 
 
 core = Core()
@@ -515,7 +521,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     @property
     def height(self) -> int:
         model = self.unet.model if self.unet is not None else self.transformer.model
-        height = model.inputs[0].get_partial_shape()[2] 
+        height = model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
             return -1
         return height.get_length() * self.vae_scale_factor
@@ -579,6 +585,46 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = tokenizer_max_length
+        model.reshape(shapes)
+        return model
+
+    def _reshape_transformer(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+        tokenizer_max_length: int = -1,
+    ):
+        if batch_size == -1 or num_images_per_prompt == -1:
+            batch_size = -1
+        else:
+            batch_size *= num_images_per_prompt
+
+        height = height // self.vae_scale_factor if height > 0 else height
+        width = width // self.vae_scale_factor if width > 0 else width
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            if inputs.get_any_name() == "timestep":
+                shapes[inputs][0] = 1
+            elif inputs.get_any_name() == "hidden_states":
+                in_channels = self.transformer.config.get("in_channels", None)
+                if in_channels is None:
+                    in_channels = shapes[inputs][1]
+                    if in_channels.is_dynamic:
+                        logger.warning(
+                            "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
+                        )
+                        self.is_dynamic = True
+
+                shapes[inputs] = [batch_size, in_channels, height, width]
+            elif inputs.get_any_name() == "pooled_projections":
+                shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
+            else:
+                shapes[inputs][0] = batch_size
+                shapes[inputs][1] = tokenizer_max_length * 2
         model.reshape(shapes)
         return model
 

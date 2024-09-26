@@ -13,9 +13,9 @@
 #  limitations under the License.
 
 import enum
+import random
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-import random
 
 from packaging import version
 from transformers import PretrainedConfig, PreTrainedModel, TFPreTrainedModel
@@ -37,7 +37,6 @@ from optimum.exporters.onnx.model_configs import (
     MPTOnnxConfig,
     PhiOnnxConfig,
     VisionOnnxConfig,
-    UNetOnnxConfig
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -50,7 +49,7 @@ from optimum.utils.input_generators import (
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
-from optimum.utils.normalized_config import NormalizedTextConfig, NormalizedVisionConfig, NormalizedConfig
+from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
 from ...intel.utils.import_utils import _transformers_version, is_transformers_version
 from .model_patcher import (
@@ -1576,9 +1575,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
 
 
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "pooled_projection"
-    )
+    SUPPORTED_INPUT_NAMES = "pooled_projection"
 
     def __init__(
         self,
@@ -1597,14 +1594,15 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
         self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-
         shape = [self.batch_size, self.pooled_projection_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
 @register_in_tasks_manager("transformer", *["semantic-segmentation"], library_name="diffusers")
 class TransformerOpenVINOConfig(UNetOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (PooledProjectionsDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (
+        PooledProjectionsDummyInputGenerator,
+    )
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         image_size="sample_size",
         num_channels="in_channels",
@@ -1624,5 +1622,4 @@ class TransformerOpenVINOConfig(UNetOnnxConfig):
         hidden_states = inputs.pop("sample", None)
         if hidden_states is not None:
             inputs["hidden_states"] = hidden_states
-        print(inputs)
         return inputs
