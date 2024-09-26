@@ -48,7 +48,6 @@ from .configuration import (
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
-    OV_TO_NP_TYPE,
     OV_XML_FILE_NAME,
     STR_TO_OV_TYPE,
     get_export_transformers_version,
@@ -467,7 +466,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif self.use_cache:
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
-                    dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
                     if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
                         shape[0] = 0
@@ -478,7 +476,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[2] = 0
                         else:
                             shape[1] = 0
-                    inputs[input_name] = np.empty([dim.get_length() for dim in shape], dtype=dtype)
+                    inputs[input_name] = Tensor(model_inputs.get_element_type(), [dim.get_length() for dim in shape])
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
