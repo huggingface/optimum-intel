@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, override_arguments
+from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -1550,6 +1550,12 @@ class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
+        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
+        if self._model.config.max_position_embeddings != getattr(
+            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+        ):
+            self._model.config.max_position_embeddings = self._model.config.original_max_position_embe
+
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
@@ -2622,3 +2628,21 @@ class DeciLMModelPatcher(DecoderModelPatcher):
 
         for layer in self._model.model.layers:
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class IBertModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        if getattr(self._model, "ibert"):
+            embeddings = self._model.ibert.embeddings
+        else:
+            embeddings = self._model.embeddings
+        # model has first inference buffers initialization, it may breaks tracing
+        if getattr(embeddings.LayerNorm, "dim_sqrt") is None:
+            self._model(torch.ones([1, 1], dtype=torch.long))

@@ -26,6 +26,7 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     GPTNeoXOnnxConfig,
+    IBertOnnxConfig,
     LlamaOnnxConfig,
     MistralOnnxConfig,
     MPTOnnxConfig,
@@ -59,6 +60,7 @@ from .model_patcher import (
     Gemma2ModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
+    IBertModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
     JaisModelPatcher,
@@ -1173,3 +1175,22 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
         model_inputs = {}
         model_inputs["x"] = inputs["pixel_values"]
         return model_inputs
+
+
+@register_in_tasks_manager(
+    "ibert",
+    *[
+        "feature-extraction",
+        "fill-mask",
+        "text-classification",
+        "multiple-choice",
+        "token-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class IBertOpenVINOConfig(IBertOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return IBertModelPatcher(self, model, model_kwargs=model_kwargs)
