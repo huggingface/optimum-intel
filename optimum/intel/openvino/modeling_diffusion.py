@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import importlib
+import inspect
 import logging
 import os
 import shutil
@@ -32,6 +33,7 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
+from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
@@ -47,7 +49,7 @@ from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import Stable
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl import StableDiffusionXLPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipelineMixin
-from optimum.pipelines.diffusers.pipeline_utils import VaeImageProcessor
+from optimum.pipelines.diffusers.pipeline_utils import DiffusionPipelineMixin, VaeImageProcessor
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -56,14 +58,22 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
 
 from ...exporters.openvino import main_export
+from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
+
+
+if is_diffusers_version(">=", "0.29.0"):
+    from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Pipeline
+else:
+    StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline = None, None, None
 
 
 core = Core()
@@ -124,7 +134,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self.trasnformer = None
         elif transformer is not None:
             self.unet = None
-            self.transformer = OVModelTransfomer(transformer, self)
+            self.transformer = OVModelTransformer(transformer, self)
         else:
             raise ValueError("`unet` or `transformer` model should be provided")
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
@@ -165,7 +175,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
             DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER: self.text_encoder_2,
             DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER: self.transformer,
-            DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER: self.text_encoder_3
+            DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER: self.text_encoder_3,
         }
         for name in sub_models.keys():
             self._internal_dict[name] = (
@@ -205,7 +215,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self.text_encoder: DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
             self.text_encoder_2: DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
             self.transformer: DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
-            self.text_encoder_3: DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER
+            self.text_encoder_3: DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER,
         }
 
         for ov_model, dst_path in sub_models_to_save.items():
@@ -261,7 +271,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         vae_encoder_file_name = vae_encoder_file_name or default_file_name
         model_id = str(model_id)
         patterns = set(config.keys())
-        sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler", "tokenizer_3"})
+        sub_models_names = patterns.intersection(
+            {"feature_extractor", "tokenizer", "tokenizer_2", "scheduler", "tokenizer_3"}
+        )
         if not os.path.isdir(model_id):
             patterns.update({"vae_encoder", "vae_decoder"})
             allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
@@ -300,7 +312,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 ignore_patterns=ignore_patterns,
             )
         new_model_save_dir = Path(model_id)
-
         for name in sub_models_names:
             # Check if the subcomponent needs to be loaded
             if kwargs.get(name, None) is not None:
@@ -323,8 +334,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
             "text_encoder": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
             "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
-            "text_encoder_3": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name
-
+            "text_encoder_3": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name,
         }
 
         compile_only = kwargs.get("compile_only", False)
@@ -344,7 +354,16 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             vae_ov_conifg = {**ov_config}
             if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
                 vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
-            unet = cls._compile_model(unet_path, device, ov_config, Path(model_save_dir) / "unet")
+            unet = (
+                cls._compile_model(unet_path, device, ov_config, Path(model_save_dir) / "unet")
+                if unet_path.exists()
+                else None
+            )
+            transformer = (
+                cls._compile_model(transformer_path, device, ov_config, Path(model_save_dir) / "transformer")
+                if transformer_path.exists()
+                else None
+            )
             for key, value in components.items():
                 components[key] = (
                     cls._compile_model(
@@ -355,11 +374,18 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 )
         else:
             # Load uncompressed models to apply hybrid quantization further
-            unet = cls.load_model(unet_path) if unet_path.exists() else None
-            transformer = cls.load_model(transformer) if transformer.exists() else None
+            unet = cls.load_model(unet_path) if unet_path.is_file() else None
+            transformer = cls.load_model(transformer_path) if transformer_path.is_file() else None
             for key, value in components.items():
                 components[key] = cls.load_model(value) if value.is_file() else None
-            sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, transformer=transformer, **components, **kwargs)
+            sd_model = cls(
+                unet=unet,
+                config=config,
+                model_save_dir=model_save_dir,
+                transformer=transformer,
+                **components,
+                **kwargs,
+            )
 
             supported_pipelines = (
                 OVStableDiffusionPipeline,
@@ -463,7 +489,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     @property
     def height(self) -> int:
         model = self.unet.model if self.unet is not None else self.transformer.model
-        height = model.inputs[0].get_partial_shape()[2] 
+        height = model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
             return -1
         return height.get_length() * self.vae_scale_factor
@@ -531,6 +557,46 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         model.reshape(shapes)
         return model
 
+    def _reshape_transformer(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+        tokenizer_max_length: int = -1,
+    ):
+        if batch_size == -1 or num_images_per_prompt == -1:
+            batch_size = -1
+        else:
+            batch_size *= num_images_per_prompt
+
+        height = height // self.vae_scale_factor if height > 0 else height
+        width = width // self.vae_scale_factor if width > 0 else width
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            if inputs.get_any_name() == "timestep":
+                shapes[inputs][0] = 1
+            elif inputs.get_any_name() == "hidden_states":
+                in_channels = self.transformer.config.get("in_channels", None)
+                if in_channels is None:
+                    in_channels = shapes[inputs][1]
+                    if in_channels.is_dynamic:
+                        logger.warning(
+                            "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
+                        )
+                        self.is_dynamic = True
+
+                shapes[inputs] = [batch_size, in_channels, height, width]
+            elif inputs.get_any_name() == "pooled_projections":
+                shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
+            else:
+                shapes[inputs][0] = batch_size
+                shapes[inputs][1] = tokenizer_max_length * 2
+        model.reshape(shapes)
+        return model
+
     def _reshape_text_encoder(
         self, model: openvino.runtime.Model, batch_size: int = -1, tokenizer_max_length: int = -1
     ):
@@ -594,7 +660,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
             )
         if self.transformer is not None:
-            self.transformer.model = self._reshape_transformer(self.transformer.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len)
+            self.transformer.model = self._reshape_transformer(
+                self.transformer.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+            )
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
@@ -608,9 +676,11 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         if self.vae_encoder is not None:
             self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
-        
+
         if self.text_encoder_3 is not None:
-            self.text_encoder_3.model = self._reshape_text_encoder(self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1))
+            self.text_encoder_3.model = self._reshape_text_encoder(
+                self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1)
+            )
 
         self.clear_requests()
         return self
@@ -625,7 +695,14 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             )
 
         compress_model_transformation(self.vae_decoder.model)
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder, self.text_encoder_3, self.unet, self.transformer}:
+        for component in {
+            self.text_encoder,
+            self.text_encoder_2,
+            self.vae_encoder,
+            self.text_encoder_3,
+            self.unet,
+            self.transformer,
+        }:
             if component is not None:
                 compress_model_transformation(component.model)
         self.clear_requests()
@@ -644,7 +721,14 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def compile(self):
         self.vae_decoder._compile()
-        for component in {self.unet, self.transformer, self.text_encoder, self.text_encoder_2, self.vae_encoder, self.text_encoder_3}:
+        for component in {
+            self.unet,
+            self.transformer,
+            self.text_encoder,
+            self.text_encoder_2,
+            self.vae_encoder,
+            self.text_encoder_3,
+        }:
             if component is not None:
                 component._compile()
 
@@ -737,6 +821,25 @@ class OVModelTransformer(OVDiffusersModelPart):
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
         super().__init__(model, parent_model, ov_config, "transformer")
+
+    def __call__(
+        self,
+        sample: np.ndarray,
+        timestep: np.ndarray,
+        encoder_hidden_states: np.ndarray,
+        pooled_projection: np.ndarray,
+    ):
+        self._compile()
+
+        inputs = {
+            "hidden_states": sample,
+            "timestep": timestep,
+            "encoder_hidden_states": encoder_hidden_states,
+            "pooled_projections": pooled_projection,
+        }
+
+        outputs = self.request(inputs, share_inputs=True)
+        return list(outputs.values())
 
 
 class OVModelVaeDecoder(OVDiffusersModelPart):
@@ -1159,4 +1262,589 @@ def _raise_invalid_batch_size(
             f"The static model expects an input of size equal to {expected_batch_size} and got the following value instead : {current_batch_size}. "
             f"To fix this, please either provide a different inputs to your model so that `batch_size` * `num_images_per_prompt` * 2 is equal to {expected_batch_size} "
             "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
+        )
+
+
+# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
+def retrieve_timesteps(
+    scheduler,
+    num_inference_steps: Optional[int] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    timesteps: Optional[List[int]] = None,
+    sigmas: Optional[List[float]] = None,
+    **kwargs,
+):
+    """
+    Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
+    custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
+
+    Args:
+        scheduler (`SchedulerMixin`):
+            The scheduler to get timesteps from.
+        num_inference_steps (`int`):
+            The number of diffusion steps used when generating samples with a pre-trained model. If used, `timesteps`
+            must be `None`.
+        device (`str` or `torch.device`, *optional*):
+            The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
+        timesteps (`List[int]`, *optional*):
+            Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
+            `num_inference_steps` and `sigmas` must be `None`.
+        sigmas (`List[float]`, *optional*):
+            Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
+            `num_inference_steps` and `timesteps` must be `None`.
+
+    Returns:
+        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
+        second element is the number of inference steps.
+    """
+    if timesteps is not None and sigmas is not None:
+        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
+    if timesteps is not None:
+        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
+        if not accepts_timesteps:
+            raise ValueError(
+                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
+                f" timestep schedules. Please check whether you are using the correct scheduler."
+            )
+        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
+        timesteps = scheduler.timesteps
+        num_inference_steps = len(timesteps)
+    elif sigmas is not None:
+        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
+        if not accept_sigmas:
+            raise ValueError(
+                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
+                f" sigmas schedules. Please check whether you are using the correct scheduler."
+            )
+        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
+        timesteps = scheduler.timesteps
+        num_inference_steps = len(timesteps)
+    else:
+        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
+        timesteps = scheduler.timesteps
+    return timesteps, num_inference_steps
+
+
+class StableDiffusion3PipelineMixin(DiffusionPipelineMixin):
+    def _get_t5_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]] = None,
+        num_images_per_prompt: int = 1,
+    ):
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt)
+
+        if self.text_encoder_3 is None:
+            return torch.zeros(
+                (batch_size, self.tokenizer_max_length, self.transformer.config.get("joint_attention_dim")),
+            )
+
+        text_inputs = self.tokenizer_3(
+            prompt,
+            padding="max_length",
+            max_length=self.tokenizer_max_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        text_input_ids = text_inputs.input_ids
+        prompt_embeds = torch.from_numpy(self.text_encoder_3(text_input_ids)[0])
+        _, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+        return prompt_embeds
+
+    def _get_clip_prompt_embeds(
+        self,
+        prompt: Union[str, List[str]],
+        num_images_per_prompt: int = 1,
+        clip_skip: Optional[int] = None,
+        clip_model_index: int = 0,
+    ):
+        clip_tokenizers = [self.tokenizer, self.tokenizer_2]
+        clip_text_encoders = [self.text_encoder, self.text_encoder_2]
+
+        tokenizer = clip_tokenizers[clip_model_index]
+        text_encoder = clip_text_encoders[clip_model_index]
+
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt)
+
+        text_inputs = tokenizer(
+            prompt, padding="max_length", max_length=self.tokenizer_max_length, truncation=True, return_tensors="pt"
+        )
+
+        text_input_ids = text_inputs.input_ids
+        prompt_embeds = text_encoder(text_input_ids)
+        pooled_prompt_embeds = torch.from_numpy(prompt_embeds[0])
+        hidden_states = prompt_embeds[1:]
+
+        if clip_skip is None:
+            prompt_embeds = torch.from_numpy(hidden_states[-2])
+        else:
+            prompt_embeds = torch.from_numpy(hidden_states[-(clip_skip + 2)])
+
+        _, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+        pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        pooled_prompt_embeds = pooled_prompt_embeds.view(batch_size * num_images_per_prompt, -1)
+
+        return prompt_embeds, pooled_prompt_embeds
+
+    def encode_prompt(
+        self,
+        prompt: Union[str, List[str]],
+        prompt_2: Union[str, List[str]],
+        prompt_3: Union[str, List[str]],
+        num_images_per_prompt: int = 1,
+        do_classifier_free_guidance: bool = True,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        negative_prompt_2: Optional[Union[str, List[str]]] = None,
+        negative_prompt_3: Optional[Union[str, List[str]]] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+        clip_skip: Optional[int] = None,
+    ):
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        if prompt is not None:
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
+
+        if prompt_embeds is None:
+            prompt_2 = prompt_2 or prompt
+            prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+
+            prompt_3 = prompt_3 or prompt
+            prompt_3 = [prompt_3] if isinstance(prompt_3, str) else prompt_3
+
+            prompt_embed, pooled_prompt_embed = self._get_clip_prompt_embeds(
+                prompt=prompt,
+                num_images_per_prompt=num_images_per_prompt,
+                clip_skip=clip_skip,
+                clip_model_index=0,
+            )
+            prompt_2_embed, pooled_prompt_2_embed = self._get_clip_prompt_embeds(
+                prompt=prompt_2,
+                num_images_per_prompt=num_images_per_prompt,
+                clip_skip=clip_skip,
+                clip_model_index=1,
+            )
+            clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
+
+            t5_prompt_embed = self._get_t5_prompt_embeds(
+                prompt=prompt_3,
+                num_images_per_prompt=num_images_per_prompt,
+            )
+
+            clip_prompt_embeds = torch.nn.functional.pad(
+                clip_prompt_embeds, (0, t5_prompt_embed.shape[-1] - clip_prompt_embeds.shape[-1])
+            )
+
+            prompt_embeds = torch.cat([clip_prompt_embeds, t5_prompt_embed], dim=-2)
+            pooled_prompt_embeds = torch.cat([pooled_prompt_embed, pooled_prompt_2_embed], dim=-1)
+
+        if do_classifier_free_guidance and negative_prompt_embeds is None:
+            negative_prompt = negative_prompt or ""
+            negative_prompt_2 = negative_prompt_2 or negative_prompt
+            negative_prompt_3 = negative_prompt_3 or negative_prompt
+
+            # normalize str to list
+            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            negative_prompt_2 = (
+                batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+            )
+            negative_prompt_3 = (
+                batch_size * [negative_prompt_3] if isinstance(negative_prompt_3, str) else negative_prompt_3
+            )
+
+            if prompt is not None and type(prompt) is not type(negative_prompt):
+                raise TypeError(
+                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
+                    f" {type(prompt)}."
+                )
+            elif batch_size != len(negative_prompt):
+                raise ValueError(
+                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
+                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
+                    " the batch size of `prompt`."
+                )
+
+            negative_prompt_embed, negative_pooled_prompt_embed = self._get_clip_prompt_embeds(
+                negative_prompt,
+                num_images_per_prompt=num_images_per_prompt,
+                clip_skip=None,
+                clip_model_index=0,
+            )
+            negative_prompt_2_embed, negative_pooled_prompt_2_embed = self._get_clip_prompt_embeds(
+                negative_prompt_2,
+                num_images_per_prompt=num_images_per_prompt,
+                clip_skip=None,
+                clip_model_index=1,
+            )
+            negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
+
+            t5_negative_prompt_embed = self._get_t5_prompt_embeds(
+                prompt=negative_prompt_3, num_images_per_prompt=num_images_per_prompt
+            )
+
+            negative_clip_prompt_embeds = torch.nn.functional.pad(
+                negative_clip_prompt_embeds,
+                (0, t5_negative_prompt_embed.shape[-1] - negative_clip_prompt_embeds.shape[-1]),
+            )
+
+            negative_prompt_embeds = torch.cat([negative_clip_prompt_embeds, t5_negative_prompt_embed], dim=-2)
+            negative_pooled_prompt_embeds = torch.cat(
+                [negative_pooled_prompt_embed, negative_pooled_prompt_2_embed], dim=-1
+            )
+
+        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+
+    def check_inputs(
+        self,
+        prompt,
+        prompt_2,
+        prompt_3,
+        height,
+        width,
+        negative_prompt=None,
+        negative_prompt_2=None,
+        negative_prompt_3=None,
+        prompt_embeds=None,
+        negative_prompt_embeds=None,
+        pooled_prompt_embeds=None,
+        negative_pooled_prompt_embeds=None,
+    ):
+        if height % 8 != 0 or width % 8 != 0:
+            raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
+
+        if prompt is not None and prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+                " only forward one of the two."
+            )
+        elif prompt_2 is not None and prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `prompt_2`: {prompt_2} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+                " only forward one of the two."
+            )
+        elif prompt_3 is not None and prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `prompt_3`: {prompt_2} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+                " only forward one of the two."
+            )
+        elif prompt is None and prompt_embeds is None:
+            raise ValueError(
+                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
+            )
+        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
+            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+        elif prompt_2 is not None and (not isinstance(prompt_2, str) and not isinstance(prompt_2, list)):
+            raise ValueError(f"`prompt_2` has to be of type `str` or `list` but is {type(prompt_2)}")
+        elif prompt_3 is not None and (not isinstance(prompt_3, str) and not isinstance(prompt_3, list)):
+            raise ValueError(f"`prompt_3` has to be of type `str` or `list` but is {type(prompt_3)}")
+
+        if negative_prompt is not None and negative_prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
+                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+            )
+        elif negative_prompt_2 is not None and negative_prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `negative_prompt_2`: {negative_prompt_2} and `negative_prompt_embeds`:"
+                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+            )
+        elif negative_prompt_3 is not None and negative_prompt_embeds is not None:
+            raise ValueError(
+                f"Cannot forward both `negative_prompt_3`: {negative_prompt_3} and `negative_prompt_embeds`:"
+                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+            )
+
+        if prompt_embeds is not None and negative_prompt_embeds is not None:
+            if prompt_embeds.shape != negative_prompt_embeds.shape:
+                raise ValueError(
+                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
+                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
+                    f" {negative_prompt_embeds.shape}."
+                )
+
+        if prompt_embeds is not None and pooled_prompt_embeds is None:
+            raise ValueError(
+                "If `prompt_embeds` are provided, `pooled_prompt_embeds` also have to be passed. Make sure to generate `pooled_prompt_embeds` from the same text encoder that was used to generate `prompt_embeds`."
+            )
+
+        if negative_prompt_embeds is not None and negative_pooled_prompt_embeds is None:
+            raise ValueError(
+                "If `negative_prompt_embeds` are provided, `negative_pooled_prompt_embeds` also have to be passed. Make sure to generate `negative_pooled_prompt_embeds` from the same text encoder that was used to generate `negative_prompt_embeds`."
+            )
+
+    def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, generator, latents=None):
+        shape = (batch_size, num_channels_latents, height // self.vae_scale_factor, width // self.vae_scale_factor)
+        if isinstance(generator, list) and len(generator) != batch_size:
+            raise ValueError(
+                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
+                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+            )
+
+        if latents is None:
+            if isinstance(generator, np.random.RandomState):
+                latents = generator.randn(*shape).astype(dtype)
+            elif isinstance(generator, torch.Generator):
+                latents = torch.randn(*shape, generator=generator).numpy().astype(dtype)
+            else:
+                raise ValueError(
+                    f"Expected `generator` to be of type `np.random.RandomState` or `torch.Generator`, but got"
+                    f" {type(generator)}."
+                )
+        elif latents.shape != shape:
+            raise ValueError(f"Unexpected latents shape, got {latents.shape}, expected {shape}")
+
+        return latents
+
+    @property
+    def guidance_scale(self):
+        return self._guidance_scale
+
+    @property
+    def clip_skip(self):
+        return self._clip_skip
+
+    # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
+    # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
+    # corresponds to doing no classifier free guidance.
+    @property
+    def do_classifier_free_guidance(self):
+        return self._guidance_scale > 1
+
+    @property
+    def joint_attention_kwargs(self):
+        return self._joint_attention_kwargs
+
+    @property
+    def num_timesteps(self):
+        return self._num_timesteps
+
+    @property
+    def interrupt(self):
+        return self._interrupt
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        prompt: Union[str, List[str]] = None,
+        prompt_2: Optional[Union[str, List[str]]] = None,
+        prompt_3: Optional[Union[str, List[str]]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 28,
+        timesteps: List[int] = None,
+        guidance_scale: float = 7.0,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        negative_prompt_2: Optional[Union[str, List[str]]] = None,
+        negative_prompt_3: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: Optional[int] = 1,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.FloatTensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+        clip_skip: Optional[int] = None,
+    ):
+        height = height or self.default_sample_size * self.vae_scale_factor
+        width = width or self.default_sample_size * self.vae_scale_factor
+
+        # 1. Check inputs. Raise error if not correct
+        self.check_inputs(
+            prompt,
+            prompt_2,
+            prompt_3,
+            height,
+            width,
+            negative_prompt=negative_prompt,
+            negative_prompt_2=negative_prompt_2,
+            negative_prompt_3=negative_prompt_3,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+        )
+
+        self._guidance_scale = guidance_scale
+        self._clip_skip = clip_skip
+        self._interrupt = False
+
+        # 2. Define call parameters
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
+        results = self.encode_prompt(
+            prompt=prompt,
+            prompt_2=prompt_2,
+            prompt_3=prompt_3,
+            negative_prompt=negative_prompt,
+            negative_prompt_2=negative_prompt_2,
+            negative_prompt_3=negative_prompt_3,
+            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+            clip_skip=self.clip_skip,
+            num_images_per_prompt=num_images_per_prompt,
+        )
+
+        (prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds) = results
+
+        if self.do_classifier_free_guidance:
+            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+            pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+
+        # 4. Prepare timesteps
+        timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, timesteps)
+        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        self._num_timesteps = len(timesteps)
+
+        # 5. Prepare latent variables
+        num_channels_latents = 16
+        latents = self.prepare_latents(
+            batch_size * num_images_per_prompt,
+            num_channels_latents,
+            height,
+            width,
+            "float32",
+            generator=generator,
+            latents=latents,
+        )
+        latents = torch.from_numpy(latents)
+        # 6. Denoising loop
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                if self.interrupt:
+                    continue
+
+                # expand the latents if we are doing classifier free guidance
+                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                timestep = t
+
+                noise_pred = self.transformer(latent_model_input, timestep, prompt_embeds, pooled_prompt_embeds)[0]
+
+                noise_pred = torch.from_numpy(noise_pred)
+
+                # perform guidance
+                if self.do_classifier_free_guidance:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                # compute the previous noisy sample x_t -> x_t-1
+                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False, generator=generator)[0]
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                    progress_bar.update()
+
+        if output_type == "latent":
+            image = latents
+
+        else:
+            latents = (latents / self.vae_decoder.config.get("scaling_factor", 1.5305)) + self.vae_decoder.config.get(
+                "shift_factor", 0.0609
+            )
+
+            image = self.vae_decoder(latents)[0]
+            image = self.image_processor.postprocess(image, output_type=output_type)
+
+        if not return_dict:
+            return (image,)
+        return StableDiffusionPipelineOutput(image, None)
+
+
+class OVStableDiffusion3PipelineBase(OVStableDiffusionPipelineBase):
+    def __init__(self, *args, **kwargs):
+        if kwargs.get("transformer") is None:
+            raise ValueError("OVStableDiffusion3Pipeline requires `transformer` model")
+        super().__init__(*args, **kwargs)
+        self.vae_scale_factor = (
+            2 ** (len(self.vae_decoder.config.get("block_out_channels", [0, 1, 2, 3])) - 1)
+            if hasattr(self, "vae_decoder") and self.vae_decoder is not None
+            else 8
+        )
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+        self.tokenizer_max_length = (
+            self.tokenizer.model_max_length if hasattr(self, "tokenizer") and self.tokenizer is not None else 77
+        )
+        self.default_sample_size = (
+            self.transformer.config.get("sample_size", 64)
+            if hasattr(self, "transformer") and self.transformer is not None
+            else 64
+        )
+
+
+class OVStableDiffusion3Pipeline(OVStableDiffusion3PipelineBase, StableDiffusion3PipelineMixin):
+    auto_model_class = StableDiffusion3Pipeline
+    export_feature = "text-to-image"
+
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        generator: Optional[Union[np.random.RandomState, torch.Generator]] = None,
+        **kwargs,
+    ):
+        height = height or self.transformer.config.get("sample_size", 64) * self.vae_scale_factor
+        width = width or self.transformer.config.get("sample_size", 64) * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+        if generator is None:
+            generator = np.random.RandomState()
+
+        if _height != -1 and height != _height:
+            logger.warning(
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+            )
+            height = _height
+
+        if _width != -1 and width != _width:
+            logger.warning(
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+            )
+            width = _width
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusion3PipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            generator=generator,
+            **kwargs,
         )
