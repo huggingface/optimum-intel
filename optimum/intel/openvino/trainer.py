@@ -87,7 +87,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_transformers_version
+from ..utils.import_utils import _transformers_version, is_transformers_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
@@ -214,6 +214,11 @@ class OVTrainer(Trainer):
         task: Optional[str] = None,
     ):
         logger.warning("OVTrainer is deprecated and will be removed in optimum-intel v1.22.0.")
+
+        if is_transformers_version(">=", "4.45.0"):
+            logger.warning(
+                f"The transformers version found is {_transformers_version} which is not officially supported by the OVTrainer, use at your own risk"
+            )
 
         self.neftune_noise_alpha = None
 
