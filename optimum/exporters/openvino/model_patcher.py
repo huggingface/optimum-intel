@@ -45,7 +45,7 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-BETTERTRANSFORMER_IGNORE = ("codegen",)
+BETTERTRANSFORMER_IGNORE = ("codegen", "gpt_neo")
 
 
 def patch_model_with_bettertransformer(model):
