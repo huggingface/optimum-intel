@@ -48,7 +48,6 @@ from .configuration import (
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
-    OV_TO_NP_TYPE,
     OV_XML_FILE_NAME,
     STR_TO_OV_TYPE,
     get_export_transformers_version,
@@ -122,7 +121,7 @@ class OVBaseDecoderModel(OVModel):
                 "`compile_only` mode does not support disabling compilation."
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
-
+        config.is_encoder_decoder = False
         super().__init__(
             model,
             config,
@@ -143,9 +142,8 @@ class OVBaseDecoderModel(OVModel):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self._original_model = (
-            self.model.clone() if not compile_only else None
-        )  # keep original model for serialization
+        # Keeping the original model for serialization
+        self._original_model = self.model.clone() if not compile_only else None
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
         self._past_length = 0
@@ -329,9 +327,11 @@ class OVBaseDecoderModel(OVModel):
             library_name=cls._library_name,
         )
 
-        config.is_decoder = True
-        config.is_encoder_decoder = False
-        config.save_pretrained(save_dir_path)
+        if config.model_type == "phi3" and config.max_position_embeddings != getattr(
+            config, "original_max_position_embeddings", config.max_position_embeddings
+        ):
+            config.max_position_embeddings = config.original_max_position_embeddings
+
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -463,7 +463,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif self.use_cache:
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
-                    dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
                     if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
                         shape[0] = 0
@@ -474,7 +473,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[2] = 0
                         else:
                             shape[1] = 0
-                    inputs[input_name] = np.empty([dim.get_length() for dim in shape], dtype=dtype)
+                    inputs[input_name] = Tensor(model_inputs.get_element_type(), [dim.get_length() for dim in shape])
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
@@ -765,10 +764,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
-    def can_generate(self):
-        """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
-        return True
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -787,6 +782,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        generation_config = kwargs.pop("generation_config", None)
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -827,20 +823,23 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
 
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-            if getattr(generation_config, "cache_implementation", None) is not None:
-                generation_config.cache_implementation = None
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                if getattr(generation_config, "cache_implementation", None) is not None:
+                    generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
 
         causal_model = init_cls(
             model=model,
@@ -849,6 +848,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             compile=enable_compilation,
             compile_only=compile_only,
             quantization_config=quantization_config,
+            generation_config=generation_config,
             **kwargs,
         )
 

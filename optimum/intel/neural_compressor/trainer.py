@@ -271,7 +271,18 @@ class INCTrainer(Trainer):
         if not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
-        self.state = TrainerState()
+        if is_transformers_version(">=", "4.44.99"):
+            from transformers.trainer_callback import ExportableState
+
+            self.state = TrainerState(
+                stateful_callbacks=[
+                    cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+                ]
+            )
+
+        else:
+            self.state = TrainerState()
+
         self.state.is_hyper_param_search = trial is not None
         self.state.train_batch_size = self._train_batch_size
 
@@ -692,6 +703,21 @@ class INCTrainer(Trainer):
         output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
 
         # Save the config
+        if self.model.can_generate():
+            if is_transformers_version(">=", "4.44.99"):
+                misplaced_generation_parameters = self.model.config._get_non_default_generation_parameters()
+                if len(misplaced_generation_parameters) > 0:
+                    logger.warning(
+                        "Moving the following attributes in the config to the generation config: "
+                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                        "generation parameters in the model config, as opposed to in the generation config.",
+                    )
+                    for param_name, param_value in misplaced_generation_parameters.items():
+                        setattr(self.model.generation_config, param_name, param_value)
+                        setattr(self.model.config, param_name, None)
+
+            self.model.generation_config.save_pretrained(output_dir)
+
         if self.model.config is not None:
             self.model.config.save_pretrained(output_dir)
 

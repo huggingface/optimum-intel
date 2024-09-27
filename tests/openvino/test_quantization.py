@@ -750,7 +750,7 @@ class OVTrainerTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        model = AutoModelForSequenceClassification.from_pretrained(model_id, attn_implementation="eager")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ov_config = OVConfig()
         dataset = load_dataset("glue", "sst2")

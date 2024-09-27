@@ -389,17 +389,21 @@ class OVQuantizer(OptimumQuantizer):
                     self.model.unet.model = _hybrid_quantization(
                         self.model.unet.model, quantization_config, calibration_dataset
                     )
+                    self.model.clear_requests()
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
+                    self.model.request = None
             else:
                 if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
                     sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config)
+                    self.model.clear_requests()
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
+                    self.model.request = None
             if save_directory is not None:
                 self.model.save_pretrained(save_directory)
                 ov_config.save_pretrained(save_directory)
@@ -434,6 +438,7 @@ class OVQuantizer(OptimumQuantizer):
         )
 
         self.model.model = quantized_model
+        self.model.request = None
         if save_directory is not None:
             self.model.save_pretrained(save_directory)
             ov_config.save_pretrained(save_directory)

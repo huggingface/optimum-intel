@@ -45,7 +45,7 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-BETTERTRANSFORMER_IGNORE = ("codegen",)
+BETTERTRANSFORMER_IGNORE = ("codegen", "gpt_neo")
 
 
 def patch_model_with_bettertransformer(model):
@@ -57,7 +57,7 @@ def patch_model_with_bettertransformer(model):
         return model
 
     if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
-        log.warn(
+        log.warning(
             COLOR_RED
             + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
             f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
@@ -75,7 +75,7 @@ def patch_model_with_bettertransformer(model):
         display_version = (
             _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
         )
-        log.warn(
+        log.warning(
             COLOR_RED
             + f"[WARNING] Stateful models are not supported for Llama, Gemma and GPTBigCode with Transformers "
             f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
@@ -93,7 +93,7 @@ def patch_model_with_bettertransformer(model):
     try:
         model = model.to_bettertransformer()
     except Exception as e:
-        log.warn(
+        log.warning(
             f"Cannot apply model.to_bettertransformer because of the exception:\n{e}."
             " Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
         )
@@ -168,7 +168,8 @@ class MixtralModelPatcher(DecoderModelPatcher):
             layer.block_sparse_moe.forward = types.MethodType(
                 _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
             )
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+            if is_transformers_version("<", "4.44.99"):
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -1549,6 +1550,12 @@ class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
+        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
+        if self._model.config.max_position_embeddings != getattr(
+            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+        ):
+            self._model.config.max_position_embeddings = self._model.config.original_max_position_embe
+
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
@@ -2145,6 +2152,7 @@ def _persimmon_self_attn_sdpa_forward(
     output_attentions: bool = False,
     use_cache: bool = False,
     cache_position: Optional[torch.LongTensor] = None,
+    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.persimmon.modeling_persimmon import apply_rotary_pos_emb
 
@@ -2170,25 +2178,42 @@ def _persimmon_self_attn_sdpa_forward(
     value_states = value_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
 
-    kv_seq_len = key_states.shape[-2]
-    if past_key_value is not None:
-        if self.layer_idx is None:
-            raise ValueError(
-                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                "with a layer index."
+    if is_transformers_version("<", "4.44.99"):
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    else:
+        if position_embeddings is None:
+            log.warning(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
             )
-        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            cos, sin = self.rotary_emb(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
+
+    if is_transformers_version("<", "4.44.99"):
+        rotary_ndims = self.rotary_emb.dim
+    else:
+        rotary_ndims = self.rotary_ndims
 
     # Partial rotary embedding
     query_rot, query_pass = (
-        query_states[..., : self.rotary_emb.dim],
-        query_states[..., self.rotary_emb.dim :],
+        query_states[..., :rotary_ndims],
+        query_states[..., rotary_ndims:],
     )
     key_rot, key_pass = (
-        key_states[..., : self.rotary_emb.dim],
-        key_states[..., self.rotary_emb.dim :],
+        key_states[..., :rotary_ndims],
+        key_states[..., rotary_ndims:],
     )
     # [batch_size, seq_length, num_heads, head_dim // config.partial_rotary_factor]
     query_rot, key_rot = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
@@ -2202,7 +2227,7 @@ def _persimmon_self_attn_sdpa_forward(
         cache_kwargs = {
             "sin": sin,
             "cos": cos,
-            "partial_rotation_size": self.rotary_emb.dim,
+            "partial_rotation_size": rotary_ndims,
             "cache_position": cache_position,
         }
         key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
@@ -2238,7 +2263,8 @@ class PersimmonModelPatcher(DecoderModelPatcher):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+            if is_transformers_version("<", "4.44.99"):
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2387,29 +2413,33 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
 class RotaryEmbPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.model.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.model.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
 
 class FalconModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.transformer.h:
-            _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.transformer.h:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
 
 
 class GptNeoxModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.gpt_neox.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.gpt_neox.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
 
 
 class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.gpt_neox_japanese.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.gpt_neox_japanese.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
 
 
 class Gemma2ModelPatcher(LlamaModelPatcher):
