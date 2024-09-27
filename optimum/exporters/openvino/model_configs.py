@@ -1418,6 +1418,11 @@ class LlavaOpenVINOConfig(OnnxConfig):
             return super().patch_model_for_export(model, model_kwargs)
         return LlavaImageEmbeddingModelPatcher(self, model, model_kwargs)
 
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
+        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+            kwargs["batch_size"] = 1
+        return super().generate_dummy_inputs(framework, **kwargs)
+
 
 @register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):

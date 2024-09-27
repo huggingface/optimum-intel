@@ -743,7 +743,20 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
-        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        if not isinstance(pixel_values, list):
+            image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        else:
+            image_features = []
+            for patch in pixel_values:
+                if isinstance(patch, list):
+                    patch_feats = []
+                    for patch_value in patch:
+                        patch_feats.append(self.vision_embeddings(np.expand_dims(patch_value, 0)).last_hidden_state)
+                    patch_feats = np.concatenate(patch_feats, axis=1)
+                else:
+                    patch_feats = self.vision_embeddings(patch).last_hidden_state
+                image_features.append(patch_feats)
+            image_features = np.concatenate(image_features, 0)
 
         return image_features
 
@@ -761,9 +774,10 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if legacy_processing is None:
             legacy_processing = (
-                hasattr(self.config, "image_seq_len") and
-                (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
-            ) or (input_ids.shape[-1] == 1)
+                not hasattr(self.config, "image_seq_len")
+                or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
+                or (input_ids.shape[-1] == 1)
+            )
 
         if legacy_processing:
             pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
@@ -844,9 +858,10 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
         legacy_processing = (
-            hasattr(self.config, "image_seq_len") and
-            (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
-        ) or (input_ids.shape[-1] == 1 and pixel_values is not None)
+            not hasattr(self.config, "image_seq_len")
+            or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
+            or (input_ids.shape[-1] == 1 and pixel_values is not None)
+        )
         inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
             input_ids, pixel_values, attention_mask, position_ids, legacy_processing=legacy_processing, **kwargs
         )
@@ -964,9 +979,10 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
         legacy_processing = (
-            hasattr(self.config, "image_seq_len") and
-            (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
-        ) or (input_ids.shape[-1] == 1 and pixel_values is not None)
+            not hasattr(self.config, "image_seq_len")
+            or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
+            or (input_ids.shape[-1] == 1 and pixel_values is not None)
+        )
         if pixel_values is not None and pixel_values.size(0) > 0:
             # ! infer image_num_patches from image_sizes
             image_num_patches = [
