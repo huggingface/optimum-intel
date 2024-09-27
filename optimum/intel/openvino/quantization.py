@@ -922,10 +922,10 @@ def _hybrid_quantization(
 
     ptq_ignored_scope = quantization_config.get_ignored_scope_instance()
     ptq_ignored_scope.names += ops_to_compress
-    ptq_ignored_scope.validate = False
 
     # TODO: remove after update to NNCF 2.14
     ptq_ignored_scope.types += ["GroupNormalization"]
+    ptq_ignored_scope.validate = False
 
     subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
     quantized_model = nncf.quantize(
