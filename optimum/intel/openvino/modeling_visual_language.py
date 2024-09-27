@@ -761,6 +761,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if legacy_processing is None:
             legacy_processing = (
+                hasattr(self.config, "image_seq_len") and
                 (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
             ) or (input_ids.shape[-1] == 1)
 
@@ -835,6 +836,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
             image_features = image_features.to(inputs_embeds.dtype)
             final_embedding = inputs_embeds.masked_scatter(special_image_mask, image_features)
+            final_attention_mask = attention_mask
 
         return final_embedding, final_attention_mask, position_ids
 
@@ -842,6 +844,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
         legacy_processing = (
+            hasattr(self.config, "image_seq_len") and
             (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
         ) or (input_ids.shape[-1] == 1 and pixel_values is not None)
         inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
@@ -961,6 +964,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
         legacy_processing = (
+            hasattr(self.config, "image_seq_len") and
             (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
         ) or (input_ids.shape[-1] == 1 and pixel_values is not None)
         if pixel_values is not None and pixel_values.size(0) > 0:
@@ -1144,6 +1148,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
             image_features = image_features.to(inputs_embeds.dtype)
             final_embedding = inputs_embeds.masked_scatter(special_image_mask, image_features)
+            final_attention_mask = attention_mask
 
         return final_embedding, final_attention_mask, position_ids
 
