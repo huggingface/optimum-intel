@@ -158,6 +158,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--gptq",
+        action="store_true",
+        default=None,
+        help=(
+            "Indicates whether to apply GPTQ algorithm that optimizes compressed weights in a layer-wise fashion to "
+            "minimize the difference between activations of a compressed and original layer. Please note, that "
+            "applying GPTQ takes additional memory and time."
+        ),
+    )
+    optional_group.add_argument(
         "--sensitivity-metric",
         type=str,
         default=None,
@@ -203,6 +213,8 @@ def no_compression_parameter_provided(args):
                 args.dataset,
                 args.num_samples,
                 args.awq,
+                args.scale_estimation,
+                args.gptq,
                 args.sensitivity_metric,
             )
         )
@@ -272,6 +284,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "quant_method": "awq" if self.args.awq else "default",
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
+                    "gptq": self.args.gptq,
                     "weight_format": self.args.weight_format,
                 }
 
