@@ -1560,7 +1560,7 @@ class Phi3ModelPatcher(DecoderModelPatcher):
         if self._model.config.max_position_embeddings != getattr(
             self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
         ):
-            self._model.config.max_position_embeddings = self._model.config.original_max_position_embe
+            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
