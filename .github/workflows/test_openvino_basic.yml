@@ -22,16 +22,12 @@ jobs:
       matrix:
         python-version: ["3.9", "3.12"]
         os: ["ubuntu-22.04", "windows-latest"]
-        transformers-version: ["4.44.*"]
-        nncf: ["nncf"]
         include:
           - python-version: "3.12"
             os: "ubuntu-22.04"
-            nncf: "nncf"
             transformers-version: "4.36.0"
           - python-version: "3.12"
             os: "ubuntu-22.04"
-            transformers-version: "4.44.*"
             nncf: "git+https://github.com/openvinotoolkit/nncf.git"
 
     runs-on: ${{ matrix.os }}
@@ -48,9 +44,10 @@ jobs:
           python -m pip install --upgrade pip
           # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install openvino
+          pip install openvino nncf
           pip install .[tests]
-          pip install transformers==${{ matrix.transformers-version }}
+      - if: ${{ matrix.transformers-version }}
+        run: pip install transformers==${{ matrix.transformers-version }}
 
       - name: Pip freeze
         run: pip freeze
@@ -59,9 +56,11 @@ jobs:
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
+      - if: ${{ matrix.nncf }}
+        run: pip install ${{ matrix.nncf }}
+
       - name: Slow tests
         run: |
-          pip install ${{ matrix.nncf }}
           pytest tests/openvino -s -m "run_slow" --durations=0
         env:
           RUN_SLOW: 1
