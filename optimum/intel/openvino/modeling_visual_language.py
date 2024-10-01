@@ -51,11 +51,13 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
     def compile(self):
         if self.request is None:
+            logger.info(f"Compiling the Language model to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
         self._compile_text_emb()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
+            logger.info(f"Compiling the Text embeddings model to {self._device} ...")
             self.text_emb_request = core.compile_model(self.text_emb_model, self._device, self.ov_config)
 
     def to(self, device: str):
@@ -528,28 +530,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        """
-        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
-
-        Arguments:
-            model_id (`str` or `Path`):
-                The directory from which to load the model.
-                Can be either:
-                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.
-            save_dir (`str` or `Path`):
-                The directory where the exported ONNX model should be saved, defaults to
-                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
-            use_auth_token (`Optional[str]`, defaults to `None`):
-                Deprecated. Please use `token` instead.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`):
-                Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id
-            kwargs (`Dict`, *optional*):
-                kwargs will be passed to the model during initialization
-        """
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
@@ -774,7 +754,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if legacy_processing is None:
             legacy_processing = (
-                not hasattr(self.config, "image_seq_len")
+                not hasattr(self.config, "image_seq_length")
                 or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
                 or (input_ids.shape[-1] == 1)
             )
@@ -858,7 +838,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
         legacy_processing = (
-            not hasattr(self.config, "image_seq_len")
+            not hasattr(self.config, "image_seq_length")
             or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
             or (input_ids.shape[-1] == 1 and pixel_values is not None)
         )
@@ -979,7 +959,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
         legacy_processing = (
-            not hasattr(self.config, "image_seq_len")
+            not hasattr(self.config, "image_seq_length")
             or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
             or (input_ids.shape[-1] == 1 and pixel_values is not None)
         )

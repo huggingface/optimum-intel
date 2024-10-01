@@ -607,7 +607,7 @@ def export_from_model(
         )
 
     logging.disable(logging.INFO)
-    export_config, models_and_export_configs, stateful_for_parts = _get_submodels_and_export_configs(
+    export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
         model=model,
         task=task,
         monolith=False,
@@ -697,7 +697,7 @@ def export_from_model(
         input_shapes=input_shapes,
         device=device,
         ov_config=ov_config,
-        stateful=stateful_for_parts,
+        stateful=stateful_submodels,
         opset=opset,
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
