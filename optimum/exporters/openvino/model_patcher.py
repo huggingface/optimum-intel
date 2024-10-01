@@ -45,7 +45,13 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-BETTERTRANSFORMER_IGNORE = ("codegen", "gpt_neo")
+BETTERTRANSFORMER_IGNORE = [
+    "codegen",
+]
+
+# in transformers 4.45 gpt_neo has SDPA
+if is_transformers_version(">=", "4.44.99"):
+    BETTERTRANSFORMER_IGNORE.append("gpt_neo")
 
 
 def patch_model_with_bettertransformer(model):
@@ -1549,6 +1555,12 @@ def _phi3_self_attn_sdpa_forward(
 class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+
+        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
+        if self._model.config.max_position_embeddings != getattr(
+            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+        ):
+            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
