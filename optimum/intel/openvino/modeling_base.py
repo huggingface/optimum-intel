@@ -783,6 +783,8 @@ class OVModelPart:
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
 
     def _compile(self):
+        if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
+            self.request = self.model
         if self.request is None:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()

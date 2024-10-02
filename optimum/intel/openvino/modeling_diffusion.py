@@ -60,10 +60,7 @@ from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel, OVModelPart
-from .utils import (
-    ONNX_WEIGHTS_NAME,
-    OV_XML_FILE_NAME,
-)
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
 
 
 core = Core()
@@ -630,6 +627,10 @@ class OVDiffusersModelPart(OVModelPart):
         )
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
+        self.input_dtype = {
+            inputs.get_any_name(): OV_TO_NP_TYPE[inputs.get_element_type().get_type_name()]
+            for inputs in self.model.inputs
+        }
 
 
 class OVModelTextEncoder(OVDiffusersModelPart):

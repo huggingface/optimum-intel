@@ -99,6 +99,7 @@ def export(
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
     patch_16bit_model: bool = False,
+    library_name: Optional[str] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -151,6 +152,7 @@ def export(
             model_kwargs=model_kwargs,
             stateful=stateful,
             patch_16bit_model=patch_16bit_model,
+            library_name=library_name,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -161,7 +163,7 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output, ov_config=ov_config)
+        return export_tensorflow(model, config, opset, output, ov_config=ov_config, library_name=library_name)
 
     else:
         raise RuntimeError(
@@ -175,6 +177,7 @@ def export_tensorflow(
     opset: int,
     output: Path,
     ov_config: Optional["OVConfig"] = None,
+    library_name: Optional[str] = None,
 ):
     """
     Export the TensorFlow model to OpenVINO format.
@@ -194,7 +197,7 @@ def export_tensorflow(
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
 
-    library_name = _infer_library_from_model_or_model_class(model=model)
+    library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
     _save_model(
         ov_model,
@@ -214,6 +217,7 @@ def export_pytorch_via_onnx(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
+    library_name: Optional[str] = None,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -255,7 +259,7 @@ def export_pytorch_via_onnx(
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
 
-    library_name = _infer_library_from_model_or_model_class(model=model)
+    library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
     _save_model(
         ov_model,
@@ -277,6 +281,7 @@ def export_pytorch(
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = False,
     patch_16bit_model: bool = False,
+    library_name: Optional[str] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -409,6 +414,7 @@ def export_pytorch(
                 input_shapes,
                 model_kwargs,
                 ov_config=ov_config,
+                library_name=library_name,
             )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
@@ -426,7 +432,7 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        library_name = _infer_library_from_model_or_model_class(model=model)
+        library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
         _save_model(
             ov_model,
@@ -453,6 +459,7 @@ def export_models(
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
     patch_16bit_model: bool = False,
+    library_name: Optional[str] = None,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -505,6 +512,7 @@ def export_models(
                 ov_config=ov_config,
                 stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
                 patch_16bit_model=patch_16bit_model,
+                library_name=library_name,
             )
         )
 
@@ -701,6 +709,7 @@ def export_from_model(
         opset=opset,
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
+        library_name=library_name,
     )
 
     return files_subpaths

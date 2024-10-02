@@ -148,8 +148,6 @@ def make_stateful(
     from openvino._offline_transformations import apply_make_stateful_transformation
 
     input_output_map = {}
-
-    main_input_name = "input_ids" if model_has_input_output_name(ov_model, "input_ids") else "inputs_embeds"
     # TODO: Can we derive the dimensions from the model topology?
 
     if num_beams_and_batch is not None:
