@@ -176,10 +176,13 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         inputs["prompt"] = "A painting of a squirrel eating a burger"
         inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
         np.random.seed(0)
-        output = pipeline(**inputs).images[0, -3:, -3:, -1]
+        output = pipeline(**inputs).images[0, -3:, -3:, -1].flatten()
         # https://github.com/huggingface/diffusers/blob/v0.17.1/tests/pipelines/stable_diffusion/test_onnx_stable_diffusion_img2img.py#L71
         expected_slice = np.array([0.69643, 0.58484, 0.50314, 0.58760, 0.55368, 0.59643, 0.51529, 0.41217, 0.49087])
-        self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
+        self.assertTrue(
+            np.allclose(output, expected_slice, atol=1e-1),
+            msg=f"Max difference: {np.abs(output - expected_slice).max()}. Actual value: {output}",
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
