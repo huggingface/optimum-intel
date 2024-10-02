@@ -1395,7 +1395,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def get_model_for_behaviour(self, model, behavior: Union[str, LlavaConfigBehavior]):
+    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
             behavior = LlavaConfigBehavior(behavior)
 
@@ -1557,7 +1557,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def get_model_for_behaviour(self, model, behavior: Union[str, LlavaConfigBehavior]):
+    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
             behavior = InternVLChatConfigBehavior(behavior)
 

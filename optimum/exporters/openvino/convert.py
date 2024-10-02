@@ -819,7 +819,7 @@ def _get_multi_modal_submodels_and_export_configs(
     for behavior in main_config.SUPPORTED_BEHAVIORS:
         model_id = f"{behavior}_model"
         model_part_config = main_config.with_behavior(behavior)
-        model_part = main_config.get_model_for_behaviour(model, behavior)
+        model_part = main_config.get_model_for_behavior(model, behavior)
         models_for_export[model_id] = (model_part, model_part_config)
         stateful_parts.append(stateful if getattr(model_part_config, "use_past", False) else False)
     return main_config, models_for_export, stateful_parts

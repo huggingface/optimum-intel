@@ -2,7 +2,7 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -17,9 +17,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available
 from .configuration import OVConfig, OVWeightQuantizationConfig
-from .modeling_base import OVBaseModel
+from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
-from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
 
 
 logger = logging.getLogger(__name__)
@@ -164,73 +163,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self._past_length += inputs["inputs_embeds"].shape[1]
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
-
-
-class OVModelPart:
-    def __init__(
-        self,
-        model: ov.Model,
-        parent_model: OVBaseModel,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_name: str = "encoder",
-        model_dir: str = None,
-    ):
-        self.model = model
-        self.parent_model = parent_model
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.input_dtype = {
-            inputs.get_any_name(): OV_TO_PT_TYPE[inputs.get_element_type().get_type_name()]
-            for inputs in self.model.inputs
-        }
-        self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
-        self._model_name = model_name
-        self.config = self.parent_model.config
-        self._model_dir = Path(model_dir or parent_model._model_save_dir)
-
-    def _compile(self):
-        if self.request is None:
-            if (
-                "CACHE_DIR" not in self.ov_config.keys()
-                and not str(self._model_dir).startswith(gettempdir())
-                and "GPU" in self._device
-            ):
-                self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
-
-            logger.info(f"Compiling the {self._model_name} to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config)
-            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
-            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
-
-    @property
-    def _device(self) -> str:
-        return self.parent_model._device
-
-    @property
-    def device(self) -> torch.device:
-        return self.parent_model.device
-
-    @property
-    def dtype(self) -> Optional[torch.dtype]:
-        for dtype in self.input_dtypes.values():
-            torch_dtype = OV_TO_PT_TYPE.get(dtype)
-            if torch_dtype.is_floating_point:
-                return torch_dtype
-
-        for dtype in self.output_dtypes.values():
-            torch_dtype = OV_TO_PT_TYPE.get(dtype)
-            if torch_dtype.is_floating_point:
-                return torch_dtype
-
-        return None
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
-
-    def forward(self, *args, **kwargs):
-        raise NotImplementedError
 
 
 class OVVisionEmbedding(OVModelPart):
