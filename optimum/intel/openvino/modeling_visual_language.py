@@ -43,6 +43,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self.text_emb_model = text_embeds_model
         self.request = None
         self.text_emb_request = None
+        compile_only = kwargs.get("compile_only", False)
+        if compile_only:
+            self.text_emb_request = self.text_emb_model
+            self.request = self.model.create_infer_request()
 
         super().__init__(
             model, config, device, dynamic_shapes, ov_config, model_save_dir, quantization_config, **kwargs
@@ -60,6 +64,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             self.text_emb_request = core.compile_model(self.text_emb_model, self._device, self.ov_config)
 
     def to(self, device: str):
+        if self._compile_only:
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         if isinstance(device, str):
             self._device = device.upper()
             self.clear_requests()
@@ -67,6 +76,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         return self
 
     def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         del self.request
         del self.text_emb_request
         self.request = None
@@ -226,6 +240,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.vision_embeddings_model = vision_embeddings
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
+        self._compile_only = kwargs.get("compile_only", False)
 
         for part in self.additional_parts:
             setattr(self, f"{part}_model", kwargs.get(part))
@@ -244,7 +259,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=False,
+            compile=not self._compile_only,
+            compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
         for part in self.additional_parts:
@@ -253,7 +269,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 model_part = MODEL_PARTS_CLS_MAPPING[part](model_part, self)
             setattr(self, part, model_part)
 
-        if enable_compilation:
+        if enable_compilation and not self._compile_only:
             self.compile()
 
         # Avoid warnings when creating a transformers pipeline
@@ -370,25 +386,51 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
 
         quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        compile_only = kwargs.get("compile_only", False)
 
         # Load model from a local directory
         if os.path.isdir(model_id):
-            language_model = model_cls.load_model(
-                os.path.join(model_id, language_model_file_name), quantization_config
-            )
-            text_embeddings = model_cls.load_model(
-                os.path.join(model_id, text_embeddings_file_name), quantization_config
-            )
-            vision_embeddings = model_cls.load_model(
-                os.path.join(model_id, vision_embeddings_file_name), quantization_config
-            )
-
-            for part in model_cls.additional_parts:
-                part_file_name = f"openvino_{part}_model.xml"
-                part_model = model_cls.load_model(os.path.join(model_id, part_file_name), quantization_config)
-                kwargs[part] = part_model
-
             model_save_dir = Path(model_id)
+            if not compile_only:
+                language_model = model_cls.load_model(
+                    os.path.join(model_id, language_model_file_name), quantization_config
+                )
+                text_embeddings = model_cls.load_model(
+                    os.path.join(model_id, text_embeddings_file_name), quantization_config
+                )
+                vision_embeddings = model_cls.load_model(
+                    os.path.join(model_id, vision_embeddings_file_name), quantization_config
+                )
+
+                for part in model_cls.additional_parts:
+                    part_file_name = f"openvino_{part}_model.xml"
+                    part_model = model_cls.load_model(os.path.join(model_id, part_file_name), quantization_config)
+                    kwargs[part] = part_model
+            else:
+                language_model = model_cls._compile_model(
+                    os.path.join(model_id, language_model_file_name),
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                text_embeddings = model_cls._compile_model(
+                    os.path.join(model_id, text_embeddings_file_name),
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                vision_embeddings = model_cls._compile_model(
+                    os.path.join(model_id, vision_embeddings_file_name),
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                for part in model_cls.additional_parts:
+                    part_file_name = f"openvino_{part}_model.xml"
+                    part_model = model_cls._compile_model(
+                        os.path.join(model_id, part_file_name), kwargs.get("device", "CPU"), kwargs.get("ov_config")
+                    )
+                    kwargs[part] = part_model
 
         # Load model from hub
         else:
@@ -414,12 +456,38 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            language_model = model_cls.load_model(file_names["language_model"], quantization_config)
-            text_embeddings = model_cls.load_model(file_names["text_embeddings"], quantization_config)
-            vision_embeddings = model_cls.load_model(file_names["vision_emnbeddings"], quantization_config)
-            for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[part], quantization_config)
-
+            if not compile_only:
+                language_model = model_cls.load_model(file_names["language_model"], quantization_config)
+                text_embeddings = model_cls.load_model(file_names["text_embeddings"], quantization_config)
+                vision_embeddings = model_cls.load_model(file_names["vision_emnbeddings"], quantization_config)
+                for part in model_cls.additional_parts:
+                    kwargs[part] = model_cls.load_model(file_names[part], quantization_config)
+            else:
+                language_model = model_cls._compile_model(
+                    file_names["language_model"],
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                text_embeddings = model_cls._compile_model(
+                    file_names["text_embeddings"],
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                vision_embeddings = model_cls._compile_model(
+                    file_names["vision_embeddings"],
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                for part in model_cls.additional_parts:
+                    kwargs[part] = model_cls._compile_model(
+                        file_names[part],
+                        kwargs.get("device", "CPU"),
+                        kwargs.get("ov_config"),
+                        model_save_dir,
+                    )
         try:
             generation_config = GenerationConfig.from_pretrained(
                 model_id,
@@ -471,6 +539,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 

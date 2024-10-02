@@ -1278,6 +1278,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = version.parse("4.37.2")
 
     def __init__(
         self,
@@ -1426,7 +1427,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
 
 @register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
-    pass
+    MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
 
 
 class InternVLChatConfigBehavior(str, enum.Enum):

@@ -2672,6 +2672,9 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
 
 
 def llava_vision_embed_forward(self, pixel_values):
+    # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
+    # these changes does not bring any difference from original, it only packs model subcomponent inference together
+    # that allow us avoid memory overheads and their inference results handling on code-level
     image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
     # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
     selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
