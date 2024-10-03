@@ -128,12 +128,12 @@ def _find_files_matching_pattern(
         subfolder = subfolder or "."
 
     if model_path.is_dir():
-        glob_pattern = subfolder + "/*"
+        glob_pattern = subfolder + "/**/*"
         files = model_path.glob(glob_pattern)
         files = [p for p in files if re.search(pattern, str(p))]
     else:
         repo_files = map(Path, HfApi().list_repo_files(model_name_or_path, revision=revision, token=token))
-        files = [Path(p) for p in repo_files if re.match(pattern, str(p)) and str(p.parent) == subfolder]
+        files = [Path(p) for p in repo_files if re.match(pattern, str(p))]
 
     return files
 
