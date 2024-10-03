@@ -103,6 +103,15 @@ if _diffusers_available:
         _diffusers_available = False
 
 
+_open_clip_available = importlib.util.find_spec("open_clip") is not None
+_open_clip_version = "N/A"
+if _open_clip_available:
+    try:
+        _open_clip_version = importlib_metadata.version("open_clip_torch")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -267,6 +276,10 @@ def is_nncf_available():
 
 def is_diffusers_available():
     return _diffusers_available
+
+
+def is_open_clip_available():
+    return _open_clip_available
 
 
 def is_safetensors_available():
