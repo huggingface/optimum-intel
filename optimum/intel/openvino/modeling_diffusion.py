@@ -87,10 +87,23 @@ else:
     from diffusers.models.vae import DiagonalGaussianDistribution
 
 if is_diffusers_version(">=", "0.29.0"):
-    from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Pipeline
+    from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 else:
-    StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline = None, None, None
+    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = None, None
 
+if is_diffusers_version(">=", "0.30.0"):
+    from diffusers import StableDiffusion3InpaintPipeline
+else:
+    StableDiffusion3InpaintPipeline = None
+
+PipelineImageInput = Union[
+    PIL.Image.Image,
+    np.ndarray,
+    torch.Tensor,
+    List[PIL.Image.Image],
+    List[np.ndarray],
+    List[torch.Tensor],
+]
 
 core = Core()
 
