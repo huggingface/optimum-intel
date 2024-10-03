@@ -362,6 +362,23 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
 
 
+    @parameterized.expand((None, "openvino"))
+    def test_find_files_matching_pattern_subdirectory(self, subfolder):
+        model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
+        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        # hub model
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
+        self.assertTrue(len(ov_files) == 1)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
+            self.assertTrue(len(ov_files) == 1)
+
+
 class PipelineTest(unittest.TestCase):
     def test_load_model_from_hub(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
