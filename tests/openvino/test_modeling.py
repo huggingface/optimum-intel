@@ -361,7 +361,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern)
             self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
 
-    @parameterized.expand((None, "openvino"))
+    @parameterized.expand(("", "openvino"))
     def test_find_files_matching_pattern_subdirectory(self, subfolder):
         model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
         pattern = r"(.*)?openvino(.*)?\_model.xml"
