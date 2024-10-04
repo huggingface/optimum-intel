@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import mkdtemp
 from typing import Dict, Optional, Union
 
 import numpy as np
@@ -237,8 +237,8 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
@@ -362,8 +362,8 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir

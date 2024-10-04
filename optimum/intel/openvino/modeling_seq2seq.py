@@ -470,9 +470,12 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
+        del self.encoder.request
+        del self.decoder.request
         self.encoder.request = None
         self.decoder.request = None
         if self.use_cache:
+            del self.decoder_with_past.request
             self.decoder_with_past.request = None
 
     def compile(self):
@@ -480,6 +483,15 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.decoder._compile()
         if self.use_cache:
             self.decoder_with_past._compile()
+
+    def __del__(self):
+        if hasattr(self, "encoder"):
+            del self.encoder
+        if hasattr(self, "decoder"):
+            del self.decoder
+        if hasattr(self, "decoder_with_past"):
+            del self.decoder_with_past
+        super().__del__()
 
 
 class OVEncoder:
@@ -567,6 +579,12 @@ class OVEncoder:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.request)
 
+    def __del__(self) -> None:
+        if hasattr(self, "request"):
+            del self.request
+        if hasattr(self, "model"):
+            del self.model
+
 
 class OVDecoder:
     """
@@ -599,6 +617,7 @@ class OVDecoder:
             self.num_pkv = 4
 
         self.request = None if not self._compile_only else self.model.create_infer_request()
+        self._compiled_model = None
 
     @property
     def _device(self) -> str:
@@ -701,12 +720,21 @@ class OVDecoder:
 
         if self.request is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
-            compiled_model = core.compile_model(self.model, self._device, ov_config)
-            self.request = compiled_model.create_infer_request()
+
+            self._compiled_model = core.compile_model(self.model, self._device, ov_config)
+            self.request = self._compiled_model.create_infer_request()
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(compiled_model)
+                _print_compiled_model_properties(self._compiled_model)
+
+    def __del__(self) -> None:
+        if hasattr(self, "request"):
+            del self.request
+        if hasattr(self, "_compiled_model"):
+            del self._compiled_model
+        if hasattr(self, "model"):
+            del self.model
 
 
 @add_start_docstrings(

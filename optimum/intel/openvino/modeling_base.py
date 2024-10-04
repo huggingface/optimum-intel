@@ -14,9 +14,10 @@
 
 import logging
 import os
+import shutil
 import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import TemporaryDirectory, gettempdir, mkdtemp
 from typing import Dict, Optional, Union
 
 import openvino
@@ -549,8 +550,8 @@ class OVBaseModel(OptimizedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
@@ -607,8 +608,9 @@ class OVBaseModel(OptimizedModel):
         stateful: bool = False,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
+        cls._model_save_dir_tempdirectory_instance = save_dir
         compile_only = kwargs.pop("compile_only", False)
         if compile_only:
             logger.warning(
@@ -745,3 +747,6 @@ class OVBaseModel(OptimizedModel):
             del self.request
         if hasattr(self, "model"):
             del self.model
+
+        if hasattr(self, "_model_save_dir_tempdirectory_instance"):
+            shutil.rmtree(self._model_save_dir_tempdirectory_instance, ignore_errors=True)

@@ -14,8 +14,9 @@
 
 import logging
 import os
+import shutil
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 from typing import Dict, Optional, Union
 
 import openvino
@@ -337,8 +338,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
 
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
@@ -442,3 +443,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    def __del__(self):
+        models = ["encoder_model", "decoder_model", "decoder_with_past_model"]
+        for attribute in models:
+            if hasattr(self, attribute):
+                delattr(self, attribute)
+
+        if hasattr(self, "_model_save_dir_tempdirectory_instance"):
+            shutil.rmtree(self._model_save_dir_tempdirectory_instance, ignore_errors=True)

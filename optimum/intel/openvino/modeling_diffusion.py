@@ -18,7 +18,7 @@ import os
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import TemporaryDirectory, gettempdir, mkdtemp
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -115,6 +115,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self._model_save_dir = Path(model_save_dir.name)
         elif isinstance(model_save_dir, str):
             self._model_save_dir = Path(model_save_dir)
+            if model_save_dir.startswith(gettempdir()):
+                self._model_save_dir_tempdirectory_instance = model_save_dir
         else:
             self._model_save_dir = model_save_dir
 
@@ -374,8 +376,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
 
         # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
         if load_in_8bit is None and not quantization_config:
@@ -610,10 +612,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
+        del self.vae_decoder.request
         self.vae_decoder.request = None
+        del self.unet.request
         self.unet.request = None
         for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
             if component is not None:
+                del component.request
                 component.request = None
 
     def compile(self):
@@ -629,6 +634,15 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def _save_config(self, save_directory):
         self.save_config(save_directory)
+
+    def __del__(self):
+        componets = ["unet", "vae_decoder", "vae_encoder", "text_encoder", "text_encoder_2"]
+        for component in componets:
+            if hasattr(self, component):
+                delattr(self, component)
+
+        if hasattr(self, "_model_save_dir_tempdirectory_instance"):
+            shutil.rmtree(self._model_save_dir_tempdirectory_instance, ignore_errors=True)
 
 
 class OVModelPart:
@@ -680,6 +694,12 @@ class OVModelPart:
     @property
     def device(self) -> torch.device:
         return self.parent_model.device
+
+    def __del__(self):
+        if hasattr(self, "request"):
+            del self.request
+        if hasattr(self, "model"):
+            del self.model
 
 
 class OVModelTextEncoder(OVModelPart):

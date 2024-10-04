@@ -14,8 +14,9 @@
 import copy
 import logging
 import os
+import shutil
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -277,8 +278,8 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
+        save_dir = mkdtemp()
+        save_dir_path = Path(save_dir)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
@@ -409,14 +410,13 @@ class OVBaseDecoderModel(OVModel):
         self.stateful = True
 
     def __del__(self):
-        if hasattr(self, "request"):
-            del self.request
-        if hasattr(self, "_compiled_model"):
-            del self._compiled_model
-        if hasattr(self, "_original_model"):
-            del self._original_model
-        if hasattr(self, "model"):
-            del self.model
+        attributes = ["request", "_compiled_model", "_originl_model", "model"]
+        for attr in attributes:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        if hasattr(self, "_model_save_dir_tempdirectory_instance"):
+            shutil.rmtree(self._model_save_dir_tempdirectory_instance, ignore_errors=True)
 
 
 @add_start_docstrings(
