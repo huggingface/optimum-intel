@@ -686,6 +686,7 @@ class OVBaseModel(OptimizedModel):
 
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
+        del self.request
         self.request = None
         return self
 
@@ -699,6 +700,7 @@ class OVBaseModel(OptimizedModel):
             )
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
+        del self.request
         self.request = None
         return self
 
@@ -737,3 +739,9 @@ class OVBaseModel(OptimizedModel):
                 return f"Got unexpected inputs: `{input_name}` set to {type(inputs[input_name])} while expected to be {dtype}."
 
         return None
+
+    def __del__(self):
+        if hasattr(self, "request"):
+            del self.request
+        if hasattr(self, "model"):
+            del self.model

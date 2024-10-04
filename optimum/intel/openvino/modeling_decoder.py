@@ -228,6 +228,7 @@ class OVBaseDecoderModel(OVModel):
                 self.model = self._original_model.clone()
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
+                del self.request
                 self.request = None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -397,12 +398,25 @@ class OVBaseDecoderModel(OVModel):
         if self.request is None:
             if self._compile_only:
                 self.request = self.model.create_infer_request()
+            if hasattr(self, "_compiled_model"):
+                del self._compiled_model
             super().compile()
-            self.request = self.request.create_infer_request()
+            self._compiled_model = self.request
+            self.request = self._compiled_model.create_infer_request()
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
         self.stateful = True
+
+    def __del__(self):
+        if hasattr(self, "request"):
+            del self.request
+        if hasattr(self, "_compiled_model"):
+            del self._compiled_model
+        if hasattr(self, "_original_model"):
+            del self._original_model
+        if hasattr(self, "model"):
+            del self.model
 
 
 @add_start_docstrings(

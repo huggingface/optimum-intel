@@ -54,9 +54,9 @@ from .utils import (
     OV_XML_FILE_NAME,
     _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
+    calculate_model_size,
     clear_class_registry,
     remove_none_from_dummy_inputs,
-    calculate_model_size
 )
 
 
@@ -147,7 +147,7 @@ def export(
             model_kwargs=model_kwargs,
             stateful=stateful,
             patch_16bit_model=patch_16bit_model,
-            return_model_size=return_model_size
+            return_model_size=return_model_size,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -158,7 +158,9 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output, ov_config=ov_config, return_model_size=return_model_size)
+        return export_tensorflow(
+            model, config, opset, output, ov_config=ov_config, return_model_size=return_model_size
+        )
 
     else:
         raise RuntimeError(
@@ -172,7 +174,7 @@ def export_tensorflow(
     opset: int,
     output: Path,
     ov_config: Optional["OVConfig"] = None,
-    return_model_size: bool = False
+    return_model_size: bool = False,
 ):
     """
     Export the TensorFlow model to OpenVINO format.
@@ -216,7 +218,7 @@ def export_pytorch_via_onnx(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
-    return_model_size: bool = False
+    return_model_size: bool = False,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -282,7 +284,7 @@ def export_pytorch(
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = False,
     patch_16bit_model: bool = False,
-    return_model_size: bool = False
+    return_model_size: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -414,7 +416,7 @@ def export_pytorch(
                 input_shapes,
                 model_kwargs,
                 ov_config=ov_config,
-                return_model_size=return_model_size
+                return_model_size=return_model_size,
             )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
@@ -436,7 +438,7 @@ def export_pytorch(
         model_size = None
 
         if return_model_size:
-           model_size = calculate_model_size(ov_model)
+            model_size = calculate_model_size(ov_model)
         _save_model(
             ov_model,
             output,
@@ -463,7 +465,7 @@ def export_models(
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
     patch_16bit_model: bool = False,
-    return_model_sizes:bool = False
+    return_model_sizes: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -505,18 +507,18 @@ def export_models(
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
         model_outputs, model_size = export(
-                model=submodel,
-                config=sub_export_config,
-                output=output_path,
-                opset=opset,
-                device=device,
-                input_shapes=input_shapes,
-                model_kwargs=model_kwargs,
-                ov_config=ov_config,
-                stateful=stateful,
-                patch_16bit_model=patch_16bit_model,
-                return_model_size=return_model_sizes,
-            )
+            model=submodel,
+            config=sub_export_config,
+            output=output_path,
+            opset=opset,
+            device=device,
+            input_shapes=input_shapes,
+            model_kwargs=model_kwargs,
+            ov_config=ov_config,
+            stateful=stateful,
+            patch_16bit_model=patch_16bit_model,
+            return_model_size=return_model_sizes,
+        )
         outputs.append(model_outputs)
         model_sizes.append(model_size)
     outputs = list(map(list, zip(*outputs)))
@@ -710,7 +712,7 @@ def export_from_model(
         opset=opset,
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
-        return_model_sizes=return_model_sizes
+        return_model_sizes=return_model_sizes,
     )
 
     return files_subpaths, model_sizes

@@ -555,12 +555,16 @@ class OVQuantizer(OptimumQuantizer):
         if not save_onnx_model:
             export_kwargs = {"stateful": stateful}
 
-        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs)
+        (_, _, is_onnx), _ = export_fn(
+            model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs
+        )
         if is_onnx:
             # Load and save the compressed model
             model = core.read_model(onnx_path)
             # Model required second saving for appling weights compression transformations
             self._save_pretrained(model, output_path)
+
+            del model
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
             if not save_onnx_model:
                 os.remove(onnx_path)
@@ -570,6 +574,10 @@ class OVQuantizer(OptimumQuantizer):
                     pass
 
         ov_config.save_pretrained(save_directory)
+
+    def __del__(self):
+        if hasattr(self, "model"):
+            del self.model
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):

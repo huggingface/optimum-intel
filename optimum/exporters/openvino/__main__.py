@@ -14,7 +14,6 @@
 
 import gc
 import logging
-
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
@@ -24,10 +23,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_torch_available
 
-from openvino.runtime import Core, Type, save_model
-
-# create core globally before openvino tokenizers import necessary to prevent errors with failed extension loading
-core = Core()
+from openvino.runtime import Core, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
@@ -56,6 +52,9 @@ if is_torch_available():
 
 
 logger = logging.getLogger(__name__)
+
+# create core globally before openvino tokenizers import necessary to prevent errors with failed extension loading
+core = Core()
 
 
 def infer_task(
