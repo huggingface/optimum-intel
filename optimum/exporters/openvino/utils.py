@@ -13,14 +13,14 @@
 #  limitations under the License.
 
 import inspect
-from collections import namedtuple
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import operator
+from collections import namedtuple
 from functools import reduce
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_torch_available
 
-from openvino.runtime import Dimension, PartialShape, Symbol, Model, Type
+from openvino.runtime import Dimension, Model, PartialShape, Symbol, Type
 from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig

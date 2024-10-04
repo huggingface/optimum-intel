@@ -14,7 +14,6 @@
 
 import gc
 import logging
-
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
@@ -24,7 +23,8 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_torch_available
 
-from openvino.runtime import Core, Type, save_model
+from openvino.runtime import Core, save_model
+
 
 # create core globally before openvino tokenizers import necessary to prevent errors with failed extension loading
 core = Core()

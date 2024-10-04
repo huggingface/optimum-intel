@@ -60,9 +60,9 @@ from .utils import (
     OV_XML_FILE_NAME,
     _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
+    calculate_model_size,
     clear_class_registry,
     remove_none_from_dummy_inputs,
-    calculate_model_size
 )
 
 
@@ -451,7 +451,7 @@ def export_pytorch(
         model_size = None
 
         if return_model_size:
-           model_size = calculate_model_size(ov_model)
+            model_size = calculate_model_size(ov_model)
         _save_model(
             ov_model,
             output,
