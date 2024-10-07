@@ -58,6 +58,7 @@ if is_torch_available():
 logger = logging.getLogger(__name__)
 
 
+
 def infer_task(
     task,
     model_name_or_path,
@@ -435,12 +436,12 @@ def main_export(
         if quantization_config is None:
             continue
 
-        submodel = core.read_model(submodel_path)
-
         if not is_nncf_available():
             raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
 
         from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        submodel = core.read_model(submodel_path)
 
         _weight_only_quantization(submodel, quantization_config)
 

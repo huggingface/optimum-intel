@@ -15,7 +15,6 @@ import copy
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -50,6 +49,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     STR_TO_OV_TYPE,
+    TemporaryDirectory,
     get_export_transformers_version,
     model_has_dynamic_inputs,
 )

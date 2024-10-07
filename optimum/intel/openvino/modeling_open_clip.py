@@ -16,7 +16,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import numpy as np
@@ -39,6 +38,7 @@ from ...exporters.openvino import main_export
 from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
+from .utils import TemporaryDirectory
 
 
 logger = logging.getLogger(__name__)
@@ -237,7 +237,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
+        save_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
@@ -362,7 +362,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
+        save_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model

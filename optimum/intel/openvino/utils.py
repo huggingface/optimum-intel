@@ -16,8 +16,12 @@
 import json
 import logging
 import os
+import shutil
+import warnings
+import weakref
 from glob import glob
 from pathlib import Path
+from tempfile import TemporaryDirectory as OrigTemporaryDirectory
 from typing import Tuple, Type, Union
 
 import numpy as np
@@ -228,3 +232,87 @@ def model_has_dynamic_inputs(model):
         if is_dynamic:
             return is_dynamic
     return is_dynamic
+
+
+# copied https://github.com/python/cpython/blob/3.12/Lib/tempfile.py
+# to add behaviour that available only for python3.10+ for older python version
+class TemporaryDirectory(OrigTemporaryDirectory):
+    def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=False, *, delete=True):
+        super().__init__(suffix=suffix, prefix=prefix, dir=dir)
+        self._ignore_cleanup_errors = ignore_cleanup_errors
+        self._delete = delete
+        self._finalizer = weakref.finalize(
+            self,
+            self._cleanup,
+            self.name,
+            warn_message="Implicitly cleaning up {!r}".format(self),
+            ignore_errors=self._ignore_cleanup_errors,
+            delete=self._delete,
+        )
+
+    @classmethod
+    def _cleanup(cls, name, warn_message, ignore_errors=False, delete=True):
+        if delete:
+            cls._rmtree(name, ignore_errors=ignore_errors)
+            warnings.warn(warn_message, ResourceWarning)
+
+    @classmethod
+    def _rmtree(cls, name, ignore_errors=False, repeated=False):
+        def _dont_follow_symlinks(func, path, *args):
+            # Pass follow_symlinks=False, unless not supported on this platform.
+            if func in os.supports_follow_symlinks:
+                func(path, *args, follow_symlinks=False)
+            elif os.name == "nt" or not os.path.islink(path):
+                func(path, *args)
+
+        def _resetperms(path):
+            try:
+                chflags = os.chflags
+            except AttributeError:
+                pass
+            else:
+                _dont_follow_symlinks(chflags, path, 0)
+            _dont_follow_symlinks(os.chmod, path, 0o700)
+
+        def onexc(func, path, exc):
+            if isinstance(exc, PermissionError):
+                if repeated and path == name:
+                    if ignore_errors:
+                        return
+                    raise
+
+                try:
+                    if path != name:
+                        _resetperms(os.path.dirname(path))
+                    _resetperms(path)
+
+                    try:
+                        os.unlink(path)
+                    except IsADirectoryError:
+                        cls._rmtree(path, ignore_errors=ignore_errors)
+                    except PermissionError:
+                        # The PermissionError handler was originally added for
+                        # FreeBSD in directories, but it seems that it is raised
+                        # on Windows too.
+                        # bpo-43153: Calling _rmtree again may
+                        # raise NotADirectoryError and mask the PermissionError.
+                        # So we must re-raise the current PermissionError if
+                        # path is not a directory.
+                        if not os.path.isdir(path) or os.path.isjunction(path):
+                            if ignore_errors:
+                                return
+                            raise
+                        cls._rmtree(path, ignore_errors=ignore_errors, repeated=(path == name))
+                except FileNotFoundError:
+                    pass
+            elif isinstance(exc, FileNotFoundError):
+                pass
+            else:
+                if not ignore_errors:
+                    raise
+
+        shutil.rmtree(name, onexc=onexc)
+
+    def cleanup(self):
+        if self._finalizer.detach() or os.path.exists(self.name):
+            self._rmtree(self.name, ignore_errors=self._ignore_cleanup_errors)
