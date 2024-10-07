@@ -31,7 +31,7 @@ from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
 from parameterized import parameterized
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, SEED
+from utils_tests import MODEL_NAMES
 
 from optimum.intel import (
     OVLatentConsistencyModelPipeline,
