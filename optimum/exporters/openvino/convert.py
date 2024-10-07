@@ -918,7 +918,7 @@ def get_diffusion_models_for_export_ext(
         is_sd3 = False
 
     if not is_sd3:
-        return get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+        return None, get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
 
     models_for_export = {}
 

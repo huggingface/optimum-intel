@@ -61,10 +61,6 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
-
-DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
-DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
-
 from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
@@ -95,6 +91,11 @@ if is_diffusers_version(">=", "0.30.0"):
     from diffusers import StableDiffusion3InpaintPipeline
 else:
     StableDiffusion3InpaintPipeline = None
+
+
+DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
+DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
+
 
 PipelineImageInput = Union[
     PIL.Image.Image,
