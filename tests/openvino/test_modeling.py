@@ -79,6 +79,7 @@ from optimum.intel import (
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
+    OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
@@ -87,6 +88,12 @@ from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, O
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+from optimum.intel.openvino.modeling_visual_language import (
+    MODEL_PARTS_CLS_MAPPING,
+    MODEL_TYPE_TO_CLS_MAPPING,
+    OVModelWithEmbedForCausalLM,
+    OVVisionEmbedding,
+)
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -1816,6 +1823,102 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         )
         del model_with_pkv
         del model_without_pkv
+        gc.collect()
+
+
+class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = [
+        "llava",
+    ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next"]
+    TASK = "image-text-to-text"
+
+    IMAGE = Image.open(
+        requests.get(
+            "http://images.cocodataset.org/val2017/000000039769.jpg",
+            stream=True,
+        ).raw
+    )
+
+    def get_transformer_model_class(self, model_arch):
+        if model_arch == "llava":
+            from transformers import LlavaForConditionalGeneration
+
+            return LlavaForConditionalGeneration
+        if model_arch == "llava_next":
+            from transformers import LlavaNextForConditionalGeneration
+
+            return LlavaNextForConditionalGeneration
+        return None
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        prompt = "<image>\n What is shown in this image?"
+        model_id = MODEL_NAMES[model_arch]
+        processor = get_preprocessor(model_id)
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
+        inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
+        self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
+        self.assertIsInstance(ov_model.language_model, OVModelWithEmbedForCausalLM)
+        for additional_part in ov_model.additional_parts:
+            self.assertTrue(hasattr(ov_model, additional_part))
+            self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        ov_outputs = ov_model(**inputs)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            num_beams=3,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+        set_seed(SEED)
+        transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+        )
+
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
+        preprocessor = get_preprocessor(model_id)
+        question = "<image>\nDescribe image"
+        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
+
+        # General case
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+
+        question = "Hi, how are you?"
+        inputs = preprocessor(images=None, text=question, return_tensors="pt")
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+        del model
+
         gc.collect()
 
 
