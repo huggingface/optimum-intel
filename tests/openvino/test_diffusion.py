@@ -54,6 +54,9 @@ from optimum.utils.import_utils import is_onnxruntime_available
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 
+SEED = 0
+
+
 def _generate_inputs(batch_size=1):
     inputs = {
         "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
@@ -259,11 +262,10 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
         inputs = _generate_inputs()
         height, width = 64, 64
-        np.random.seed(0)
-        ov_outputs_1 = pipeline(**inputs, height=height, width=width)
-        np.random.seed(0)
-        ov_outputs_2 = pipeline(**inputs, height=height, width=width)
-        ov_outputs_3 = pipeline(**inputs, height=height, width=width)
+        generator = np.random.RandomState(SEED)
+        ov_outputs_1 = pipeline(**inputs, height=height, width=width, generator=generator)
+        ov_outputs_2 = pipeline(**inputs, height=height, width=width, generator=generator)
+        ov_outputs_3 = pipeline(**inputs, height=height, width=width, generator=generator)
         # Compare model outputs
         self.assertTrue(np.array_equal(ov_outputs_1.images[0], ov_outputs_2.images[0]))
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
@@ -420,15 +422,20 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
             self.assertIsInstance(getattr(pipeline, component).request, CompiledModel)
 
         batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
+        generator = np.random.RandomState(SEED)
         inputs = _generate_inputs(batch_size)
-        np.random.seed(0)
-        ov_outputs_1 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
-        np.random.seed(0)
+        ov_outputs_1 = pipeline(
+            **inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt, generator=generator
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
-        ov_outputs_2 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
-        ov_outputs_3 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
+        ov_outputs_2 = pipeline(
+            **inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt, generator=generator
+        )
+        ov_outputs_3 = pipeline(
+            **inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt, generator=generator
+        )
         self.assertTrue(np.array_equal(ov_outputs_1.images[0], ov_outputs_2.images[0]))
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
 
@@ -467,9 +474,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         batch_size, height, width = 1, 128, 128
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
-        np.random.seed(0)
-        output = pipeline(**inputs).images[0, -3:, -3:, -1]
-        expected_slice = np.array([0.5683, 0.5121, 0.4767, 0.5253, 0.5072, 0.5462, 0.4766, 0.4279, 0.4855])
+        output = pipeline(**inputs, generator=np.random.RandomState(SEED)).images[0, -3:, -3:, -1]
+        expected_slice = np.array([0.5747, 0.5182, 0.4857, 0.5295, 0.5106, 0.5520, 0.4814, 0.4289, 0.4868])
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

@@ -258,7 +258,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_pipeline.compile()
         self.assertEqual(loaded_pipeline.unet.request.get_property("PERFORMANCE_HINT"), "LATENCY")
         batch_size, height, width = 2, 16, 16
-        np.random.seed(0)
         inputs = {
             "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
             "height": height,
@@ -266,7 +265,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             "num_inference_steps": 2,
             "output_type": "np",
         }
-        pipeline_outputs = loaded_pipeline(**inputs).images
+        pipeline_outputs = loaded_pipeline(**inputs, generator=np.random.RandomState(SEED)).images
         self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
@@ -288,13 +287,11 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
-            np.random.seed(0)
-            outputs = compile_only_pipeline(**inputs).images
+            outputs = compile_only_pipeline(**inputs, generator=np.random.RandomState(SEED)).images
             self.assertTrue(np.array_equal(pipeline_outputs, outputs))
             del compile_only_pipeline
 
-        np.random.seed(0)
-        outputs = pipeline(**inputs).images
+        outputs = pipeline(**inputs, generator=np.random.RandomState(SEED)).images
         self.assertTrue(np.array_equal(pipeline_outputs, outputs))
         del pipeline
         gc.collect()
