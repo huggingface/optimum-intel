@@ -26,6 +26,39 @@ class OVModelForAudioClassification(metaclass=DummyObject):
         requires_backends(cls, ["openvino"])
 
 
+class OVModelOpenCLIPForZeroShotImageClassification(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])
+
+
+class OVModelOpenCLIPVisual(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])
+
+
+class OVModelOpenCLIPText(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])
+
+
 class OVModelForAudioFrameClassification(metaclass=DummyObject):
     _backends = ["openvino"]
 

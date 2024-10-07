@@ -36,6 +36,9 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelOpenCLIPForZeroShotImageClassification,
+    OVModelOpenCLIPText,
+    OVModelOpenCLIPVisual,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
@@ -105,6 +108,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
+            {"int8": 4, "int4": 14},
+        ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
             {"int8": 4, "int4": 14},
         ),
     ]
@@ -244,6 +253,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
+            self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
@@ -319,3 +329,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False)
             self.assertFalse("last_hidden_state" in model.output_names)
+
+    def test_exporters_cli_open_clip(self):
+        model_id = MODEL_NAMES["open-clip"]
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --framework pt {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_vision = eval(_HEAD_TO_AUTOMODELS["open_clip_vision"]).from_pretrained(tmpdir, compile=False)
+            model_text = eval(_HEAD_TO_AUTOMODELS["open_clip_text"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("image_features" in model_vision.output_names)
+            self.assertTrue("text_features" in model_text.output_names)
+
+            model = eval(_HEAD_TO_AUTOMODELS["open_clip"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("text_features" in model.text_model.output_names)
+            self.assertTrue("image_features" in model.visual_model.output_names)

@@ -46,10 +46,8 @@ from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from transformers.utils.generic import ContextManagers
 
-from optimum.intel.generation import BaseModelForCausalLM
-
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_torch_version
+from ..utils.import_utils import _torch_version, is_torch_version, is_transformers_version
 from .configuration import INCConfig
 from .quantization import _weight_only_quantization
 from .utils import QUANTIZATION_CONFIG_NAME
@@ -85,6 +83,8 @@ class INCModel(OptimizedModel):
         inc_config: Dict = None,
         **kwargs,
     ):
+        generation_config = kwargs.pop("generation_config", None)
+
         super().__init__(model=model, config=config, **kwargs)
         self.inc_config = inc_config
         self._q_config = q_config
@@ -92,7 +92,23 @@ class INCModel(OptimizedModel):
         self._device = getattr(self.model, "device", None) or torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
-        self.generation_config = GenerationConfig.from_model_config(config)
+        if self.can_generate():
+            self.generation_config = generation_config or GenerationConfig.from_model_config(config)
+
+            if is_transformers_version(">=", "4.44.99"):
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                if len(misplaced_generation_parameters) > 0:
+                    logger.warning(
+                        "Moving the following attributes in the config to the generation config: "
+                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                        "generation parameters in the model config, as opposed to in the generation config.",
+                    )
+                    for param_name, param_value in misplaced_generation_parameters.items():
+                        setattr(self.generation_config, param_name, param_value)
+                        setattr(self.config, param_name, None)
+
+        else:
+            self.generation_config = None
 
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -126,8 +142,28 @@ class INCModel(OptimizedModel):
             token = use_auth_token
 
         quantization_config = kwargs.pop("quantization_config", None)
+        generation_config = kwargs.pop("generation_config", None)
+
         model_path = Path(model_id)
         is_local = model_path.is_dir()
+
+        if generation_config is None and "text-generation" in cls.export_feature:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                if getattr(generation_config, "cache_implementation", None) is not None:
+                    generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
 
         # ITREX compatibility
         quantization_config_path = None
@@ -202,7 +238,7 @@ class INCModel(OptimizedModel):
                 **kwargs,
             )
 
-            return cls(model, config=config, model_save_dir=None, **kwargs).model
+            return cls(model, config=config, model_save_dir=None, generation_config=generation_config, **kwargs).model
 
         model_cache_path = None
         inc_config = None
@@ -261,7 +297,14 @@ class INCModel(OptimizedModel):
             )
             model = torch.jit.load(model_cache_path)
             model = torch.jit.freeze(model.eval())
-            return cls(model, config=config, model_save_dir=model_save_dir, inc_config=inc_config, **kwargs)
+            return cls(
+                model,
+                config=config,
+                model_save_dir=model_save_dir,
+                inc_config=inc_config,
+                generation_config=generation_config,
+                **kwargs,
+            )
 
         model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
         # Load the state dictionary of the model to verify whether the model to get the quantization config
@@ -283,7 +326,13 @@ class INCModel(OptimizedModel):
                 raise
 
         return cls(
-            model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, **kwargs
+            model,
+            config=config,
+            model_save_dir=model_save_dir,
+            q_config=q_config,
+            inc_config=inc_config,
+            generation_config=generation_config,
+            **kwargs,
         )
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -303,6 +352,14 @@ class INCModel(OptimizedModel):
 
         if self.inc_config:
             self.inc_config.save_pretrained(save_directory)
+
+        if self.generation_config is not None:
+            try:
+                self.generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)
@@ -366,29 +423,6 @@ class INCModelForVision2Seq(INCModel):
     export_feature = "image-to-text"
 
 
-class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
+class INCModelForCausalLM(INCModel):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    forward = BaseModelForCausalLM.forward
-    generate = BaseModelForCausalLM.generate
-    can_generate = BaseModelForCausalLM.can_generate
-
-    def __init__(
-        self,
-        model,
-        config: PretrainedConfig = None,
-        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        q_config: Dict = None,
-        inc_config: Dict = None,
-        use_cache: bool = True,
-        **kwargs,
-    ):
-        super(INCModelForCausalLM, self).__init__(
-            model=model,
-            config=config,
-            model_save_dir=model_save_dir,
-            q_config=q_config,
-            inc_config=inc_config,
-            use_cache=use_cache,
-            **kwargs,
-        )

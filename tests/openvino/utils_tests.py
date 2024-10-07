@@ -44,6 +44,7 @@ MODEL_NAMES = {
     "dbrx": "katuni4ka/tiny-random-dbrx",
     "deberta": "hf-internal-testing/tiny-random-deberta",
     "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
+    "decilm": "katuni4ka/tiny-random-decilm",
     "deit": "hf-internal-testing/tiny-random-DeiTModel",
     "convnext": "hf-internal-testing/tiny-random-convnext",
     "convnextv2": "hf-internal-testing/tiny-random-ConvNextV2Model",
@@ -141,6 +142,8 @@ MODEL_NAMES = {
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
     "glm4": "katuni4ka/tiny-random-glm4",
+    "open-clip": "hf-internal-testing/tiny-open-clip-model",
+    "open-clip-ov": "zofinka/tiny-open-clip-model",
 }
 
 
@@ -164,6 +167,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion": (242, 34, 42, 64),
     "stable-diffusion-xl": (366, 34, 42, 66),
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
+    "open-clip": (20, 28),
 }
 
 

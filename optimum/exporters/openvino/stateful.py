@@ -151,7 +151,7 @@ def make_stateful(
                 shape[0] = num_beams_and_batch
                 input.get_node().set_partial_shape(shape)
             else:
-                log.warn(f"Rank of {input.get_any_name()} input of the model is not 2, batch size is not set")
+                log.warning(f"Rank of {input.get_any_name()} input of the model is not 2, batch size is not set")
 
     for kv_name_pair in zip(key_value_input_names, key_value_output_names):
         input_output_map[kv_name_pair[0]] = kv_name_pair[1]
@@ -176,7 +176,7 @@ def ensure_stateful_is_available(warn=True):
     """
     if is_openvino_version("<", "2023.3"):
         if warn:
-            log.warn(
+            log.warning(
                 f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. It may result in sub-optimal inference performance."
                 "Install openvino>=2023.3.0."
             )

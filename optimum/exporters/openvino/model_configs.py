@@ -13,24 +13,25 @@
 #  limitations under the License.
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from packaging import version
-from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    CLIPOnnxConfig,
+    CLIPTextOnnxConfig,
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
     GPTNeoXOnnxConfig,
+    IBertOnnxConfig,
     LlamaOnnxConfig,
     MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
 )
-from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -40,7 +41,7 @@ from optimum.utils.input_generators import (
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
-from optimum.utils.normalized_config import NormalizedTextConfig
+from optimum.utils.normalized_config import NormalizedTextConfig, NormalizedVisionConfig
 
 from ...intel.utils.import_utils import _transformers_version, is_transformers_version
 from .model_patcher import (
@@ -50,10 +51,12 @@ from .model_patcher import (
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
     DBRXModelPatcher,
+    DeciLMModelPatcher,
     FalconModelPatcher,
     Gemma2ModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
+    IBertModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
     JaisModelPatcher,
@@ -71,6 +74,9 @@ from .model_patcher import (
 
 
 def init_model_configs():
+    if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
+
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
         "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
@@ -959,3 +965,172 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.num_key_value_heads_per_layer = normalized_config.num_key_value_heads_per_layer
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+
+        for layer_id in range(self.num_layers):
+            shape = (
+                self.batch_size,
+                self.num_key_value_heads_per_layer[layer_id],
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+            past_key_values.append(
+                (
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                )
+            )
+        return past_key_values
+
+
+@register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DeciDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DeciDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return DeciLMModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("clip", *["zero-shot-image-classification"], library_name="open_clip")
+class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "text_batch_size"},
+            "pixel_values": {0: "image_batch_size", 1: "num_channels", 2: "height", 3: "width"},
+            "attention_mask": {0: "text_batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "text_features": {0: "text_batch_size"},
+            "image_features": {0: "image_batch_size"},
+        }
+
+    def rename_ambiguous_inputs(self, inputs):
+        model_inputs = {}
+        model_inputs["image"] = inputs["pixel_values"]
+        model_inputs["text"] = inputs["input_ids"]
+        return model_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # override sequence_length shape here in the kwargs
+        kwargs["sequence_length"] = self._config.text_config.context_length
+        return super().generate_dummy_inputs(framework, **kwargs)
+
+    def generate_dummy_inputs_for_validation(
+        self, reference_model_inputs: Dict[str, Any], onnx_input_names: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        if "attention_mask" in reference_model_inputs:
+            reference_model_inputs.pop("attention_mask")
+        if "image" in onnx_input_names and "pixel_values" in reference_model_inputs:
+            reference_model_inputs["image"] = reference_model_inputs.pop("pixel_values")
+        if "text" in onnx_input_names and "input_ids" in reference_model_inputs:
+            reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
+        return super().generate_dummy_inputs_for_validation(reference_model_inputs)
+
+
+@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="open_clip")
+class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "text_batch_size"},
+            "attention_mask": {0: "text_batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "text_features": {0: "text_batch_size"},
+        }
+
+    def rename_ambiguous_inputs(self, inputs):
+        model_inputs = {}
+        model_inputs["text"] = inputs["input_ids"]
+        # model_inputs["attn_mask"] = inputs["attention_mask"]
+        return model_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # override sequence_length shape here in the kwargs
+        kwargs["sequence_length"] = self._config.context_length
+        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
+        return dummy_inputs
+
+
+@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="open_clip")
+class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "pixel_values": {0: "image_batch_size", 1: "num_channels", 2: "height", 3: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "image_features": {0: "image_batch_size"},
+        }
+
+    def rename_ambiguous_inputs(self, inputs):
+        model_inputs = {}
+        model_inputs["x"] = inputs["pixel_values"]
+        return model_inputs
+
+
+@register_in_tasks_manager(
+    "ibert",
+    *[
+        "feature-extraction",
+        "fill-mask",
+        "text-classification",
+        "multiple-choice",
+        "token-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class IBertOpenVINOConfig(IBertOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return IBertModelPatcher(self, model, model_kwargs=model_kwargs)

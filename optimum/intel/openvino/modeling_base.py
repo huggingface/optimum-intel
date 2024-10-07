@@ -34,7 +34,7 @@ from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
 from .utils import (
@@ -61,6 +61,7 @@ class OVBaseModel(OptimizedModel):
     export_feature = None
     _supports_cache_class = False
     _library_name = "transformers"
+    _xml_model_name = OV_XML_FILE_NAME
 
     def __init__(
         self,
@@ -74,6 +75,7 @@ class OVBaseModel(OptimizedModel):
         **kwargs,
     ):
         self.config = config
+        self.name_or_path = getattr(config, "name_or_path", None)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
@@ -125,11 +127,25 @@ class OVBaseModel(OptimizedModel):
 
         self.output_names = output_names
         self.output_dtypes = output_dtypes
-
         self.model = model
         self.request = None if not self._compile_only else self.model
+
+        generation_config = kwargs.get("generation_config", None)
         if self.can_generate():
-            self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+            self.generation_config = generation_config or GenerationConfig.from_model_config(config)
+
+            if is_transformers_version(">=", "4.44.99"):
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                if len(misplaced_generation_parameters) > 0:
+                    logger.warning(
+                        "Moving the following attributes in the config to the generation config: "
+                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                        "generation parameters in the model config, as opposed to in the generation config.",
+                    )
+                    for param_name, param_value in misplaced_generation_parameters.items():
+                        setattr(self.generation_config, param_name, param_value)
+                        setattr(self.config, param_name, None)
+
         else:
             self.generation_config = None
 
@@ -219,7 +235,6 @@ class OVBaseModel(OptimizedModel):
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Union[str, Path] = None,
     ):
-        logger.info(f"Compiling the model to {device} ...")
         if isinstance(model, str):
             model = Path(model)
         ov_config = ov_config or {}
@@ -256,7 +271,7 @@ class OVBaseModel(OptimizedModel):
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only=True` mode, to save your model please initialize your model with compile_only=False"
             )
-        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        dst_path = os.path.join(save_directory, self._xml_model_name)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
         generation_config = getattr(self, "generation_config", None)
         if generation_config is not None:
@@ -350,19 +365,6 @@ class OVBaseModel(OptimizedModel):
                 kwargs.get("ov_config"),
                 model_save_dir=model_cache_path.parent,
             )
-
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                subfolder=subfolder,
-                force_download=force_download,
-                cache_dir=cache_dir,
-            )
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
 
         return cls(
             model,
@@ -582,7 +584,6 @@ class OVBaseModel(OptimizedModel):
             library_name=cls._library_name,
         )
 
-        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -711,9 +712,7 @@ class OVBaseModel(OptimizedModel):
         """
         Returns whether this model can generate sequences with `.generate()`.
         """
-        if isinstance(self, GenerationMixin):
-            return True
-        return False
+        return isinstance(self, GenerationMixin)
 
     def _inference(self, inputs):
         try:
