@@ -555,7 +555,7 @@ class OVQuantizer(OptimumQuantizer):
         if not save_onnx_model:
             export_kwargs = {"stateful": stateful}
 
-        (_, _, is_onnx), _ = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs)
+        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs)
         if is_onnx:
             # Load and save the compressed model
             model = core.read_model(onnx_path)

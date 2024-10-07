@@ -213,6 +213,8 @@ def export_tensorflow(
         ov_config=ov_config,
         library_name=library_name,
     )
+    if not return_model_size:
+        return (input_names, output_names, True)
     return (input_names, output_names, True), model_size
 
 
@@ -280,6 +282,9 @@ def export_pytorch_via_onnx(
         ov_config=ov_config,
         library_name=library_name,
     )
+
+    if not return_model_size:
+        return (input_names, output_names, True)
     return (input_names, output_names, True), model_size
 
 
@@ -462,6 +467,9 @@ def export_pytorch(
         clear_class_registry()
         del model
         gc.collect()
+
+    if not return_model_size:
+        return (input_names, output_names, False)
     return (input_names, output_names, False), model_size
 
 
@@ -520,7 +528,7 @@ def export_models(
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        model_outputs, model_size = export(
+        model_outputs = export(
                 model=submodel,
                 config=sub_export_config,
                 output=output_path,
@@ -534,10 +542,14 @@ def export_models(
                 library_name=library_name,
                 return_model_size=return_model_sizes,
             )
-        outputs.append(model_outputs)
-        model_sizes.append(model_size)
+        outputs.append(model_outputs if not return_model_sizes else model_outputs[:-1])
+        if return_model_sizes:
+            model_sizes.append(model_outputs[-1])
     outputs = list(map(list, zip(*outputs)))
-    return outputs, model_sizes
+
+    if return_model_sizes:
+        return outputs, model_sizes
+    return outputs
 
 
 def export_from_model(
@@ -719,7 +731,7 @@ def export_from_model(
 
         model.save_config(output)
 
-    _, model_sizes = export_models(
+    export_results = export_models(
         models_and_export_configs=models_and_export_configs,
         output_dir=output,
         output_names=files_subpaths,
@@ -734,7 +746,9 @@ def export_from_model(
         return_model_sizes=return_model_sizes
     )
 
-    return files_subpaths, model_sizes
+    if not return_model_sizes:
+        return files_subpaths
+    return files_subpaths, export_results[-1]
 
 
 def export_tokenizer(
