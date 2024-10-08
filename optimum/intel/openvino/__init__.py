@@ -76,6 +76,7 @@ from .modeling_open_clip import (
     OVModelOpenCLIPVisual,
 )
 from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
+from .modeling_visual_language import OVModelForVisualCausalLM
 
 
 if is_diffusers_available():

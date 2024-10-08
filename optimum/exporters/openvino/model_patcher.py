@@ -2652,3 +2652,56 @@ class IBertModelPatcher(ModelPatcher):
         # model has first inference buffers initialization, it may breaks tracing
         if getattr(embeddings.LayerNorm, "dim_sqrt") is None:
             self._model(torch.ones([1, 1], dtype=torch.long))
+
+
+class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.extract_feature
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+def llava_vision_embed_forward(self, pixel_values):
+    # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
+    # these changes does not bring any difference from original, it only packs model subcomponent inference together
+    # that allow us avoid memory overheads and their inference results handling on code-level
+    image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+    # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
+    selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
+
+    if self.config.vision_feature_select_strategy == "default":
+        selected_image_feature = selected_image_feature[:, 1:]
+    elif self.config.vision_feature_select_strategy == "full":
+        selected_image_feature = selected_image_feature
+    else:
+        raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
+
+    image_features = self.multi_modal_projector(selected_image_feature)
+    return image_features
+
+
+class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward

@@ -126,24 +126,6 @@ class OVModel(OVBaseModel):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
-    def to(self, device: str):
-        """
-        Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
-        be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
-        """
-        if self._compile_only and isinstance(device, str):
-            raise ValueError(
-                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
-            )
-
-        if isinstance(device, str):
-            self._device = device.upper()
-            self.request = None
-        else:
-            logger.debug(f"device must be of type {str} but got {type(device)} instead")
-
-        return self
-
     def forward(self, *args, **kwargs):
         raise NotImplementedError
 
