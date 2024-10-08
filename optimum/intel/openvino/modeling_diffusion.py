@@ -138,32 +138,22 @@ class OVPipeline(OVBaseModel, ConfigMixin):
                     f"Please set `compile_only=False` or `dynamic_shapes={model_is_dynamic}`"
                 )
 
-        self._openvino_config = None
-        if quantization_config:
-            self._openvino_config = OVConfig(quantization_config=quantization_config)
-        self._set_ov_config_parameters()
+        self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER)
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
 
-        self.unet = OVModelUnet(unet, parent_pipeline=self, subfolder=DIFFUSION_MODEL_UNET_SUBFOLDER)
-        self.vae_decoder = OVModelVaeDecoder(
-            vae_decoder, parent_pipeline=self, subfolder=DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER
-        )
-        self.vae_encoder = (
-            OVModelVaeEncoder(vae_encoder, parent_pipeline=self, subfolder=DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
-            if vae_encoder is not None
-            else None
-        )
-        self.text_encoder = (
-            OVModelTextEncoder(text_encoder, parent_pipeline=self, subfolder=DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)
-            if text_encoder is not None
-            else None
-        )
-        self.text_encoder_2 = (
-            OVModelTextEncoder(
-                text_encoder_2, parent_pipeline=self, subfolder=DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER
-            )
-            if text_encoder_2 is not None
-            else None
-        )
+        if vae_encoder is not None:
+            self.vae_encoder = OVModelVaeEncoder(vae_encoder, self, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
+        else:
+            self.vae_encoder = None
+        if text_encoder is not None:
+            self.text_encoder = OVModelTextEncoder(text_encoder, self, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)
+        else:
+            self.text_encoder = None
+        if text_encoder_2 is not None:
+            self.text_encoder_2 = OVModelTextEncoder(text_encoder_2, self, DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
+        else:
+            self.text_encoder_2 = None
+
         # We wrap the VAE Decoder & Encoder in a single object to simulate diffusers API
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
 
@@ -196,6 +186,11 @@ class OVPipeline(OVBaseModel, ConfigMixin):
             if key in all_pipeline_init_args:
                 diffusers_pipeline_args[key] = all_pipeline_init_args[key]
         self.auto_model_class.__init__(self, **diffusers_pipeline_args)
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
 
         if self.is_dynamic and not self._compile_only:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
@@ -707,16 +702,17 @@ class OVPipelinePart(ConfigMixin):
         self,
         model: openvino.runtime.Model,
         parent_pipeline: OVPipeline,
-        subfolder: str = "",
+        model_name: str = "",
     ):
         self.model = model
+        self.model_name = model_name
         self.parent_pipeline = parent_pipeline
         self.request = None if not parent_pipeline._compile_only else self.model
 
         if isinstance(parent_pipeline.model_save_dir, TemporaryDirectory):
-            self.model_save_dir = Path(parent_pipeline.model_save_dir.name) / subfolder
+            self.model_save_dir = Path(parent_pipeline.model_save_dir.name) / self.model_name
         else:
-            self.model_save_dir = Path(parent_pipeline.model_save_dir) / subfolder
+            self.model_save_dir = Path(parent_pipeline.model_save_dir) / self.model_name
 
         config_file_path = self.model_save_dir / self.config_name
 
@@ -752,7 +748,7 @@ class OVPipelinePart(ConfigMixin):
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self.model_save_dir, "model_cache")
 
-            logger.info(f"Compiling the {self.model_save_dir} to {self._device} ...")
+            logger.info(f"Compiling the {self.model_name} to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
