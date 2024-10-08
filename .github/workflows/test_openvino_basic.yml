@@ -41,7 +41,7 @@ jobs:
           - python-version: "3.12"
             os: "ubuntu-22.04"
             transformers-version: "4.45.*"
-            openvino: "openvino openvino-tokenizers"
+            openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
             nncf: "git+https://github.com/openvinotoolkit/nncf.git"
 
     runs-on: ${{ matrix.os }}
