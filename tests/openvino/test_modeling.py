@@ -326,13 +326,13 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
-        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        pattern = r"(.*)?openvino(.*)?\_model.xml$"
         # hub model
         for revision in ("main", "ov", "itrex"):
             ov_files = _find_files_matching_pattern(
                 model_id, pattern=pattern, revision=revision, subfolder="openvino" if revision == "itrex" else ""
             )
-            self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
+            self.assertTrue(len(ov_files) > 0)
 
         # local model
         api = HfApi()
@@ -343,11 +343,11 @@ class OVModelIntegrationTest(unittest.TestCase):
                 ov_files = _find_files_matching_pattern(
                     local_dir, pattern=pattern, revision=revision, subfolder="openvino" if revision == "itrex" else ""
                 )
-                self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
+                self.assertTrue(len(ov_files) > 0)
 
     @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
     def test_find_files_matching_pattern_sd(self, model_arch):
-        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        pattern = r"(.*)?openvino(.*)?\_model.xml$"
         model_id = MODEL_NAMES[model_arch]
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
@@ -364,7 +364,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     @parameterized.expand(("", "openvino"))
     def test_find_files_matching_pattern_subdirectory(self, subfolder):
         model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
-        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        pattern = r"(.*)?openvino(.*)?\_model.xml$"
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
         self.assertTrue(len(ov_files) == 1)
