@@ -171,6 +171,7 @@ class OVVisionEmbedding(OVModelPart):
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.hidden_states_output_names = []
         if len(self.model.outputs) > 2:
             self.hidden_states_output_names = [
@@ -178,7 +179,12 @@ class OVVisionEmbedding(OVModelPart):
             ]
 
     def forward(self, pixel_values, **kwargs):
-        result = self.request({"pixel_values": pixel_values})
+        inputs = {"pixel_values": pixel_values}
+        if len(self.input_names) > 1:
+            for name in self.input_names:
+                if name in kwargs:
+                    inputs[name] = kwargs[name]
+        result = self.request(inputs)
         last_hidden_state = result[0]
         hidden_states = None
         pooler_out = None
@@ -193,7 +199,23 @@ class OVVisionEmbedding(OVModelPart):
         )
 
 
-MODEL_PARTS_CLS_MAPPING = {}
+class OVResampler(OVModelPart):
+    _model_name = "resampler"
+
+    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+        super().__init__(model, parent_model, model_name=self._model_name)
+        self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
+        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+
+    def forward(self, image_feature, pos_embed, key_padding_mask):
+        result = self.request({"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask})[0]
+        return result
+
+
+
+MODEL_PARTS_CLS_MAPPING = {
+    "resampler": OVResampler
+}
 
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
@@ -1122,6 +1144,182 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
         input_embeds = input_embeds.reshape(B, N, C)
         return input_embeds, attention_mask, position_ids
 
+
+class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["resampler"]
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        tgt_sizes = kwargs["tgt_sizes"]
+        pixel_values_list = pixel_values
+        vision_hidden_states = []
+        all_pixel_values = []
+        img_cnt = []
+        for pixel_value in pixel_values_list:
+            img_cnt.append(len(pixel_value))
+            all_pixel_values.extend([i.flatten(end_dim=1).permute(1, 0) for i in pixel_value])
+
+        vision_embedding = None
+         # exist image
+        if all_pixel_values:
+            tgt_sizes = [tgt_size for tgt_size in tgt_sizes if isinstance(tgt_size, torch.Tensor)]
+            tgt_sizes = torch.vstack(tgt_sizes).type(torch.int32)
+
+            max_patches = torch.max(tgt_sizes[:, 0] * tgt_sizes[:, 1])
+
+            all_pixel_values = torch.nn.utils.rnn.pad_sequence(all_pixel_values, batch_first=True, padding_value=0.0)
+            B, L, _ = all_pixel_values.shape
+            all_pixel_values = all_pixel_values.permute(0, 2, 1).reshape(B, 3, -1, L)
+
+            patch_attn_mask = torch.zeros((B, 1, max_patches), dtype=torch.bool)
+            for i in range(B):
+                patch_attn_mask[i, 0, : tgt_sizes[i][0] * tgt_sizes[i][1]] = True
+            position_ids = self._prepare_vis_position_ids(
+                    all_pixel_values,
+                    patch_attn_mask,
+                    tgt_sizes,
+                    self.config.vision_config.patch_size,
+                    self.config.vision_config.image_size // self.config.patch_size,
+                    )
+            vision_embedding = torch.from_numpy(self.visin_embeddings(pixel_values=all_pixel_values, patch_attn_mask=patch_attn_mask, position_ids=position_ids)[0])
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes)
+            
+            start = 0
+            for pixel_value in pixel_values_list:
+                img_cnt = len(pixel_value)
+                if img_cnt > 0:
+                    vision_hidden_states.append(vision_embedding[start : start + img_cnt])
+                    start += img_cnt
+                else:
+                    vision_hidden_states.append([])
+        else:  # no image
+            dummy_feature = []
+            for _ in range(len(pixel_values_list)):
+                vision_hidden_states.append(dummy_feature)
+        return vision_hidden_states
+    
+    def resampling(self, x, tgt_sizes):
+        bs = x.shape[0]
+
+        patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
+
+        self._adjust_pos_cache(tgt_sizes)
+
+        max_patch_len = torch.max(patch_len)
+        key_padding_mask = torch.zeros((bs, max_patch_len), dtype=torch.bool)
+
+        pos_embed = []
+        for i in range(bs):
+            tgt_h, tgt_w = tgt_sizes[i]
+            pos_embed.append(self._pos_embeds[:tgt_h, :tgt_w, :].reshape((tgt_h * tgt_w, -1)))  # patches * D
+            key_padding_mask[i, patch_len[i] :] = True
+
+        pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(1, 0, 2)  # BLD => L * B * D
+        res = torch.from_numpy(self.resampler(image_feautre=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
+        return res
+
+    def _set_2d_pos_cache(self, max_size):
+        pos_embed = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
+        self._pos_embed = pos_embed
+
+    def _adjust_pos_cache(self, tgt_sizes):
+        max_h = torch.max(tgt_sizes[:, 0])
+        max_w = torch.max(tgt_sizes[:, 1])
+        if max_h > self.max_size[0] or max_w > self.max_size[1]:
+            self.max_size = [max(max_h, self.max_size[0]), max(max_w, self.max_size[1])]
+            self._set_2d_pos_cache(self.max_size)
+
+    def _get_2d_sincos_pos_embed(self, embed_dim, image_size):
+        """
+        image_size: image_size or (image_height, image_width)
+        return:
+        pos_embed: [image_height, image_width, embed_dim]
+        """
+        if isinstance(image_size, int):
+            grid_h_size, grid_w_size = image_size, image_size
+        else:
+            grid_h_size, grid_w_size = image_size[0], image_size[1]
+
+        grid_h = np.arange(grid_h_size, dtype=np.float32)
+        grid_w = np.arange(grid_w_size, dtype=np.float32)
+        grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+        grid = np.stack(grid, axis=0)
+
+        pos_embed = self._get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+        return pos_embed
+
+
+    def _get_2d_sincos_pos_embed_from_grid(self, embed_dim, grid):
+        assert embed_dim % 2 == 0
+
+        # use half of dimensions to encode grid_h
+        emb_h = self._get_1d_sincos_pos_embed_from_grid_new(embed_dim // 2, grid[0])  # (H, W, D/2)
+        emb_w = self._get_1d_sincos_pos_embed_from_grid_new(embed_dim // 2, grid[1])  # (H, W, D/2)
+
+        emb = np.concatenate([emb_h, emb_w], axis=-1)  # (H, W, D)
+        return emb
+
+
+    def _get_1d_sincos_pos_embed_from_grid_new(self, embed_dim, pos):
+        """
+        embed_dim: output dimension for each position
+        pos: a list of positions to be encoded: size (H, W)
+        out: (H, W, D)
+        """
+        assert embed_dim % 2 == 0
+        omega = np.arange(embed_dim // 2, dtype=np.float32)
+        omega /= embed_dim / 2.0
+        omega = 1.0 / 10000**omega  # (D/2,)
+
+        out = np.einsum("hw,d->hwd", pos, omega)  # (H, W, D/2), outer product
+
+        emb_sin = np.sin(out)  # (H, W, D/2)
+        emb_cos = np.cos(out)  # (H, W, D/2)
+
+        emb = np.concatenate([emb_sin, emb_cos], axis=-1)  # (H, W, D)
+        return emb
+
+    def _prepare_vis_position_ids(self, pixel_values, patch_attention_mask, tgt_sizes, patch_size, num_patches_per_side):
+        batch_size = pixel_values.size(0)
+        max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+        max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
+        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        position_ids = torch.full(size=(batch_size, max_nb_patches_h * max_nb_patches_w), fill_value=0)
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            if tgt_sizes is not None:
+                nb_patches_h = tgt_sizes[batch_idx][0]
+                nb_patches_w = tgt_sizes[batch_idx][1]
+            else:
+                nb_patches_h = p_attn_mask[:, 0].sum()
+                nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+
+        return position_ids
+
+    def merge_vision_text_embeddings(
+            self, vision_embeds, input_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+        ):
+        bs = input_ids.shape[0]
+        image_bound = kwargs["image_bound"]
+        vllm_embedding = torch.from_numpy(input_embeds)
+        for i in range(bs):
+            cur_vs_hs = vision_embeds[i]
+            if len(cur_vs_hs) > 0:
+                cur_vllm_emb = vllm_embedding[i]
+                cur_image_bound = image_bound[i]
+                if len(cur_image_bound) > 0:
+                    image_indices = torch.stack([torch.arange(r[0], r[1], dtype=torch.long) for r in cur_image_bound])
+
+                    cur_vllm_emb.scatter_(0, image_indices.view(-1, 1).repeat(1, cur_vllm_emb.shape[-1]), cur_vs_hs.view(-1, cur_vs_hs.shape[-1]))
+        return vllm_embedding, attention_mask, position_ids
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
