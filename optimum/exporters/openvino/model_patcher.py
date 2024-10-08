@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
@@ -2699,6 +2699,221 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask):
+    bs = image_feature.shape[0]
+    image_feature = self.kv_proj(image_feature)  # B * L * D
+    image_feature = self.ln_kv(image_feature).permute(1, 0, 2)  # L * B * D
+
+    q = self.ln_q(self.query)  # Q * D
+
+    q_bs = q.unsqueeze(1).repeat(1, bs, 1)
+
+    out = self.attn(q_bs, image_feature + pos_embed, image_feature, key_padding_mask=key_padding_mask)[0]  # Q * B * D  # L * B * D +  L * B * D
+    #  out: Q * B * D
+    x = out.permute(1, 0, 2)  # B * Q * D
+
+    x = self.ln_post(x)
+    x = x @ self.proj
+    return x
+
+
+def _minicpmv_siglip_vis_embed_forward(
+    self,
+    pixel_values: torch.FloatTensor,
+    patch_attention_mask: torch.BoolTensor,
+    tgt_sizes: Optional[torch.IntTensor] = None,
+    position_ids: Optional[torch.FloatTensor] = None,
+) -> torch.Tensor:
+    patch_embeds = self.patch_embedding(pixel_values)
+    embeddings = patch_embeds.flatten(2).transpose(1, 2)
+
+    if position_ids is None:
+        batch_size = pixel_values.size(0)
+        max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+        max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+        boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
+        position_ids = torch.full(
+            size=(
+                    batch_size,
+                    max_nb_patches_h * max_nb_patches_w,
+                ),
+                fill_value=0,
+            )
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            if tgt_sizes is not None:
+                nb_patches_h = tgt_sizes[batch_idx][0]
+                nb_patches_w = tgt_sizes[batch_idx][1]
+            else:
+                nb_patches_h = p_attn_mask[:, 0].sum()
+                nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+
+    position_ids = position_ids.to(self.position_embedding.weight.device)
+
+    embeddings = embeddings + self.position_embedding(position_ids)
+    return embeddings
+
+def _minicpmv_siglip_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    output_attentions: Optional[bool] = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    """Input shape: Batch x Time x Channel"""
+
+    batch_size, q_len, _ = hidden_states.size()
+
+    query_states = self.q_proj(hidden_states)
+    key_states = self.k_proj(hidden_states)
+    value_states = self.v_proj(hidden_states)
+
+    query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states, key_states, value_states, attention_mask, is_causal=attention_mask is None
+    )
+
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.reshape(batch_size, q_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, None
+
+def _minicpmv_siglip_transformer_forward(
+    self,
+    pixel_values,
+    patch_attention_mask: Optional[torch.BoolTensor] = None,
+    tgt_sizes: Optional[torch.IntTensor] = None,
+    position_ids: Optional[torch.FloatTensor] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+) -> Union[Tuple, BaseModelOutputWithPooling]:
+    from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    batch_size = pixel_values.size(0)
+    if patch_attention_mask is None:
+        patch_attention_mask = torch.ones(
+                size=(
+                    batch_size,
+                    pixel_values.size(2) // self.config.patch_size,
+                    pixel_values.size(3) // self.config.patch_size,
+                ),
+                dtype=torch.bool,
+                device=pixel_values.device,
+            )
+
+    hidden_states = self.embeddings(
+        pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, tgt_sizes=tgt_sizes, position_ids=position_ids
+    )
+
+    patch_attention_mask = patch_attention_mask.view(batch_size, -1)
+    attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype) if not self._use_flash_attention_2 else patch_attention_mask
+
+    encoder_outputs = self.encoder(
+        inputs_embeds=hidden_states,
+        attention_mask=attention_mask,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+    )
+
+    last_hidden_state = encoder_outputs[0]
+    last_hidden_state = self.post_layernorm(last_hidden_state)
+
+    if not return_dict:
+        return (last_hidden_state, None) + encoder_outputs[1:]
+
+    return BaseModelOutputWithPooling(
+        last_hidden_state=last_hidden_state,
+        pooler_output=None,
+        hidden_states=encoder_outputs.hidden_states,
+        attentions=encoder_outputs.attentions,
+    )
+
+
+class MiniCPMVResamplerModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_minicpmv_resampler_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(_minicpmv_siglip_transformer_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        self._model.embeddings._orig_forward = self._model.embeddings.forward
+        self._model.embeddings.forward = types.MethodType(_minicpmv_siglip_vis_embed_forward, self._model.embeddings)
+
+        if is_torch_version(">=", "2.0.0"):
+            for layer in self._model.encoder.layers:
+                layer.self_attn._orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(_minicpmv_siglip_attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        self._model.embeddings.forward = self._model.embeddings._orig_forward
+        if is_torch_version(">=", "2.0.0"):
+            for layer in self._model.encoder.layers:
+                layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class InputEmbeddingPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        def forward(self, input):
+            return self.__orig_forward(input)
+        model.forward = types.MethodType(forward, model)
 
         super().__init__(config, model, model_kwargs)
 
