@@ -112,7 +112,6 @@ class OVPipeline(OVBaseModel, ConfigMixin):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        enable_compilation = compile
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self._compile_only = compile_only
@@ -121,7 +120,7 @@ class OVPipeline(OVBaseModel, ConfigMixin):
         self.preprocessors = kwargs.get("preprocessors", [])
 
         if self._compile_only:
-            if not enable_compilation:
+            if not compile:
                 raise ValueError(
                     "`compile_only` mode does not support disabling compilation."
                     "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
@@ -201,7 +200,7 @@ class OVPipeline(OVBaseModel, ConfigMixin):
         if self.is_dynamic and not self._compile_only:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
-        if not self._compile_only and enable_compilation:
+        if compile and not self._compile_only:
             self.compile()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -320,22 +319,22 @@ class OVPipeline(OVBaseModel, ConfigMixin):
         if model_save_dir is None:
             model_save_dir = model_save_path
 
-        submodels = {}
-        for submodel in {"scheduler", "tokenizer", "tokenizer_2", "feature_extractor"}:
-            if kwargs.get(submodel, None) is not None:
-                submodels[submodel] = kwargs.pop(submodel)
-            elif config.get(submodel, (None, None))[0] is not None:
-                library_name, library_classes = config.get(submodel)
+        submodels = {"scheduler": None, "tokenizer": None, "tokenizer_2": None, "feature_extractor": None}
+        for name in submodels.keys():
+            if kwargs.get(name, None) is not None:
+                submodels[name] = kwargs.pop(name)
+            elif config.get(name, (None, None))[0] is not None:
+                library_name, library_classes = config.get(name)
                 library = importlib.import_module(library_name)
                 class_obj = getattr(library, library_classes)
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
-                if (model_save_path / submodel).is_dir():
-                    submodels[submodel] = load_method(model_save_path / submodel)
+                if (model_save_path / name).is_dir():
+                    submodels[name] = load_method(model_save_path / name)
                 else:
-                    submodels[submodel] = load_method(model_save_path)
+                    submodels[name] = load_method(model_save_path)
 
-        model_paths = {
+        models = {
             "unet": model_save_path / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
             "vae_decoder": model_save_path / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
             "vae_encoder": model_save_path / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
@@ -343,47 +342,46 @@ class OVPipeline(OVBaseModel, ConfigMixin):
             "text_encoder_2": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
         }
 
-        models = {}
         compile_only = kwargs.get("compile_only", False)
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
-            for model, path in model_paths.items():
-                if kwargs.get(model, None) is not None:
-                    models[model] = kwargs.pop(model)
+            for name, path in models.items():
+                if kwargs.get(name, None) is not None:
+                    models[name] = kwargs.pop(name)
                 else:
-                    models[model] = cls.load_model(path, quantization_config) if path.is_file() else None
+                    models[name] = cls.load_model(path, quantization_config) if path.is_file() else None
         elif compile_only:
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
             if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
                 vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
-            for model, path in models.items():
-                if kwargs.get(model, None) is not None:
-                    models[model] = kwargs.pop(model)
+            for name, path in models.items():
+                if kwargs.get(name, None) is not None:
+                    models[name] = kwargs.pop(name)
                 else:
-                    models[model] = (
+                    models[name] = (
                         cls._compile_model(
                             path,
                             device,
-                            ov_config if "vae" not in model else vae_ov_conifg,
-                            Path(model_save_dir) / model,
+                            ov_config if "vae" not in name else vae_ov_conifg,
+                            Path(model_save_dir) / name,
                         )
                         if path.is_file()
                         else None
                     )
         else:
-            if cls.export_feature != "text-to-image":
-                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
-
-            for model, path in model_paths.items():
-                if kwargs.get(model, None) is not None:
-                    models[model] = kwargs.pop(model)
+            for name, path in models.items():
+                if kwargs.get(name, None) is not None:
+                    models[name] = kwargs.pop(name)
                 else:
-                    models[model] = cls.load_model(path) if path.is_file() else None
+                    models[name] = cls.load_model(path) if path.is_file() else None
             pipeline = cls(**models, **submodels, model_save_dir=model_save_dir, **kwargs)
 
             from optimum.intel import OVQuantizer
+
+            if cls.export_feature != "text-to-image":
+                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
             hybrid_quantization_config = deepcopy(quantization_config)
             hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID

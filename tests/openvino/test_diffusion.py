@@ -246,9 +246,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            self.onnx_model_dirs[model_arch], safety_checker=safety_checker
-        )
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
 
         self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -273,22 +271,29 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_height_width_properties(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
+        batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+        )
 
-        batch_size, num_images, height, width = 2, 4, 128, 64
-        pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=True)
+        self.assertTrue(ov_pipeline.is_dynamic)
+        self.assertEqual(ov_pipeline.batch_size, -1)
+        self.assertEqual(ov_pipeline.height, -1)
+        self.assertEqual(ov_pipeline.width, -1)
 
-        self.assertTrue(pipeline.is_dynamic)
-        self.assertEqual(pipeline.batch_size, -1)
-        self.assertEqual(pipeline.height, -1)
-        self.assertEqual(pipeline.width, -1)
+        ov_pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
 
-        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-
-        self.assertFalse(pipeline.is_dynamic)
-        self.assertEqual(pipeline.batch_size, batch_size)
-        self.assertEqual(pipeline.height, height)
-        self.assertEqual(pipeline.width, width)
+        self.assertFalse(ov_pipeline.is_dynamic)
+        self.assertEqual(
+            ov_pipeline.batch_size,
+            batch_size
+            * num_images_per_prompt
+            * (2 if "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs} else 1),
+        )
+        self.assertEqual(ov_pipeline.height, height)
+        self.assertEqual(ov_pipeline.width, width)
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
@@ -430,9 +435,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            self.onnx_model_dirs[model_arch], safety_checker=safety_checker
-        )
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
 
         self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -457,22 +460,29 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_height_width_properties(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
+        batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+        )
 
-        batch_size, num_images, height, width = 2, 4, 128, 64
-        pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=True)
+        self.assertTrue(ov_pipeline.is_dynamic)
+        self.assertEqual(ov_pipeline.batch_size, -1)
+        self.assertEqual(ov_pipeline.height, -1)
+        self.assertEqual(ov_pipeline.width, -1)
 
-        self.assertTrue(pipeline.is_dynamic)
-        self.assertEqual(pipeline.batch_size, -1)
-        self.assertEqual(pipeline.height, -1)
-        self.assertEqual(pipeline.width, -1)
+        ov_pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
 
-        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-
-        self.assertFalse(pipeline.is_dynamic)
-        self.assertEqual(pipeline.batch_size, batch_size)
-        self.assertEqual(pipeline.height, height)
-        self.assertEqual(pipeline.width, width)
+        self.assertFalse(ov_pipeline.is_dynamic)
+        self.assertEqual(
+            ov_pipeline.batch_size,
+            batch_size
+            * num_images_per_prompt
+            * (2 if "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs} else 1),
+        )
+        self.assertEqual(ov_pipeline.height, height)
+        self.assertEqual(ov_pipeline.width, width)
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -619,9 +629,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            self.onnx_model_dirs[model_arch], safety_checker=safety_checker
-        )
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
 
         self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -646,19 +654,26 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_height_width_properties(self, model_arch: str):
-        batch_size, num_images, height, width = 2, 4, 128, 64
-        pipeline = self.OVMODEL_CLASS.from_pretrained(
+        batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
             MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
         )
 
-        self.assertTrue(pipeline.is_dynamic)
-        self.assertEqual(pipeline.batch_size, -1)
-        self.assertEqual(pipeline.height, -1)
-        self.assertEqual(pipeline.width, -1)
+        self.assertTrue(ov_pipeline.is_dynamic)
+        self.assertEqual(ov_pipeline.batch_size, -1)
+        self.assertEqual(ov_pipeline.height, -1)
+        self.assertEqual(ov_pipeline.width, -1)
 
-        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+        ov_pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
 
-        self.assertFalse(pipeline.is_dynamic)
-        self.assertEqual(pipeline.batch_size, batch_size)
-        self.assertEqual(pipeline.height, height)
-        self.assertEqual(pipeline.width, width)
+        self.assertFalse(ov_pipeline.is_dynamic)
+        self.assertEqual(
+            ov_pipeline.batch_size,
+            batch_size
+            * num_images_per_prompt
+            * (2 if "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs} else 1),
+        )
+        self.assertEqual(ov_pipeline.height, height)
+        self.assertEqual(ov_pipeline.width, width)
