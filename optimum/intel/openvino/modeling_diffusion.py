@@ -87,17 +87,17 @@ class OVPipeline(OVBaseModel, ConfigMixin):
 
     def __init__(
         self,
-        scheduler: Optional["SchedulerMixin"],
-        unet: Optional[openvino.runtime.Model],
-        vae_decoder: Optional[openvino.runtime.Model],
+        scheduler: SchedulerMixin,
+        unet: openvino.runtime.Model,
+        vae_decoder: openvino.runtime.Model,
         # optional pipeline models
         vae_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
         # optional pipeline submodels
-        tokenizer: Optional["CLIPTokenizer"] = None,
-        tokenizer_2: Optional["CLIPTokenizer"] = None,
-        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        tokenizer: Optional[CLIPTokenizer] = None,
+        tokenizer_2: Optional[CLIPTokenizer] = None,
+        feature_extractor: Optional[CLIPFeatureExtractor] = None,
         # stable diffusion xl specific arguments
         force_zeros_for_empty_prompt: bool = True,
         requires_aesthetics_score: bool = False,
@@ -166,7 +166,7 @@ class OVPipeline(OVBaseModel, ConfigMixin):
             else None
         )
         # We wrap the VAE Decoder & Encoder in a single object to simulate diffusers API
-        self.vae = OVWrapperVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
+        self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
 
         self.scheduler = scheduler
         self.tokenizer = tokenizer
@@ -827,6 +827,10 @@ class OVModelUnet(OVPipelinePart):
         super().__init__(*args, **kwargs)
 
         if not hasattr(self.config, "time_cond_proj_dim"):
+            logger.warning(
+                "The `time_cond_proj_dim` attribute is missing from the UNet configuration. "
+                "Please re-export the model with newer version of optimum and diffusers."
+            )
             self.register_to_config(time_cond_proj_dim=None)
 
     def forward(
@@ -877,6 +881,10 @@ class OVModelVaeEncoder(OVPipelinePart):
         super().__init__(*args, **kwargs)
 
         if not hasattr(self.config, "scaling_factor"):
+            logger.warning(
+                "The `scaling_factor` attribute is missing from the VAE encoder configuration. "
+                "Please re-export the model with newer version of optimum and diffusers."
+            )
             self.register_to_config(scaling_factor=2 ** (len(self.config.block_out_channels) - 1))
 
     def forward(
@@ -918,7 +926,12 @@ class OVModelVaeDecoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        # can be missing from models exported long ago
         if not hasattr(self.config, "scaling_factor"):
+            logger.warning(
+                "The `scaling_factor` attribute is missing from the VAE decoder configuration. "
+                "Please re-export the model with newer version of optimum and diffusers."
+            )
             self.register_to_config(scaling_factor=2 ** (len(self.config.block_out_channels) - 1))
 
     def forward(
@@ -948,11 +961,10 @@ class OVModelVaeDecoder(OVPipelinePart):
         super()._compile()
 
 
-class OVWrapperVae:
+class OVModelVae:
     def __init__(self, decoder: OVModelVaeDecoder, encoder: OVModelVaeEncoder):
         self.decoder = decoder
-        if encoder is not None:
-            self.encoder = encoder
+        self.encoder = encoder
 
     @property
     def config(self):
@@ -966,11 +978,11 @@ class OVWrapperVae:
     def device(self):
         return self.decoder.device
 
-    def encode(self, *args, **kwargs):
-        return self.encoder(*args, **kwargs)
-
     def decode(self, *args, **kwargs):
         return self.decoder(*args, **kwargs)
+
+    def encode(self, *args, **kwargs):
+        return self.encoder(*args, **kwargs)
 
     def to(self, *args, **kwargs):
         self.decoder.to(*args, **kwargs)
