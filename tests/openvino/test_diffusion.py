@@ -22,6 +22,7 @@ from diffusers import (
     AutoPipelineForText2Image,
     DiffusionPipeline,
 )
+from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, SEED
@@ -239,6 +240,56 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         np.testing.assert_allclose(images_1, images_2, atol=1e-4, rtol=1e-2)
 
+    @parameterized.expand(["stable-diffusion", "latent-consistency"])
+    @require_diffusers
+    def test_safety_checker(self, model_arch: str):
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+
+        pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            self.onnx_model_dirs[model_arch], safety_checker=safety_checker
+        )
+
+        self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
+        self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
+
+        height, width, batch_size = 32, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
+        diffusers_output = pipeline(**inputs, generator=get_generator("pt", SEED))
+
+        ov_nsfw_content_detected = ov_output.nsfw_content_detected
+        diffusers_nsfw_content_detected = diffusers_output.nsfw_content_detected
+
+        self.assertTrue(ov_nsfw_content_detected is not None)
+        self.assertTrue(diffusers_nsfw_content_detected is not None)
+        self.assertEqual(ov_nsfw_content_detected, diffusers_nsfw_content_detected)
+
+        ov_images = ov_output.images
+        diffusers_images = diffusers_output.images
+
+        np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_height_width_properties(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+
+        batch_size, num_images, height, width = 2, 4, 128, 64
+        pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=True)
+
+        self.assertTrue(pipeline.is_dynamic)
+        self.assertEqual(pipeline.batch_size, -1)
+        self.assertEqual(pipeline.height, -1)
+        self.assertEqual(pipeline.width, -1)
+
+        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+
+        self.assertFalse(pipeline.is_dynamic)
+        self.assertEqual(pipeline.batch_size, batch_size)
+        self.assertEqual(pipeline.height, height)
+        self.assertEqual(pipeline.width, width)
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
@@ -372,6 +423,56 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
             self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
             np.testing.assert_allclose(ov_outputs_1.images[0], ov_outputs_2.images[0], atol=1e-4, rtol=1e-2)
+
+    @parameterized.expand(["stable-diffusion", "latent-consistency"])
+    @require_diffusers
+    def test_safety_checker(self, model_arch: str):
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+
+        pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            self.onnx_model_dirs[model_arch], safety_checker=safety_checker
+        )
+
+        self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
+        self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
+
+        height, width, batch_size = 32, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
+        diffusers_output = pipeline(**inputs, generator=get_generator("pt", SEED))
+
+        ov_nsfw_content_detected = ov_output.nsfw_content_detected
+        diffusers_nsfw_content_detected = diffusers_output.nsfw_content_detected
+
+        self.assertTrue(ov_nsfw_content_detected is not None)
+        self.assertTrue(diffusers_nsfw_content_detected is not None)
+        self.assertEqual(ov_nsfw_content_detected, diffusers_nsfw_content_detected)
+
+        ov_images = ov_output.images
+        diffusers_images = diffusers_output.images
+
+        np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_height_width_properties(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+
+        batch_size, num_images, height, width = 2, 4, 128, 64
+        pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=True)
+
+        self.assertTrue(pipeline.is_dynamic)
+        self.assertEqual(pipeline.batch_size, -1)
+        self.assertEqual(pipeline.height, -1)
+        self.assertEqual(pipeline.width, -1)
+
+        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+
+        self.assertFalse(pipeline.is_dynamic)
+        self.assertEqual(pipeline.batch_size, batch_size)
+        self.assertEqual(pipeline.height, height)
+        self.assertEqual(pipeline.width, width)
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -511,3 +612,53 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
             self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
             np.testing.assert_allclose(ov_outputs_1.images[0], ov_outputs_2.images[0], atol=1e-4, rtol=1e-2)
+
+    @parameterized.expand(["stable-diffusion"])
+    @require_diffusers
+    def test_safety_checker(self, model_arch: str):
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+
+        pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            self.onnx_model_dirs[model_arch], safety_checker=safety_checker
+        )
+
+        self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
+        self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
+
+        height, width, batch_size = 32, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
+        diffusers_output = pipeline(**inputs, generator=get_generator("pt", SEED))
+
+        ov_nsfw_content_detected = ov_output.nsfw_content_detected
+        diffusers_nsfw_content_detected = diffusers_output.nsfw_content_detected
+
+        self.assertTrue(ov_nsfw_content_detected is not None)
+        self.assertTrue(diffusers_nsfw_content_detected is not None)
+        self.assertEqual(ov_nsfw_content_detected, diffusers_nsfw_content_detected)
+
+        ov_images = ov_output.images
+        diffusers_images = diffusers_output.images
+
+        np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_height_width_properties(self, model_arch: str):
+        batch_size, num_images, height, width = 2, 4, 128, 64
+        pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+        )
+
+        self.assertTrue(pipeline.is_dynamic)
+        self.assertEqual(pipeline.batch_size, -1)
+        self.assertEqual(pipeline.height, -1)
+        self.assertEqual(pipeline.width, -1)
+
+        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+
+        self.assertFalse(pipeline.is_dynamic)
+        self.assertEqual(pipeline.batch_size, batch_size)
+        self.assertEqual(pipeline.height, height)
+        self.assertEqual(pipeline.width, width)
