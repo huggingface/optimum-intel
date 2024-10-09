@@ -152,7 +152,7 @@ class OVModelOpenCLIPBase(OVModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model\_(.*)?.xml",
+                pattern=r"(.*)?openvino(.*)?\_model\_(.*)?.xml$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
