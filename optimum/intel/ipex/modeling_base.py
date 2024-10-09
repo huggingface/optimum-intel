@@ -53,7 +53,6 @@ from optimum.utils import NormalizedConfigManager
 from ...exporters.ipex.cache_utils import IPEXPagedCache
 from ...exporters.ipex.model_config import ipex_onnx_config
 from ...exporters.ipex.model_patcher import (
-    _IPEX_EXPORTED_GENERATION_TASKS,
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
@@ -72,16 +71,6 @@ _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "
 
 def _is_patched_with_ipex(model, task):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
-        return False
-
-    if isinstance(model, torch.jit.ScriptModule):
-        for node in model.graph.nodes():
-            # Only patched model enabled fusion linear.
-            if "/fusions/" in node.__str__():
-                return True
-        return False
-    elif task in _IPEX_EXPORTED_GENERATION_TASKS and model.config.hidden_size < 64:
-        # The ipex IAKV op in patched model requires the hidden size at least 64
         return False
 
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
@@ -421,7 +410,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    _supports_cache_class = False
+    _supports_cache_class = True
     _is_stateful = False
 
     def __init__(
@@ -530,6 +519,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         # Patch functions to support paged cache
         transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["paged"] = IPEXPagedCache
         self.generation_config.cache_implementation = "paged"
+        if is_transformers_version(">=", "4.45.0"):
+            if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
+                transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
         if kwargs.get("generation_config", None):
             kwargs["generation_config"].cache_implementation = "paged"
         if self._is_ipex_exported and kwargs.get("assistant_model", None):

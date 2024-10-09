@@ -30,7 +30,15 @@ class IPEXPagedCache(Cache):
         ```
     """
 
-    def __init__(self, config: PretrainedConfig, max_batch_size: int, max_cache_len: int, device, dtype=None) -> None:
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        max_batch_size: int,
+        max_cache_len: int,
+        device,
+        dtype=None,
+        layer_device_map=None,
+    ) -> None:
         super().__init__()
         self.max_batch_size = max_batch_size
         self.kv_cache = []
