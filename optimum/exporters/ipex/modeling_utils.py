@@ -18,14 +18,15 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 from torch import nn
-from torch.nn import functional as F
+from transformers.cache_utils import Cache
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
-from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
 from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
+
+from .cache_utils import IPEXPagedCache
 
 
 logger = logging.getLogger(__name__)
@@ -38,28 +39,28 @@ if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
     )
 else:
+    from intel_extension_for_pytorch.llm.functional import rms_norm, rotary_embedding, varlen_attention
     from intel_extension_for_pytorch.llm.modules import (
-        IndirectAccessKVCacheAttention,
         Linear2SiluMul,
         LinearAdd,
         LinearAddAdd,
         LinearGelu,
-        RotaryEmbedding,
+        PagedAttention,
     )
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
 def _ipex_rms_layer_norm_forward(self, hidden_states):
-    return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
+    return rms_norm(hidden_states, self.weight, self.variance_epsilon)
 
 
-# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
+# Adapted from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llama/modeling_llama.py#L918
 def _llama_model_forward(
     self,
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
-    past_key_values: Optional[List[torch.FloatTensor]] = None,
+    past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
     use_cache: Optional[bool] = None,
     output_attentions: Optional[bool] = None,
@@ -85,9 +86,10 @@ def _llama_model_forward(
     else:
         raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-    past_key_values_length = 0
-    if past_key_values is not None:
-        past_key_values_length = past_key_values[0][0].shape[2]
+    if past_key_values is not None and not isinstance(past_key_values, IPEXPagedCache):
+        raise ValueError("only support IPEXPagedCache input now")
+
+    past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
 
     if position_ids is None:
         device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -99,15 +101,6 @@ def _llama_model_forward(
     if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
 
-    if getattr(self.config, "_flash_attn_2_enabled", False):
-        # 2d mask is passed through the layers
-        attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-    else:
-        # 4d mask is passed through the layers
-        attention_mask = _prepare_4d_causal_attention_mask(
-            attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
-        )
-
     # embed positions
     hidden_states = inputs_embeds
 
@@ -116,25 +109,40 @@ def _llama_model_forward(
     all_self_attns = () if output_attentions else None
     next_decoder_cache = () if use_cache else None
 
+    position_embeddings = self.rotary_emb(hidden_states, position_ids)
+    if past_key_values_length == 0:
+        # first token, remove the padding from hidden_states, varlen do not accept attention mask
+        hidden_states_copy = hidden_states
+        index = attention_mask.view(-1) != 0
+        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+        cos = position_embeddings[0]
+        sin = position_embeddings[1]
+        cos = (cos.reshape(-1, cos.shape[-1]))[index]
+        sin = (sin.reshape(-1, sin.shape[-1]))[index]
+        position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    else:
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+    input_lens = attention_mask.cumsum(-1)[:, -1]
+
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-
-        past_key_value = past_key_values[idx] if past_key_values is not None else None
 
         layer_outputs = decoder_layer(
             hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_value=past_key_value,
+            past_key_value=past_key_values,
             output_attentions=output_attentions,
             use_cache=use_cache,
+            position_embeddings=position_embeddings,
+            input_lens=input_lens.int(),
         )
 
         hidden_states = layer_outputs[0]
 
         if use_cache:
-            next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
+            next_decoder_cache = layer_outputs[2 if output_attentions else 1]
 
         if output_attentions:
             all_self_attns += (layer_outputs[1],)
@@ -148,8 +156,11 @@ def _llama_model_forward(
     next_cache = next_decoder_cache if use_cache else None
     if not return_dict:
         return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+    if hidden_states.shape[0] != batch_size * seq_length:
+        (hidden_states_copy.view(-1, hidden_states.shape[-1]))[attention_mask.view(-1) != 0] = hidden_states
+        hidden_states = hidden_states_copy
     return BaseModelOutputWithPast(
-        last_hidden_state=hidden_states,
+        last_hidden_state=hidden_states.view(batch_size, -1, hidden_states.shape[-1]),
         past_key_values=next_cache,
         hidden_states=all_hidden_states,
         attentions=all_self_attns,
@@ -174,41 +185,17 @@ class _IPEXAttention(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(text_max_length=config.max_position_embeddings)
-        if hasattr(config, "rope_theta"):
-            self.ipex_rope = RotaryEmbedding(
-                config.max_position_embeddings,
-                config.hidden_size // config.num_attention_heads,
-                config.rope_theta,
-                config.architectures[0],
-            )
+        self.module_device = next(module.parameters()).device.type
+        self.num_groups = self.num_heads // self.num_key_value_heads
+        self.kv_head_mapping = torch.arange(
+            0, self.num_key_value_heads, dtype=torch.int32, device=self.module_device
+        ).repeat_interleave(self.num_groups)
 
     def qkv_gemm(self, hidden_states):
         raise NotImplementedError("Need to implement in specific model class")
 
     def rope(self, *args, **kwargs):
         raise NotImplementedError("Need to implement in specific model class")
-
-    def sdpa_with_cache(self, query, key, value, past_key_value, attention_mask, **kwargs):
-        # This ipex op pre-allocates buffers for past_key_values and use beam index history
-        # which to decide which beam should be used to make attention scale dot more efficient.
-        (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
-            query,
-            key,
-            value,
-            math.sqrt(self.head_dim),
-            past_key_value,
-            kwargs.get("head_mask", None),
-            attention_mask,
-            kwargs.get("alibi", None),
-        )
-        return attn_output, past_key_value, attn_weights
-
-    def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, **kwargs):
-        raise NotImplementedError("Need to implement in specific model class")
-
-    def prepare_attention_mask_float(self, attention_mask, *args):
-        return attention_mask
 
     def postprocess_attention_output(self, attn_output, bsz, seq_len):
         attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, self.hidden_size)
@@ -219,40 +206,69 @@ class _IPEXAttention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_value: Optional[IPEXPagedCache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
+        input_lens: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        # For llama inputs: https://github.com/huggingface/transformers/blob/v4.43.4/src/transformers/models/llama/modeling_llama.py#L308
-        # For falcon inputs: https://github.com/huggingface/transformers/blob/v4.43.4/src/transformers/models/falcon/modeling_falcon.py#L370
         if past_key_value is None and kwargs.get("layer_past", None) is not None:
             past_key_value = kwargs.pop("layer_past", None)
-        bsz, seq_len, _ = hidden_states.size()
-        past_len = past_key_value[0].size(-2) if past_key_value is not None else 0
-        kv_seq_len = seq_len + past_len
-
+        bsz, seq_len = position_ids.size()
+        past_len = 0
+        if past_key_value is not None:
+            past_len = past_key_value.get_seq_length()
         qkv_out = self.qkv_gemm(hidden_states)
         if isinstance(qkv_out, tuple) and len(qkv_out) == 3:
-            query, key, value = self.qkv_gemm(hidden_states)
-            query, key = self.rope(query, key, kv_seq_len, use_cache, position_ids=position_ids)
+            query, key, value = qkv_out[0], qkv_out[1], qkv_out[2]
+            query, key = self.rope(query, key, **kwargs)
         else:
-            query, key, value = self.rope(qkv_out, kv_seq_len, use_cache, past_len=past_len)
+            query, key, value = self.rope(qkv_out, **kwargs)
 
-        attention_mask = self.prepare_attention_mask_float(attention_mask, query.dtype)
-        sdpa = self.sdpa_with_cache if use_cache else self.sdpa_without_cache
-        attn_output, past_key_value, attn_weights = sdpa(
-            query,
-            key,
-            value,
-            past_key_value,
-            attention_mask,
-            position_ids=position_ids,
-            head_mask=kwargs.get("head_mask", None),
-            alibi=kwargs.get("alibi", None),
-        )
-        attn_output = self.postprocess_attention_output(attn_output, bsz, seq_len)
+        if past_key_value is not None:
+            key_cache, value_cache = past_key_value.update(
+                key, value, self.layer_idx, attention_mask, position_ids, input_lens
+            )
 
+        attn_output = torch.empty_like(query)
+        if past_len == 0:
+            # prefill, remove padding
+            seq_len_tensor = torch.cat(
+                (torch.tensor([0], device=input_lens.device, dtype=torch.int), input_lens.cumsum(-1).int())
+            )
+            varlen_attention(
+                query.contiguous() if query.device.type == "xpu" else query,
+                key.contiguous() if key.device.type == "xpu" else key,
+                value.contiguous() if value.device.type == "xpu" else value,
+                attn_output,
+                seq_len_tensor,
+                seq_len_tensor,
+                max(input_lens),
+                max(input_lens),
+                0.0,
+                1.0 / math.sqrt(self.head_dim),
+                False,
+                True,
+                False,
+                None,
+            )
+        else:
+            # decode
+            PagedAttention.single_query_cached_kv_attention(
+                attn_output,
+                query,
+                key_cache,
+                value_cache,
+                self.kv_head_mapping,
+                1.0 / math.sqrt(self.head_dim),
+                past_key_value.block_tables,
+                input_lens,
+                past_key_value.block_size,
+                max(input_lens),
+                None,
+            )
+
+        attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
         if not output_attentions:
             attn_weights = None
 
@@ -262,77 +278,33 @@ class _IPEXAttention(nn.Module):
 class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         super().__init__(module, config)
-        if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-            self.mha_linear_add = LinearAdd(module.o_proj)
-            del self.__dict__["_modules"]["o_proj"]
+        if self.module_device == "cpu":
+            if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                self.mha_linear_add = LinearAdd(module.o_proj)
+                del self.__dict__["_modules"]["o_proj"]
 
     def qkv_gemm(self, hidden_states):
-        bsz, seq_len, _ = hidden_states.size()
-        query = self.q_proj(hidden_states).view(bsz, seq_len, self.num_heads, self.head_dim)
-        key = self.k_proj(hidden_states).view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        value = self.v_proj(hidden_states).view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        query = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
+        key = self.k_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
+        value = self.v_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
 
         return query, key, value
 
-    def rope(self, query, key, kv_seq_len, use_cache, position_ids):
-        if use_cache:
-            args = (self.head_dim, self.head_dim // 2, self.head_dim, kv_seq_len)
-            key = self.ipex_rope(key, position_ids, self.num_key_value_heads, *args)
-            query = self.ipex_rope(query, position_ids, self.num_heads, *args)
+    def rope(self, query, key, **kwargs):
+        position_embeddings = kwargs.pop("position_embeddings", None)
+        rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
         return query, key
-
-    # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L341
-    def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, position_ids, **kwargs):
-        query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
-        cos, sin = self.rotary_emb(value, position_ids)
-        query, key = apply_rotary_pos_emb(query, key, cos, sin)
-        # repeat k/v heads if n_kv_heads < n_heads
-        key = repeat_kv(key, self.num_key_value_groups)
-        value = repeat_kv(value, self.num_key_value_groups)
-        attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.head_dim)
-        if attention_mask is not None:
-            attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
-            attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-        attn_output = torch.matmul(attn_weights, value)
-
-        return attn_output, None, attn_weights
 
 
 class _IPEXFalconAttention(_IPEXAttention):
     def qkv_gemm(self, hidden_states):
         return self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
 
-    def rope(self, fused_qkv, seq_len, use_cache, past_len):
-        if use_cache:
-            query, key, value = self.ipex_rope(
-                fused_qkv,
-                torch.tensor(past_len),
-                self.num_heads,
-                self.head_dim,
-                self.head_dim // 2,
-                self.head_dim,
-                seq_len,
-                3,
-            )
-        else:
-            (query, key, value) = self._split_heads(fused_qkv)
+    def rope(self, fused_qkv, **kwargs):
+        position_embeddings = kwargs.pop("position_embeddings", None)
+        (query, key, value) = self._split_heads(fused_qkv)
+        rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
         return query, key, value
-
-    def prepare_attention_mask_float(self, attention_mask, dtype):
-        attention_mask_float = (
-            (attention_mask * 1.0).masked_fill(attention_mask.to(torch.bool), float("-1e9")).to(dtype)
-        )
-        return attention_mask_float
-
-    def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, **kwargs):
-        bs, q_len = query.shape[0], query.shape[1]
-        query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
-        attn_output = F.scaled_dot_product_attention(query, key, value, attention_mask, 0.0, is_causal=False)
-        attn_output = attn_output.view(bs, self.num_heads, q_len, self.head_dim)
-
-        return attn_output, None, None
 
 
 class _IPEXGPT2Attention(_IPEXAttention):
@@ -353,12 +325,6 @@ class _IPEXGPT2Attention(_IPEXAttention):
     def rope(self, query, key, *args, **kwargs):
         return query, key
 
-    def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, **kwargs):
-        query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
-        attn_output = F.scaled_dot_product_attention(query, key, value, attention_mask, 0.0, is_causal=True)
-
-        return attn_output, None, None
-
     def postprocess_attention_output(self, attn_output, bsz, seq_len):
         attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, self.embed_dim)
         attn_output = self.c_proj(attn_output)
@@ -372,13 +338,15 @@ class _IPEXLlamaMLP(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
-            self.mlp_linear_add = LinearAdd(module.down_proj)
-            del self.__dict__["_modules"]["down_proj"]
-        self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
-        del self.__dict__["_modules"]["gate_proj"]
-        del self.__dict__["_modules"]["up_proj"]
+        self.module_device = next(module.parameters()).device.type
+        if self.module_device == "cpu":
+            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+            if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                self.mlp_linear_add = LinearAdd(module.down_proj)
+                del self.__dict__["_modules"]["down_proj"]
+            self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+            del self.__dict__["_modules"]["gate_proj"]
+            del self.__dict__["_modules"]["up_proj"]
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):

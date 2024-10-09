@@ -13,11 +13,10 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
-from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2LMHeadModel
+from transformers.models.falcon.modeling_falcon import FalconDecoderLayer
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
-    LlamaForCausalLM,
     LlamaModel,
     LlamaRMSNorm,
 )
@@ -75,7 +74,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 def _patch_llama_model(model):
     """
     Patch llama model:
-        1. Use IPEX Rope and IAKV cache
+        1. Use IPEX Rope and Paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
@@ -88,7 +87,7 @@ def _patch_falcon_model(model):
     """
     Patch falcon model:
         1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IPEX Rope and IAKV cache
+        2. Use IPEX Rope and paged cache
         3. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
     """
     model.transformer._use_sdpa = False
@@ -136,11 +135,11 @@ def _patch_model(model):
         raise ImportError(
             f"Only transformers versions {_TRANSFORMERS_MIN_VERSION} ~ {_TRANSFORMERS_MAX_VERSION} are verified."
         )
-    if isinstance(model, LlamaForCausalLM):
+    if model.config.model_type == "llama":
         model = _patch_llama_model(model)
-    elif isinstance(model, FalconForCausalLM):
+    elif model.config.model_type == "falcon":
         model = _patch_falcon_model(model)
-    elif isinstance(model, GPT2LMHeadModel):
+    elif model.config.model_type == "gpt2":
         model = _patch_gpt2_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
