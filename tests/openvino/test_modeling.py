@@ -324,6 +324,20 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsInstance(model.config, PretrainedConfig)
         self.assertTrue(model.stateful)
 
+    @parameterized.expand(("", "openvino"))
+    def test_loading_with_config_in_root(self, subfolder):
+        # config.json file in the root directory and not in the subfolder
+        model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
+        export = subfolder == ""
+        # hub model
+        OVModelForFeatureExtraction.from_pretrained(model_id, subfolder=subfolder, export=export)
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            OVModelForFeatureExtraction.from_pretrained(local_dir, subfolder=subfolder, export=export)
+
     def test_infer_export_when_loading(self):
         model_id = MODEL_NAMES["phi"]
         model = AutoModelForCausalLM.from_pretrained(model_id)

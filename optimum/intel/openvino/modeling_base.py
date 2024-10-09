@@ -512,7 +512,7 @@ class OVBaseModel(OptimizedModel):
         # locates a file in a local folder and repo, downloads and cache it if necessary.
         model_path = Path(model_path)
         if model_path.is_dir():
-            model_cache_path = model_path / file_name
+            model_cache_path = model_path / subfolder / file_name
         else:
             file_name = Path(file_name)
             if file_name.suffix != ".onnx":
