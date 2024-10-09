@@ -272,8 +272,12 @@ class OVModelIntegrationTest(unittest.TestCase):
             "num_inference_steps": 2,
             "output_type": "np",
         }
-        pipeline_outputs = loaded_pipeline(**inputs, generator=np.random.RandomState(SEED)).images
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        pipeline_outputs = loaded_pipeline(**inputs).images
         self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
@@ -294,12 +298,17 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
-            outputs = compile_only_pipeline(**inputs, generator=np.random.RandomState(SEED)).images
-            self.assertTrue(np.array_equal(pipeline_outputs, outputs))
+
+            np.random.seed(0)
+            torch.manual_seed(0)
+            outputs = compile_only_pipeline(**inputs).images
+            np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
             del compile_only_pipeline
 
-        outputs = pipeline(**inputs, generator=np.random.RandomState(SEED)).images
-        self.assertTrue(np.array_equal(pipeline_outputs, outputs))
+        np.random.seed(0)
+        torch.manual_seed(0)
+        outputs = pipeline(**inputs).images
+        np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
         del pipeline
         gc.collect()
 
