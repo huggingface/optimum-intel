@@ -17,7 +17,6 @@ import inspect
 
 import itertools
 import logging
-import tempfile
 import unittest
 from collections import defaultdict
 from enum import Enum
@@ -74,6 +73,7 @@ from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.openvino.utils import TemporaryDirectory
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
 _TASK_TO_DATASET = {
@@ -102,7 +102,7 @@ class OVQuantizerTest(unittest.TestCase):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.auto_model_class.from_pretrained(model_id)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -146,7 +146,7 @@ class OVQuantizerTest(unittest.TestCase):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, export=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -315,7 +315,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.auto_model_class.from_pretrained(model_id)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -346,7 +346,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.from_pretrained(model_id, export=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -371,7 +371,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8, expected_int4):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -398,7 +398,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -451,7 +451,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
         model_id = MODEL_NAMES[model_type]
         quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
             num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
@@ -497,7 +497,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         "optimum.intel.openvino.configuration._DEFAULT_4BIT_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
     )
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
             model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4})
             tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -521,7 +521,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_name, quantization_config, expected_num_weight_nodes
     ):
         model_id = MODEL_NAMES[model_name]
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
             if quantization_config.quant_method.lower() == "awq":
@@ -658,7 +658,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_name, quantization_config, expected_num_weight_nodes
     ):
         model_id = MODEL_NAMES[model_name]
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             group_size = quantization_config.pop("group_size", 32)
             quantization_config = OVDynamicQuantizationConfig(
                 weights_group_size=group_size, activations_group_size=group_size, **quantization_config
@@ -693,7 +693,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
             )
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantizer = OVQuantizer.from_pretrained(transformers_model)
@@ -734,7 +734,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
             )
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             transformers_model = OVModelForQuestionAnswering.from_pretrained(model_name, export=True)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantizer = OVQuantizer.from_pretrained(transformers_model)
@@ -787,7 +787,7 @@ class OVTrainerTest(unittest.TestCase):
         def compute_metrics(p):
             return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             trainer = OVTrainer(
                 model=model,
                 ov_config=ov_config,
@@ -916,7 +916,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
         ov_config = OVConfig(quantization_config=quantization_config)
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             ov_config.save_pretrained(tmp_dir)
             loaded_ov_config = OVConfig.from_pretrained(tmp_dir)
 

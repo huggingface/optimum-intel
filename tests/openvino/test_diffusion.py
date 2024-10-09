@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import random
-import tempfile
 import unittest
 from typing import Dict
 
@@ -47,6 +46,7 @@ from optimum.intel.openvino.modeling_diffusion import (
     OVModelVaeDecoder,
     OVModelVaeEncoder,
 )
+from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils.import_utils import is_onnxruntime_available
 
@@ -428,7 +428,7 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
             num_images_per_prompt=num_images_per_prompt,
             generator=np.random.RandomState(SEED),
         )
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
         ov_outputs_2 = pipeline(
@@ -470,7 +470,7 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir, ov_config=F32_CONFIG)
 
