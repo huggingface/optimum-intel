@@ -425,7 +425,7 @@ def _rmtree(path, ignore_errors=False, onerror=None, *, onexc=None, dir_fd=None)
 # copied https://github.com/python/cpython/blob/3.12/Lib/tempfile.py
 # to add behaviour that available only for python3.10+ for older python version
 class TemporaryDirectory(OrigTemporaryDirectory):
-    def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=False, *, delete=True):
+    def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=True, *, delete=True):
         super().__init__(suffix=suffix, prefix=prefix, dir=dir)
         self._ignore_cleanup_errors = ignore_cleanup_errors
         self._delete = delete
