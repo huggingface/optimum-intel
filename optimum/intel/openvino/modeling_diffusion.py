@@ -273,7 +273,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         **kwargs,
     ):
         # same as DiffusionPipeline.from_pretraoned, if called directly, it loads the class in the config
-        if cls.__name__ == "ORTDiffusionPipeline":
+        if cls.__name__ == "OVDiffusionPipeline":
             class_name = config["_class_name"]
             ov_pipeline_class = _get_ov_class(class_name)
         else:
