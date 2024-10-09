@@ -208,14 +208,13 @@ class OVResampler(OVModelPart):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
 
     def forward(self, image_feature, pos_embed, key_padding_mask):
-        result = self.request({"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask})[0]
+        result = self.request(
+            {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
+        )[0]
         return result
 
 
-
-MODEL_PARTS_CLS_MAPPING = {
-    "resampler": OVResampler
-}
+MODEL_PARTS_CLS_MAPPING = {"resampler": OVResampler}
 
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
@@ -1148,7 +1147,39 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
 class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["resampler"]
 
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
+        self.embed_dim = self.language_model.config.hidden_size
+        max_size = self.config.vision_config.image_size // self.config.vision_config.patch_size
+        self._pos_embeds = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
+        self.max_size = (max_size, max_size)
+
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
         tgt_sizes = kwargs["tgt_sizes"]
         pixel_values_list = pixel_values
         vision_hidden_states = []
@@ -1159,7 +1190,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             all_pixel_values.extend([i.flatten(end_dim=1).permute(1, 0) for i in pixel_value])
 
         vision_embedding = None
-         # exist image
+        # exist image
         if all_pixel_values:
             tgt_sizes = [tgt_size for tgt_size in tgt_sizes if isinstance(tgt_size, torch.Tensor)]
             tgt_sizes = torch.vstack(tgt_sizes).type(torch.int32)
@@ -1174,15 +1205,19 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             for i in range(B):
                 patch_attn_mask[i, 0, : tgt_sizes[i][0] * tgt_sizes[i][1]] = True
             position_ids = self._prepare_vis_position_ids(
-                    all_pixel_values,
-                    patch_attn_mask,
-                    tgt_sizes,
-                    self.config.vision_config.patch_size,
-                    self.config.vision_config.image_size // self.config.patch_size,
-                    )
-            vision_embedding = torch.from_numpy(self.visin_embeddings(pixel_values=all_pixel_values, patch_attn_mask=patch_attn_mask, position_ids=position_ids)[0])
+                all_pixel_values,
+                patch_attn_mask,
+                tgt_sizes,
+                self.config.vision_config.patch_size,
+                self.config.vision_config.image_size // self.config.patch_size,
+            )
+            vision_embedding = torch.from_numpy(
+                self.vision_embeddings(
+                    pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
+                )[0]
+            )
             vision_embedding = self.resampling(vision_embedding, tgt_sizes)
-            
+
             start = 0
             for pixel_value in pixel_values_list:
                 img_cnt = len(pixel_value)
@@ -1196,7 +1231,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             for _ in range(len(pixel_values_list)):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
-    
+
     def resampling(self, x, tgt_sizes):
         bs = x.shape[0]
 
@@ -1213,8 +1248,10 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             pos_embed.append(self._pos_embeds[:tgt_h, :tgt_w, :].reshape((tgt_h * tgt_w, -1)))  # patches * D
             key_padding_mask[i, patch_len[i] :] = True
 
-        pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(1, 0, 2)  # BLD => L * B * D
-        res = torch.from_numpy(self.resampler(image_feautre=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
+        pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
+            1, 0, 2
+        )  # BLD => L * B * D
+        res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
         return res
 
     def _set_2d_pos_cache(self, max_size):
@@ -1247,7 +1284,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = self._get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
         return pos_embed
 
-
     def _get_2d_sincos_pos_embed_from_grid(self, embed_dim, grid):
         assert embed_dim % 2 == 0
 
@@ -1257,7 +1293,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
         emb = np.concatenate([emb_h, emb_w], axis=-1)  # (H, W, D)
         return emb
-
 
     def _get_1d_sincos_pos_embed_from_grid_new(self, embed_dim, pos):
         """
@@ -1278,7 +1313,9 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         emb = np.concatenate([emb_sin, emb_cos], axis=-1)  # (H, W, D)
         return emb
 
-    def _prepare_vis_position_ids(self, pixel_values, patch_attention_mask, tgt_sizes, patch_size, num_patches_per_side):
+    def _prepare_vis_position_ids(
+        self, pixel_values, patch_attention_mask, tgt_sizes, patch_size, num_patches_per_side
+    ):
         batch_size = pixel_values.size(0)
         max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
         max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
@@ -1305,8 +1342,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return position_ids
 
     def merge_vision_text_embeddings(
-            self, vision_embeds, input_embeds, input_ids, attention_mask, position_ids=None, **kwargs
-        ):
+        self, vision_embeds, input_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+    ):
         bs = input_ids.shape[0]
         image_bound = kwargs["image_bound"]
         vllm_embedding = torch.from_numpy(input_embeds)
@@ -1318,11 +1355,94 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 if len(cur_image_bound) > 0:
                     image_indices = torch.stack([torch.arange(r[0], r[1], dtype=torch.long) for r in cur_image_bound])
 
-                    cur_vllm_emb.scatter_(0, image_indices.view(-1, 1).repeat(1, cur_vllm_emb.shape[-1]), cur_vs_hs.view(-1, cur_vs_hs.shape[-1]))
+                    cur_vllm_emb.scatter_(
+                        0,
+                        image_indices.view(-1, 1).repeat(1, cur_vllm_emb.shape[-1]),
+                        cur_vs_hs.view(-1, cur_vs_hs.shape[-1]),
+                    )
         return vllm_embedding, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        if past_key_values is not None:
+            past_length = self.language_model._get_past_length(past_key_values)
+
+            # Keep only the unprocessed tokens:
+            # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
+            # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
+            # input)
+            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
+                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+            # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
+            # input_ids based on the past_length.llava
+            elif past_length < input_ids.shape[1]:
+                input_ids = input_ids[:, past_length:]
+
+        position_ids = kwargs.get("position_ids", None)
+        if attention_mask is not None and position_ids is None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": kwargs.get("use_cache"),
+                "attention_mask": attention_mask,
+                "pixel_values": pixel_values,
+                "image_sizes": image_sizes,
+                "image_bound": kwargs.get("image_bound"),
+                "tgt_sizes": kwargs.get("tgt_sizes"),
+            }
+        )
+        return model_inputs
+
+    def forward(
+        self,
+        input_ids,
+        pixel_values,
+        past_key_values=None,
+        inputs_embeds=None,
+        image_sizes=None,
+        attention_mask=None,
+        position_ids=None,
+        image_bound=None,
+        tgt_sizes=None,
+        **kwargs,
+    ):
+        return super().forward(
+            input_ids,
+            pixel_values,
+            past_key_values,
+            inputs_embeds,
+            image_sizes,
+            attention_mask,
+            position_ids,
+            image_bound=image_bound,
+            tgt_sizes=tgt_sizes,
+            **kwargs,
+        )
+
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "internvl_chat": _OvInternVLForCausalLM,
+    "minicpmv": _OVMiniCPMVForCausalLM,
 }

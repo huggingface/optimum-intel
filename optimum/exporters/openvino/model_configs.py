@@ -41,13 +41,13 @@ from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
+    DTYPE_MAPPER,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummyTextInputGenerator,
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
-    DTYPE_MAPPER
 )
 from optimum.utils.normalized_config import NormalizedTextConfig, NormalizedVisionConfig
 
@@ -65,10 +65,10 @@ from .model_patcher import (
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
     IBertModelPatcher,
+    InputEmbeddingPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
-    InputEmbeddingPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -1582,11 +1582,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
 
 
 class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "pixel_values",
-        "patch_attention_mask",
-        "position_ids"
-    )
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "patch_attention_mask", "position_ids")
 
     def __init__(
         self,
@@ -1596,7 +1592,7 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"],
         height: int = DEFAULT_DUMMY_SHAPES["height"],
-        **kwargs
+        **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height)
         self.patch_size = normalized_config.config.patch_size
@@ -1604,32 +1600,34 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "pixel_values":
             return self.random_float_tensor(
-                shape=[self.batch_size, self.num_channels, self.patch_size, (self.height * self.width) // self.patch_size],
+                shape=[
+                    self.batch_size,
+                    self.num_channels,
+                    self.patch_size,
+                    (self.height * self.width) // self.patch_size,
+                ],
                 framework=framework,
-                dtype=float_dtype
+                dtype=float_dtype,
             )
-            
+
         if input_name == "patch_attention_mask":
             return self.random_int_tensor(
                 shape=[self.batch_size, 1, (self.height // self.patch_size) * (self.width // self.patch_size)],
                 framework=framework,
                 dtype=float_dtype,
-                min_value=0, max_value=2
+                min_value=0,
+                max_value=2,
             )
 
         if input_name == "position_ids":
             return self.random_int_tensor(
                 shape=[self.batch_size, (self.height // self.patch_size) * (self.width // self.patch_size)],
-                max_value=self.patch_size
+                max_value=self.patch_size,
             )
 
 
 class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "image_feature",
-        "pos_embed",
-        "key_padding_mask"
-    )
+    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
 
     def __init__(
         self,
@@ -1639,35 +1637,32 @@ class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"],
         height: int = DEFAULT_DUMMY_SHAPES["height"],
-        **kwargs
+        **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height)
         self.patch_size = normalized_config.config.patch_size
         self.hidden_size = normalized_config.config.hidden_size
         self.img_hidden_size = normalized_config.config.vision_config.hidden_size
-        self.feat_size = (normalized_config.config.vision_config.image_size // self.patch_size) * (normalized_config.config.vision_config.image_size  // self.patch_size)
+        self.feat_size = (normalized_config.config.vision_config.image_size // self.patch_size) * (
+            normalized_config.config.vision_config.image_size // self.patch_size
+        )
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "image_feature":
             return self.random_float_tensor(
-                shape=[self.batch_size, self.feat_size, self.img_hidden_size],
-                framework=framework,
-                dtype=float_dtype
+                shape=[self.batch_size, self.feat_size, self.img_hidden_size], framework=framework, dtype=float_dtype
             )
-            
+
         if input_name == "key_padding_mask":
             return self.constant_tensor(
                 shape=[self.batch_size, self.feat_size],
                 framework=framework,
                 value=1,
-                dtype=DTYPE_MAPPER.pt(float_dtype)
-
+                dtype=DTYPE_MAPPER.pt(float_dtype),
             )
 
         if input_name == "pos_embed":
-            return self.random_float_tensor(
-                shape=[self.feat_size, self.batch_size, self.hidden_size]
-            )
+            return self.random_float_tensor(shape=[self.feat_size, self.batch_size, self.hidden_size])
 
 
 class MiniCPMVConfigBehavior(str, enum.Enum):
@@ -1675,6 +1670,7 @@ class MiniCPMVConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
+
 
 @register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
 class MiniCPMVOpenVINOConfig(OnnxConfig):
@@ -1688,7 +1684,7 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior:MiniCPMVConfigBehavior = MiniCPMVConfigBehavior.VISION_EMBEDDINGS,
+        behavior: MiniCPMVConfigBehavior = MiniCPMVConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -1702,17 +1698,25 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
         self._orig_config = config
         if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVImageInputGenerator, )
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVImageInputGenerator,)
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator, )
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator,)
         self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
-            return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}, "patch_attention_mask": {0: "batch_size", 1: "num_patches", 2: "patch_size"}, "position_ids": {0: "batch_size", 1: "patch_size"}}
+            return {
+                "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+                "patch_attention_mask": {0: "batch_size", 1: "num_patches", 2: "patch_size"},
+                "position_ids": {0: "batch_size", 1: "patch_size"},
+            }
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
-            return {"image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"}, "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"}, "key_padding_mask": {0: "batch_size", 1: "patch_size"}}
+            return {
+                "image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
+                "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"},
+                "key_padding_mask": {0: "batch_size", 1: "patch_size"},
+            }
         return {}
 
     @property
@@ -1720,8 +1724,8 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
         if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
             return {"last_hidden_state": {0: "batch_size", 1: "patch_height", 2: "patch_width"}}
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
-            return  {"last_hidden_state": {0: "batch_size"}}
-        
+            return {"last_hidden_state": {0: "batch_size"}}
+
         return {}
 
     def with_behavior(
@@ -1832,8 +1836,7 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
             return text_embedding
         if behavior == MiniCPMVConfigBehavior.RESAMPLER:
             model.resampler.config = model.vpm.config
-            return model.resampler        
-
+            return model.resampler
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -1841,8 +1844,8 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
             return MiniCPMVImageEmbeddingsModelPatcher(self, model, model_kwargs)
-        
+
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
             return MiniCPMVResamplerModelPatcher(self, model, model_kwargs)
-        
+
         return super().patch_model_for_export(model, model_kwargs)

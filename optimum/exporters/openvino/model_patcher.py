@@ -2716,7 +2716,9 @@ def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask
 
     q_bs = q.unsqueeze(1).repeat(1, bs, 1)
 
-    out = self.attn(q_bs, image_feature + pos_embed, image_feature, key_padding_mask=key_padding_mask)[0]  # Q * B * D  # L * B * D +  L * B * D
+    out = self.attn(q_bs, image_feature + pos_embed, image_feature, key_padding_mask=key_padding_mask)[
+        0
+    ]  # Q * B * D  # L * B * D +  L * B * D
     #  out: Q * B * D
     x = out.permute(1, 0, 2)  # B * Q * D
 
@@ -2742,11 +2744,11 @@ def _minicpmv_siglip_vis_embed_forward(
         boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
         position_ids = torch.full(
             size=(
-                    batch_size,
-                    max_nb_patches_h * max_nb_patches_w,
-                ),
-                fill_value=0,
-            )
+                batch_size,
+                max_nb_patches_h * max_nb_patches_w,
+            ),
+            fill_value=0,
+        )
 
         for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
             if tgt_sizes is not None:
@@ -2769,6 +2771,7 @@ def _minicpmv_siglip_vis_embed_forward(
 
     embeddings = embeddings + self.position_embedding(position_ids)
     return embeddings
+
 
 def _minicpmv_siglip_attn_forward(
     self,
@@ -2799,6 +2802,7 @@ def _minicpmv_siglip_attn_forward(
 
     return attn_output, None
 
+
 def _minicpmv_siglip_transformer_forward(
     self,
     pixel_values,
@@ -2810,28 +2814,38 @@ def _minicpmv_siglip_transformer_forward(
     return_dict: Optional[bool] = None,
 ) -> Union[Tuple, BaseModelOutputWithPooling]:
     from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-    output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
     batch_size = pixel_values.size(0)
     if patch_attention_mask is None:
         patch_attention_mask = torch.ones(
-                size=(
-                    batch_size,
-                    pixel_values.size(2) // self.config.patch_size,
-                    pixel_values.size(3) // self.config.patch_size,
-                ),
-                dtype=torch.bool,
-                device=pixel_values.device,
-            )
+            size=(
+                batch_size,
+                pixel_values.size(2) // self.config.patch_size,
+                pixel_values.size(3) // self.config.patch_size,
+            ),
+            dtype=torch.bool,
+            device=pixel_values.device,
+        )
 
     hidden_states = self.embeddings(
-        pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, tgt_sizes=tgt_sizes, position_ids=position_ids
+        pixel_values=pixel_values,
+        patch_attention_mask=patch_attention_mask,
+        tgt_sizes=tgt_sizes,
+        position_ids=position_ids,
     )
 
     patch_attention_mask = patch_attention_mask.view(batch_size, -1)
-    attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype) if not self._use_flash_attention_2 else patch_attention_mask
+    attention_mask = (
+        _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
+        if not self._use_flash_attention_2
+        else patch_attention_mask
+    )
 
     encoder_outputs = self.encoder(
         inputs_embeds=hidden_states,
@@ -2911,8 +2925,10 @@ class InputEmbeddingPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
+
         def forward(self, input):
             return self.__orig_forward(input)
+
         model.forward = types.MethodType(forward, model)
 
         super().__init__(config, model, model_kwargs)
