@@ -341,20 +341,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         except AttributeError:
             pass
 
-    def to(self, device: str):
-        if self._compile_only and isinstance(device, str):
-            raise ValueError(
-                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
-            )
-
-        if isinstance(device, str):
-            self._device = device.upper()
-            self.clear_requests()
-        else:
-            logger.debug(f"device must be of type {str} but got {type(device)} instead")
-
-        return self
-
     @property
     def dtype(self) -> Optional[torch.dtype]:
         return self.encoder.dtype or self.decoder.dtype

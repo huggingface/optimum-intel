@@ -263,8 +263,11 @@ def _infer_library_from_model_name_or_path(
 
 
 def _infer_library_from_model_or_model_class(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"]
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
+    library_name: Optional[str] = None,
 ):
+    if library_name is not None:
+        return library_name
     if model.__module__.startswith("open_clip"):
         library_name = "open_clip"
     elif model.__module__.startswith("optimum"):

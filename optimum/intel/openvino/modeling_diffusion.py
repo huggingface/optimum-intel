@@ -18,13 +18,12 @@ import os
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
 import PIL
-import torch
 from diffusers import (
     DDIMScheduler,
     LMSDiscreteScheduler,
@@ -60,13 +59,8 @@ from optimum.utils import (
 from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
-from .modeling_base import OVBaseModel
-from .utils import (
-    ONNX_WEIGHTS_NAME,
-    OV_TO_NP_TYPE,
-    OV_XML_FILE_NAME,
-    _print_compiled_model_properties,
-)
+from .modeling_base import OVBaseModel, OVModelPart
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
 
 
 core = Core()
@@ -427,20 +421,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             **kwargs,
         )
 
-    def to(self, device: str):
-        if self._compile_only and not isinstance(device, str):
-            raise ValueError(
-                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
-            )
-
-        if isinstance(device, str):
-            self._device = device.upper()
-            self.clear_requests()
-        else:
-            logger.debug(f"device must be of type {str} but got {type(device)} instead")
-
-        return self
-
     @property
     def height(self) -> int:
         height = self.unet.model.inputs[0].get_partial_shape()[2]
@@ -631,7 +611,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self.save_config(save_directory)
 
 
-class OVModelPart:
+class OVDiffusersModelPart(OVModelPart):
     CONFIG_NAME = "config.json"
 
     def __init__(
@@ -642,47 +622,18 @@ class OVModelPart:
         model_name: str = "encoder",
         model_dir: str = None,
     ):
-        self.model = model
-        self.parent_model = parent_model
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        super().__init__(
+            model=model, parent_model=parent_model, ov_config=ov_config, model_name=model_name, model_dir=model_dir
+        )
+        config_path = self._model_dir / model_name / self.CONFIG_NAME
+        self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
         self.input_dtype = {
             inputs.get_any_name(): OV_TO_NP_TYPE[inputs.get_element_type().get_type_name()]
             for inputs in self.model.inputs
         }
-        self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self._compile_only = parent_model._compile_only
-        self.request = None if not self._compile_only else self.model
-        self._model_name = model_name
-        self._model_dir = Path(model_dir or parent_model._model_save_dir)
-        config_path = self._model_dir / model_name / self.CONFIG_NAME
-        self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-
-    def _compile(self):
-        if self.request is None:
-            if (
-                "CACHE_DIR" not in self.ov_config.keys()
-                and not str(self._model_dir).startswith(gettempdir())
-                and "GPU" in self._device
-            ):
-                self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
-
-            logger.info(f"Compiling the {self._model_name} to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config)
-            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
-            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
-
-    @property
-    def _device(self) -> str:
-        return self.parent_model._device
-
-    @property
-    def device(self) -> torch.device:
-        return self.parent_model.device
 
 
-class OVModelTextEncoder(OVModelPart):
+class OVModelTextEncoder(OVDiffusersModelPart):
     def __init__(
         self,
         model: openvino.runtime.Model,
@@ -692,7 +643,7 @@ class OVModelTextEncoder(OVModelPart):
     ):
         super().__init__(model, parent_model, ov_config, model_name)
 
-    def __call__(self, input_ids: np.ndarray):
+    def forward(self, input_ids: np.ndarray):
         self._compile()
 
         inputs = {
@@ -702,13 +653,13 @@ class OVModelTextEncoder(OVModelPart):
         return list(outputs.values())
 
 
-class OVModelUnet(OVModelPart):
+class OVModelUnet(OVDiffusersModelPart):
     def __init__(
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
         super().__init__(model, parent_model, ov_config, "unet")
 
-    def __call__(
+    def forward(
         self,
         sample: np.ndarray,
         timestep: np.ndarray,
@@ -736,13 +687,13 @@ class OVModelUnet(OVModelPart):
         return list(outputs.values())
 
 
-class OVModelVaeDecoder(OVModelPart):
+class OVModelVaeDecoder(OVDiffusersModelPart):
     def __init__(
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
         super().__init__(model, parent_model, ov_config, "vae_decoder")
 
-    def __call__(self, latent_sample: np.ndarray):
+    def forward(self, latent_sample: np.ndarray):
         self._compile()
 
         inputs = {
@@ -757,13 +708,13 @@ class OVModelVaeDecoder(OVModelPart):
         super()._compile()
 
 
-class OVModelVaeEncoder(OVModelPart):
+class OVModelVaeEncoder(OVDiffusersModelPart):
     def __init__(
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
         super().__init__(model, parent_model, ov_config, "vae_encoder")
 
-    def __call__(self, sample: np.ndarray):
+    def forward(self, sample: np.ndarray):
         self._compile()
 
         inputs = {

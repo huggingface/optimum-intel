@@ -40,6 +40,9 @@ jobs:
           pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
           pip install transformers==${{ matrix.transformers-version }}
 
+      - if: ${{ matrix.transformers-version == '4.36.0' }}
+        run: pip install accelerate==0.*
+
       - name: Test with Pytest
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}

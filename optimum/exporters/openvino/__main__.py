@@ -42,7 +42,7 @@ from optimum.intel.utils.modeling_utils import (
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry
+from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
 
 
 if TYPE_CHECKING:
@@ -275,51 +275,54 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
-    dtype = loading_kwargs.get("torch_dtype")
-    if isinstance(dtype, str):
-        dtype = config.torch_dtype if dtype == "auto" else getattr(torch, dtype)
+        dtype = loading_kwargs.get("torch_dtype")
+        if isinstance(dtype, str):
+            dtype = getattr(config, "torch_dtype") if dtype == "auto" else getattr(torch, dtype)
 
-    if (
-        dtype is None
-        and framework == "pt"
-        and not do_gptq_patching
-        and task.startswith("text-generation")
-        and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
-    ):
-        if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
-            dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
-        elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
-            dtype = torch.float16
-        elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
-            dtype = torch.bfloat16
+        if (
+            dtype is None
+            and framework == "pt"
+            and not do_gptq_patching
+            and (
+                task.startswith("text-generation")
+                or getattr(config, "model_type", None) in MULTI_MODAL_TEXT_GENERATION_MODELS
+            )
+            and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
+        ):
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
+            elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+                dtype = torch.float16
+            elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+                dtype = torch.bfloat16
 
-    if dtype is not None:
-        if dtype in [torch.float16, torch.bfloat16]:
-            patch_16bit = True
-        loading_kwargs["torch_dtype"] = dtype
-    # Patch the modules to export of GPTQ models w/o GPU
-    if do_gptq_patching:
-        torch.set_default_dtype(torch.float32)
-        orig_cuda_check = torch.cuda.is_available
-        torch.cuda.is_available = lambda: True
+        if dtype is not None:
+            if dtype in [torch.float16, torch.bfloat16]:
+                patch_16bit = True
+            loading_kwargs["torch_dtype"] = dtype
+        # Patch the modules to export of GPTQ models w/o GPU
+        if do_gptq_patching:
+            torch.set_default_dtype(torch.float32)
+            orig_cuda_check = torch.cuda.is_available
+            torch.cuda.is_available = lambda: True
 
-        from optimum.gptq import GPTQQuantizer
+            from optimum.gptq import GPTQQuantizer
 
-        orig_post_init_model = GPTQQuantizer.post_init_model
+            orig_post_init_model = GPTQQuantizer.post_init_model
 
-        def post_init_model(self, model):
-            from auto_gptq import exllama_set_max_input_length
+            def post_init_model(self, model):
+                from auto_gptq import exllama_set_max_input_length
 
-            class StoreAttr(object):
-                pass
+                class StoreAttr(object):
+                    pass
 
-            model.quantize_config = StoreAttr()
-            model.quantize_config.desc_act = self.desc_act
-            if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                model = exllama_set_max_input_length(model, self.max_input_length)
-            return model
+                model.quantize_config = StoreAttr()
+                model.quantize_config.desc_act = self.desc_act
+                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                    model = exllama_set_max_input_length(model, self.max_input_length)
+                return model
 
-        GPTQQuantizer.post_init_model = post_init_model
+            GPTQQuantizer.post_init_model = post_init_model
 
     if library_name == "open_clip":
         model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)

@@ -43,6 +43,10 @@ jobs:
           pip install Pillow parameterized
           pip install transformers[testing]==${{ matrix.transformers-version }}
           pip install .[ipex]
+
+      - if: ${{ matrix.ipex-version == '2.2.0' }}
+        run: pip install numpy==1.*
+
       - name: Test with Pytest
         run: |
           pytest tests/ipex/

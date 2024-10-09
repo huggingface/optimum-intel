@@ -164,6 +164,27 @@ class OVBaseModel(OptimizedModel):
         """
         return torch.device("cpu")
 
+    def to(self, device: str):
+        """
+        Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
+        be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
+        """
+        if self._compile_only and isinstance(device, str):
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.clear_requests()
+        else:
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
+
+        return self
+
+    def clear_requests(self):
+        self.request = None
+
     @property
     def dtype(self) -> Optional[torch.dtype]:
         for dtype in self.input_dtypes.values():
@@ -737,3 +758,72 @@ class OVBaseModel(OptimizedModel):
                 return f"Got unexpected inputs: `{input_name}` set to {type(inputs[input_name])} while expected to be {dtype}."
 
         return None
+
+
+class OVModelPart:
+    def __init__(
+        self,
+        model: Model,
+        parent_model: OVBaseModel,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_name: str = "encoder",
+        model_dir: str = None,
+    ):
+        self.model = model
+        self.parent_model = parent_model
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        self.input_dtype = {
+            inputs.get_any_name(): OV_TO_PT_TYPE[inputs.get_element_type().get_type_name()]
+            for inputs in self.model.inputs
+        }
+        self.ov_config = ov_config or {**self.parent_model.ov_config}
+        self.request = None
+        self._model_name = model_name
+        self.config = self.parent_model.config
+        self._model_dir = Path(model_dir or parent_model._model_save_dir)
+
+    def _compile(self):
+        if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
+            self.request = self.model
+        if self.request is None:
+            if (
+                "CACHE_DIR" not in self.ov_config.keys()
+                and not str(self._model_dir).startswith(gettempdir())
+                and "GPU" in self._device
+            ):
+                self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
+
+            logger.info(f"Compiling the {self._model_name} to {self._device} ...")
+            self.request = core.compile_model(self.model, self._device, self.ov_config)
+            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
+                _print_compiled_model_properties(self.request)
+
+    @property
+    def _device(self) -> str:
+        return self.parent_model._device
+
+    @property
+    def device(self) -> torch.device:
+        return self.parent_model.device
+
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        for dtype in self.input_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        for dtype in self.output_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        return None
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError
