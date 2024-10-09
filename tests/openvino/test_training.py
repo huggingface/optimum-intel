@@ -15,7 +15,6 @@
 import random
 import re
 import shutil
-import tempfile
 import unittest
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -56,7 +55,7 @@ from optimum.intel.openvino.modeling import (
     OVModelForSequenceClassification,
 )
 from optimum.intel.openvino.trainer import DEFAULT_QUANTIZATION_CONFIG, OVTrainer
-from optimum.intel.openvino.utils import OV_XML_FILE_NAME
+from optimum.intel.openvino.utils import OV_XML_FILE_NAME, TemporaryDirectory
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
@@ -112,7 +111,8 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
         torch.manual_seed(42)
         random.seed(42)
         np.random.seed(42)
-        self.output_dir = tempfile.mkdtemp()
+        self._tmp_dir = TemporaryDirectory()
+        self.output_dir = self._tmp_dir.name
 
     def run_ovtrainer_training_checks(self, desc: OVTrainerTestDescriptor):
         self.prepare_model_and_dataset(desc)
