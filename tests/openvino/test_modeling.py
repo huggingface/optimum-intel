@@ -771,7 +771,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bloom",
         "chatglm",
         "codegen",
-        "codegen2",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -819,6 +818,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "exaone",
             "mistral-nemo",
         )
+
+    # custom modeling defined in https://huggingface.co/katuni4ka/tiny-random-codegen2 differs from transformers after v4.45 resulting in unadapted patching
+    if is_transformers_version("<", "4.45.0"):
+        SUPPORTED_ARCHITECTURES += ("codegen2",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
