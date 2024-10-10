@@ -15,6 +15,7 @@
 import unittest
 
 import numpy as np
+import pytest
 import torch
 from diffusers import (
     AutoPipelineForImage2Image,
@@ -296,6 +297,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
+    @pytest.mark.run_slow
     @slow
     @require_diffusers
     def test_textual_inversion(self):
@@ -507,6 +509,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
+    @pytest.mark.run_slow
     @slow
     @require_diffusers
     def test_textual_inversion(self):
@@ -723,6 +726,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
+    @pytest.mark.run_slow
     @slow
     @require_diffusers
     def test_textual_inversion(self):
