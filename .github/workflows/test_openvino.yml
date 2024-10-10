@@ -22,7 +22,6 @@ jobs:
       matrix:
         python-version: ["3.8", "3.12"]
         transformers-version: ["4.36.0", "4.45.*"]
-
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
