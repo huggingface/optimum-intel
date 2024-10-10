@@ -296,27 +296,27 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @slow
+    # @slow
     @require_diffusers
     def test_textual_inversion(self):
         # for now we only test for stable-diffusion
         # this is very slow and costly to run right now
 
         model_id = "runwayml/stable-diffusion-v1-5"
-
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
-
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        ov_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+        ti_id = "sd-concepts-library/cat-toy"
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion(ti_id)
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline.load_textual_inversion(ti_id)
+
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-        # TODO: investigate why it works but not numerically consistent with diffusers
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
@@ -372,7 +372,6 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     def test_callback(self, model_arch: str):
         height, width, batch_size = 32, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-        inputs["num_inference_steps"] = 3
 
         class Callback:
             def __init__(self):
@@ -508,27 +507,27 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @slow
+    # @slow
     @require_diffusers
     def test_textual_inversion(self):
         # for now we only test for stable-diffusion
         # this is very slow and costly to run right now
 
         model_id = "runwayml/stable-diffusion-v1-5"
-
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
-
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        ov_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+        ti_id = "sd-concepts-library/cat-toy"
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion(ti_id)
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline.load_textual_inversion(ti_id)
+
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-        # TODO: investigate why it works but not numerically consistent with diffusers
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
@@ -589,7 +588,6 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     def test_callback(self, model_arch: str):
         height, width, batch_size = 32, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-        inputs["num_inference_steps"] = 3
 
         class Callback:
             def __init__(self):
@@ -725,25 +723,25 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @slow
+    # @slow
     @require_diffusers
     def test_textual_inversion(self):
         # for now we only test for stable-diffusion
         # this is very slow and costly to run right now
 
         model_id = "runwayml/stable-diffusion-v1-5"
-
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
-
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        ov_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+        ti_id = "sd-concepts-library/cat-toy"
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion(ti_id)
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline.load_textual_inversion(ti_id)
+
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-        # TODO: investigate why it works but not numerically consistent with diffusers
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
