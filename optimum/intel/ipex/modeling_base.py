@@ -131,6 +131,8 @@ class IPEXModel(OptimizedModel):
         else:
             self._device = torch.device("cpu")
 
+        config = config or model.config
+
         OptimizedModel.__init__(self, model=model, config=config)
 
         self.model.to(self._device)
