@@ -74,7 +74,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-to-image", "stable-diffusion-xl-refiner"),
     )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
-        "gpt2": 2,
+        "gpt2": 2 if is_tokenizers_version("<", "0.20") else 0,
         "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
         "distilbert": 1,  # no detokenizer
