@@ -99,9 +99,11 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
             raise ValueError(
                 f"{self.__class__.__name__} requires `self.text_encoder` of type `openvino.runtime.Model` for calling `{self.load_textual_inversion.__name__}`"
             )
-        elif self.text_encoder.request is None:
+        elif self.text_encoder.request is not None or not isinstance(
+            self.text_encoder.request, openvino.runtime.Model
+        ):
             raise ValueError(
-                f"{self.__class__.__name__} requires `self.text_encoder.request` to be None for calling `{self.load_textual_inversion.__name__}`"
+                f"{self.__class__.__name__} requires `self.text_encoder.request` to be None or of type `openvino.runtime.Model` for calling `{self.load_textual_inversion.__name__}`"
             )
 
         # 1. Set correct tokenizer and text encoder
