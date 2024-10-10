@@ -41,6 +41,7 @@ class IPEXPagedCache(Cache):
     ) -> None:
         super().__init__()
         self.max_batch_size = max_batch_size
+        self.batch_size = max_batch_size
         self.kv_cache = []
 
         self._seen_tokens = max_batch_size * [

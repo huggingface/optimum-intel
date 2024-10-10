@@ -142,6 +142,8 @@ class IPEXModel(OptimizedModel):
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
+        if self._is_ipex_exported:
+            model = _patch_model(model)
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -238,11 +240,6 @@ class IPEXModel(OptimizedModel):
             _commit_hash=commit_hash,
             **model_kwargs,
         )
-        if is_torch_xpu_available(check_device=True):
-            model.to("xpu:0")
-
-        if _is_patched_with_ipex(model, task):
-            model = _patch_model(model)
         return cls(model, config=config, export=True, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
