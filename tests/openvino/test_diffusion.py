@@ -25,6 +25,7 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
+from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel.openvino import (
@@ -295,6 +296,29 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
+    @slow
+    @require_diffusers
+    def test_textual_inversion(self):
+        # for now we only test for stable-diffusion
+        # this is very slow and costly to run right now
+
+        model_id = "runwayml/stable-diffusion-v1-5"
+
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        ov_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+
+        inputs = self.generate_inputs()
+        inputs["prompt"] = "A <cat-toy> backpack"
+
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+        # TODO: investigate why it works but not numerically consistent with diffusers
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
@@ -483,6 +507,29 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         )
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
+
+    @slow
+    @require_diffusers
+    def test_textual_inversion(self):
+        # for now we only test for stable-diffusion
+        # this is very slow and costly to run right now
+
+        model_id = "runwayml/stable-diffusion-v1-5"
+
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        ov_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+
+        inputs = self.generate_inputs()
+        inputs["prompt"] = "A <cat-toy> backpack"
+
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+        # TODO: investigate why it works but not numerically consistent with diffusers
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -677,3 +724,26 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         )
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
+
+    @slow
+    @require_diffusers
+    def test_textual_inversion(self):
+        # for now we only test for stable-diffusion
+        # this is very slow and costly to run right now
+
+        model_id = "runwayml/stable-diffusion-v1-5"
+
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        ov_pipeline.load_textual_inversion("sd-concepts-library/cat-toy")
+
+        inputs = self.generate_inputs()
+        inputs["prompt"] = "A <cat-toy> backpack"
+
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+        # TODO: investigate why it works but not numerically consistent with diffusers
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)

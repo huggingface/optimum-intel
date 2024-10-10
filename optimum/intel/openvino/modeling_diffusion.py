@@ -64,8 +64,8 @@ from optimum.utils import (
 
 from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
-from .modeling_base import OVBaseModel
 from .loaders import OVTextualInversionLoaderMixin
+from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
