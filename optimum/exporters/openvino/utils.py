@@ -13,12 +13,14 @@
 #  limitations under the License.
 
 import inspect
+import operator
 from collections import namedtuple
+from functools import reduce
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_torch_available
 
-from openvino.runtime import Dimension, PartialShape, Symbol
+from openvino.runtime import Dimension, Model, PartialShape, Symbol, Type
 from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
@@ -209,3 +211,11 @@ def _get_open_clip_submodels_fn_and_export_configs(
 
 
 MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "internvl-chat"]
+
+
+def calculate_model_size(ov_model: Model):
+    num_parameters = 0
+    for op in ov_model.get_ops():
+        if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+            num_parameters += reduce(operator.mul, op.shape, 1)
+    return num_parameters

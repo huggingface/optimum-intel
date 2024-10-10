@@ -15,7 +15,6 @@
 
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import torch
 from parameterized import parameterized
@@ -46,6 +45,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
+from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import _transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 

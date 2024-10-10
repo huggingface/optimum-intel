@@ -1,14 +1,15 @@
 import os
 import re
 import subprocess
+from pathlib import Path
 
 from setuptools import find_namespace_packages, setup
 
 
 # Ensure we match the version set in optimum/intel/version.py
+filepath = Path(__file__).parent / "optimum/intel/version.py"
 try:
-    filepath = "optimum/intel/version.py"
-    with open(filepath) as version_file:
+    with filepath.open() as version_file:
         (__version__,) = re.findall('__version__ = "(.*)"', version_file.read())
     if __version__.endswith(".dev0"):
         dev_version_id = ""
@@ -20,7 +21,7 @@ try:
                 .decode()
             )
             dev_version_id = "+" + dev_version_id
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             pass
         __version__ = __version__ + dev_version_id
 except Exception as error:

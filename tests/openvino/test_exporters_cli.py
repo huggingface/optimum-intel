@@ -14,7 +14,6 @@
 import subprocess
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM
@@ -44,7 +43,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
-from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
+from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,

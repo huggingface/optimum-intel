@@ -14,7 +14,6 @@
 
 import gc
 import os
-import tempfile
 import unittest
 
 import numpy as np
@@ -26,6 +25,7 @@ from transformers import (
 )
 
 from optimum.intel import OVSentenceTransformer
+from optimum.intel.openvino.utils import TemporaryDirectory
 
 
 SEED = 42
@@ -65,7 +65,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_sentence_transformers_save_and_infer(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "sentence_transformers_ov_model")
             ov_model.save_pretrained(model_save_path)
             model = OVSentenceTransformer.from_pretrained(model_save_path)
