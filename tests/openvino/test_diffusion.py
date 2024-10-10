@@ -296,7 +296,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    # @slow
+    @slow
     @require_diffusers
     def test_textual_inversion(self):
         # for now we only test for stable-diffusion
@@ -507,7 +507,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    # @slow
+    @slow
     @require_diffusers
     def test_textual_inversion(self):
         # for now we only test for stable-diffusion
@@ -723,7 +723,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    # @slow
+    @slow
     @require_diffusers
     def test_textual_inversion(self):
         # for now we only test for stable-diffusion
