@@ -44,13 +44,13 @@ from transformers import (
     AutoModelForCTC,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
-    AutoProcessor,
     AutoModelForQuestionAnswering,
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
@@ -1825,15 +1825,14 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = [
-        "llava",
-        "minicpmv"
-    ]
+    SUPPORTED_ARCHITECTURES = ["llava"]
 
     REMOTE_CODE_MODELS = ["minicpmv"]
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next"]
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES += ["minicpmv"]
     TASK = "image-text-to-text"
 
     IMAGE = Image.open(
@@ -1861,12 +1860,16 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         if "llava" in model_arch:
             prompt = "<image>\n What is shown in this image?"
         elif "minicpmv" in model_arch:
-           prompt = "<|im_start|>user\n(<image>./</image>)\n What is shown in this image?<|im_end|>\n<|im_start|>assistant\n"
+            prompt = "<|im_start|>user\n(<image>./</image>)\n What is shown in this image?<|im_end|>\n<|im_start|>assistant\n"
         model_id = MODEL_NAMES[model_arch]
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
+            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
         inputs = processor(images=[self.IMAGE.resize((600, 600))], text=[prompt], return_tensors="pt")
-        ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
         self.assertIsInstance(ov_model.language_model, OVModelWithEmbedForCausalLM)
@@ -1874,7 +1877,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(hasattr(ov_model, additional_part))
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        if not "minicpmv" in model_arch:
+        if "minicpmv" not in model_arch:
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**inputs)
@@ -1896,7 +1899,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
         if model_arch == "minicpmv":
-            ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1]:]
+            ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
@@ -1910,7 +1913,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
         preprocessor = AutoProcessor.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if "llava" in model_arch:
             question = "<image>\nDescribe image"
