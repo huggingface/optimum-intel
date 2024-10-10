@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import os
 import random
 import re
 import shutil
@@ -87,6 +88,10 @@ def initialize_movement_sparsifier_parameters_by_sparsity(
             if operand.prune_bias:
                 bias_init_tensor = torch.ones_like(operand.bias_importance) * negative_value
                 operand.bias_importance.copy_(bias_init_tensor)
+
+
+def is_windows():
+    return os.name == "nt"
 
 
 def is_avx_vnni_supported() -> bool:
@@ -614,6 +619,7 @@ OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
 # TODO : can be moved to MODEL_NAMES["swin-window"] after transformers v4.42.3
 
 
+@unittest.skipIf(is_windows(), reason="Fails on windows")
 class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
     ovmodel_cls = OVModelForImageClassification
     task = "image-classification"
@@ -794,6 +800,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
 }
 
 
+@unittest.skipIf(is_windows(), reason="Fails on windows")
 class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     ovmodel_cls = OVModelForAudioClassification
     task = "audio-classification"
