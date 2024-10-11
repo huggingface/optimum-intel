@@ -516,6 +516,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             no_post_process=True,
             revision=revision,
             cache_dir=cache_dir,
+            task=cls.export_feature,
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
@@ -1481,13 +1482,16 @@ class OVPipelineForTask(ConfigMixin):
 class OVPipelineForText2Image(OVPipelineForTask):
     auto_model_class = AutoPipelineForText2Image
     ov_pipelines_mapping = OV_TEXT2IMAGE_PIPELINES_MAPPING
+    export_feature = "text-to-image"
 
 
 class OVPipelineForImage2Image(OVPipelineForTask):
     auto_model_class = AutoPipelineForImage2Image
     ov_pipelines_mapping = OV_IMAGE2IMAGE_PIPELINES_MAPPING
+    export_feature = "image-to-image"
 
 
 class OVPipelineForInpainting(OVPipelineForTask):
     auto_model_class = AutoPipelineForInpainting
     ov_pipelines_mapping = OV_INPAINT_PIPELINES_MAPPING
+    export_feature = "inpainting"

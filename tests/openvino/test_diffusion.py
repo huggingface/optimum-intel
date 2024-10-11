@@ -72,7 +72,7 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
 
 
 class OVPipelineForText2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency", "stable-diffusion-3"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
     AUTOMODEL_CLASS = AutoPipelineForText2Image
@@ -323,7 +323,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency", "stable-diffusion-3"]
 
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
@@ -535,7 +535,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "stable-diffusion-3"]
 
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
