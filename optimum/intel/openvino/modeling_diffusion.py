@@ -580,8 +580,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def batch_size(self) -> int:
-        model = self.unet.model if self.unet is not None else self.transformer
-        batch_size = model.inputs[0].get_partial_shape()[0]
+        model = self.unet.model if self.unet is not None else self.transformer.model
+        batch_size = model.inputs[0].get_partial_shape()[0] 
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
