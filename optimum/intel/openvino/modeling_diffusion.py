@@ -581,7 +581,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     @property
     def batch_size(self) -> int:
         model = self.unet.model if self.unet is not None else self.transformer
-        batch_size = model.inputs[0].get_partial_shape()[0] 
+        batch_size = model.inputs[0].get_partial_shape()[0]
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
@@ -669,7 +669,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             else:
                 shapes[inputs][0] = batch_size
-                shapes[inputs][1] = -1 # text_encoder_3 may have vary input length
+                shapes[inputs][1] = -1  # text_encoder_3 may have vary input length
         model.reshape(shapes)
         return model
 
@@ -776,7 +776,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`half()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        for component in {self.unet, self.transformer, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2, self.text_encoder_3}:
+        for component in {
+            self.unet,
+            self.transformer,
+            self.vae_encoder,
+            self.vae_decoder,
+            self.text_encoder,
+            self.text_encoder_2,
+            self.text_encoder_3,
+        }:
             if component is not None:
                 compress_model_transformation(component.model)
 
@@ -797,7 +805,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.vae_decoder,
             self.text_encoder,
             self.text_encoder_2,
-            self.text_encoder_3
+            self.text_encoder_3,
         }:
             if component is not None:
                 component.request = None
@@ -810,7 +818,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.vae_decoder,
             self.text_encoder,
             self.text_encoder_2,
-            self.text_encoder_3
+            self.text_encoder_3,
         }:
             if component is not None:
                 component._compile()

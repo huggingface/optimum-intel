@@ -380,15 +380,27 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config_copy = copy.deepcopy(quantization_config)
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]
+                    sub_model_names = [
+                        "vae_encoder",
+                        "vae_decoder",
+                        "text_encoder",
+                        "text_encoder_2",
+                        "text_encoder_3",
+                    ]
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config_copy)
 
-                    # Apply hybrid quantization to UNet
-                    self.model.unet.model = _hybrid_quantization(
-                        self.model.unet.model, quantization_config, calibration_dataset
-                    )
+                    if self.model.unet is not None:
+                        # Apply hybrid quantization to UNet
+                        self.model.unet.model = _hybrid_quantization(
+                            self.model.unet.model, quantization_config, calibration_dataset
+                        )
+                    else:
+                        self.model.transformer.model = _hybrid_quantization(
+                            self.model.transformer.model, quantization_config, calibration_dataset
+                        )
+
                     self.model.clear_requests()
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
@@ -396,7 +408,15 @@ class OVQuantizer(OptimumQuantizer):
                     self.model.request = None
             else:
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
+                    sub_model_names = [
+                        "vae_encoder",
+                        "vae_decoder",
+                        "text_encoder",
+                        "text_encoder_2",
+                        "unet",
+                        "transformer",
+                        "text_encoder_3",
+                    ]
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config)
@@ -743,7 +763,9 @@ class OVQuantizer(OptimumQuantizer):
     ) -> nncf.Dataset:
         self.model.compile()
 
-        size = self.model.unet.config.get("sample_size", 64) * self.model.vae_scale_factor
+        diffuser = self.model.unet if self.model.unet is not None else self.model.transformer
+
+        size = diffuser.config.get("sample_size", 64) * self.model.vae_scale_factor
         height, width = 2 * (min(size, 512),)
         num_samples = num_samples or 200
 
@@ -784,7 +806,7 @@ class OVQuantizer(OptimumQuantizer):
 
         calibration_data = []
         try:
-            self.model.unet.request = InferRequestWrapper(self.model.unet.request, calibration_data)
+            diffuser.request = InferRequestWrapper(diffuser.request, calibration_data)
 
             for inputs in dataset:
                 inputs = transform_fn(inputs)
@@ -795,7 +817,7 @@ class OVQuantizer(OptimumQuantizer):
                 if len(calibration_data) >= num_samples:
                     break
         finally:
-            self.model.unet.request = self.model.unet.request.request
+            diffuser.request = diffuser.request.request
 
         calibration_dataset = nncf.Dataset(calibration_data[:num_samples])
         return calibration_dataset
