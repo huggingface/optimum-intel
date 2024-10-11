@@ -24,6 +24,8 @@ from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, Tex
 from optimum.exporters.onnx.model_configs import (
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
+    CLIPTextWithProjectionOnnxConfig,
+    CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
@@ -35,6 +37,7 @@ from optimum.exporters.onnx.model_configs import (
     PhiOnnxConfig,
     VisionOnnxConfig,
 )
+from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -1079,6 +1082,11 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
             reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
         return super().generate_dummy_inputs_for_validation(reference_model_inputs)
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
@@ -1109,6 +1117,11 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
         return dummy_inputs
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
@@ -1132,6 +1145,42 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
         model_inputs = {}
         model_inputs["x"] = inputs["pixel_values"]
         return model_inputs
+
+
+@register_in_tasks_manager(
+    "clip", *["feature-extraction", "zero-shot-image-classification"], library_name="transformers"
+)
+class CLIPOpenVINOConfig(CLIPOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="diffusers")
+class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
+class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="transformers")
+class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
