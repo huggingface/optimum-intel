@@ -233,9 +233,7 @@ class _IPEXAttention(nn.Module):
         attn_output = torch.empty_like(query)
         if past_len == 0:
             # prefill, remove padding
-            seq_len_tensor = torch.cat(
-                (torch.tensor([0], device=input_lens.device, dtype=torch.int), input_lens.cumsum(-1).int())
-            )
+            seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
             varlen_attention(
                 query.contiguous() if query.device.type == "xpu" else query,
                 key.contiguous() if key.device.type == "xpu" else key,
