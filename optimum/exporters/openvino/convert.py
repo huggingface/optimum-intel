@@ -34,6 +34,8 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.utils import (
     _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
+)
+from optimum.exporters.utils import (
     get_diffusion_models_for_export,
 )
 from optimum.intel.utils.import_utils import (
@@ -624,6 +626,7 @@ def export_from_model(
 
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
+        stateful_submodels = False
     else:
         logging.disable(logging.INFO)
         export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
@@ -639,7 +642,7 @@ def export_from_model(
             _variant="default",
             legacy=False,
             exporter="openvino",
-            stateful=stateful
+            stateful=stateful,
         )
         logging.disable(logging.NOTSET)
 
@@ -957,7 +960,7 @@ def get_diffusion_models_for_export_ext(
 
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
     vae_encoder = copy.deepcopy(pipeline.vae)
-    vae_encoder.forward = lambda sample: {"latent_sample": vae_encoder.encode(x=sample)["latent_dist"].sample()}
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_encoder,
         exporter=exporter,
@@ -1011,4 +1014,4 @@ def get_diffusion_models_for_export_ext(
         export_config = export_config_constructor(text_encoder_3.config, int_dtype=int_dtype, float_dtype=float_dtype)
         models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
 
-    return None, models_for_export, False
+    return None, models_for_export

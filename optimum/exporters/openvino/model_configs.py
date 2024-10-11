@@ -36,6 +36,7 @@ from optimum.exporters.onnx.model_configs import (
     MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    UNetOnnxConfig,
     VisionOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
@@ -1571,7 +1572,6 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         if self._behavior != InternVLChatConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
-
 
 
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):

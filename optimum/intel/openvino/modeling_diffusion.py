@@ -22,7 +22,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
@@ -85,26 +85,16 @@ else:
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 else:
-    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = None, None
+    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 
 if is_diffusers_version(">=", "0.30.0"):
     from diffusers import StableDiffusion3InpaintPipeline
 else:
-    StableDiffusion3InpaintPipeline = None
+    StableDiffusion3InpaintPipeline = StableDiffusion3Pipeline
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
-
-
-PipelineImageInput = Union[
-    PIL.Image.Image,
-    np.ndarray,
-    torch.Tensor,
-    List[PIL.Image.Image],
-    List[np.ndarray],
-    List[torch.Tensor],
-]
 
 core = Core()
 
@@ -122,15 +112,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def __init__(
         self,
         scheduler: SchedulerMixin,
-        unet: openvino.runtime.Model,
-        vae_decoder: openvino.runtime.Model,
+        unet: Optional[openvino.runtime.Model] = None,
+        vae_decoder: Optional[openvino.runtime.Model] = None,
         # optional pipeline models
         vae_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
+        text_encoder_3: Optional[openvino.runtime.Model] = None,
+        transofrmer: Optional[openvino.runtime.Model] = None,
         # optional pipeline submodels
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
+        tokenizer_3: Optional[CLIPTokenizer] = None,
         feature_extractor: Optional[CLIPFeatureExtractor] = None,
         # stable diffusion xl specific arguments
         force_zeros_for_empty_prompt: bool = True,
@@ -172,7 +165,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     f"Please set `compile_only=False` or `dynamic_shapes={model_is_dynamic}`"
                 )
 
-        self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER)
+        self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER) if unet is not None else None
+        self.transformer = (
+            OVModelTransformer(transofrmer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
+            if transofrmer is not None
+            else None
+        )
+
+        if unet is None and transofrmer is None:
+            raise ValueError("`unet` or `transformer` model should be provided for pipeline work")
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
         self.vae_encoder = (
             OVModelVaeEncoder(vae_encoder, self, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
@@ -189,12 +190,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if text_encoder_2 is not None
             else None
         )
+        self.text_encoder_3 = (
+            OVModelTextEncoder(text_encoder_2, self, DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER)
+            if text_encoder_3 is not None
+            else None
+        )
         # We wrap the VAE Decoder & Encoder in a single object to simulate diffusers API
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
 
         self.scheduler = scheduler
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
+        self.tokenizer_3 = tokenizer_3
         self.feature_extractor = feature_extractor
 
         # we allow passing these as torch models for now
@@ -204,8 +211,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         all_pipeline_init_args = {
             "vae": self.vae,
             "unet": self.unet,
+            "transformer": self.transformer,
             "text_encoder": self.text_encoder,
             "text_encoder_2": self.text_encoder_2,
+            "text_encoder_3": self.text_encoder_3,
             "safety_checker": self.safety_checker,
             "image_encoder": self.image_encoder,
             "scheduler": self.scheduler,
@@ -259,6 +268,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             (self.vae_encoder, save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER),
             (self.text_encoder, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER),
             (self.text_encoder_2, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER),
+            (self.text_encoder_3, save_directory / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER),
+            (self.transformer, save_directory / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER),
         }
         for model, save_path in models_to_save_paths:
             if model is not None:
@@ -277,6 +288,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
             self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
+        if self.tokenizer_3 is not None:
+            self.tokenizer_3.save_pretrained(save_directory / "tokenizer_3")
         if self.feature_extractor is not None:
             self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
 
@@ -297,6 +310,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         vae_encoder_file_name: Optional[str] = None,
         text_encoder_file_name: Optional[str] = None,
         text_encoder_2_file_name: Optional[str] = None,
+        text_encoder_3_file_name: Optional[str] = None,
+        transformer_file_name: Optional[str] = None,
         from_onnx: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
@@ -317,6 +332,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
         text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
+        text_encoder_3_file_name = text_encoder_3_file_name or default_file_name
+        transformer_file_name = transformer_file_name or default_file_name
 
         if not os.path.isdir(str(model_id)):
             all_components = {key for key in config.keys() if not key.startswith("_")} | {"vae_encoder", "vae_decoder"}
@@ -324,15 +341,19 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             allow_patterns.update(
                 {
                     unet_file_name,
+                    transformer_file_name,
                     vae_encoder_file_name,
                     vae_decoder_file_name,
                     text_encoder_file_name,
                     text_encoder_2_file_name,
+                    text_encoder_3_file_name,
                     unet_file_name.replace(".xml", ".bin"),
+                    transformer_file_name.replace(".xml", ".bin"),
                     vae_encoder_file_name.replace(".xml", ".bin"),
                     vae_decoder_file_name.replace(".xml", ".bin"),
                     text_encoder_file_name.replace(".xml", ".bin"),
                     text_encoder_2_file_name.replace(".xml", ".bin"),
+                    text_encoder_3_file_name.replace(".xml", ".bin"),
                     SCHEDULER_CONFIG_NAME,
                     cls.config_name,
                     CONFIG_NAME,
@@ -360,7 +381,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if model_save_dir is None:
             model_save_dir = model_save_path
 
-        submodels = {"scheduler": None, "tokenizer": None, "tokenizer_2": None, "feature_extractor": None}
+        submodels = {
+            "scheduler": None,
+            "tokenizer": None,
+            "tokenizer_2": None,
+            "tokenizer_3": None,
+            "feature_extractor": None,
+        }
         for name in submodels.keys():
             if kwargs.get(name, None) is not None:
                 submodels[name] = kwargs.pop(name)
@@ -377,10 +404,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         models = {
             "unet": model_save_path / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
+            "transformer": model_save_path / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER / unet_file_name,
             "vae_decoder": model_save_path / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
             "vae_encoder": model_save_path / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "text_encoder": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
             "text_encoder_2": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
+            "text_encoder_3": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name,
         }
 
         compile_only = kwargs.get("compile_only", False)
@@ -518,7 +547,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if isinstance(device, str):
             self._device = device.upper()
-            self.request = None
+            self.clear_requests()
         elif device is not None:
             raise ValueError(
                 "The `device` argument should be a string representing the device on which the model should be loaded."
@@ -703,9 +732,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 self.tokenizer.model_max_length if self.tokenizer is not None else self.tokenizer_2.model_max_length
             )
 
-        self.unet.model = self._reshape_unet(
-            self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
-        )
+        if self.unet is not None:
+            self.unet.model = self._reshape_unet(
+                self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+            )
+        if self.transformer is not None:
+            self.transformer.model = self._reshape_transformer(
+                self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+            )
         self.vae_decoder.model = self._reshape_vae_decoder(
             self.vae_decoder.model, height, width, num_images_per_prompt
         )
@@ -721,6 +755,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if self.text_encoder_2 is not None:
             self.text_encoder_2.model = self._reshape_text_encoder(
                 self.text_encoder_2.model, batch_size, self.tokenizer_2.model_max_length
+            )
+
+        if self.text_encoder_3 is not None:
+            self.text_encoder_3.model = self._reshape_text_encoder(
+                self.text_encoder_3.model, batch_size, self.tokenizer_3.model_max_length
             )
 
         self.clear_requests()
@@ -749,12 +788,26 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        for component in {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}:
+        for component in {
+            self.unet,
+            self.transformer,
+            self.vae_encoder,
+            self.vae_decoder,
+            self.text_encoder,
+            self.text_encoder_2,
+        }:
             if component is not None:
                 component.request = None
 
     def compile(self):
-        for component in {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}:
+        for component in {
+            self.unet,
+            self.transformer,
+            self.vae_encoder,
+            self.vae_decoder,
+            self.text_encoder,
+            self.text_encoder_2,
+        }:
             if component is not None:
                 component._compile()
 
@@ -770,8 +823,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         components = {
             "vae": self.vae,
             "unet": self.unet,
+            "transfomer": self.transformer,
             "text_encoder": self.text_encoder,
             "text_encoder_2": self.text_encoder_2,
+            "text_encoder_3": self.text_encoder_2,
             "safety_checker": self.safety_checker,
             "image_encoder": self.image_encoder,
         }
@@ -956,6 +1011,38 @@ class OVModelUnet(OVPipelinePart):
             model_inputs.update(cross_attention_kwargs)
         if added_cond_kwargs is not None:
             model_inputs.update(added_cond_kwargs)
+
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+
+        if return_dict:
+            return model_outputs
+
+        return ModelOutput(**model_outputs)
+
+
+class OVModelTransformer(OVPipelinePart):
+    def forward(
+        self,
+        hidden_states: torch.FloatTensor,
+        encoder_hidden_states: torch.FloatTensor = None,
+        pooled_projections: torch.FloatTensor = None,
+        timestep: torch.LongTensor = None,
+        block_controlnet_hidden_states: List = None,
+        joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        return_dict: bool = True,
+    ):
+        self._compile()
+
+        model_inputs = {
+            "hidden_states": hidden_states,
+            "timestep": timestep,
+            "encoder_hidden_states": encoder_hidden_states,
+            "pooled_projections": pooled_projections,
+        }
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -1242,6 +1329,28 @@ class OVLatentConsistencyModelImg2ImgPipeline(
     auto_model_class = LatentConsistencyModelImg2ImgPipeline
 
 
+class OVStableDiffusion3Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3Pipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = StableDiffusion3Pipeline
+
+
+class OVStableDiffusion3Img2ImgPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3Img2ImgPipeline
+):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = StableDiffusion3Img2ImgPipeline
+
+
+class OVStableDiffusion3InpaintPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3InpaintPipeline
+):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = StableDiffusion3InpaintPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1288,6 +1397,22 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
         ("stable-diffusion-xl", OVStableDiffusionXLInpaintPipeline),
     ]
 )
+
+if is_diffusers_version(">=", "0.29.0"):
+    SUPPORTED_OV_PIPELINES.extend(
+        [
+            OVStableDiffusion3Pipeline,
+            OVStableDiffusion3Img2ImgPipeline,
+        ]
+    )
+
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3Pipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3Img2ImgPipeline
+
+if is_diffusers_version(">=", "0.30.0"):
+    SUPPORTED_OV_PIPELINES.append(OVStableDiffusion3InpaintPipeline)
+    OV_INPAINT_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3InpaintPipeline
+
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
