@@ -119,7 +119,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
         text_encoder_3: Optional[openvino.runtime.Model] = None,
-        transofrmer: Optional[openvino.runtime.Model] = None,
+        transformer: Optional[openvino.runtime.Model] = None,
         # optional pipeline submodels
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
@@ -167,12 +167,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER) if unet is not None else None
         self.transformer = (
-            OVModelTransformer(transofrmer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
-            if transofrmer is not None
+            OVModelTransformer(transformer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
+            if transformer is not None
             else None
         )
 
-        if unet is None and transofrmer is None:
+        if unet is None and transformer is None:
             raise ValueError("`unet` or `transformer` model should be provided for pipeline work")
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
         self.vae_encoder = (
@@ -191,7 +191,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             else None
         )
         self.text_encoder_3 = (
-            OVModelTextEncoder(text_encoder_2, self, DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER)
+            OVModelTextEncoder(text_encoder_3, self, DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER)
             if text_encoder_3 is not None
             else None
         )
@@ -220,6 +220,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "scheduler": self.scheduler,
             "tokenizer": self.tokenizer,
             "tokenizer_2": self.tokenizer_2,
+            "tokenizer_3": self.tokenizer_3,
             "feature_extractor": self.feature_extractor,
             "requires_aesthetics_score": requires_aesthetics_score,
             "force_zeros_for_empty_prompt": force_zeros_for_empty_prompt,
@@ -404,7 +405,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         models = {
             "unet": model_save_path / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
-            "transformer": model_save_path / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER / unet_file_name,
+            "transformer": model_save_path / DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER / transformer_file_name,
             "vae_decoder": model_save_path / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
             "vae_encoder": model_save_path / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "text_encoder": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
@@ -579,7 +580,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def batch_size(self) -> int:
-        batch_size = self.unet.model.inputs[0].get_partial_shape()[0]
+        model = self.unet.model if self.unet is not None else self.transformer
+        batch_size = model.inputs[0].get_partial_shape()[0] 
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
@@ -651,7 +653,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
             if inputs.get_any_name() == "timestep":
-                shapes[inputs][0] = 1
+                shapes[inputs][0] = batch_size
             elif inputs.get_any_name() == "hidden_states":
                 in_channels = self.transformer.config.get("in_channels", None)
                 if in_channels is None:
@@ -667,7 +669,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             else:
                 shapes[inputs][0] = batch_size
-                shapes[inputs][1] = tokenizer_max_length * 2
+                shapes[inputs][1] = -1 # text_encoder_3 may have vary input length
         model.reshape(shapes)
         return model
 
@@ -738,7 +740,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
         if self.transformer is not None:
             self.transformer.model = self._reshape_transformer(
-                self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+                self.transformer.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
             )
         self.vae_decoder.model = self._reshape_vae_decoder(
             self.vae_decoder.model, height, width, num_images_per_prompt
@@ -774,7 +776,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`half()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        for component in {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}:
+        for component in {self.unet, self.transformer, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2, self.text_encoder_3}:
             if component is not None:
                 compress_model_transformation(component.model)
 
@@ -795,6 +797,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.vae_decoder,
             self.text_encoder,
             self.text_encoder_2,
+            self.text_encoder_3
         }:
             if component is not None:
                 component.request = None
@@ -807,6 +810,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.vae_decoder,
             self.text_encoder,
             self.text_encoder_2,
+            self.text_encoder_3
         }:
             if component is not None:
                 component._compile()
