@@ -647,6 +647,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             batch_size = -1
         else:
             batch_size *= num_images_per_prompt
+        # The factor of 2 comes from the guidance scale > 1
+        batch_size *= 2
 
         height = height // self.vae_scale_factor if height > 0 else height
         width = width // self.vae_scale_factor if width > 0 else width
