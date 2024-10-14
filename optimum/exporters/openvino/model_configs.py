@@ -1598,7 +1598,7 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
-@register_in_tasks_manager("transformer", *["semantic-segmentation"], library_name="diffusers")
+@register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
 class TransformerOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (
         PooledProjectionsDummyInputGenerator,

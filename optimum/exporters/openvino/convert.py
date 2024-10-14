@@ -922,7 +922,12 @@ def get_diffusion_models_for_export_ext(
 
     if not is_sd3:
         return None, get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+    models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
 
+    return None, models_for_export
+
+
+def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
     # Text encoder
@@ -951,7 +956,7 @@ def get_diffusion_models_for_export_ext(
         exporter=exporter,
         library_name="diffusers",
         task="semantic-segmentation",
-        model_type="transformer",
+        model_type="sd3-transformer",
     )
     transformer_export_config = export_config_constructor(
         pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
@@ -1018,4 +1023,4 @@ def get_diffusion_models_for_export_ext(
         )
         models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
 
-    return None, models_for_export
+    return models_for_export

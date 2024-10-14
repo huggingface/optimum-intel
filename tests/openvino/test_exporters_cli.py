@@ -70,6 +70,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "blenderbot"),
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
+        ("text-to-image", "stable-diffusion-3"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
     )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
@@ -84,6 +85,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "blenderbot": 2 if is_tokenizers_version("<", "0.20") else 0,
         "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") else 0,
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") else 0,
+        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = (

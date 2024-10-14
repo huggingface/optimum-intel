@@ -40,6 +40,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
+    OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
@@ -68,6 +69,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
+        "stable-diffusion-3": OVStableDiffusion3Pipeline,
     }
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper")
