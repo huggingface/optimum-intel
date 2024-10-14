@@ -1009,9 +1009,9 @@ def get_diffusion_models_for_export_ext(
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="clip-text-with-projection",
+            model_type="t5-encoder-model",
         )
-        export_config = export_config_constructor(text_encoder_3.config, int_dtype=int_dtype, float_dtype=float_dtype)
+        export_config = export_config_constructor(text_encoder_3.config, int_dtype=int_dtype, float_dtype=float_dtype, )
         models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
 
     return None, models_for_export

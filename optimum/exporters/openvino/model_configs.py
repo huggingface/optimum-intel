@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from packaging import version
 from transformers import PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
+from optimum.exporters.onnx.model_patcher import ModelPatcher
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
@@ -1623,3 +1624,12 @@ class TransformerOpenVINOConfig(UNetOnnxConfig):
         if hidden_states is not None:
             inputs["hidden_states"] = hidden_states
         return inputs
+
+
+@register_in_tasks_manager("t5-encoder-model", *["feature-extraction"], library_name="diffusers")
+class T5EncoderOpenVINOConfig(CLIPTextOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+

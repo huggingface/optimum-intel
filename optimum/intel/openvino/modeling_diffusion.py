@@ -390,7 +390,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "feature_extractor": None,
         }
         for name in submodels.keys():
-            if kwargs.get(name, None) is not None:
+            if kwargs.get(name) is not None:
                 submodels[name] = kwargs.pop(name)
             elif config.get(name, (None, None))[0] is not None:
                 library_name, library_classes = config.get(name)
@@ -417,7 +417,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
             for name, path in models.items():
-                if kwargs.get(name, None) is not None:
+                if name in kwargs:
                     models[name] = kwargs.pop(name)
                 else:
                     models[name] = cls.load_model(path, quantization_config) if path.is_file() else None
@@ -428,7 +428,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
                 vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
             for name, path in models.items():
-                if kwargs.get(name, None) is not None:
+                if name in kwargs:
                     models[name] = kwargs.pop(name)
                 else:
                     models[name] = (
@@ -449,7 +449,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             from optimum.intel import OVQuantizer
 
             for name, path in models.items():
-                if kwargs.get(name, None) is not None:
+                if name in kwargs:
                     models[name] = kwargs.pop(name)
                 else:
                     models[name] = cls.load_model(path) if path.is_file() else None
@@ -464,7 +464,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
 
             return ov_pipeline
-
         ov_pipeline = ov_pipeline_class(
             **models,
             **submodels,
@@ -646,10 +645,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
-            batch_size *= num_images_per_prompt
-        # The factor of 2 comes from the guidance scale > 1
-        batch_size *= 2
-
+            # The factor of 2 comes from the guidance scale > 1
+            batch_size *= 2 * num_images_per_prompt
+        
         height = height // self.vae_scale_factor if height > 0 else height
         width = width // self.vae_scale_factor if width > 0 else width
         shapes = {}
@@ -801,7 +799,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        for component in {
+        for component in [
             self.unet,
             self.transformer,
             self.vae_encoder,
@@ -809,12 +807,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.text_encoder,
             self.text_encoder_2,
             self.text_encoder_3,
-        }:
+        ]:
             if component is not None:
                 component.request = None
 
     def compile(self):
-        for component in {
+        for component in [
             self.unet,
             self.transformer,
             self.vae_encoder,
@@ -822,7 +820,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.text_encoder,
             self.text_encoder_2,
             self.text_encoder_3,
-        }:
+        ]:
             if component is not None:
                 component._compile()
 
@@ -956,6 +954,10 @@ class OVPipelinePart(ConfigMixin):
 
 
 class OVModelTextEncoder(OVPipelinePart):
+    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
+        super().__init__(model, parent_pipeline, model_name)
+        self.hidden_states_output_names = sorted({name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")})
+
     def forward(
         self,
         input_ids: Union[np.ndarray, torch.Tensor],
@@ -967,17 +969,15 @@ class OVModelTextEncoder(OVPipelinePart):
 
         model_inputs = {"input_ids": input_ids}
 
-        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
-
+        ov_outputs = self.request(model_inputs, share_inputs=True)
+        main_out = ov_outputs[0]
         model_outputs = {}
-        for key, value in ov_outputs.items():
-            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
-
-        if output_hidden_states:
-            model_outputs["hidden_states"] = []
-            for i in range(self.config.num_hidden_layers):
-                model_outputs["hidden_states"].append(model_outputs.pop(f"hidden_states.{i}"))
-            model_outputs["hidden_states"].append(model_outputs.get("last_hidden_state"))
+        model_outputs[self.model.outputs[0].get_any_name()] = torch.from_numpy(main_out)
+        if self.hidden_states_output_names and not "last_hidden_state" in model_outputs:
+            model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
+        if self.hidden_states_output_names and output_hidden_states or self.config.output_hidden_states:
+            hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
+            model_outputs["hidden_states"] = hidden_states
 
         if return_dict:
             return model_outputs
