@@ -118,7 +118,7 @@ MODEL_NAMES = {
     "stable-diffusion-openvino": "hf-internal-testing/tiny-stable-diffusion-openvino",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
-    "stable-diffusion-3": "yujiepan/stable-diffusion-3-tiny-random",
+    "stable-diffusion-3": "katuni4ka/tiny-random-stabdle-diffusion-3",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
     "starcoder2": "hf-internal-testing/tiny-random-Starcoder2ForCausalLM",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
