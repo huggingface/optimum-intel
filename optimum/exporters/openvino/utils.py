@@ -102,7 +102,7 @@ def _get_input_info(
                     symbol = name_to_symbol[dim_name]
                 else:
                     symbol = Symbol()
-                    name_to_symbol[name] = symbol
+                    name_to_symbol[dim_name] = symbol
                 dim = Dimension(-1)
                 dim.set_symbol(symbol)
                 shape[idx] = dim
