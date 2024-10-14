@@ -581,7 +581,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     @property
     def batch_size(self) -> int:
         model = self.unet.model if self.unet is not None else self.transformer.model
-        batch_size = model.inputs[0].get_partial_shape()[0] 
+        batch_size = model.inputs[0].get_partial_shape()[0]
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
@@ -647,7 +647,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         else:
             # The factor of 2 comes from the guidance scale > 1
             batch_size *= 2 * num_images_per_prompt
-        
+
         height = height // self.vae_scale_factor if height > 0 else height
         width = width // self.vae_scale_factor if width > 0 else width
         shapes = {}
@@ -956,7 +956,9 @@ class OVPipelinePart(ConfigMixin):
 class OVModelTextEncoder(OVPipelinePart):
     def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
         super().__init__(model, parent_pipeline, model_name)
-        self.hidden_states_output_names = sorted({name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")})
+        self.hidden_states_output_names = sorted(
+            {name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")}
+        )
 
     def forward(
         self,
@@ -973,9 +975,13 @@ class OVModelTextEncoder(OVPipelinePart):
         main_out = ov_outputs[0]
         model_outputs = {}
         model_outputs[self.model.outputs[0].get_any_name()] = torch.from_numpy(main_out)
-        if self.hidden_states_output_names and not "last_hidden_state" in model_outputs:
+        if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
             model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
-        if self.hidden_states_output_names and output_hidden_states or self.config.output_hidden_states:
+        if (
+            self.hidden_states_output_names
+            and output_hidden_states
+            or getattr(self.config, "output_hidden_states", False)
+        ):
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
             model_outputs["hidden_states"] = hidden_states
 

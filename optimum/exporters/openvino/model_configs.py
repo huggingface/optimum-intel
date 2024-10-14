@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from packaging import version
 from transformers import PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
-from optimum.exporters.onnx.model_patcher import ModelPatcher
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
@@ -1632,4 +1631,3 @@ class T5EncoderOpenVINOConfig(CLIPTextOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
-
