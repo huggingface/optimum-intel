@@ -123,7 +123,7 @@ def _llama_model_forward(
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
     input_lens = attention_mask.cumsum(-1)[:, -1]
-
+    lens_list = input_lens.tolist()
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
@@ -137,6 +137,7 @@ def _llama_model_forward(
             use_cache=use_cache,
             position_embeddings=position_embeddings,
             input_lens=input_lens.int(),
+            lens_list=lens_list,
         )
 
         hidden_states = layer_outputs[0]
@@ -210,6 +211,7 @@ class _IPEXAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         input_lens: Optional[torch.Tensor] = None,
+        lens_list: Optional[List] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if past_key_value is None and kwargs.get("layer_past", None) is not None:
@@ -227,7 +229,7 @@ class _IPEXAttention(nn.Module):
 
         if past_key_value is not None:
             key_cache, value_cache = past_key_value.update(
-                key, value, self.layer_idx, attention_mask, position_ids, input_lens
+                key, value, self.layer_idx, attention_mask, position_ids, lens_list
             )
 
         attn_output = torch.empty_like(query)

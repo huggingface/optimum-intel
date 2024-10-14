@@ -1,5 +1,5 @@
-from typing import Optional, Tuple
-import time
+from typing import List, Optional, Tuple
+
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
@@ -102,7 +102,7 @@ class IPEXPagedCache(Cache):
         layer_idx: int,
         attention_mask: torch.Tensor,
         position_ids: torch.Tensor,
-        input_lens: torch.Tensor,
+        length_list: Optional[List],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
@@ -121,7 +121,7 @@ class IPEXPagedCache(Cache):
         batch_size = position_ids.shape[0]
         if self.get_seq_length() == 0:
             # prefill
-            num_slots = input_lens.tolist()
+            num_slots = length_list
         else:
             # decode
             num_slots = [1] * batch_size
