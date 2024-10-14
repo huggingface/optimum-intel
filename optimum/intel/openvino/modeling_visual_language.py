@@ -574,6 +574,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         image_sizes=None,
         attention_mask=None,
         position_ids=None,
+        image_bound=None,
+        tgt_sizes=None,
         **kwargs,
     ):
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
@@ -583,6 +585,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
+            image_bound=None,
+            tgt_sizes=None,
             **kwargs,
         )
         return self.language_model.forward(
@@ -625,6 +629,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 )
         return inputs_embeds, attention_mask, position_ids
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L521
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -649,7 +654,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             elif past_length < input_ids.shape[1]:
                 input_ids = input_ids[:, past_length:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
-            elif self.config.image_token_index in input_ids:
+            elif getattr(self.config, "image_token_index", -1) in input_ids:
                 input_ids = input_ids[:, input_ids.shape[1] - 1 :]
 
         position_ids = kwargs.get("position_ids", None)
@@ -673,6 +678,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "attention_mask": attention_mask,
                 "pixel_values": pixel_values,
                 "image_sizes": image_sizes,
+                "image_bound": kwargs.get("image_bound"),
+                "tgt_sizes": kwargs.get("tgt_sizes"),
             }
         )
         return model_inputs
@@ -1361,83 +1368,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                         cur_vs_hs.view(-1, cur_vs_hs.shape[-1]),
                     )
         return vllm_embedding, attention_mask, position_ids
-
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        inputs_embeds=None,
-        pixel_values=None,
-        image_sizes=None,
-        attention_mask=None,
-        **kwargs,
-    ):
-        if past_key_values is not None:
-            past_length = self.language_model._get_past_length(past_key_values)
-
-            # Keep only the unprocessed tokens:
-            # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
-            # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
-            # input)
-            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
-                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
-            # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
-            # input_ids based on the past_length.llava
-            elif past_length < input_ids.shape[1]:
-                input_ids = input_ids[:, past_length:]
-
-        position_ids = kwargs.get("position_ids", None)
-        if attention_mask is not None and position_ids is None:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
-
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            model_inputs = {"input_ids": input_ids}
-
-        model_inputs.update(
-            {
-                "position_ids": position_ids,
-                "past_key_values": past_key_values,
-                "use_cache": kwargs.get("use_cache"),
-                "attention_mask": attention_mask,
-                "pixel_values": pixel_values,
-                "image_sizes": image_sizes,
-                "image_bound": kwargs.get("image_bound"),
-                "tgt_sizes": kwargs.get("tgt_sizes"),
-            }
-        )
-        return model_inputs
-
-    def forward(
-        self,
-        input_ids,
-        pixel_values,
-        past_key_values=None,
-        inputs_embeds=None,
-        image_sizes=None,
-        attention_mask=None,
-        position_ids=None,
-        image_bound=None,
-        tgt_sizes=None,
-        **kwargs,
-    ):
-        return super().forward(
-            input_ids,
-            pixel_values,
-            past_key_values,
-            inputs_embeds,
-            image_sizes,
-            attention_mask,
-            position_ids,
-            image_bound=image_bound,
-            tgt_sizes=tgt_sizes,
-            **kwargs,
-        )
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
