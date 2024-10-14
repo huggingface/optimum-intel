@@ -43,25 +43,43 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self.text_emb_model = text_embeds_model
         self.request = None
         self.text_emb_request = None
+        self._device = device
         compile_only = kwargs.get("compile_only", False)
         if compile_only:
             self.text_emb_request = self.text_emb_model
             self.request = self.model.create_infer_request()
 
         super().__init__(
-            model, config, device, dynamic_shapes, ov_config, model_save_dir, quantization_config, **kwargs
+            model=model,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
         )
 
     def compile(self):
         if self.request is None:
-            logger.info(f"Compiling the Language model to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+            if self._compile_only:
+                self.request = self.model.create_infer_request()
+            else:
+                logger.info(f"Compiling the Language model to {self._device} ...")
+                self.request = self._compile_model(
+                    self.model, self._device, self.ov_config, self.model_save_dir
+                ).create_infer_request()
         self._compile_text_emb()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
-            logger.info(f"Compiling the Text embeddings model to {self._device} ...")
-            self.text_emb_request = core.compile_model(self.text_emb_model, self._device, self.ov_config)
+            if self._compile_only:
+                self.text_emb_request = self.text_emb_model
+            else:
+                logger.info(f"Compiling the Text embeddings model to {self._device} ...")
+                self.text_emb_request = self._compile_model(
+                    self.text_emb_model, self._device, self.ov_config, self.model_save_dir
+                )
 
     def clear_requests(self):
         if self._compile_only:
@@ -258,14 +276,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
         self.language_model = OVModelWithEmbedForCausalLM(
-            self.lm_model,
-            self.text_embdings_model,
+            model=self.lm_model,
+            text_embeds_model=self.text_embdings_model,
             config=config,
-            deivce=device,
+            device=self._device,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=not self._compile_only,
+            compile=self._compile_only,
             compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
