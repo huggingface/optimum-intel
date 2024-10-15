@@ -603,8 +603,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            image_bound=None,
-            tgt_sizes=None,
+            image_bound=image_bound,
+            tgt_sizes=tgt_sizes,
             **kwargs,
         )
         return self.language_model.forward(
