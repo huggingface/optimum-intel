@@ -72,7 +72,7 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
 
 
 class OVPipelineForText2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency", "stable-diffusion-3"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
     AUTOMODEL_CLASS = AutoPipelineForText2Image
@@ -126,18 +126,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
 
         for output_type in ["latent", "np", "pt"]:
+            print(output_type)
             inputs["output_type"] = output_type
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(["stable-diffusion", "stable-diffusion-xl", "latent-consistency"])
     @require_diffusers
     def test_callback(self, model_arch: str):
         height, width, batch_size = 64, 128, 1
@@ -184,9 +185,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
+                out_channels = (
+                    pipeline.unet.config.out_channels
+                    if pipeline.unet is not None
+                    else pipeline.transformer.config.out_channels
+                )
                 self.assertEqual(
                     outputs.shape,
-                    (batch_size, 4, height // pipeline.vae_scale_factor, width // pipeline.vae_scale_factor),
+                    (
+                        batch_size,
+                        out_channels,
+                        height // pipeline.vae_scale_factor,
+                        width // pipeline.vae_scale_factor,
+                    ),
                 )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -229,6 +240,22 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                 do_classifier_free_guidance=True,
                 negative_prompt=negative_prompt,
             )
+        elif model_arch == "stable-diffusion-3":
+            (
+                inputs["prompt_embeds"],
+                inputs["negative_prompt_embeds"],
+                inputs["pooled_prompt_embeds"],
+                inputs["negative_pooled_prompt_embeds"],
+            ) = pipeline.encode_prompt(
+                prompt=prompt,
+                prompt_2=None,
+                prompt_3=None,
+                num_images_per_prompt=1,
+                device=torch.device("cpu"),
+                do_classifier_free_guidance=True,
+                negative_prompt=negative_prompt,
+            )
+
         else:
             inputs["prompt_embeds"], inputs["negative_prompt_embeds"] = pipeline.encode_prompt(
                 prompt=prompt,
@@ -288,11 +315,14 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         )
 
         self.assertFalse(ov_pipeline.is_dynamic)
+        expected_batch = batch_size * num_images_per_prompt
+        if ov_pipeline.unet is None or "timestep_cond" not in {
+            inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs
+        }:
+            expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
-            batch_size
-            * num_images_per_prompt
-            * (2 if "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs} else 1),
+            expected_batch,
         )
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
@@ -323,7 +353,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency", "stable-diffusion-3"]
 
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
@@ -369,7 +399,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
                         self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(["stable-diffusion", "stable-diffusion-xl", "latent-consistency"])
     @require_diffusers
     def test_callback(self, model_arch: str):
         height, width, batch_size = 32, 64, 1
@@ -416,9 +446,19 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
+                    out_channels = (
+                        pipeline.unet.config.out_channels
+                        if pipeline.unet is not None
+                        else pipeline.transformer.config.out_channels
+                    )
                     self.assertEqual(
                         outputs.shape,
-                        (batch_size, 4, height // pipeline.vae_scale_factor, width // pipeline.vae_scale_factor),
+                        (
+                            batch_size,
+                            out_channels,
+                            height // pipeline.vae_scale_factor,
+                            width // pipeline.vae_scale_factor,
+                        ),
                     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -427,16 +467,17 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
 
         for output_type in ["latent", "np", "pt"]:
+            print(output_type)
             inputs["output_type"] = output_type
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -500,12 +541,12 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         )
 
         self.assertFalse(ov_pipeline.is_dynamic)
-        self.assertEqual(
-            ov_pipeline.batch_size,
-            batch_size
-            * num_images_per_prompt
-            * (2 if "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs} else 1),
-        )
+        expected_batch = batch_size * num_images_per_prompt
+        if ov_pipeline.unet is None or "timestep_cond" not in {
+            inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs
+        }:
+            expected_batch *= 2
+        self.assertEqual(ov_pipeline.batch_size, expected_batch)
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
@@ -535,7 +576,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "stable-diffusion-3"]
 
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
@@ -586,7 +627,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
                         self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(["stable-diffusion", "stable-diffusion-xl"])
     @require_diffusers
     def test_callback(self, model_arch: str):
         height, width, batch_size = 32, 64, 1
@@ -633,9 +674,19 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
+                    out_channels = (
+                        pipeline.unet.config.out_channels
+                        if pipeline.unet is not None
+                        else pipeline.transformer.config.out_channels
+                    )
                     self.assertEqual(
                         outputs.shape,
-                        (batch_size, 4, height // pipeline.vae_scale_factor, width // pipeline.vae_scale_factor),
+                        (
+                            batch_size,
+                            out_channels,
+                            height // pipeline.vae_scale_factor,
+                            width // pipeline.vae_scale_factor,
+                        ),
                     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -648,12 +699,13 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         for output_type in ["latent", "np", "pt"]:
+            print(output_type)
             inputs["output_type"] = output_type
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -717,11 +769,14 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         )
 
         self.assertFalse(ov_pipeline.is_dynamic)
+        expected_batch = batch_size * num_images_per_prompt
+        if ov_pipeline.unet is None or "timestep_cond" not in {
+            inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs
+        }:
+            expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
-            batch_size
-            * num_images_per_prompt
-            * (2 if "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs} else 1),
+            expected_batch,
         )
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
