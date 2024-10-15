@@ -22,8 +22,10 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+import datasets
 import nncf
 import openvino
+import requests
 import torch
 import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
@@ -33,9 +35,11 @@ from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
+from PIL import Image
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
+from tqdm import tqdm
+from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
@@ -62,6 +66,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     PREDEFINED_SD_DATASETS,
+    PREDEFINED_VISUAL_LM_DATASETS,
 )
 
 
@@ -313,6 +318,8 @@ class OVQuantizer(OptimumQuantizer):
         remove_unused_columns: bool = True,
         **kwargs,
     ):
+        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM
+
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
@@ -361,6 +368,8 @@ class OVQuantizer(OptimumQuantizer):
 
                 if isinstance(self.model, OVModelForCausalLM):
                     calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
+                elif isinstance(self.model, OVModelForVisualCausalLM):
+                    calibration_dataset = self._prepare_visual_causal_lm_dataset(quantization_config)
                 elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     if not isinstance(quantization_config.dataset, str):
                         raise ValueError("Please provide dataset as one of the accepted dataset labels.")
@@ -420,6 +429,14 @@ class OVQuantizer(OptimumQuantizer):
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config)
+                    self.model.clear_requests()
+                elif isinstance(self.model, OVModelForVisualCausalLM):
+                    language_model = self.model.language_model
+                    _weight_only_quantization(language_model.model, quantization_config, calibration_dataset)
+                    sub_model_names = ["vision_embeddings", "text_embeddings"] + self.model.additional_parts
+                    sub_models = [getattr(self.model, f"{name}_model") for name in sub_model_names]
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8, sym=False))
                     self.model.clear_requests()
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
@@ -731,6 +748,60 @@ class OVQuantizer(OptimumQuantizer):
         calibration_dataset = prepare_dataset(calibration_dataset)
         calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
 
+        return calibration_dataset
+
+    def _prepare_visual_causal_lm_dataset(self, config: OVWeightQuantizationConfig, max_tokens=32):
+        dataset_name = config.dataset
+        if dataset_name not in PREDEFINED_VISUAL_LM_DATASETS:
+            raise ValueError(
+                "You have entered a string value for dataset. You can only choose between"
+                f"{list(PREDEFINED_VISUAL_LM_DATASETS.keys())}, but the {dataset_name} was found"
+            )
+
+        dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
+        dataset = datasets.load_dataset(dataset_metadata["name"], split=dataset_metadata["split"]).shuffle(seed=0)
+        num_samples = min(config.num_samples or 128, len(dataset))
+
+        calibration_dataset = []
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+        pbar = tqdm(desc="Collecting calibration dataset", total=num_samples)
+        for item in dataset:
+            image_url = item[dataset_metadata["inputs"]["image_url"]]
+            instruction = item[dataset_metadata["inputs"]["instruction"]]
+            image = Image.open(requests.get(image_url, stream=True).raw)
+
+            chat_template = [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image"}]}]
+            prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
+
+            inputs = processor(images=image, text=prompt, return_tensors="pt")
+            if inputs.input_ids.size(1) > max_tokens:
+                continue
+            input_ids = inputs.input_ids
+            attention_mask = inputs.attention_mask
+            position_ids = torch.arange(attention_mask.size(1)).unsqueeze(0).to(attention_mask.device)
+            pixel_values = inputs.pixel_values
+            image_sizes = inputs.image_sizes
+
+            inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
+                input_ids,
+                pixel_values,
+                image_sizes=image_sizes,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+            )
+
+            language_model_inputs = self.model.language_model.prepare_inputs(
+                input_ids=None,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
+            )
+            pbar.update(1)
+            calibration_dataset.append(language_model_inputs)
+            if len(calibration_dataset) == num_samples:
+                break
+
+        calibration_dataset = nncf.Dataset(calibration_dataset)
         return calibration_dataset
 
     def _prepare_text_generation_dataset(

@@ -15,6 +15,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
+from .. import OVQuantizer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -181,6 +182,7 @@ class OVVisionEmbedding(OVModelPart):
         self._main_input = "images" if model_has_input_output_name(self.model, "images") else "pixel_values"
 
     def forward(self, pixel_values, **kwargs):
+        self._compile()
         inputs = {self._main_input: pixel_values}
         if len(self.input_names) > 1:
             for name in self.input_names:
@@ -244,7 +246,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self.lm_model = language_model
-        self.text_embdings_model = text_embeddings
+        self.text_embeddings_model = text_embeddings
         self.vision_embeddings_model = vision_embeddings
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
@@ -261,13 +263,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._set_ov_config_parameters()
         self.language_model = OVModelWithEmbedForCausalLM(
             self.lm_model,
-            self.text_embdings_model,
+            self.text_embeddings_model,
             config=config,
             deivce=device,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=not self._compile_only,
+            compile=not self._compile_only and enable_compilation,
             compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
@@ -287,6 +289,18 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except AttributeError:
             pass
 
+    def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
+        self.language_model.clear_requests()
+        components = [self.vision_embeddings] + [getattr(self, part) for part in self.additional_parts]
+        for component in components:
+            if component is not None:
+                component.request = None
+
     def compile(self):
         self.language_model.compile()
         self.vision_embeddings._compile()
@@ -304,11 +318,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.lm_model, self.text_embdings_model, self.vision_embeddings_model]
+        src_files = [self.lm_model, self.text_embeddings_model, self.vision_embeddings_model]
         dst_file_names = [
             "openvino_language_model.xml",
             "openvino_text_embeddings_model.xml",
-            "openvino_vision_embeddings.xml",
+            "openvino_vision_embeddings_model.xml",
         ]
         for part in self.additional_parts:
             model = getattr(self, f"{part}_model", None)
@@ -387,26 +401,18 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-        compile_only = kwargs.get("compile_only", False)
-
-        # Load model from a local directory
-        if os.path.isdir(model_id):
-            model_save_dir = Path(model_id)
         model_file_names = {
             "language_model": "openvino_language_model.xml",
             "text_embeddings": "openvino_text_embeddings_model.xml",
             "vision_embeddings": "openvino_vision_embeddings_model.xml",
         }
 
+        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         for part in model_cls.additional_parts:
             model_file_names[part] = f"openvino_{part}_model.xml"
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
+            # Load model from a local directory
             model_save_dir = Path(model_id)
             file_names = {k: os.path.join(model_id, model_file_names[k]) for k in model_file_names}
         else:
@@ -424,11 +430,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 file_names[name] = model_cache_path
             model_save_dir = Path(model_cache_path).parent
         if not compile_only:
-            language_model = model_cls.load_model(file_names["language_model"], quantization_config)
-            text_embeddings = model_cls.load_model(file_names["text_embeddings"], quantization_config)
-            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"], quantization_config)
+            language_model = model_cls.load_model(file_names["language_model"])
+            text_embeddings = model_cls.load_model(file_names["text_embeddings"])
+            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"])
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[part], quantization_config)
+                kwargs[part] = model_cls.load_model(file_names[part])
         else:
             language_model = model_cls._compile_model(
                 file_names["language_model"],
@@ -468,7 +474,12 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        return model_cls(
+        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        to_quantize = not compile_only and quantization_config is not None
+        if to_quantize:
+            kwargs["compile"] = False
+
+        model = model_cls(
             language_model=language_model,
             text_embeddings=text_embeddings,
             vision_embeddings=vision_embeddings,
@@ -477,6 +488,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             quantization_config=quantization_config,
             **kwargs,
         )
+
+        if to_quantize:
+            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+        return model
 
     @classmethod
     def _from_transformers(
@@ -556,8 +572,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         apply_moc_transformations(self.lm_model, cf=False)
         compress_model_transformation(self.lm_model)
-        apply_moc_transformations(self.text_embdings_model, cf=False)
-        compress_model_transformation(self.text_embdings_model)
+        apply_moc_transformations(self.text_embeddings_model, cf=False)
+        compress_model_transformation(self.text_embeddings_model)
         apply_moc_transformations(self.vision_embeddings_model, cf=False)
         compress_model_transformation(self.vision_embeddings_model)
         for part in self.additional_parts:
