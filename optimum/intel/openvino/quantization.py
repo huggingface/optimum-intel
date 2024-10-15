@@ -757,6 +757,12 @@ class OVQuantizer(OptimumQuantizer):
                 "You have entered a string value for dataset. You can only choose between"
                 f"{list(PREDEFINED_VISUAL_LM_DATASETS.keys())}, but the {dataset_name} was found"
             )
+        if config.processor is None:
+            raise ValueError(
+                "`processor` must be specified in order to run data-aware weight compression. "
+                "Please provide it as a model id, or a path to a directory containing all the required "
+                "configuration files."
+            )
 
         dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
         dataset = datasets.load_dataset(dataset_metadata["name"], split=dataset_metadata["split"]).shuffle(seed=0)

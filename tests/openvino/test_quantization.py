@@ -64,6 +64,7 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
     OVModelOpenCLIPForZeroShotImageClassification,
+    OVModelForVisualCausalLM,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -300,6 +301,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionPipeline, "stable-diffusion"),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip"),
+        (OVModelForVisualCausalLM, "llava"),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
@@ -448,6 +450,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         elif model_type == "open-clip":
             models = [model.text_model, model.visual_model]
+        elif model.export_feature == "image-text-to-text":
+            models = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
+            models += [getattr(model, part) for part in model.additional_parts]
         else:
             models = [model]
 
@@ -543,16 +548,16 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+            ov_model = model
+            if model_cls == OVModelForVisualCausalLM:
+                ov_model = model.lm_model
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
+            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
 
-            wc_rt_info = model.model.get_rt_info()["nncf"]["weight_compression"]
+            wc_rt_info = ov_model.get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
             self.assertEqual(
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
@@ -583,6 +588,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         elif model_type == "open-clip":
             models = [model.text_model, model.visual_model]
+        elif model.export_feature == "image-text-to-text":
+            models = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
+            models += [getattr(model, part) for part in model.additional_parts]
         else:
             models = [model]
 
