@@ -767,26 +767,22 @@ class OVQuantizer(OptimumQuantizer):
         pbar = tqdm(desc="Collecting calibration dataset", total=num_samples)
         for item in dataset:
             image_url = item[dataset_metadata["inputs"]["image_url"]]
-            instruction = item[dataset_metadata["inputs"]["instruction"]]
             image = Image.open(requests.get(image_url, stream=True).raw)
 
+            instruction = item[dataset_metadata["inputs"]["instruction"]]
             chat_template = [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image"}]}]
             prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
-
             inputs = processor(images=image, text=prompt, return_tensors="pt")
-            if inputs.input_ids.size(1) > max_tokens:
-                continue
             input_ids = inputs.input_ids
-            attention_mask = inputs.attention_mask
-            position_ids = torch.arange(attention_mask.size(1)).unsqueeze(0).to(attention_mask.device)
-            pixel_values = inputs.pixel_values
-            image_sizes = inputs.image_sizes
+            if input_ids.size(1) > max_tokens:
+                continue
 
+            position_ids = torch.arange(inputs.input_ids.size(1)).unsqueeze(0).to(inputs.input_ids.device)
             inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
                 input_ids,
-                pixel_values,
-                image_sizes=image_sizes,
-                attention_mask=attention_mask,
+                inputs.pixel_values,
+                image_sizes=inputs.image_sizes,
+                attention_mask=inputs.attention_mask,
                 position_ids=position_ids,
             )
 
@@ -796,6 +792,7 @@ class OVQuantizer(OptimumQuantizer):
                 position_ids=position_ids,
                 inputs_embeds=inputs_embeds,
             )
+
             pbar.update(1)
             calibration_dataset.append(language_model_inputs)
             if len(calibration_dataset) == num_samples:
