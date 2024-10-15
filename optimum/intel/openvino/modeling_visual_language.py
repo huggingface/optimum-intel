@@ -324,7 +324,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         dst_file_names = [
             "openvino_language_model.xml",
             "openvino_text_embeddings_model.xml",
-            "openvino_vision_embeddings.xml",
+            "openvino_vision_embeddings_model.xml",
         ]
         for part in self.additional_parts:
             model = getattr(self, f"{part}_model", None)
