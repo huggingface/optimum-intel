@@ -40,6 +40,7 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
     OVSentenceTransformer,
+    OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
