@@ -28,7 +28,6 @@ import numpy as np
 import openvino
 import torch
 from diffusers.configuration_utils import ConfigMixin
-from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from diffusers.pipelines import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
@@ -63,6 +62,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
+from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
@@ -74,6 +74,12 @@ from .utils import (
     model_has_dynamic_inputs,
     np_to_pt_generators,
 )
+
+
+if is_diffusers_version(">=", "0.25.0"):
+    from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
+else:
+    from diffusers.models.vae import DiagonalGaussianDistribution
 
 
 core = Core()
