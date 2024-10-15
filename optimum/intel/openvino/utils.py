@@ -119,6 +119,7 @@ _HEAD_TO_AUTOMODELS = {
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
+    "stable-diffusion-3": "OVStableDiffusion3Pipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
     "open_clip_text": "OVModelOpenCLIPText",
