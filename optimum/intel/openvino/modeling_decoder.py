@@ -504,7 +504,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-                if past_key_values:
+                if past_key_values is not None:
                     position_ids = position_ids[:, -input_ids.shape[1] :]
 
             inputs["position_ids"] = position_ids
