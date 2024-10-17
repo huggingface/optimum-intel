@@ -15,7 +15,6 @@ import copy
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -50,6 +49,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     STR_TO_OV_TYPE,
+    TemporaryDirectory,
     get_export_transformers_version,
     model_has_dynamic_inputs,
 )
@@ -276,7 +276,7 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        save_dir = TemporaryDirectory()
+        save_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
@@ -331,7 +331,7 @@ class OVBaseDecoderModel(OVModel):
             config, "original_max_position_embeddings", config.max_position_embeddings
         ):
             config.max_position_embeddings = config.original_max_position_embeddings
-
+        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

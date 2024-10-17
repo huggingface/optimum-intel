@@ -21,7 +21,7 @@ from abc import abstractmethod
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import gettempdir
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -70,6 +70,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
+    TemporaryDirectory,
     _print_compiled_model_properties,
     model_has_dynamic_inputs,
     np_to_pt_generators,

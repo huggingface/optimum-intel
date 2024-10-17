@@ -61,6 +61,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
+    calculate_model_size,
     clear_class_registry,
     remove_none_from_dummy_inputs,
 )
@@ -101,6 +102,7 @@ def export(
     stateful: bool = True,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
+    return_model_size: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -154,6 +156,7 @@ def export(
             stateful=stateful,
             patch_16bit_model=patch_16bit_model,
             library_name=library_name,
+            return_model_size=return_model_size,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -164,7 +167,15 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output, ov_config=ov_config, library_name=library_name)
+        return export_tensorflow(
+            model,
+            config,
+            opset,
+            output,
+            ov_config=ov_config,
+            return_model_size=return_model_size,
+            library_name=library_name,
+        )
 
     else:
         raise RuntimeError(
@@ -179,6 +190,7 @@ def export_tensorflow(
     output: Path,
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
+    return_model_size: bool = False,
 ):
     """
     Export the TensorFlow model to OpenVINO format.
@@ -200,13 +212,19 @@ def export_tensorflow(
 
     library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
+    model_size = None
+    if return_model_size:
+        model_size = calculate_model_size(ov_model)
+
     _save_model(
         ov_model,
         output.parent / output,
         ov_config=ov_config,
         library_name=library_name,
     )
-    return input_names, output_names, True
+    if not return_model_size:
+        return (input_names, output_names, True)
+    return (input_names, output_names, True), model_size
 
 
 def export_pytorch_via_onnx(
@@ -219,6 +237,7 @@ def export_pytorch_via_onnx(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
+    return_model_size: bool = False,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -262,13 +281,19 @@ def export_pytorch_via_onnx(
 
     library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
+    model_size = None
+    if return_model_size:
+        model_size = calculate_model_size(ov_model)
     _save_model(
         ov_model,
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
         ov_config=ov_config,
         library_name=library_name,
     )
-    return input_names, output_names, True
+
+    if not return_model_size:
+        return (input_names, output_names, True)
+    return (input_names, output_names, True), model_size
 
 
 def export_pytorch(
@@ -283,6 +308,7 @@ def export_pytorch(
     stateful: bool = False,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
+    return_model_size: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -416,6 +442,7 @@ def export_pytorch(
                 model_kwargs,
                 ov_config=ov_config,
                 library_name=library_name,
+                return_model_size=return_model_size,
             )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
@@ -434,17 +461,24 @@ def export_pytorch(
             patch_stateful(model.config, ov_model)
 
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
+        model_size = None
 
+        if return_model_size:
+            model_size = calculate_model_size(ov_model)
         _save_model(
             ov_model,
             output,
             ov_config=ov_config,
             library_name=library_name,
         )
+        del ov_model
         clear_class_registry()
         del model
         gc.collect()
-    return input_names, output_names, False
+
+    if not return_model_size:
+        return (input_names, output_names, False)
+    return (input_names, output_names, False), model_size
 
 
 def export_models(
@@ -461,6 +495,7 @@ def export_models(
     stateful: bool = True,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
+    return_model_sizes: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -490,7 +525,7 @@ def export_models(
     """
 
     outputs = []
-
+    model_sizes = []
     if output_names is not None and len(output_names) != len(models_and_export_configs):
         raise ValueError(
             f"Provided custom names {output_names} for the export of {len(models_and_export_configs)} models. Please provide the same number of names as models to export."
@@ -501,23 +536,27 @@ def export_models(
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        outputs.append(
-            export(
-                model=submodel,
-                config=sub_export_config,
-                output=output_path,
-                opset=opset,
-                device=device,
-                input_shapes=input_shapes,
-                model_kwargs=model_kwargs,
-                ov_config=ov_config,
-                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
-                patch_16bit_model=patch_16bit_model,
-                library_name=library_name,
-            )
+        model_outputs = export(
+            model=submodel,
+            config=sub_export_config,
+            output=output_path,
+            opset=opset,
+            device=device,
+            input_shapes=input_shapes,
+            model_kwargs=model_kwargs,
+            ov_config=ov_config,
+            stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
+            patch_16bit_model=patch_16bit_model,
+            library_name=library_name,
+            return_model_size=return_model_sizes,
         )
-
+        outputs.append(model_outputs if not return_model_sizes else model_outputs[:-1])
+        if return_model_sizes:
+            model_sizes.append(model_outputs[-1])
     outputs = list(map(list, zip(*outputs)))
+
+    if return_model_sizes:
+        return outputs, model_sizes
     return outputs
 
 
@@ -535,6 +574,7 @@ def export_from_model(
     device: str = "cpu",
     trust_remote_code: bool = False,
     patch_16bit_model: bool = False,
+    return_model_sizes: bool = False,
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
@@ -699,7 +739,7 @@ def export_from_model(
 
         model.save_config(output)
 
-    export_models(
+    export_results = export_models(
         models_and_export_configs=models_and_export_configs,
         output_dir=output,
         output_names=files_subpaths,
@@ -711,9 +751,12 @@ def export_from_model(
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
+        return_model_sizes=return_model_sizes,
     )
 
-    return files_subpaths
+    if not return_model_sizes:
+        return files_subpaths
+    return files_subpaths, export_results[-1]
 
 
 def export_tokenizer(

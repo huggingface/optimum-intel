@@ -15,7 +15,6 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
@@ -36,6 +35,7 @@ from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
+    TemporaryDirectory,
 )
 
 
@@ -337,7 +337,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        save_dir = TemporaryDirectory()
+        save_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         save_dir_path = Path(save_dir.name)
 
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
