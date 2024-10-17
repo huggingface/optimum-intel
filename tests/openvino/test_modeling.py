@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Dict
 
 import numpy as np
+import open_clip
+import openvino as ov
 import pytest
 import requests
 import timm
@@ -77,6 +79,8 @@ from optimum.intel import (
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
+    OVModelForVisualCausalLM,
+    OVModelOpenCLIPForZeroShotImageClassification,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
 )
@@ -84,6 +88,12 @@ from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, O
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+from optimum.intel.openvino.modeling_visual_language import (
+    MODEL_PARTS_CLS_MAPPING,
+    MODEL_TYPE_TO_CLS_MAPPING,
+    OVModelWithEmbedForCausalLM,
+    OVVisionEmbedding,
+)
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -139,11 +149,27 @@ class OVModelIntegrationTest(unittest.TestCase):
         ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID, ov_config=ov_config)
         self.assertTrue(manual_openvino_cache_dir.is_dir())
-        self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
+        num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        self.assertGreaterEqual(num_blobs, 1)
         if is_openvino_version("<", "2023.3"):
             self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
         else:
             self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+
+        # Test compile only
+
+        compile_only_model = OVModelForSequenceClassification.from_pretrained(
+            self.OV_MODEL_ID, ov_config=ov_config, compile_only=True
+        )
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        # compile_only get model from cache
+        self.assertGreaterEqual(current_num_blobs, num_blobs)
+        self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.request, ov.runtime.CompiledModel)
+        outputs = compile_only_model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        del compile_only_model
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
@@ -182,6 +208,13 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
             self.assertEqual(model.use_cache, use_cache)
 
+            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache)
+            self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
+            outputs = compile_only_model(**tokens)
+            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+            del compile_only_model
+
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
         del loaded_model
@@ -208,6 +241,14 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(OV_DECODER_NAME in folder_contents)
             self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
             model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
+            # compile only
+            compile_only_model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_model.encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder_with_past.model, ov.runtime.CompiledModel)
+            outputs = compile_only_model.generate(**tokens)
+            self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+            del compile_only_model
 
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
@@ -224,7 +265,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_pipeline.compile()
         self.assertEqual(loaded_pipeline.unet.request.get_property("PERFORMANCE_HINT"), "LATENCY")
         batch_size, height, width = 2, 16, 16
-        np.random.seed(0)
         inputs = {
             "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
             "height": height,
@@ -232,8 +272,12 @@ class OVModelIntegrationTest(unittest.TestCase):
             "num_inference_steps": 2,
             "output_type": "np",
         }
+
+        np.random.seed(0)
+        torch.manual_seed(0)
         pipeline_outputs = loaded_pipeline(**inputs).images
         self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
@@ -248,9 +292,23 @@ class OVModelIntegrationTest(unittest.TestCase):
                 folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
                 self.assertIn(OV_XML_FILE_NAME, folder_contents)
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+
+            compile_only_pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_pipeline.unet.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+
+            np.random.seed(0)
+            torch.manual_seed(0)
+            outputs = compile_only_pipeline(**inputs).images
+            np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+            del compile_only_pipeline
+
         np.random.seed(0)
+        torch.manual_seed(0)
         outputs = pipeline(**inputs).images
-        self.assertTrue(np.array_equal(pipeline_outputs, outputs))
+        np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
         del pipeline
         gc.collect()
 
@@ -265,6 +323,20 @@ class OVModelIntegrationTest(unittest.TestCase):
         model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
         self.assertIsInstance(model.config, PretrainedConfig)
         self.assertTrue(model.stateful)
+
+    @parameterized.expand(("", "openvino"))
+    def test_loading_with_config_in_root(self, subfolder):
+        # config.json file in the root directory and not in the subfolder
+        model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
+        export = subfolder == ""
+        # hub model
+        OVModelForFeatureExtraction.from_pretrained(model_id, subfolder=subfolder, export=export)
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            OVModelForFeatureExtraction.from_pretrained(local_dir, subfolder=subfolder, export=export)
 
     def test_infer_export_when_loading(self):
         model_id = MODEL_NAMES["phi"]
@@ -281,7 +353,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
-        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        pattern = r"(.*)?openvino(.*)?\_model.xml$"
         # hub model
         for revision in ("main", "ov", "itrex"):
             ov_files = _find_files_matching_pattern(
@@ -302,7 +374,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
     def test_find_files_matching_pattern_sd(self, model_arch):
-        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        pattern = r"(.*)?openvino(.*)?\_model.xml$"
         model_id = MODEL_NAMES[model_arch]
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
@@ -315,6 +387,23 @@ class OVModelIntegrationTest(unittest.TestCase):
             api.snapshot_download(repo_id=model_id, local_dir=local_dir)
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern)
             self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
+
+    @parameterized.expand(("", "openvino"))
+    def test_find_files_matching_pattern_with_config_in_root(self, subfolder):
+        # Notably, the model has a config.json file in the root directory and not in the subfolder
+        model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
+        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        # hub model
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
+        self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
+            self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
 
 
 class PipelineTest(unittest.TestCase):
@@ -682,7 +771,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bloom",
         "chatglm",
         "codegen",
-        "codegen2",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -711,6 +799,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "jais",
         "glm4",
+        "decilm",
     )
 
     if is_transformers_version(">=", "4.40.0"):
@@ -730,6 +819,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "mistral-nemo",
         )
 
+    # custom modeling defined in https://huggingface.co/katuni4ka/tiny-random-codegen2 differs from transformers after v4.45 resulting in unadapted patching
+    if is_transformers_version("<", "4.45.0"):
+        SUPPORTED_ARCHITECTURES += ("codegen2",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -748,6 +841,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arctic",
         "glm4",
         "exaone",
+        "decilm",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -795,7 +889,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
+        atol = 1e-3 if model_arch == "minicpm" else 1e-4
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
 
@@ -1771,6 +1866,102 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         gc.collect()
 
 
+class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = [
+        "llava",
+    ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next"]
+    TASK = "image-text-to-text"
+
+    IMAGE = Image.open(
+        requests.get(
+            "http://images.cocodataset.org/val2017/000000039769.jpg",
+            stream=True,
+        ).raw
+    )
+
+    def get_transformer_model_class(self, model_arch):
+        if model_arch == "llava":
+            from transformers import LlavaForConditionalGeneration
+
+            return LlavaForConditionalGeneration
+        if model_arch == "llava_next":
+            from transformers import LlavaNextForConditionalGeneration
+
+            return LlavaNextForConditionalGeneration
+        return None
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        prompt = "<image>\n What is shown in this image?"
+        model_id = MODEL_NAMES[model_arch]
+        processor = get_preprocessor(model_id)
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
+        inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
+        self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
+        self.assertIsInstance(ov_model.language_model, OVModelWithEmbedForCausalLM)
+        for additional_part in ov_model.additional_parts:
+            self.assertTrue(hasattr(ov_model, additional_part))
+            self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        ov_outputs = ov_model(**inputs)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            num_beams=3,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+        set_seed(SEED)
+        transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+        )
+
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
+        preprocessor = get_preprocessor(model_id)
+        question = "<image>\nDescribe image"
+        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
+
+        # General case
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+
+        question = "Hi, how are you?"
+        inputs = preprocessor(images=None, text=question, return_tensors="pt")
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+        del model
+
+        gc.collect()
+
+
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("whisper",)
 
@@ -2030,4 +2221,142 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
                 )
         del transformers_model
         del ov_model
+        gc.collect()
+
+
+class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
+    OV_MODEL_ID = MODEL_NAMES["open-clip"]
+    OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
+
+    def _get_sample_image(self):
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        return image
+
+    def test_load_from_hub_and_save_model(self):
+        loaded_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(self.OV_MODEL_ID_IR)
+
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
+        all_text = ["a dog", "a cat", "a frog"]
+        tokens = tokenizer.batch_encode_plus(
+            all_text,
+            return_tensors="pt",
+            max_length=loaded_model.config.text_config.context_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids
+
+        processor_inputs = {
+            "is_train": False,
+            "image_size": (loaded_model.config.vision_config.image_size, loaded_model.config.vision_config.image_size),
+        }
+
+        processor = open_clip.image_transform(**processor_inputs)
+        processed_image = processor(self._get_sample_image()).unsqueeze(0)
+
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+
+        loaded_model_outputs = loaded_model(tokens, processed_image)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(loaded_model.text_model._xml_model_name in folder_contents)
+            self.assertTrue(loaded_model.text_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
+            self.assertTrue(loaded_model.visual_model._xml_model_name in folder_contents)
+            self.assertTrue(loaded_model.visual_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
+            model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(tmpdirname)
+
+        outputs = model(tokens, processed_image)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits_per_image, outputs.logits_per_image))
+        self.assertTrue(torch.equal(loaded_model_outputs.logits_per_text, outputs.logits_per_text))
+
+        del loaded_model
+        del model
+        gc.collect()
+
+    def test_compare_output_open_clip(self):
+        clip_model, clip_preprocessor = open_clip.create_model_from_pretrained(f"hf-hub:{self.OV_MODEL_ID}")
+        clip_tokenizer = open_clip.get_tokenizer(f"hf-hub:{self.OV_MODEL_ID}")
+
+        image = clip_preprocessor(self._get_sample_image()).unsqueeze(0)
+        text = clip_tokenizer(["a dog", "a cat", "a frog"])
+
+        with torch.no_grad():
+            clip_image_features = clip_model.encode_image(image)
+            clip_text_features = clip_model.encode_text(text)
+
+        ov_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(self.OV_MODEL_ID, export=True)
+        ov_outputs = ov_model(text, image)
+
+        self.assertTrue(
+            torch.allclose(
+                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-4
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-4
+            )
+        )
+
+        del ov_model
+        gc.collect()
+
+    def test_functions(self):
+        model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(self.OV_MODEL_ID, export=True)
+
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
+        all_text = ["a dog", "a cat", "a frog"]
+        tokens = tokenizer.batch_encode_plus(
+            all_text,
+            return_tensors="pt",
+            max_length=model.config.text_config.context_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids
+
+        processor_inputs = {
+            "is_train": False,
+            "image_size": (model.config.vision_config.image_size, model.config.vision_config.image_size),
+        }
+
+        processor = open_clip.image_transform(**processor_inputs)
+        processed_image = processor(self._get_sample_image()).unsqueeze(0)
+
+        model_outputs = model(tokens, processed_image)
+
+        model.to("AUTO")
+        self.assertTrue(model.visual_model._device == "AUTO")
+        self.assertTrue(model.text_model._device == "AUTO")
+        self.assertTrue(model.visual_model.request is None)
+        self.assertTrue(model.text_model.request is None)
+        res = model(tokens, processed_image)
+        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+
+        model.compile()
+        self.assertTrue(model.visual_model.request is not None)
+        self.assertTrue(model.text_model.request is not None)
+        res = model(tokens, processed_image)
+        print(model_outputs.logits_per_image, res.logits_per_image)
+        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+
+        model.half()
+        model.compile()
+        res = model(tokens, processed_image)
+        print(model_outputs.logits_per_image, res.logits_per_image)
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-2))
+
+        model.reshape(1, -1)
+        reshaped_tokens = tokenizer.batch_encode_plus(
+            ["a dog"],
+            return_tensors="pt",
+            max_length=model.config.text_config.context_length,
+            padding="max_length",
+            truncation=True,
+        ).input_ids
+        model.compile()
+        res = model(reshaped_tokens, processed_image)
+
+        del model
         gc.collect()

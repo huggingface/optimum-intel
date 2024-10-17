@@ -22,13 +22,27 @@ jobs:
       matrix:
         # Testing lower and upper bound of supported Python versions
         # This also ensures that the test fails if dependencies break for Python 3.7
-        python-version: ["3.8", "3.12"]
+        python-version: ["3.9", "3.12"]
         os: ["ubuntu-22.04", "windows-latest"]
-        transformers-version: ["4.44.*"]
+        transformers-version: ["4.45.*"]
+        openvino: ["openvino openvino-tokenizers"]
+        nncf: ["nncf"]
         include:
           - python-version: "3.12"
             os: "ubuntu-22.04"
             transformers-version: "4.36.0"
+            openvino: "openvino openvino-tokenizers"
+            nncf: "nncf"
+          - python-version: "3.12"
+            os: "ubuntu-22.04"
+            transformers-version: "4.45.*"
+            openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+            nncf: "nncf"
+          - python-version: "3.12"
+            os: "ubuntu-22.04"
+            transformers-version: "4.45.*"
+            openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+            nncf: "git+https://github.com/openvinotoolkit/nncf.git"
 
     runs-on: ${{ matrix.os }}
 
@@ -46,8 +60,9 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           # Install openvino manually to prevent dependency conflicts when .[openvino] pins
           # optimum or transformers to a specific version
-          pip install .[tests] openvino
+          pip install ${{ matrix.openvino }}
           pip install transformers==${{ matrix.transformers-version }}
+          pip install .[tests]
 
       - name: Pip freeze
         run: pip freeze
@@ -58,7 +73,8 @@ jobs:
 
       - name: Slow tests
         run: |
-          pip install nncf
+          pip install ${{ matrix.nncf }}
           pytest tests/openvino -s -m "run_slow" --durations=0
         env:
           RUN_SLOW: 1
+          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}

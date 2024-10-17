@@ -36,9 +36,13 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_transformers_version,
 )
+from optimum.intel.utils.modeling_utils import (
+    _infer_library_from_model_name_or_path,
+    _OpenClipForZeroShotImageClassification,
+)
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry
+from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
 
 
 if TYPE_CHECKING:
@@ -59,25 +63,29 @@ def infer_task(
     revision: Optional[str] = None,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
+    library_name: Optional[str] = None,
 ):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
-        try:
-            task = TasksManager._infer_task_from_model_name_or_path(
-                model_name_or_path=model_name_or_path,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-            )
-        except KeyError as e:
-            raise KeyError(
-                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-        except RequestsConnectionError as e:
-            raise RequestsConnectionError(
-                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
+        if library_name == "open_clip":
+            task = "zero-shot-image-classification"
+        else:
+            try:
+                task = TasksManager._infer_task_from_model_name_or_path(
+                    model_name_or_path=model_name_or_path,
+                    subfolder=subfolder,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    token=token,
+                )
+            except KeyError as e:
+                raise KeyError(
+                    f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                )
+            except RequestsConnectionError as e:
+                raise RequestsConnectionError(
+                    f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                )
     return task
 
 
@@ -182,16 +190,13 @@ def main_export(
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
 
-    original_task = task
-    task = infer_task(
-        task, model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-    )
-    framework = TasksManager.determine_framework(
-        model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-    )
+    if framework is None:
+        framework = TasksManager.determine_framework(
+            model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+        )
 
     if library_name is None:
-        library_name = TasksManager._infer_library_from_model_name_or_path(
+        library_name = _infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path,
             subfolder=subfolder,
             revision=revision,
@@ -204,6 +209,17 @@ def main_export(
                 "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
             )
             library_name = "transformers"
+
+    original_task = task
+    task = infer_task(
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+        library_name=library_name,
+    )
 
     do_gptq_patching = False
     custom_architecture = False
@@ -259,67 +275,73 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
-    dtype = loading_kwargs.get("torch_dtype")
-    if isinstance(dtype, str):
-        dtype = config.torch_dtype if dtype == "auto" else getattr(torch, dtype)
+        dtype = loading_kwargs.get("torch_dtype")
+        if isinstance(dtype, str):
+            dtype = getattr(config, "torch_dtype") if dtype == "auto" else getattr(torch, dtype)
 
-    if (
-        dtype is None
-        and framework == "pt"
-        and not do_gptq_patching
-        and task.startswith("text-generation")
-        and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
-    ):
-        if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
-            dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
-        elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
-            dtype = torch.float16
-        elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
-            dtype = torch.bfloat16
+        if (
+            dtype is None
+            and framework == "pt"
+            and not do_gptq_patching
+            and (
+                task.startswith("text-generation")
+                or getattr(config, "model_type", None) in MULTI_MODAL_TEXT_GENERATION_MODELS
+            )
+            and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
+        ):
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
+            elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+                dtype = torch.float16
+            elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+                dtype = torch.bfloat16
 
-    if dtype is not None:
-        if dtype in [torch.float16, torch.bfloat16]:
-            patch_16bit = True
-        loading_kwargs["torch_dtype"] = dtype
-    # Patch the modules to export of GPTQ models w/o GPU
-    if do_gptq_patching:
-        torch.set_default_dtype(torch.float32)
-        orig_cuda_check = torch.cuda.is_available
-        torch.cuda.is_available = lambda: True
+        if dtype is not None:
+            if dtype in [torch.float16, torch.bfloat16]:
+                patch_16bit = True
+            loading_kwargs["torch_dtype"] = dtype
+        # Patch the modules to export of GPTQ models w/o GPU
+        if do_gptq_patching:
+            torch.set_default_dtype(torch.float32)
+            orig_cuda_check = torch.cuda.is_available
+            torch.cuda.is_available = lambda: True
 
-        from optimum.gptq import GPTQQuantizer
+            from optimum.gptq import GPTQQuantizer
 
-        orig_post_init_model = GPTQQuantizer.post_init_model
+            orig_post_init_model = GPTQQuantizer.post_init_model
 
-        def post_init_model(self, model):
-            from auto_gptq import exllama_set_max_input_length
+            def post_init_model(self, model):
+                from auto_gptq import exllama_set_max_input_length
 
-            class StoreAttr(object):
-                pass
+                class StoreAttr(object):
+                    pass
 
-            model.quantize_config = StoreAttr()
-            model.quantize_config.desc_act = self.desc_act
-            if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                model = exllama_set_max_input_length(model, self.max_input_length)
-            return model
+                model.quantize_config = StoreAttr()
+                model.quantize_config.desc_act = self.desc_act
+                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                    model = exllama_set_max_input_length(model, self.max_input_length)
+                return model
 
-        GPTQQuantizer.post_init_model = post_init_model
+            GPTQQuantizer.post_init_model = post_init_model
 
-    model = TasksManager.get_model_from_task(
-        task,
-        model_name_or_path,
-        subfolder=subfolder,
-        revision=revision,
-        cache_dir=cache_dir,
-        token=token,
-        local_files_only=local_files_only,
-        force_download=force_download,
-        trust_remote_code=trust_remote_code,
-        framework=framework,
-        device=device,
-        library_name=library_name,
-        **loading_kwargs,
-    )
+    if library_name == "open_clip":
+        model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+    else:
+        model = TasksManager.get_model_from_task(
+            task,
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            framework=framework,
+            device=device,
+            library_name=library_name,
+            **loading_kwargs,
+        )
 
     needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 

@@ -39,7 +39,7 @@ jobs:
         # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
         # ffmpeg, torchaudio and pillow are required for image classification and audio classification pipelines
         sudo apt-get install ffmpeg
-        pip install torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         pip install -r notebooks/openvino/requirements.txt
         pip install .[tests,openvino] nbval
 

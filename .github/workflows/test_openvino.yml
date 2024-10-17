@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.12"]
-        transformers-version: ["4.36.0", "4.44.*"]
+        transformers-version: ["4.36.0", "4.45.*"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
@@ -39,6 +39,9 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
           pip install transformers==${{ matrix.transformers-version }}
+
+      - if: ${{ matrix.transformers-version == '4.36.0' }}
+        run: pip install accelerate==0.*
 
       - name: Test with Pytest
         env:

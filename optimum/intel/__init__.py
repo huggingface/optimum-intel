@@ -99,7 +99,13 @@ except OptionalDependencyNotAvailable:
         "OVStableDiffusionInpaintPipeline",
         "OVStableDiffusionXLPipeline",
         "OVStableDiffusionXLImg2ImgPipeline",
+        "OVStableDiffusionXLInpaintPipeline",
         "OVLatentConsistencyModelPipeline",
+        "OVLatentConsistencyModelImg2ImgPipeline",
+        "OVPipelineForImage2Image",
+        "OVPipelineForText2Image",
+        "OVPipelineForInpainting",
+        "OVDiffusionPipeline",
     ]
 else:
     _import_structure["openvino"].extend(
@@ -109,7 +115,13 @@ else:
             "OVStableDiffusionInpaintPipeline",
             "OVStableDiffusionXLPipeline",
             "OVStableDiffusionXLImg2ImgPipeline",
+            "OVStableDiffusionXLInpaintPipeline",
             "OVLatentConsistencyModelPipeline",
+            "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVPipelineForImage2Image",
+            "OVPipelineForText2Image",
+            "OVPipelineForInpainting",
+            "OVDiffusionPipeline",
         ]
     )
 
@@ -139,9 +151,13 @@ else:
             "OVModelForSeq2SeqLM",
             "OVModelForSpeechSeq2Seq",
             "OVModelForVision2Seq",
+            "OVModelForVisualCausalLM",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
             "OVConfig",
+            "OVModelOpenCLIPVisual",
+            "OVModelOpenCLIPText",
+            "OVModelOpenCLIPForZeroShotImageClassification",
         ]
     )
 
@@ -246,7 +262,11 @@ if TYPE_CHECKING:
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_diffusers_objects import (
+            OVDiffusionPipeline,
             OVLatentConsistencyModelPipeline,
+            OVPipelineForImage2Image,
+            OVPipelineForInpainting,
+            OVPipelineForText2Image,
             OVStableDiffusionImg2ImgPipeline,
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,
@@ -255,11 +275,17 @@ if TYPE_CHECKING:
         )
     else:
         from .openvino import (
+            OVDiffusionPipeline,
+            OVLatentConsistencyModelImg2ImgPipeline,
             OVLatentConsistencyModelPipeline,
+            OVPipelineForImage2Image,
+            OVPipelineForInpainting,
+            OVPipelineForText2Image,
             OVStableDiffusionImg2ImgPipeline,
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
+            OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
         )
 
@@ -286,6 +312,10 @@ if TYPE_CHECKING:
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
             OVModelForVision2Seq,
+            OVModelForVisualCausalLM,
+            OVModelOpenCLIPForZeroShotImageClassification,
+            OVModelOpenCLIPText,
+            OVModelOpenCLIPVisual,
         )
 
     try:

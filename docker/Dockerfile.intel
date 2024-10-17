@@ -27,8 +27,6 @@ RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
     libpng-dev \
     python3 \
     python3-pip \
-    python3-dev \
-    libnuma-dev \
     && rm -rf /var/lib/apt/lists/*"
 RUN /usr/sbin/update-ccache-symlinks
 RUN mkdir /opt/ccache && ccache --set-config=cache_dir=/opt/ccache
@@ -46,7 +44,7 @@ RUN python3 -m pip install --no-cache-dir \
     -f https://download.pytorch.org/whl/torch_stable.html && \
     python3 -m pip install intel-extension-for-pytorch==$IPEX_VERSION && \
     python3 -m pip install oneccl_bind_pt --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/cpu/us/ && \
-    python3 -m pip install --no-cache-dir  numa
+    python3 -m pip install --no-cache-dir  py-libnuma
 
 ARG KMP_BLOCKTIME=1
 ENV KMP_BLOCKTIME=${KMP_BLOCKTIME}

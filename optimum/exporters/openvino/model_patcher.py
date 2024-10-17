@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, override_arguments
+from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -45,7 +45,13 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-BETTERTRANSFORMER_IGNORE = ("codegen",)
+BETTERTRANSFORMER_IGNORE = [
+    "codegen",
+]
+
+# in transformers 4.45 gpt_neo has SDPA
+if is_transformers_version(">=", "4.44.99"):
+    BETTERTRANSFORMER_IGNORE.append("gpt_neo")
 
 
 def patch_model_with_bettertransformer(model):
@@ -57,7 +63,7 @@ def patch_model_with_bettertransformer(model):
         return model
 
     if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
-        log.warn(
+        log.warning(
             COLOR_RED
             + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
             f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
@@ -75,7 +81,7 @@ def patch_model_with_bettertransformer(model):
         display_version = (
             _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
         )
-        log.warn(
+        log.warning(
             COLOR_RED
             + f"[WARNING] Stateful models are not supported for Llama, Gemma and GPTBigCode with Transformers "
             f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
@@ -93,7 +99,7 @@ def patch_model_with_bettertransformer(model):
     try:
         model = model.to_bettertransformer()
     except Exception as e:
-        log.warn(
+        log.warning(
             f"Cannot apply model.to_bettertransformer because of the exception:\n{e}."
             " Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
         )
@@ -168,7 +174,8 @@ class MixtralModelPatcher(DecoderModelPatcher):
             layer.block_sparse_moe.forward = types.MethodType(
                 _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
             )
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+            if is_transformers_version("<", "4.44.99"):
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -1549,6 +1556,12 @@ class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
+        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
+        if self._model.config.max_position_embeddings != getattr(
+            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+        ):
+            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
+
         if is_transformers_version(">=", "4.42.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
@@ -2145,6 +2158,7 @@ def _persimmon_self_attn_sdpa_forward(
     output_attentions: bool = False,
     use_cache: bool = False,
     cache_position: Optional[torch.LongTensor] = None,
+    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.persimmon.modeling_persimmon import apply_rotary_pos_emb
 
@@ -2170,25 +2184,42 @@ def _persimmon_self_attn_sdpa_forward(
     value_states = value_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
 
-    kv_seq_len = key_states.shape[-2]
-    if past_key_value is not None:
-        if self.layer_idx is None:
-            raise ValueError(
-                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                "with a layer index."
+    if is_transformers_version("<", "4.44.99"):
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    else:
+        if position_embeddings is None:
+            log.warning(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
             )
-        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            cos, sin = self.rotary_emb(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
+
+    if is_transformers_version("<", "4.44.99"):
+        rotary_ndims = self.rotary_emb.dim
+    else:
+        rotary_ndims = self.rotary_ndims
 
     # Partial rotary embedding
     query_rot, query_pass = (
-        query_states[..., : self.rotary_emb.dim],
-        query_states[..., self.rotary_emb.dim :],
+        query_states[..., :rotary_ndims],
+        query_states[..., rotary_ndims:],
     )
     key_rot, key_pass = (
-        key_states[..., : self.rotary_emb.dim],
-        key_states[..., self.rotary_emb.dim :],
+        key_states[..., :rotary_ndims],
+        key_states[..., rotary_ndims:],
     )
     # [batch_size, seq_length, num_heads, head_dim // config.partial_rotary_factor]
     query_rot, key_rot = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
@@ -2202,7 +2233,7 @@ def _persimmon_self_attn_sdpa_forward(
         cache_kwargs = {
             "sin": sin,
             "cos": cos,
-            "partial_rotation_size": self.rotary_emb.dim,
+            "partial_rotation_size": rotary_ndims,
             "cache_position": cache_position,
         }
         key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
@@ -2238,7 +2269,8 @@ class PersimmonModelPatcher(DecoderModelPatcher):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+            if is_transformers_version("<", "4.44.99"):
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2387,29 +2419,33 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
 class RotaryEmbPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.model.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.model.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
 
 class FalconModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.transformer.h:
-            _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.transformer.h:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
 
 
 class GptNeoxModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.gpt_neox.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.gpt_neox.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
 
 
 class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.gpt_neox_japanese.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.gpt_neox_japanese.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
 
 
 class Gemma2ModelPatcher(LlamaModelPatcher):
@@ -2467,3 +2503,205 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
             return outputs
 
         self.patched_forward = patched_forward
+
+
+def _decilm_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    # decilm contains bug in attention calculation for case if past key values is not None
+    def rotate_half(x):
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+        """Applies Rotary Position Embedding to the query and key tensors.
+
+        Args:
+            q (`torch.Tensor`): The query tensor.
+            k (`torch.Tensor`): The key tensor.
+            cos (`torch.Tensor`): The cosine part of the rotary embedding.
+            sin (`torch.Tensor`): The sine part of the rotary embedding.
+            position_ids (`torch.Tensor`):
+                The position indices of the tokens corresponding to the query and key tensors. For example, this can be
+                used to pass offsetted position ids when working with a KV-cache.
+            unsqueeze_dim (`int`, *optional*, defaults to 1):
+                The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+                sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+                that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+                k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+                cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+                the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+        Returns:
+            `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+        """
+        cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+        sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        return q_embed, k_embed
+
+    def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+        """
+        This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+        num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+        """
+        batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+        if n_rep == 1:
+            return hidden_states
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+    bsz, q_len, _ = hidden_states.size()
+    if self.pretraining_tp > 1:
+        key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.pretraining_tp
+        query_slices = self.q_proj.weight.split((self.num_heads * self.head_dim) // self.pretraining_tp, dim=0)
+        key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
+        value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
+
+        query_states = [F.linear(hidden_states, query_slices[i]) for i in range(self.pretraining_tp)]
+        query_states = torch.cat(query_states, dim=-1)
+
+        key_states = [F.linear(hidden_states, key_slices[i]) for i in range(self.pretraining_tp)]
+        key_states = torch.cat(key_states, dim=-1)
+
+        value_states = [F.linear(hidden_states, value_slices[i]) for i in range(self.pretraining_tp)]
+        value_states = torch.cat(value_states, dim=-1)
+
+    else:
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+    kv_seq_len = key_states.shape[-2]
+    if past_key_value is not None:
+        kv_seq_len += past_key_value[0].shape[-2]
+    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
+    if past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+    past_key_value = (key_states, value_states) if use_cache else None
+
+    # repeat k/v heads if n_kv_heads < n_heads
+    key_states = repeat_kv(key_states, self.num_key_value_groups)
+    value_states = repeat_kv(value_states, self.num_key_value_groups)
+    attn_output = F.scaled_dot_product_attention(
+        query_states, key_states, value_states, is_causal=attention_mask is None, attn_mask=attention_mask
+    )
+
+    # modified, in original implementation .transpose(1, 2) missed
+    attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, q_len, self.hidden_size)
+
+    if self.pretraining_tp > 1:
+        attn_output = attn_output.split(self.hidden_size // self.pretraining_tp, dim=2)
+        o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.pretraining_tp, dim=1)
+        attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.pretraining_tp)])
+    else:
+        attn_output = self.o_proj(attn_output)
+
+    attn_weights = None
+
+    return attn_output, attn_weights, past_key_value
+
+
+class DeciLMModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        for layer in self._model.model.layers:
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(_decilm_attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        for layer in self._model.model.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class IBertModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        if getattr(self._model, "ibert"):
+            embeddings = self._model.ibert.embeddings
+        else:
+            embeddings = self._model.embeddings
+        # model has first inference buffers initialization, it may breaks tracing
+        if getattr(embeddings.LayerNorm, "dim_sqrt") is None:
+            self._model(torch.ones([1, 1], dtype=torch.long))
+
+
+class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.extract_feature
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+def llava_vision_embed_forward(self, pixel_values):
+    # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
+    # these changes does not bring any difference from original, it only packs model subcomponent inference together
+    # that allow us avoid memory overheads and their inference results handling on code-level
+    image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+    # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
+    selected_image_feature = image_outputs.hidden_states[self.config.vision_feature_layer]
+
+    if self.config.vision_feature_select_strategy == "default":
+        selected_image_feature = selected_image_feature[:, 1:]
+    elif self.config.vision_feature_select_strategy == "full":
+        selected_image_feature = selected_image_feature
+    else:
+        raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
+
+    image_features = self.multi_modal_projector(selected_image_feature)
+    return image_features
+
+
+class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward

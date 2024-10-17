@@ -26,6 +26,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from ...exporters.openvino import main_export
+from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -65,22 +66,35 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.config = config
         self.use_cache = decoder_with_past is not None
         self.model_save_dir = model_save_dir
+        self._compile_only = kwargs.get("compile_only", False)
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
-        if self.is_dynamic:
+        if self.is_dynamic and not self._compile_only:
             encoder = self._reshape(encoder, -1, -1, is_decoder=False)
             decoder = self._reshape(decoder, -1, -1)
             decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-        if self.can_generate():
-            self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
-        else:
-            self.generation_config = None
+
+        generation_config = kwargs.get("generation_config", None)
+        self.generation_config = generation_config or GenerationConfig.from_model_config(config)
+
+        if is_transformers_version(">=", "4.44.99"):
+            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            if len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(self.generation_config, param_name, param_value)
+                    setattr(self.config, param_name, None)
+
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
@@ -165,6 +179,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+        generation_config = kwargs.pop("generation_config", None)
+        subfolder = kwargs.pop("subfolder", "")
+
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
@@ -175,16 +192,38 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
+        compile_only = kwargs.get("compile_only", False)
+
         # Load model from a local directory
         if os.path.isdir(model_id):
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
-            if use_cache:
-                decoder_with_past = cls.load_model(
-                    os.path.join(model_id, decoder_with_past_file_name), quantization_config
-                )
-
             model_save_dir = Path(model_id)
+            if not compile_only:
+                encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
+                decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
+                if use_cache:
+                    decoder_with_past = cls.load_model(
+                        os.path.join(model_id, decoder_with_past_file_name), quantization_config
+                    )
+            else:
+                encoder = cls._compile_model(
+                    os.path.join(model_id, encoder_file_name),
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                decoder = cls._compile_model(
+                    os.path.join(model_id, decoder_file_name),
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    model_save_dir,
+                )
+                if use_cache:
+                    decoder_with_past = cls._compile_model(
+                        os.path.join(model_id, decoder_with_past_file_name),
+                        kwargs.get("device", "CPU"),
+                        kwargs.get("ov_config"),
+                        model_save_dir,
+                    )
 
         # Load model from hub
         else:
@@ -206,27 +245,48 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     cache_dir=cache_dir,
                     force_download=force_download,
                     local_files_only=local_files_only,
+                    subfolder=subfolder,
                 )
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"], quantization_config)
-            decoder = cls.load_model(file_names["decoder"], quantization_config)
-            if use_cache:
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+            if not compile_only:
+                encoder = cls.load_model(file_names["encoder"], quantization_config)
+                decoder = cls.load_model(file_names["decoder"], quantization_config)
+                if use_cache:
+                    decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+            else:
+                encoder = cls._compile_model(
+                    file_names["encoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
+                )
+                decoder = cls._compile_model(
+                    file_names["decoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
+                )
+                if use_cache:
+                    decoder_with_past = cls._compile_model(
+                        file_names["decoder_with_past"],
+                        kwargs.get("device", "CPU"),
+                        kwargs.get("ov_config"),
+                        model_save_dir,
+                    )
 
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                if getattr(generation_config, "cache_implementation", None) is not None:
+                    generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
 
         return cls(
             encoder=encoder,
@@ -235,6 +295,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            generation_config=generation_config,
             **kwargs,
         )
 
@@ -288,6 +349,13 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             if use_cache:
                 task = task + "-with-past"
 
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
         # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
         if load_in_8bit is None and not quantization_config:
             ov_config = None
@@ -308,13 +376,13 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config=ov_config,
         )
 
-        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            compile_only=compile_only,
             **kwargs,
         )
 
@@ -344,6 +412,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             sequence_length (`int`):
                 The sequence length.
         """
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
@@ -355,6 +427,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
+        if self._compile_only:
+            raise ValueError(
+                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         apply_moc_transformations(self.encoder_model, cf=False)
         apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)

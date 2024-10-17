@@ -14,12 +14,13 @@
 
 import inspect
 from collections import namedtuple
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Dimension, PartialShape, Symbol
 from openvino.runtime.utils.types import get_element_type
+from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.utils import is_diffusers_available
 
@@ -158,3 +159,53 @@ def clear_class_registry():
     torch._C._jit_clear_class_registry()
     torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
     torch.jit._state._clear_class_state()
+
+
+def _get_open_clip_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "open_clip",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OnnxConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    custom_export = {}
+    if not custom_export_configs or "model_vision" in custom_export_configs:
+        visual_model = model.visual
+        setattr(visual_model, "config", model.config.vision_config)
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=model.visual, exporter="openvino", task="feature-extraction", library_name=library_name
+        )
+        vision_cfg = export_config_constructor(
+            model.config.vision_config,
+            int_dtype="int64",
+            float_dtype="fp32",
+            preprocessors=preprocessors,
+        )
+        custom_export["model_vision"] = vision_cfg
+
+    if not custom_export_configs or "model_text" in custom_export_configs:
+        text_model = model.text
+        setattr(text_model, "config", model.config.text_config)
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=model.text, exporter="openvino", task="feature-extraction", library_name=library_name
+        )
+        text_cfg = export_config_constructor(
+            model.config.text_config,
+            int_dtype="int64",
+            float_dtype="fp32",
+            preprocessors=preprocessors,
+        )
+        custom_export["model_text"] = text_cfg
+
+    if fn_get_submodels is None:
+
+        def get_submodels(model):
+            return {"model_text": model.text, "model_vision": model.visual}
+
+        fn_get_submodels = get_submodels
+
+    return custom_export, fn_get_submodels
+
+
+MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "internvl-chat"]

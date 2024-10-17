@@ -62,6 +62,7 @@ from optimum.intel import (
     OVQuantizationConfig,
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
+    OVModelOpenCLIPForZeroShotImageClassification,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -268,6 +269,20 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             {"int4": 12, "int8": 8},
         ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset="c4",
+                gptq=True,
+            ),
+            {"int4": 12, "int8": 8},
+        ),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
@@ -282,6 +297,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForFeatureExtraction, "blenderbot"),
         (OVStableDiffusionPipeline, "stable-diffusion"),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
+        (OVModelOpenCLIPForZeroShotImageClassification, "open-clip"),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
@@ -406,14 +422,23 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
-        self.assertEqual(model._openvino_config.quantization_config.bits, 8)
-        self.assertEqual(model._openvino_config.dtype, "int8")
+
+        if model_type == "open-clip":
+            self.assertEqual(model.text_model._openvino_config.quantization_config.bits, 8)
+            self.assertEqual(model.text_model._openvino_config.dtype, "int8")
+            self.assertEqual(model.visual_model._openvino_config.quantization_config.bits, 8)
+            self.assertEqual(model.visual_model._openvino_config.dtype, "int8")
+        else:
+            self.assertEqual(model._openvino_config.quantization_config.bits, 8)
+            self.assertEqual(model._openvino_config.dtype, "int8")
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+        elif model_type == "open-clip":
+            models = [model.text_model, model.visual_model]
         else:
             models = [model]
 
@@ -499,8 +524,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
-            if quantization_config.quant_method.lower() == "awq" or quantization_config.scale_estimation:
-                # TODO: Check that AWQ and SE was actually applied
+            if quantization_config.quant_method.lower() == "awq":
+                # TODO: Check that AWQ was actually applied
                 pass
 
             tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -511,6 +536,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
+
+            wc_rt_info = model.model.get_rt_info()["nncf"]["weight_compression"]
+            self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
+            self.assertEqual(
+                quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
+            )
+            self.assertEqual(quantization_config.gptq or False, wc_rt_info["gptq"].value == "True")
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
@@ -534,6 +566,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+        elif model_type == "open-clip":
+            models = [model.text_model, model.visual_model]
         else:
             models = [model]
 
@@ -567,6 +601,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "awq": None,
                     "subset_size": 128,
                     "scale_estimation": None,
+                    "gptq": None,
                 }
                 compress_weights_patch.assert_called_with(
                     unittest.mock.ANY,
@@ -614,6 +649,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "awq": None,
                     "subset_size": 128,
                     "scale_estimation": None,
+                    "gptq": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
@@ -732,12 +768,12 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 65, 39),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 64, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        model = AutoModelForSequenceClassification.from_pretrained(model_id, attn_implementation="eager")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ov_config = OVConfig()
         dataset = load_dataset("glue", "sst2")

@@ -23,8 +23,9 @@ from typing import Tuple, Type, Union
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, properties
+from openvino.runtime import Core, Model, properties
 from openvino.runtime import Type as OVType
+from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
@@ -52,9 +53,7 @@ MIN_ONNX_QDQ_OPSET = 13
 
 EXTERNAL_DATA_FORMAT_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
 
-TEXTUAL_INVERSION_NAME = "learned_embeds.bin"
-TEXTUAL_INVERSION_NAME_SAFE = "learned_embeds.safetensors"
-TEXTUAL_INVERSION_EMBEDDING_KEY = "text_model.embeddings.token_embedding.weight"
+TEXTUAL_INVERSION_EMBEDDING_KEY = "self.text_model.embeddings.token_embedding.weight"
 
 OV_TO_NP_TYPE = {
     "boolean": np.bool_,
@@ -118,6 +117,9 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
+    "open_clip_text": "OVModelOpenCLIPText",
+    "open_clip_vision": "OVModelOpenCLIPVisual",
+    "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
 }
 
 
@@ -201,3 +203,60 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+
+
+def np_to_pt_generators(np_object, device):
+    if isinstance(np_object, np.random.RandomState):
+        return torch.Generator(device=device).manual_seed(int(np_object.get_state()[1][0]))
+    elif isinstance(np_object, np.random.Generator):
+        return torch.Generator(device=device).manual_seed(int(np_object.bit_generator.state[1][0]))
+    elif isinstance(np_object, list) and isinstance(np_object[0], (np.random.RandomState, np.random.Generator)):
+        return [np_to_pt_generators(a, device) for a in np_object]
+    elif isinstance(np_object, dict) and isinstance(
+        next(iter(np_object.values())), (np.random.RandomState, np.random.Generator)
+    ):
+        return {k: np_to_pt_generators(v, device) for k, v in np_object.items()}
+    else:
+        return np_object
+
+
+def _raise_invalid_batch_size(
+    expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
+):
+    current_batch_size = batch_size * num_images_per_prompt * (1 if guidance_scale <= 1 else 2)
+
+    if expected_batch_size != current_batch_size:
+        msg = ""
+        if guidance_scale is not None and guidance_scale <= 1:
+            msg = f"`guidance_scale` was set to {guidance_scale}, static shapes are currently only supported for `guidance_scale` > 1 "
+
+        raise ValueError(
+            "The model was statically reshaped and the pipeline inputs do not match the expected shapes. "
+            f"The `batch_size`, `num_images_per_prompt` and `guidance_scale` were respectively set to {batch_size}, {num_images_per_prompt} and {guidance_scale}. "
+            f"The static model expects an input of size equal to {expected_batch_size} and got the following value instead : {current_batch_size}. "
+            f"To fix this, please either provide a different inputs to your model so that `batch_size` * `num_images_per_prompt` * 2 is equal to {expected_batch_size} "
+            "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
+        )
+
+
+def get_export_transformers_version(model, config):
+    version_str = None
+
+    if isinstance(model, Model):
+        if "optimum" in model.rt_info:
+            version_str = model.rt_info["optimum"]["transformers_version"].value
+    if version_str is None:
+        version_str = getattr(config, "transformers_version", "0.0.0")
+
+    version_str = version_str or "0.0.0"
+
+    return Version(version_str)
+
+
+def model_has_dynamic_inputs(model):
+    is_dynamic = False
+    for input in model.inputs:
+        is_dynamic = input.get_partial_shape().is_dynamic
+        if is_dynamic:
+            return is_dynamic
+    return is_dynamic
