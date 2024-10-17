@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import numpy as np
+import openvino as ov
 import torch
 
 
@@ -170,10 +171,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl": (366, 34, 42, 66),
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
     "open-clip": (20, 28),
+    "llava": (30, 18, 2),
 }
 
 
-def get_num_quantized_nodes(ov_model):
+def get_num_quantized_nodes(model):
     num_fake_quantize = 0
     num_weight_nodes = {
         "int8": 0,
@@ -181,7 +183,8 @@ def get_num_quantized_nodes(ov_model):
         "f4e2m1": 0,
         "f8e8m0": 0,
     }
-    for elem in ov_model.model.get_ops():
+    ov_model = model if isinstance(model, ov.Model) else model.model
+    for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
