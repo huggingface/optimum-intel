@@ -29,11 +29,11 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _gpt2_block_forward,
-    _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
     _IPEXGPT2Attention,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
+    _llama_layer_norm_forward,
     _llama_model_forward,
 )
 
@@ -79,7 +79,7 @@ def _patch_llama_model(model):
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
-    convert_functions(model, LlamaRMSNorm, "forward", _ipex_rms_layer_norm_forward)
+    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
     convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
     return model
 
