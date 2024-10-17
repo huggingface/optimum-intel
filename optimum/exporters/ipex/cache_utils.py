@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
@@ -95,6 +95,79 @@ class IPEXPagedCache(Cache):
                 for _ in range(self.num_hidden_layers)
             ]
 
+    def update_for_prefill(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        batch_size: int,
+        length_list: Optional[List],
+    ):
+        all_block_indices = []
+        all_slot_offsets = []
+        for i in range(batch_size):
+            num_blocks = (length_list[i] + self.block_size - 1) // self.block_size
+            for b_idx in range(num_blocks):
+                if self.block_tables[i][b_idx] == -1:
+                    # need a free block
+                    self.block_tables[i][b_idx] = self.free_blocks.pop(0)
+
+            slots_range = torch.arange(length_list[i], device=key_states.device)
+            block_indices = slots_range // self.block_size
+            slot_offsets = slots_range % self.block_size
+            all_block_indices.append(self.block_tables[i][block_indices])
+            all_slot_offsets.append(slot_offsets)
+
+        all_block_indices = torch.cat(all_block_indices)
+        all_slot_offsets = torch.cat(all_slot_offsets)
+        slots_tensor = all_block_indices * self.block_size + all_slot_offsets
+        # Update the cache
+        PagedAttention.reshape_and_cache(
+            key_states,
+            value_states,
+            self.kv_cache[layer_idx][0],
+            self.kv_cache[layer_idx][1],
+            slots_tensor,
+        )
+
+        # Update the number of seen tokens
+        if layer_idx == self.num_hidden_layers - 1:
+            for i in range(batch_size):
+                self._seen_tokens[i] += length_list[i]
+
+    def update_for_decode(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        batch_size: int,
+    ):
+        slots = []
+        for i in range(batch_size):
+            start_block_idx = self._seen_tokens[i] // self.block_size
+            num_blocks = (self._seen_tokens[i] + self.block_size) // self.block_size
+            for b_idx in range(start_block_idx, num_blocks):
+                if self.block_tables[i][b_idx] == -1:
+                    # need a free block
+                    self.block_tables[i][b_idx] = self.free_blocks.pop(0)
+            block_idx = (self._seen_tokens[i]) // self.block_size
+            slot_offset_in_block = (self._seen_tokens[i]) % self.block_size
+            slots.append(self.block_tables[i][block_idx].item() * self.block_size + slot_offset_in_block)
+
+        # Update the cache
+        PagedAttention.reshape_and_cache(
+            key_states,
+            value_states,
+            self.kv_cache[layer_idx][0],
+            self.kv_cache[layer_idx][1],
+            torch.tensor(slots, device=key_states.device),
+        )
+
+        # Update the number of seen tokens
+        if layer_idx == self.num_hidden_layers - 1:
+            for i in range(batch_size):
+                self._seen_tokens[i] += 1
+
     def update(
         self,
         key_states: torch.Tensor,
@@ -102,7 +175,7 @@ class IPEXPagedCache(Cache):
         layer_idx: int,
         attention_mask: torch.Tensor,
         position_ids: torch.Tensor,
-        input_lens: torch.Tensor,
+        length_list: Optional[List],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
@@ -117,39 +190,14 @@ class IPEXPagedCache(Cache):
         Return:
             A tuple containing the updated key and value states.
         """
+
         batch_size = position_ids.shape[0]
-        slots = []
         if self.get_seq_length() == 0:
             # prefill
-            num_slots = input_lens.tolist()
+            self.update_for_prefill(key_states, value_states, layer_idx, batch_size, length_list)
         else:
             # decode
-            num_slots = [1] * batch_size
-        for i in range(batch_size):
-            start_block_idx = self._seen_tokens[i] // self.block_size
-            num_blocks = (self._seen_tokens[i] + num_slots[i] + self.block_size - 1) // self.block_size
-            for b_idx in range(start_block_idx, num_blocks):
-                if self.block_tables[i][b_idx] == -1:
-                    # need a free block
-                    self.block_tables[i][b_idx] = self.free_blocks.pop(0)
-            for slot in range(num_slots[i]):
-                block_idx = (self._seen_tokens[i] + slot) // self.block_size
-                slot_offset_in_block = (self._seen_tokens[i] + slot) % self.block_size
-                slots.append(self.block_tables[i][block_idx].item() * self.block_size + slot_offset_in_block)
-
-        # Update the cache
-        PagedAttention.reshape_and_cache(
-            key_states,
-            value_states,
-            self.kv_cache[layer_idx][0],
-            self.kv_cache[layer_idx][1],
-            torch.tensor(slots, device=key_states.device),
-        )
-
-        # Update the number of seen tokens
-        if layer_idx == self.num_hidden_layers - 1:
-            for i in range(batch_size):
-                self._seen_tokens[i] += num_slots[i]
+            self.update_for_decode(key_states, value_states, layer_idx, batch_size)
 
         return self.kv_cache[layer_idx][0], self.kv_cache[layer_idx][1]
 
