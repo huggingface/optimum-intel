@@ -842,7 +842,6 @@ class OVModelTextEncoder(OVPipelinePart):
         return ModelOutput(**model_outputs)
 
 
-
 class OVModelUnet(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
