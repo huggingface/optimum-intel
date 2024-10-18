@@ -765,10 +765,6 @@ class OVPipelinePart(ConfigMixin):
     def dtype(self) -> torch.dtype:
         return OV_TO_PT_TYPE[self.ov_config.get("dtype", "f32")]
 
-    def modules(self):
-        return {}
-
-
     def _compile(self):
         if self.request is None:
             if (
