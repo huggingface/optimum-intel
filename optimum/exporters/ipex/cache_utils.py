@@ -212,6 +212,8 @@ class IPEXPagedCache(Cache):
     def reset(self):
         """Resets the cache values while preserving the objects"""
         self._seen_tokens = self.max_batch_size * [0]
+        self.block_tables.fill_(-1)
+        self.free_blocks = list(range(0, self.num_blocks))
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
