@@ -46,6 +46,7 @@ from optimum.utils.input_generators import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummyTextInputGenerator,
+    DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
@@ -1575,7 +1576,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
 
 
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = "pooled_projection"
+    SUPPORTED_INPUT_NAMES = "pooled_projections"
 
     def __init__(
         self,
@@ -1598,10 +1599,20 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DummyTransformerTimestpsInputGenerator(DummyTimestepInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "timestep":
+            shape = [self.batch_size]
+            return self.random_float_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
-class TransformerOpenVINOConfig(UNetOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES + (
-        PooledProjectionsDummyInputGenerator,
+class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        (DummyTransformerTimestpsInputGenerator,)
+        + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+        + (PooledProjectionsDummyInputGenerator,)
     )
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         image_size="sample_size",

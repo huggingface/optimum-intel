@@ -35,6 +35,7 @@ from optimum.intel.openvino import (
     OVPipelineForInpainting,
     OVPipelineForText2Image,
 )
+from optimum.intel.utils.import_utils import is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
 
 
@@ -72,7 +73,10 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
 
 
 class OVPipelineForText2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency", "stable-diffusion-3"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+    CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
     AUTOMODEL_CLASS = AutoPipelineForText2Image
@@ -138,7 +142,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
-    @parameterized.expand(["stable-diffusion", "stable-diffusion-xl", "latent-consistency"])
+    @parameterized.expand(CALLBACK_SUPPORT_ARCHITECTURES)
     @require_diffusers
     def test_callback(self, model_arch: str):
         height, width, batch_size = 64, 128, 1
@@ -353,7 +357,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency", "stable-diffusion-3"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
 
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
@@ -576,7 +582,10 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "stable-diffusion-3"]
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl"]
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
 
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting

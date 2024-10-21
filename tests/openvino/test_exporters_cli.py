@@ -93,6 +93,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("stable-diffusion", 72, 195),
         ("stable-diffusion-xl", 84, 331),
         ("latent-consistency", 50, 135),
+        ("stable-diffusion-3", 84, 331),
     )
 
     TEST_4BIT_CONFIGURATONS = [
