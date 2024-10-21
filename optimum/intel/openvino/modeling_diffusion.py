@@ -741,6 +741,7 @@ class OVPipelinePart(ConfigMixin):
         self.model_name = model_name
         self.parent_pipeline = parent_pipeline
         self.request = None if not parent_pipeline._compile_only else self.model
+        self.ov_config = parent_pipeline.ov_config
 
         if isinstance(parent_pipeline.model_save_dir, TemporaryDirectory):
             self.model_save_dir = Path(parent_pipeline.model_save_dir.name) / self.model_name
@@ -763,10 +764,6 @@ class OVPipelinePart(ConfigMixin):
     @property
     def device(self) -> torch.device:
         return self.parent_pipeline.device
-
-    @property
-    def ov_config(self) -> OVConfig:
-        return self.parent_pipeline.ov_config
 
     @property
     def dtype(self) -> torch.dtype:
