@@ -28,7 +28,6 @@ import numpy as np
 import openvino
 import torch
 from diffusers.configuration_utils import ConfigMixin
-from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from diffusers.pipelines import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
@@ -63,7 +62,9 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
+from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
+from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
@@ -73,6 +74,12 @@ from .utils import (
     model_has_dynamic_inputs,
     np_to_pt_generators,
 )
+
+
+if is_diffusers_version(">=", "0.25.0"):
+    from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
+else:
+    from diffusers.models.vae import DiagonalGaussianDistribution
 
 
 core = Core()
@@ -811,6 +818,9 @@ class OVPipelinePart(ConfigMixin):
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
+    def modules(self):
+        return []
+
 
 class OVModelTextEncoder(OVPipelinePart):
     def forward(
@@ -1010,7 +1020,7 @@ class OVModelVae:
             self.encoder.to(*args, **kwargs)
 
 
-class OVStableDiffusionPipeline(OVDiffusionPipeline, StableDiffusionPipeline):
+class OVStableDiffusionPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion#diffusers.StableDiffusionPipeline).
     """
@@ -1020,7 +1030,9 @@ class OVStableDiffusionPipeline(OVDiffusionPipeline, StableDiffusionPipeline):
     auto_model_class = StableDiffusionPipeline
 
 
-class OVStableDiffusionImg2ImgPipeline(OVDiffusionPipeline, StableDiffusionImg2ImgPipeline):
+class OVStableDiffusionImg2ImgPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionImg2ImgPipeline
+):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_img2img#diffusers.StableDiffusionImg2ImgPipeline).
     """
@@ -1030,7 +1042,9 @@ class OVStableDiffusionImg2ImgPipeline(OVDiffusionPipeline, StableDiffusionImg2I
     auto_model_class = StableDiffusionImg2ImgPipeline
 
 
-class OVStableDiffusionInpaintPipeline(OVDiffusionPipeline, StableDiffusionInpaintPipeline):
+class OVStableDiffusionInpaintPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionInpaintPipeline
+):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_inpaint#diffusers.StableDiffusionInpaintPipeline).
     """
@@ -1040,7 +1054,7 @@ class OVStableDiffusionInpaintPipeline(OVDiffusionPipeline, StableDiffusionInpai
     auto_model_class = StableDiffusionInpaintPipeline
 
 
-class OVStableDiffusionXLPipeline(OVDiffusionPipeline, StableDiffusionXLPipeline):
+class OVStableDiffusionXLPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLPipeline).
     """
@@ -1063,7 +1077,9 @@ class OVStableDiffusionXLPipeline(OVDiffusionPipeline, StableDiffusionXLPipeline
         return add_time_ids
 
 
-class OVStableDiffusionXLImg2ImgPipeline(OVDiffusionPipeline, StableDiffusionXLImg2ImgPipeline):
+class OVStableDiffusionXLImg2ImgPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLImg2ImgPipeline
+):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLImg2ImgPipeline).
     """
@@ -1100,7 +1116,9 @@ class OVStableDiffusionXLImg2ImgPipeline(OVDiffusionPipeline, StableDiffusionXLI
         return add_time_ids, add_neg_time_ids
 
 
-class OVStableDiffusionXLInpaintPipeline(OVDiffusionPipeline, StableDiffusionXLInpaintPipeline):
+class OVStableDiffusionXLInpaintPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLInpaintPipeline
+):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLInpaintPipeline).
     """
@@ -1137,7 +1155,9 @@ class OVStableDiffusionXLInpaintPipeline(OVDiffusionPipeline, StableDiffusionXLI
         return add_time_ids, add_neg_time_ids
 
 
-class OVLatentConsistencyModelPipeline(OVDiffusionPipeline, LatentConsistencyModelPipeline):
+class OVLatentConsistencyModelPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelPipeline
+):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency#diffusers.LatentConsistencyModelPipeline).
     """
@@ -1147,7 +1167,9 @@ class OVLatentConsistencyModelPipeline(OVDiffusionPipeline, LatentConsistencyMod
     auto_model_class = LatentConsistencyModelPipeline
 
 
-class OVLatentConsistencyModelImg2ImgPipeline(OVDiffusionPipeline, LatentConsistencyModelImg2ImgPipeline):
+class OVLatentConsistencyModelImg2ImgPipeline(
+    OVDiffusionPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelImg2ImgPipeline
+):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency_img2img#diffusers.LatentConsistencyModelImg2ImgPipeline).
     """
