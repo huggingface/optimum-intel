@@ -74,8 +74,10 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
 
 class OVPipelineForText2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
+    NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+        SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux"])
+        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.append("stable-diffusion-3")
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -189,20 +191,26 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
-                out_channels = (
-                    pipeline.unet.config.out_channels
-                    if pipeline.unet is not None
-                    else pipeline.transformer.config.out_channels
-                )
-                self.assertEqual(
-                    outputs.shape,
-                    (
-                        batch_size,
-                        out_channels,
-                        height // pipeline.vae_scale_factor,
-                        width // pipeline.vae_scale_factor,
-                    ),
-                )
+                if model_arch != "flux":
+                    out_channels = (
+                        pipeline.unet.config.out_channels
+                        if pipeline.unet is not None
+                        else pipeline.transformer.config.out_channels
+                    )
+                    self.assertEqual(
+                        outputs.shape,
+                        (
+                            batch_size,
+                            out_channels,
+                            height // pipeline.vae_scale_factor,
+                            width // pipeline.vae_scale_factor,
+                        ),
+                    )
+                else:
+                    packed_height = height // pipeline.vae_scale_factor
+                    packed_width = width // pipeline.vae_scale_factor
+                    channels = pipeline.transformer.config.in_channels
+                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -220,7 +228,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
             np.testing.assert_allclose(ov_outputs_1.images[0], ov_outputs_2.images[0], atol=1e-4, rtol=1e-2)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES)
     def test_negative_prompt(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
@@ -320,9 +328,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        if ov_pipeline.unet is None or "timestep_cond" not in {
-            inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs
-        }:
+        if (
+            ov_pipeline.unet is not None
+            and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
+        ) or (
+            ov_pipeline.transformer is not None
+            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+        ):
             expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,

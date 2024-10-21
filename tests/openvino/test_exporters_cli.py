@@ -49,6 +49,7 @@ from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
     is_tokenizers_version,
+    is_transformers_version,
 )
 
 
@@ -57,7 +58,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     Integration tests ensuring supported models are correctly exported.
     """
 
-    SUPPORTED_ARCHITECTURES = (
+    SUPPORTED_ARCHITECTURES = [
         ("text-generation", "gpt2"),
         ("text-generation-with-past", "gpt2"),
         ("text2text-generation", "t5"),
@@ -71,9 +72,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "blenderbot"),
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
-        ("text-to-image", "stable-diffusion-3"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
-    )
+    ]
+
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_ARCHITECTURES.append(("text-to-image", "stable-diffusion-3"))
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") else 0,
         "t5": 0,  # no .model file in the repository
@@ -89,12 +92,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 0,
     }
 
-    SUPPORTED_SD_HYBRID_ARCHITECTURES = (
+    SUPPORTED_SD_HYBRID_ARCHITECTURES = [
         ("stable-diffusion", 72, 195),
         ("stable-diffusion-xl", 84, 331),
         ("latent-consistency", 50, 135),
-        ("stable-diffusion-3", 84, 331),
-    )
+    ]
+
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
 
     TEST_4BIT_CONFIGURATONS = [
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
@@ -213,7 +218,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if task.endswith("with-past"):
                     models.append(model.decoder_with_past)
             elif model_type.startswith("stable-diffusion"):
-                models = [model.unet, model.vae_encoder, model.vae_decoder]
+                models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
                 models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
             else:
                 models = [model]
@@ -232,7 +237,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
-            num_fq, num_weight_nodes = get_num_quantized_nodes(model.unet)
+            num_fq, num_weight_nodes = get_num_quantized_nodes(
+                model.unet if model.unet is not None else model.transformer
+            )
             self.assertEqual(exp_num_int8, num_weight_nodes["int8"])
             self.assertEqual(exp_num_fq, num_fq)
 

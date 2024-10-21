@@ -411,9 +411,9 @@ def _llama_gemma_update_causal_mask_legacy(self, attention_mask, input_tensor, c
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
+                mask_slice
+            )
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -1979,9 +1979,9 @@ def _dbrx_update_causal_mask_legacy(
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
+                mask_slice
+            )
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -2705,3 +2705,39 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
+
+def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
+    def rope(pos: torch.Tensor, dim: int, theta: int) -> torch.Tensor:
+        assert dim % 2 == 0, "The dimension must be even."
+
+        scale = torch.arange(0, dim, 2, dtype=torch.float32, device=pos.device) / dim
+        omega = 1.0 / (theta**scale)
+
+        batch_size, seq_length = pos.shape
+        out = pos.unsqueeze(-1) * omega.unsqueeze(0).unsqueeze(0)
+        cos_out = torch.cos(out)
+        sin_out = torch.sin(out)
+
+        stacked_out = torch.stack([cos_out, -sin_out, sin_out, cos_out], dim=-1)
+        out = stacked_out.view(batch_size, -1, dim // 2, 2, 2)
+        return out.float()
+
+    n_axes = ids.shape[-1]
+    emb = torch.cat(
+        [rope(ids[..., i], self.axes_dim[i], self.theta) for i in range(n_axes)],
+        dim=-3,
+    )
+    return emb.unsqueeze(1)
+
+
+class FluxTransfromerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.pos_embed._orig_forward = self._model.pos_embed.forward
+        self._model.pos_embed.forward = types.MethodType(_embednb_forward, self._model.pos_embed)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        self._model.pos_embed.forward = self._model.pos_embed._orig_forward

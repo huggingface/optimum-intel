@@ -88,9 +88,10 @@ else:
     StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 
 if is_diffusers_version(">=", "0.30.0"):
-    from diffusers import StableDiffusion3InpaintPipeline
+    from diffusers import FluxPipeline, StableDiffusion3InpaintPipeline
 else:
-    StableDiffusion3InpaintPipeline = StableDiffusion3Pipeline
+    StableDiffusion3InpaintPipeline = StableDiffusionInpaintPipeline
+    FluxPipeline = StableDiffusionPipeline
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
@@ -564,7 +565,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def height(self) -> int:
-        model = self.unet.model if self.unet is not None else self.transformer.model
+        # flux transformer does not preserve info about height/width, they are knwon in vae_decoder
+        model = self.unet.model if self.unet is not None else self.vae.decoder.model
         height = model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
             return -1
@@ -572,7 +574,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def width(self) -> int:
-        model = self.unet.model if self.unet is not None else self.transformer.model
+        # flux transformer does not preserve info about height/width, they are known in vae_decoder
+        model = self.unet.model if self.unet is not None else self.vae.decoder.model
         width = model.inputs[0].get_partial_shape()[3]
         if width.is_dynamic:
             return -1
@@ -646,28 +649,42 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             batch_size = -1
         else:
             # The factor of 2 comes from the guidance scale > 1
-            batch_size *= 2 * num_images_per_prompt
+            batch_size *= num_images_per_prompt
+            if "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
+                batch_size *= 2
 
         height = height // self.vae_scale_factor if height > 0 else height
         width = width // self.vae_scale_factor if width > 0 else width
+        packed_height = height // 2 if height > 0 else height
+        packed_width = width // 2 if width > 0 else width
+        packed_height_width = packed_width * packed_height if height > 0 and width > 0 else -1
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
-            if inputs.get_any_name() == "timestep":
+            if inputs.get_any_name() in ["timestep", "guidance"]:
                 shapes[inputs][0] = batch_size
             elif inputs.get_any_name() == "hidden_states":
                 in_channels = self.transformer.config.get("in_channels", None)
                 if in_channels is None:
-                    in_channels = shapes[inputs][1]
+                    in_channels = (
+                        shapes[inputs][1] if inputs.get_partial_shape().rank.get_length() == 4 else shapes[inputs][2]
+                    )
                     if in_channels.is_dynamic:
                         logger.warning(
                             "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
                         )
                         self.is_dynamic = True
+                if inputs.get_partial_shape().rank.get_length() == 4:
+                    shapes[inputs] = [batch_size, in_channels, height, width]
+                else:
+                    shapes[inputs] = [batch_size, packed_height_width, in_channels]
 
-                shapes[inputs] = [batch_size, in_channels, height, width]
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
+            elif inputs.get_any_name() == "img_ids":
+                shapes[inputs] = [batch_size, packed_height_width, 3]
+            elif inputs.get_any_name() == "txt_ids":
+                shapes[inputs] = [batch_size, -1, 3]
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = -1  # text_encoder_3 may have vary input length
@@ -836,7 +853,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         components = {
             "vae": self.vae,
             "unet": self.unet,
-            "transfomer": self.transformer,
+            "transformer": self.transformer,
             "text_encoder": self.text_encoder,
             "text_encoder_2": self.text_encoder_2,
             "text_encoder_3": self.text_encoder_2,
@@ -968,13 +985,14 @@ class OVModelTextEncoder(OVPipelinePart):
         return_dict: bool = False,
     ):
         self._compile()
-
         model_inputs = {"input_ids": input_ids}
 
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]
         model_outputs = {}
         model_outputs[self.model.outputs[0].get_any_name()] = torch.from_numpy(main_out)
+        if len(self.model.outputs) > 1 and "pooler_output" in self.model.outputs[1].get_any_name():
+            model_outputs["pooler_output"] = torch.from_numpy(ov_outputs[1])
         if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
             model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
         if (
@@ -987,7 +1005,6 @@ class OVModelTextEncoder(OVPipelinePart):
 
         if return_dict:
             return model_outputs
-
         return ModelOutput(**model_outputs)
 
 
@@ -1052,6 +1069,9 @@ class OVModelTransformer(OVPipelinePart):
         encoder_hidden_states: torch.FloatTensor = None,
         pooled_projections: torch.FloatTensor = None,
         timestep: torch.LongTensor = None,
+        img_ids: torch.Tensor = None,
+        txt_ids: torch.Tensor = None,
+        guidance: torch.Tensor = None,
         block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
@@ -1064,6 +1084,13 @@ class OVModelTransformer(OVPipelinePart):
             "encoder_hidden_states": encoder_hidden_states,
             "pooled_projections": pooled_projections,
         }
+
+        if img_ids is not None:
+            model_inputs["img_ids"] = img_ids
+        if txt_ids is not None:
+            model_inputs["txt_ids"] = txt_ids
+        if guidance is not None:
+            model_inputs["guidance"] = guidance
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -1359,17 +1386,23 @@ class OVStableDiffusion3Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMi
 class OVStableDiffusion3Img2ImgPipeline(
     OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3Img2ImgPipeline
 ):
-    main_input_name = "prompt"
-    export_feature = "text-to-image"
+    main_input_name = "image"
+    export_feature = "image-to-image"
     auto_model_class = StableDiffusion3Img2ImgPipeline
 
 
 class OVStableDiffusion3InpaintPipeline(
     OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3InpaintPipeline
 ):
+    main_input_name = "image"
+    export_feature = "inpainting"
+    auto_model_class = StableDiffusion3InpaintPipeline
+
+
+class OVFluxPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxPipeline):
     main_input_name = "prompt"
     export_feature = "text-to-image"
-    auto_model_class = StableDiffusion3InpaintPipeline
+    auto_model_class = FluxPipeline
 
 
 SUPPORTED_OV_PIPELINES = [
@@ -1431,8 +1464,9 @@ if is_diffusers_version(">=", "0.29.0"):
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3Img2ImgPipeline
 
 if is_diffusers_version(">=", "0.30.0"):
-    SUPPORTED_OV_PIPELINES.append(OVStableDiffusion3InpaintPipeline)
+    SUPPORTED_OV_PIPELINES.extend([OVStableDiffusion3InpaintPipeline, OVFluxPipeline])
     OV_INPAINT_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3InpaintPipeline
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxPipeline
 
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [

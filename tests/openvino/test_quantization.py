@@ -56,6 +56,7 @@ from optimum.intel import (
     OVModelForSpeechSeq2Seq,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
+    OVStableDiffusion3Pipeline,
     OVQuantizer,
     OVTrainer,
     OVQuantizationConfig,
@@ -300,11 +301,16 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip"),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
+    SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
         (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
-    )
+    ]
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION.append(
+            (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65)
+        )
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
@@ -454,7 +460,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
-            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(
+                model.unet if model.unet is not None else model.transformer
+            )
             self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
             self.assertEqual(0, num_weight_nodes["int4"])
@@ -468,7 +476,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
-        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(int8_pipe.unet)
+        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(
+            int8_pipe.unet if int8_pipe.unet is not None else int8_pipe.transformer
+        )
         self.assertEqual(0, num_fake_quantize)
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
@@ -487,7 +497,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
-        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
+        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(
+            model.unet if model.unet is not None else model.transformer
+        )
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
         self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])

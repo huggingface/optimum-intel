@@ -59,6 +59,7 @@ MODEL_NAMES = {
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
+    "flux": "katuni4ka/tiny-random-flux",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
