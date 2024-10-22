@@ -565,8 +565,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def height(self) -> int:
-        # flux transformer does not preserve info about height/width, they are knwon in vae_decoder
-        model = self.unet.model if self.unet is not None else self.vae.decoder.model
+        model = self.vae.decoder.model
         height = model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
             return -1
@@ -574,8 +573,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def width(self) -> int:
-        # flux transformer does not preserve info about height/width, they are known in vae_decoder
-        model = self.unet.model if self.unet is not None else self.vae.decoder.model
+        model = self.vae.decoder.model
         width = model.inputs[0].get_partial_shape()[3]
         if width.is_dynamic:
             return -1

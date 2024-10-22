@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import enum
-import random
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -1590,11 +1589,7 @@ class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
         **kwargs,
     ):
         self.task = task
-        if random_batch_size_range:
-            low, high = random_batch_size_range
-            self.batch_size = random.randint(low, high)
-        else:
-            self.batch_size = batch_size
+        self.batch_size = batch_size
         self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -1642,11 +1637,8 @@ class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
 
 
 @register_in_tasks_manager("t5-encoder-model", *["feature-extraction"], library_name="diffusers")
-class T5EncoderOpenVINOConfig(CLIPTextOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    pass
 
 
 class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
