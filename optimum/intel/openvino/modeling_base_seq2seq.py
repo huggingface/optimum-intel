@@ -15,7 +15,6 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
@@ -36,6 +35,7 @@ from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
+    TemporaryDirectory,
 )
 
 

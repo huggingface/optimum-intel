@@ -206,6 +206,7 @@ def export_tensorflow(
         ov_config=ov_config,
         library_name=library_name,
     )
+    del ov_model
     return input_names, output_names, True
 
 
@@ -268,6 +269,7 @@ def export_pytorch_via_onnx(
         ov_config=ov_config,
         library_name=library_name,
     )
+    del ov_model
     return input_names, output_names, True
 
 
@@ -442,6 +444,7 @@ def export_pytorch(
             library_name=library_name,
         )
         clear_class_registry()
+        del ov_model
         del model
         gc.collect()
     return input_names, output_names, False

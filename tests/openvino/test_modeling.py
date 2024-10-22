@@ -94,7 +94,7 @@ from optimum.intel.openvino.modeling_visual_language import (
     OVModelWithEmbedForCausalLM,
     OVVisionEmbedding,
 )
-from optimum.intel.openvino.utils import _print_compiled_model_properties
+from optimum.intel.openvino.utils import TemporaryDirectory, _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
@@ -171,7 +171,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
         del compile_only_model
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
@@ -200,7 +200,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertEqual(loaded_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
         loaded_model_outputs = loaded_model(**tokens)
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
@@ -234,7 +234,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         loaded_model_outputs = loaded_model.generate(**tokens)
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_ENCODER_NAME in folder_contents)
@@ -278,7 +278,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         pipeline_outputs = loaded_pipeline(**inputs).images
         self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -333,7 +333,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         OVModelForFeatureExtraction.from_pretrained(model_id, subfolder=subfolder, export=export)
         # local model
         api = HfApi()
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
             api.snapshot_download(repo_id=model_id, local_dir=local_dir)
             OVModelForFeatureExtraction.from_pretrained(local_dir, subfolder=subfolder, export=export)
@@ -341,7 +341,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_infer_export_when_loading(self):
         model_id = MODEL_NAMES["phi"]
         model = AutoModelForCausalLM.from_pretrained(model_id)
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             model.save_pretrained(Path(tmpdirname) / "original")
             # Load original model and convert
             model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "original")
@@ -363,7 +363,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         # local model
         api = HfApi()
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             for revision in ("main", "ov", "itrex"):
                 local_dir = Path(tmpdirname) / revision
                 api.snapshot_download(repo_id=model_id, local_dir=local_dir, revision=revision)
@@ -382,7 +382,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         # local model
         api = HfApi()
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
             api.snapshot_download(repo_id=model_id, local_dir=local_dir)
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern)
@@ -416,7 +416,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
@@ -436,7 +436,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
@@ -752,7 +752,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         from Sentence Transformers then an appropriate exception raises.
         """
         model_id = MODEL_NAMES[model_arch]
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
             OVSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
             with self.assertRaises(Exception) as context:
@@ -1389,7 +1389,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(TIMM_MODELS)
     def test_timm_save_and_infer(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True)
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "timm_ov_model")
             ov_model.save_pretrained(model_save_path)
             model = OVModelForImageClassification.from_pretrained(model_save_path)
@@ -2258,7 +2258,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         loaded_model_outputs = loaded_model(tokens, processed_image)
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(loaded_model.text_model._xml_model_name in folder_contents)
