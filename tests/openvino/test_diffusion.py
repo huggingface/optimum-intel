@@ -136,7 +136,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
 
         for output_type in ["latent", "np", "pt"]:
-            print(output_type)
             inputs["output_type"] = output_type
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
