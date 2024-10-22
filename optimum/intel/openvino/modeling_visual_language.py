@@ -2,7 +2,6 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -19,6 +18,7 @@ from ...exporters.openvino.stateful import ensure_stateful_is_available
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from .utils import TemporaryDirectory
 
 
 logger = logging.getLogger(__name__)

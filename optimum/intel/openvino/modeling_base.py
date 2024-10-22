@@ -16,7 +16,7 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
@@ -41,6 +41,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
+    TemporaryDirectory,
     _print_compiled_model_properties,
     model_has_dynamic_inputs,
 )
