@@ -682,9 +682,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
-                shapes[inputs] = [batch_size, packed_height_width, 3]
+                shapes[inputs] = (
+                    [batch_size, packed_height_width, 3]
+                    if is_diffusers_version("<", "0.31.0")
+                    else [packed_height_width, 3]
+                )
             elif inputs.get_any_name() == "txt_ids":
-                shapes[inputs] = [batch_size, -1, 3]
+                shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = -1  # text_encoder_3 may have vary input length

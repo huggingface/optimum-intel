@@ -55,7 +55,7 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
-from ...intel.utils.import_utils import _transformers_version, is_transformers_version
+from ...intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
 from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
@@ -1681,7 +1681,9 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
             img_ids_height = self.height // 2
             img_ids_width = self.width // 2
             return self.random_int_tensor(
-                [self.batch_size, img_ids_height * img_ids_width, 3],
+                [self.batch_size, img_ids_height * img_ids_width, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [img_ids_height * img_ids_width, 3],
                 min_value=0,
                 max_value=min(img_ids_height, img_ids_width),
                 framework=framework,
@@ -1704,7 +1706,11 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
         if input_name == "txt_ids":
             import torch
 
-            shape = [self.batch_size, self.sequence_length, 3]
+            shape = (
+                [self.batch_size, self.sequence_length, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [self.sequence_length, 3]
+            )
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
@@ -1724,8 +1730,14 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         common_inputs = super().inputs
         common_inputs.pop("sample", None)
         common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
-        common_inputs["txt_ids"] = {0: "batch_size", 1: "sequence_length"}
-        common_inputs["img_ids"] = {0: "batch_size", 1: "packed_height_width"}
+        common_inputs["txt_ids"] = (
+            {0: "batch_size", 1: "sequence_length"} if is_diffusers_version("<", "0.31.0") else {0: "sequence_length"}
+        )
+        common_inputs["img_ids"] = (
+            {0: "batch_size", 1: "packed_height_width"}
+            if is_diffusers_version("<", "0.31.0")
+            else {0: "packed_height_width"}
+        )
         if getattr(self._normalized_config, "guidance_embeds", False):
             common_inputs["guidance"] = {0: "batch_size"}
         return common_inputs

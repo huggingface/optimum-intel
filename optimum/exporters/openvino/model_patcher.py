@@ -29,6 +29,7 @@ from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
     _transformers_version,
+    is_diffusers_version,
     is_openvino_version,
     is_torch_version,
     is_transformers_version,
@@ -2734,10 +2735,11 @@ def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
 class FluxTransfromerModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        self._model.pos_embed._orig_forward = self._model.pos_embed.forward
-        self._model.pos_embed.forward = types.MethodType(_embednb_forward, self._model.pos_embed)
+        if is_diffusers_version("<", "0.31.0"):
+            self._model.pos_embed._orig_forward = self._model.pos_embed.forward
+            self._model.pos_embed.forward = types.MethodType(_embednb_forward, self._model.pos_embed)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-
-        self._model.pos_embed.forward = self._model.pos_embed._orig_forward
+        if hasattr(self._model.pos_embed, "_orig_forward"):
+            self._model.pos_embed.forward = self._model.pos_embed._orig_forward
