@@ -1405,7 +1405,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         if isinstance(pixel_values, list) or pixel_values.ndim == 5:
-            concat_images = torch.cat([image for image in pixel_values], dim=0)
+            concat_images = torch.cat(pixel_values, dim=0) if isinstance(pixel_values, list) else pixel_values
             image_features = torch.from_numpy(self.vision_embeddings(concat_images).last_hidden_state)
             split_sizes = [image.shape[0] for image in pixel_values]
             image_features = torch.split(image_features, split_sizes, dim=0)
