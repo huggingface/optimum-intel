@@ -57,6 +57,7 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
+    OVFluxPipeline,
     OVQuantizer,
     OVTrainer,
     OVQuantizationConfig,
@@ -308,8 +309,10 @@ class OVWeightCompressionTest(unittest.TestCase):
     ]
 
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION.append(
-            (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65)
+        SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION.extend(
+            [
+                (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
+            ]
         )
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")

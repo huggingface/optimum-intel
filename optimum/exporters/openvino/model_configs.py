@@ -1678,43 +1678,17 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
             shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "img_ids":
-            return self.prepare_image_ids(framework, int_dtype, float_dtype)
+            img_ids_height = self.height // 2
+            img_ids_width = self.width // 2
+            return self.random_int_tensor(
+                [self.batch_size, img_ids_height * img_ids_width, 3],
+                min_value=0,
+                max_value=min(img_ids_height, img_ids_width),
+                framework=framework,
+                dtype=float_dtype,
+            )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
-
-    def prepare_image_ids(self, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        img_ids_height = self.height // 2
-        img_ids_width = self.width // 2
-        if framework == "pt":
-            import torch
-
-            latent_image_ids = torch.zeros(img_ids_height, img_ids_width, 3)
-            latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(img_ids_height)[:, None]
-            latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(img_ids_width)[None, :]
-
-            latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
-
-            latent_image_ids = latent_image_ids[None, :].repeat(self.batch_size, 1, 1, 1)
-            latent_image_ids = latent_image_ids.reshape(
-                self.batch_size, latent_image_id_height * latent_image_id_width, latent_image_id_channels
-            )
-            latent_image_ids.to(DTYPE_MAPPER.pt(float_dtype))
-            return latent_image_ids
-        if framework == "np":
-            import numpy as np
-
-            latent_image_ids = np.zeros(img_ids_height, img_ids_width, 3)
-            latent_image_ids[..., 1] = latent_image_ids[..., 1] + np.arange(img_ids_height)[:, None]
-            latent_image_ids[..., 2] = latent_image_ids[..., 2] + np.arange(img_ids_width)[None, :]
-
-            latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
-
-            latent_image_ids = np.tile(latent_image_ids[None, :], (self.batch_size, 1, 1, 1))
-            latent_image_ids = latent_image_ids.reshape(
-                self.batch_size, latent_image_id_height * latent_image_id_width, latent_image_id_channels
-            )
-            latent_image_ids.astype(DTYPE_MAPPER.np[float_dtype])
-            return latent_image_ids
 
 
 class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
@@ -1728,7 +1702,11 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "txt_ids":
-            return self.constant_tensor([self.batch_size, self.sequence_length, 3], 0, DTYPE_MAPPER.pt(float_dtype))
+            import torch
+
+            shape = [self.batch_size, self.sequence_length, 3]
+            dtype = DTYPE_MAPPER.pt(float_dtype)
+            return torch.full(shape, 0, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 

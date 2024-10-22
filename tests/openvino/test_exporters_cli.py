@@ -25,6 +25,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
+    OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -76,7 +77,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     ]
 
     if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.append(("text-to-image", "stable-diffusion-3"))
+        SUPPORTED_ARCHITECTURES.extend([("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux")])
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") else 0,
         "t5": 0,  # no .model file in the repository
@@ -89,7 +90,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         "blenderbot": 2 if is_tokenizers_version("<", "0.20") else 0,
         "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") else 0,
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 0,
+        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 2,
+        "flux": 4 if is_tokenizers_version("<", "0.20") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -217,7 +219,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past"):
                     models.append(model.decoder_with_past)
-            elif model_type.startswith("stable-diffusion"):
+            elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
                 models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
             else:
