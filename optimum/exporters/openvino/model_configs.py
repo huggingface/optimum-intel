@@ -99,9 +99,9 @@ def init_model_configs():
         "transformers",
         "LlavaNextForConditionalGeneration",
     )
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = (
-        TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
-    )
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
+        "image-text-to-text"
+    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -1669,7 +1669,6 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         height: int = DEFAULT_DUMMY_SHAPES["height"],
         **kwargs,
     ):
-
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
