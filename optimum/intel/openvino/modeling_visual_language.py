@@ -16,6 +16,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
+from ...exporters.openvino.utils import save_config
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -345,6 +346,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 logger.warning(
                     f"The generation config will not be saved, saving failed with following error:\n{exception}"
                 )
+
+    def _save_config(self, save_directory):
+        """
+        Saves a model configuration into a directory, so that it can be re-loaded using the
+        [`from_pretrained`] class method.
+        """
+        save_config(save_directory, self.config)
 
     @classmethod
     def _from_pretrained(
