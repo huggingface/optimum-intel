@@ -259,6 +259,26 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         self._save_openvino_config(save_directory)
 
+    def _save_config(self, save_directory):
+        """
+        Saves a model configuration into a directory, so that it can be re-loaded using the
+        [`from_pretrained`] class method.
+        """
+        model_dir = (
+            self.model_save_dir
+            if not isinstance(self.model_save_dir, TemporaryDirectory)
+            else self.model_save_dir.name
+        )
+        save_dir = Path(save_directory)
+        original_config = Path(model_dir) / self.config_name
+        if original_config.exists():
+            if not save_dir.exists():
+                save_dir.mkdir(parents=True)
+
+            shutil.copy(original_config, save_dir)
+        else:
+            self.config.save_pretrained(save_dir)
+
     @classmethod
     def _from_pretrained(
         cls,
