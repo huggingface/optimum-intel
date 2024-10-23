@@ -136,7 +136,6 @@ def _llama_model_forward(
             use_cache=use_cache,
             position_embeddings=position_embeddings,
             input_lens=input_lens,
-            lens_list=input_lens,
         )
 
         hidden_states = layer_outputs[0]
@@ -210,7 +209,6 @@ class _IPEXAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         input_lens: Optional[torch.Tensor] = None,
-        lens_list: Optional[List] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if past_key_value is None and kwargs.get("layer_past", None) is not None:
@@ -228,7 +226,7 @@ class _IPEXAttention(nn.Module):
 
         if past_key_value is not None:
             key_cache, value_cache = past_key_value.update(
-                key, value, self.layer_idx, attention_mask, position_ids, lens_list
+                key, value, self.layer_idx, attention_mask, position_ids, input_lens
             )
 
         attn_output = torch.empty_like(query)
@@ -242,8 +240,8 @@ class _IPEXAttention(nn.Module):
                 attn_output,
                 seq_len_tensor,
                 seq_len_tensor,
-                max(input_lens),
-                max(input_lens),
+                input_lens.max(),
+                input_lens.max(),
                 0.0,
                 1.0 / math.sqrt(self.head_dim),
                 False,
@@ -263,7 +261,7 @@ class _IPEXAttention(nn.Module):
                 past_key_value.block_tables,
                 input_lens,
                 past_key_value.block_size,
-                max(input_lens),
+                input_lens.max(),
                 None,
             )
 
@@ -277,13 +275,13 @@ class _IPEXAttention(nn.Module):
 class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         super().__init__(module, config)
-        concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight])
+        concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
         bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias]
         use_bias = bias_list != []
         self.concat_qkv = nn.Linear(concat_weight.shape[1], concat_weight.shape[0], bias=use_bias)
         self.concat_qkv.weight = nn.Parameter(concat_weight)
         if use_bias:
-            concat_bias = torch.concat(bias_list, 0)
+            concat_bias = torch.concat(bias_list, 0).contiguous()
             self.concat_linear.bias = nn.Parameter(concat_bias)
         self.q_slice = self.q_proj.out_features
         self.k_slice = self.q_slice + self.k_proj.out_features
