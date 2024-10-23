@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.13"]
+        python-version: ["3.9", "3.12"]
         transformers-version: ["4.36.0", "4.45.*"]
         os: [ubuntu-latest]
 
