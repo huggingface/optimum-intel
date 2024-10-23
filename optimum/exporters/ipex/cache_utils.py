@@ -42,11 +42,8 @@ class IPEXPagedCache(Cache):
         super().__init__()
         self.max_batch_size = max_batch_size
         self.batch_size = max_batch_size
-        self.kv_cache = []
-
-        self._seen_tokens = max_batch_size * [
-            0
-        ]  # Used in `generate` to keep tally of how many tokens the cache has seen
+        # Used in `generate` to keep tally of how many tokens the cache has seen
+        self._seen_tokens = max_batch_size * [0]
         self.block_size = 16
         self.num_blocks = (max_cache_len // self.block_size + (max_cache_len % self.block_size != 0)) * max_batch_size
         self.block_tables = -1 * torch.ones([self.num_blocks], dtype=torch.int32, device=device).reshape(
@@ -62,38 +59,20 @@ class IPEXPagedCache(Cache):
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
 
+        self.key_cache: List[torch.Tensor] = []
+        self.value_cache: List[torch.Tensor] = []
+
         if device.type == "cpu":
-            self.kv_cache = [
-                (
-                    torch.empty(
-                        (self.num_blocks, self.num_kv_heads, self.block_size, head_size),
-                        dtype=dtype,
-                        device=device,
-                    ),
-                    torch.empty(
-                        (self.num_blocks, self.num_kv_heads, self.block_size, head_size),
-                        dtype=dtype,
-                        device=device,
-                    ),
-                )
-                for _ in range(self.num_hidden_layers)
-            ]
+            key_cache_shape = (self.num_blocks, self.num_kv_heads, self.block_size, head_size)
+            value_cache_shape = (self.num_blocks, self.num_kv_heads, self.block_size, head_size)
         elif device.type == "xpu":
-            self.kv_cache = [
-                (
-                    torch.empty(
-                        (self.num_blocks, self.num_kv_heads, head_size, self.block_size, 1),
-                        dtype=dtype,
-                        device=device,
-                    ),
-                    torch.empty(
-                        (self.num_blocks, self.num_kv_heads, head_size, self.block_size),
-                        dtype=dtype,
-                        device=device,
-                    ),
-                )
-                for _ in range(self.num_hidden_layers)
-            ]
+            key_cache_shape = (self.num_blocks, self.num_kv_heads, head_size, self.block_size, 1)
+            value_cache_shape = (self.num_blocks, self.num_kv_heads, head_size, self.block_size)
+        for i in range(config.num_hidden_layers):
+            new_layer_key_cache = torch.zeros(key_cache_shape, dtype=dtype, device=device)
+            new_layer_value_cache = torch.zeros(value_cache_shape, dtype=dtype, device=device)
+            self.key_cache.append(new_layer_key_cache)
+            self.value_cache.append(new_layer_value_cache)
 
     def update_for_prefill(
         self,
@@ -125,8 +104,8 @@ class IPEXPagedCache(Cache):
         PagedAttention.reshape_and_cache(
             key_states,
             value_states,
-            self.kv_cache[layer_idx][0],
-            self.kv_cache[layer_idx][1],
+            self.key_cache[layer_idx],
+            self.value_cache[layer_idx],
             slots_tensor,
         )
 
@@ -158,8 +137,8 @@ class IPEXPagedCache(Cache):
         PagedAttention.reshape_and_cache(
             key_states,
             value_states,
-            self.kv_cache[layer_idx][0],
-            self.kv_cache[layer_idx][1],
+            self.key_cache[layer_idx],
+            self.value_cache[layer_idx],
             torch.tensor(slots, device=key_states.device),
         )
 
@@ -175,7 +154,7 @@ class IPEXPagedCache(Cache):
         layer_idx: int,
         attention_mask: torch.Tensor,
         position_ids: torch.Tensor,
-        length_list: Optional[List],
+        length_list: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
@@ -199,7 +178,7 @@ class IPEXPagedCache(Cache):
             # decode
             self.update_for_decode(key_states, value_states, layer_idx, batch_size)
 
-        return self.kv_cache[layer_idx][0], self.kv_cache[layer_idx][1]
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states that were seen by the model."""
@@ -227,9 +206,9 @@ class IPEXPagedCache(Cache):
             self.block_tables[i, 0 : num_blocks[i] - 1] = updated_block_tables[i, 0 : num_blocks[i] - 1]
             updated_table.append(self.block_tables[i : i + 1, num_blocks[i] - 1 : num_blocks[i]])
         updated_table = torch.cat(tuple(updated_table), dim=0)
-        for layer_idx in range(len(self.kv_cache)):
-            self.kv_cache[layer_idx][0][updated_table] = self.kv_cache[layer_idx][0][updated_table[beam_idx]]
-            self.kv_cache[layer_idx][1][updated_table] = self.kv_cache[layer_idx][1][updated_table[beam_idx]]
+        for layer_idx in range(self.num_hidden_layers):
+            self.key_cache[layer_idx][updated_table] = self.key_cache[layer_idx][updated_table[beam_idx]]
+            self.value_cache[layer_idx][updated_table] = self.value_cache[layer_idx][updated_table[beam_idx]]
 
         free_table = origin_table[origin_table != self.block_tables]
         for i in range(free_table.shape[0]):

@@ -122,8 +122,7 @@ def _llama_model_forward(
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-    input_lens = attention_mask.cumsum(-1)[:, -1]
-    lens_list = input_lens.tolist()
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
@@ -136,8 +135,8 @@ def _llama_model_forward(
             output_attentions=output_attentions,
             use_cache=use_cache,
             position_embeddings=position_embeddings,
-            input_lens=input_lens.int(),
-            lens_list=lens_list,
+            input_lens=input_lens,
+            lens_list=input_lens,
         )
 
         hidden_states = layer_outputs[0]
