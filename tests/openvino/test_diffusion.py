@@ -719,7 +719,6 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         for output_type in ["latent", "np", "pt"]:
-            print(output_type)
             inputs["output_type"] = output_type
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
