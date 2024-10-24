@@ -55,6 +55,9 @@ if is_torch_available():
 
 logger = logging.getLogger(__name__)
 
+# init core before import openvino tokenizers to prevent failed attempt loading extension
+core = Core()
+
 
 def infer_task(
     task,
@@ -413,7 +416,6 @@ def main_export(
     del model
     gc.collect()
 
-    core = Core()
     for submodel_path in submodel_paths:
         submodel_path = Path(output) / submodel_path
         submodel = core.read_model(submodel_path)

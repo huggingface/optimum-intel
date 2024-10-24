@@ -41,6 +41,7 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_openvino_tokenizers_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -734,9 +735,9 @@ def export_tokenizer(
     except ModuleNotFoundError:
         return
 
-    if is_tokenizers_version(">", "0.19"):
+    if is_tokenizers_version(">", "0.19") and is_openvino_tokenizers_version("<", "2024.5.0.0"):
         logger.warning(
-            "Exporting tokenizers to OpenVINO is not supported for tokenizers version > 0.19. "
+            "Exporting tokenizers to OpenVINO is not supported for tokenizers version > 0.19 and openvino version <= 2024.4. "
             "Please downgrade to tokenizers version <= 0.19 to export tokenizers to OpenVINO."
         )
 

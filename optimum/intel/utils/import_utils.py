@@ -382,6 +382,24 @@ def is_openvino_version(operation: str, version: str):
     return compare_versions(parse(_openvino_version), operation, version)
 
 
+def is_openvino_tokenizers_version(operation: str, version: str):
+    if not is_openvino_available():
+        return False
+    if not is_openvino_tokenizers_available():
+        return False
+    import openvino_tokenizers
+
+    tokenizers_version = openvino_tokenizers.__version__
+
+    if tokenizers_version == "0.0.0.0":
+        try:
+            tokenizers_version = importlib_metadata.version("openvino_tokenizers") or tokenizers_version
+        except importlib_metadata.PackageNotFoundError:
+            pass
+
+    return compare_versions(parse(tokenizers_version), operation, version)
+
+
 def is_diffusers_version(operation: str, version: str):
     """
     Compare the current diffusers version to a given reference with an operation.

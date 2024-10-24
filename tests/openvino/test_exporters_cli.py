@@ -153,7 +153,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             output = subprocess.check_output(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
+                f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
                 stderr=subprocess.STDOUT,
             ).decode()
