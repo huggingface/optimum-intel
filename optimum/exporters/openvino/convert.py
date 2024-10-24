@@ -389,7 +389,10 @@ def export_pytorch(
                 if patch_16bit_model:
                     from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
 
+                    # frontend may riases confusing warnings about modules already patched if model splitted on several parts
+                    logging.disable(logging.WARNING)
                     __make_16bit_traceable(model)
+                    logging.disable(logging.NOTSET)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = _get_input_info(model, config, dummy_inputs)
                 ov_model = convert_model(
