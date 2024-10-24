@@ -26,6 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
+from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
 
 
 if is_nncf_available():
@@ -350,6 +351,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
+        processor (`str`, *optional*):
+            A transformers processor used to process inputs for multi-modal models. You can pass either:
+                - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
+                - A path to a *directory* containing files required by the processor, for instance saved
+                    using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
     """
 
     def __init__(
@@ -369,6 +375,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation: bool = None,
         weight_format: Optional[str] = None,
         gptq: bool = None,
+        processor: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -383,6 +390,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.scale_estimation = scale_estimation
         self.weight_format = weight_format
         self.gptq = gptq
+        self.processor = processor
         self.post_init()
 
     def post_init(self):
@@ -400,16 +408,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            llm_datasets = ["wikitext2", "c4", "c4-new"]
-            stable_diffusion_datasets = [
-                "conceptual_captions",
-                "laion/220k-GPT4Vision-captions-from-LIVIS",
-                "laion/filtered-wit",
-            ]
-            if self.dataset not in llm_datasets + stable_diffusion_datasets:
+            lm_datasets = ["wikitext2", "c4", "c4-new"]
+            visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
+            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
+            if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
+                    {lm_datasets} for LLMs, {visual_lm_datasets} for visual LLMs
+                    or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
 
         if self.bits not in [4, 8]:
@@ -443,6 +449,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
+
+        if self.processor is not None and not isinstance(self.processor, str):
+            raise ValueError(f"Processor is expected to be a string, but found {self.processor}")
 
         if self.weight_format is None:
             self.weight_format = "int4" if self.bits == 4 else "int8"
