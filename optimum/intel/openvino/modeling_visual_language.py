@@ -697,6 +697,33 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self._legacy_processing = not hasattr(self.config, "image_seq_length")
+
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
@@ -731,10 +758,8 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if legacy_processing is None:
-            legacy_processing = (
-                not hasattr(self.config, "image_seq_length")
-                or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
-                or (input_ids.shape[-1] == 1)
+            legacy_processing = not (hasattr(self.config, "image_seq_length") and (input_ids.shape[-1] == 1)) or (
+                (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
             )
 
         if legacy_processing:
@@ -815,11 +840,15 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_multimodal_embeddings(
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
-        legacy_processing = (
-            not hasattr(self.config, "image_seq_length")
-            or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
-            or (input_ids.shape[-1] == 1 and pixel_values is not None)
-        )
+        legacy_processing = self._legacy_processing
+        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+
+        if pixel_values is not None and not legacy_processing and past_key_values is None:
+            legacy_processing = (input_ids == self.config.image_token_index).sum(
+                1
+            ).max() < self.config.image_seq_length
+            self._legacy_processing = legacy_processing
+
         inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
             input_ids, pixel_values, attention_mask, position_ids, legacy_processing=legacy_processing, **kwargs
         )
@@ -937,12 +966,14 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
 
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+        legacy_processing = self._legacy_processing
 
-        legacy_processing = (
-            not hasattr(self.config, "image_seq_length")
-            or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
-            or (input_ids.shape[-1] == 1 and pixel_values is not None)
-        )
+        if pixel_values is not None and not legacy_processing and past_key_values is None:
+            legacy_processing = (input_ids == self.config.image_token_index).sum(
+                1
+            ).max() < self.config.image_seq_length
+            self._legacy_processing = legacy_processing
+
         if pixel_values is not None and pixel_values.size(0) > 0:
             # ! infer image_num_patches from image_sizes
             image_num_patches = [
