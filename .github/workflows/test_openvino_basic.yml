@@ -53,6 +53,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install lowest compatible transformers version
+        if: ${{ matrix.transformers-version != 'latest' }}
+        run: pip install transformers==${{ matrix.transformers-version }}
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -62,9 +66,6 @@ jobs:
           # optimum or transformers to a specific version
           pip install ${{ matrix.openvino }}
           pip install .[tests]
-
-      - if: ${{ matrix.transformers-version != 'latest' }}
-        run: pip install transformers==${{ matrix.transformers-version }}
 
       - name: Pip freeze
         run: pip freeze
