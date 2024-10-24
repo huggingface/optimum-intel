@@ -28,8 +28,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "transformers @ git+https://github.com/huggingface/transformers.git",
-    #"transformers>=4.36,<4.46",
+    "transformers>=4.36,<4.47",
     "optimum~=1.23",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -61,7 +60,7 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate"],
+    "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
     "openvino": [
         "openvino==2024.4.1.dev20240926",
         "nncf>=2.11.0",
