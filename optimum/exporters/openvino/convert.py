@@ -109,7 +109,7 @@ def export(
         model ([`PreTrainedModel`] or [`TFPreTrainedModel`]):
             The model to export.
         config ([`~exporters.onnx.config.OnnxConfig`]):
-            The ONNX configuration associated with the exported model.
+            The export configuration associated with the exported model.
         output (`Path`):
             Directory to store the exported model.
         opset (`Optional[int]`, defaults to `None`):
