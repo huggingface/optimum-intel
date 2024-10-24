@@ -27,6 +27,7 @@ from optimum.exporters.onnx.model_configs import BertOnnxConfig
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -40,13 +41,14 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
+    OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -69,6 +71,9 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
     }
+
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_ARCHITECTURES.update({"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper")
 

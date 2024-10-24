@@ -59,6 +59,7 @@ MODEL_NAMES = {
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
+    "flux": "katuni4ka/tiny-random-flux",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
@@ -118,6 +119,7 @@ MODEL_NAMES = {
     "stable-diffusion-openvino": "hf-internal-testing/tiny-stable-diffusion-openvino",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
+    "stable-diffusion-3": "yujiepan/stable-diffusion-3-tiny-random",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
     "starcoder2": "hf-internal-testing/tiny-random-Starcoder2ForCausalLM",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
@@ -170,6 +172,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl": (366, 34, 42, 66),
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
     "open-clip": (20, 28),
+    "stable-diffusion-3": (66, 42, 58, 30),
+    "flux": (56, 24, 28, 64),
 }
 
 

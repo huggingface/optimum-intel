@@ -35,22 +35,26 @@ from optimum.exporters.onnx.model_configs import (
     MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    UNetOnnxConfig,
     VisionOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
+    DTYPE_MAPPER,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
+    DummySeq2SeqDecoderTextInputGenerator,
     DummyTextInputGenerator,
+    DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
-from optimum.utils.normalized_config import NormalizedTextConfig, NormalizedVisionConfig
+from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
-from ...intel.utils.import_utils import _transformers_version, is_transformers_version
+from ...intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
 from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
@@ -60,6 +64,7 @@ from .model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     FalconModelPatcher,
+    FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
@@ -1570,3 +1575,166 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         if self._behavior != InternVLChatConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["pooled_projections"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.pooled_projection_dim = normalized_config.config.pooled_projection_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = [self.batch_size, self.pooled_projection_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class DummyTransformerTimestpsInputGenerator(DummyTimestepInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("timestep", "text_embeds", "time_ids", "timestep_cond", "guidance")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["timestep", "guidance"]:
+            shape = [self.batch_size]
+            return self.random_float_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
+class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        (DummyTransformerTimestpsInputGenerator,)
+        + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+        + (PooledProjectionsDummyInputGenerator,)
+    )
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="joint_attention_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs["pooled_projections"] = {0: "batch_size"}
+        return common_inputs
+
+    def rename_ambiguous_inputs(self, inputs):
+        #  The input name in the model signature is `x, hence the export input name is updated.
+        hidden_states = inputs.pop("sample", None)
+        if hidden_states is not None:
+            inputs["hidden_states"] = hidden_states
+        return inputs
+
+
+@register_in_tasks_manager("t5-encoder-model", *["feature-extraction"], library_name="diffusers")
+class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    pass
+
+
+class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_mask",
+        "sample",
+        "latent_sample",
+        "hidden_states",
+        "img_ids",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        if getattr(normalized_config, "in_channels", None):
+            self.num_channels = normalized_config.in_channels // 4
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["hidden_states", "sample"]:
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "img_ids":
+            img_ids_height = self.height // 2
+            img_ids_width = self.width // 2
+            return self.random_int_tensor(
+                [self.batch_size, img_ids_height * img_ids_width, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [img_ids_height * img_ids_width, 3],
+                min_value=0,
+                max_value=min(img_ids_height, img_ids_width),
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+        "txt_ids",
+    )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "txt_ids":
+            import torch
+
+            shape = (
+                [self.batch_size, self.sequence_length, 3]
+                if is_diffusers_version("<", "0.31.0")
+                else [self.sequence_length, 3]
+            )
+            dtype = DTYPE_MAPPER.pt(float_dtype)
+            return torch.full(shape, 0, dtype=dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("flux-transformer", *["semantic-segmentation"], library_name="diffusers")
+class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyFluxTransformerInputGenerator,
+        DummyFluxTextInputGenerator,
+        PooledProjectionsDummyInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs.pop("sample", None)
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "packed_height_width"}
+        common_inputs["txt_ids"] = (
+            {0: "batch_size", 1: "sequence_length"} if is_diffusers_version("<", "0.31.0") else {0: "sequence_length"}
+        )
+        common_inputs["img_ids"] = (
+            {0: "batch_size", 1: "packed_height_width"}
+            if is_diffusers_version("<", "0.31.0")
+            else {0: "packed_height_width"}
+        )
+        if getattr(self._normalized_config, "guidance_embeds", False):
+            common_inputs["guidance"] = {0: "batch_size"}
+        return common_inputs
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
