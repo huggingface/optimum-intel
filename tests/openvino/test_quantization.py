@@ -786,6 +786,9 @@ class OVTrainerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 64, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @unittest.skipIf(
+        is_transformers_version(">=", "4.46"), reason="OVTrainer is not compatible with transformers>=v4.46"
+    )
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
         model = AutoModelForSequenceClassification.from_pretrained(model_id, attn_implementation="eager")

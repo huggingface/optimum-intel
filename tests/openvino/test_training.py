@@ -475,7 +475,10 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
     task = "sequence-classification"
 
     @parameterized.expand(OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS.items())
-    @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
+    @unittest.skipIf(
+        is_transformers_version("<", "4.41") or is_transformers_version(">=", "4.46"),
+        reason="Mismatch in expected fake quantized op and incompatible with transformers v4.46",
+    )
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
@@ -627,7 +630,10 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
     @parameterized.expand(OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS.items())
     @pytest.mark.run_slow
     @slow
-    @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
+    @unittest.skipIf(
+        is_transformers_version("<", "4.41") or is_transformers_version(">=", "4.46"),
+        reason="Mismatch in expected fake quantized op and incompatible with transformers v4.46",
+    )
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
@@ -808,6 +814,9 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
     @pytest.mark.run_slow
     @slow
+    @unittest.skipIf(
+        is_transformers_version(">=", "4.46"), reason="OVTrainer is not compatible with transformers>=v4.46"
+    )
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 

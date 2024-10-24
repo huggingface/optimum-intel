@@ -24,7 +24,7 @@ jobs:
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.9", "3.12"]
         os: ["ubuntu-22.04", "windows-latest"]
-        transformers-version: ["4.45.*"]
+        transformers-version: ["latest"]
         openvino: ["openvino openvino-tokenizers"]
         nncf: ["nncf"]
         include:
@@ -35,12 +35,12 @@ jobs:
             nncf: "nncf"
           - python-version: "3.12"
             os: "ubuntu-22.04"
-            transformers-version: "4.45.*"
+            transformers-version: "latest"
             openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
             nncf: "nncf"
           - python-version: "3.12"
             os: "ubuntu-22.04"
-            transformers-version: "4.45.*"
+            transformers-version: "latest"
             openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
             nncf: "git+https://github.com/openvinotoolkit/nncf.git"
 
@@ -53,6 +53,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install lowest compatible transformers version
+        if: ${{ matrix.transformers-version != 'latest' }}
+        run: pip install transformers==${{ matrix.transformers-version }}
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -61,7 +65,6 @@ jobs:
           # Install openvino manually to prevent dependency conflicts when .[openvino] pins
           # optimum or transformers to a specific version
           pip install ${{ matrix.openvino }}
-          pip install transformers==${{ matrix.transformers-version }}
           pip install .[tests]
 
       - name: Pip freeze
