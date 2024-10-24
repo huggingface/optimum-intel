@@ -14,7 +14,7 @@ from transformers import AutoConfig, GenerationConfig, GenerationMixin, Pretrain
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
-from ...exporters.openvino.stateful import ensure_stateful_is_available
+from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -122,8 +122,8 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-                if past_key_values:
-                    position_ids = position_ids[:, -input_ids.shape[1] :]
+            if past_len:
+                position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
             inputs["position_ids"] = position_ids
 
@@ -177,9 +177,11 @@ class OVVisionEmbedding(OVModelPart):
             self.hidden_states_output_names = [
                 key.get_any_name() for key in self.model.outputs[2:] if "hidden_states" in key.get_any_name()
             ]
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        self._main_input = "images" if model_has_input_output_name(self.model, "images") else "pixel_values"
 
     def forward(self, pixel_values, **kwargs):
-        inputs = {"pixel_values": pixel_values}
+        inputs = {self._main_input: pixel_values}
         if len(self.input_names) > 1:
             for name in self.input_names:
                 if name in kwargs:
@@ -568,7 +570,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     def forward(
         self,
         input_ids,
-        pixel_values,
+        pixel_values=None,
         past_key_values=None,
         inputs_embeds=None,
         image_sizes=None,
@@ -576,8 +578,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
+        images=None,
         **kwargs,
     ):
+        if pixel_values is None and images is not None:
+            pixel_values = images
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -629,6 +634,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 )
         return inputs_embeds, attention_mask, position_ids
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L521
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -646,14 +652,15 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
             # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
             # input)
-            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
-                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+            if attention_mask is not None and past_length + 1 > input_ids.shape[1]:
+                input_discount = max(attention_mask.shape[1] - past_length, 1)
+                input_ids = input_ids[:, -input_discount:]
             # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
             # input_ids based on the past_length.llava
             elif past_length < input_ids.shape[1]:
                 input_ids = input_ids[:, past_length:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
-            elif getattr(self.config, "image_token_index", None) in input_ids:
+            elif getattr(self.config, "image_token_index", -1) in input_ids:
                 input_ids = input_ids[:, input_ids.shape[1] - 1 :]
 
         position_ids = kwargs.get("position_ids", None)
@@ -679,6 +686,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_sizes": image_sizes,
                 "image_bound": kwargs.get("image_bound"),
                 "tgt_sizes": kwargs.get("tgt_sizes"),
+                "images": kwargs.get("images"),
             }
         )
         return model_inputs
@@ -1546,4 +1554,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llava_next": _OVLlavaNextForCausalLM,
     "internvl_chat": _OvInternVLForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
+    "llava-qwen2": _OVNanoLlavaForCausalLM,
 }

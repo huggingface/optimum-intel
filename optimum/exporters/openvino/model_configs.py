@@ -17,7 +17,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from packaging import version
-from transformers import PretrainedConfig, PreTrainedModel, TFPreTrainedModel
+from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
@@ -75,6 +75,7 @@ from .model_patcher import (
     JaisModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
+    LlavaQwen2ImageEmbeddingsModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
@@ -1577,6 +1578,165 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         if self._behavior != InternVLChatConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "llava-qwen2", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class LlavaQwen2OpenVINOConfig(OnnxConfig):
+    SUPPORTS_PAST = True
+    MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: LlavaConfigBehavior = LlavaConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        use_past: bool = False,
+    ):
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            config = AutoConfig.from_pretrained(config.mm_vision_tower, trust_remote_code=True)
+            if hasattr(config, "vision_config"):
+                config = config.vision_config
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "batch_size"}}
+
+    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
+            behavior = LlavaConfigBehavior(behavior)
+
+        if behavior == LlavaConfigBehavior.LANGUAGE:
+            model.forward = super(type(model), model).forward
+            return model
+
+        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.model.config
+            return text_embedding
+
+    def with_behavior(
+        self,
+        behavior: Union[str, LlavaConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
+            behavior = LlavaConfigBehavior(behavior)
+
+        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = self._orig_config.model_type.replace("llava-", "")
+            model_type = model_type.replace("_", "-")
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+            export_config = InputEmbedOpenvVINOConfig(
+                self._orig_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == LlavaConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.model_type.replace("llava-", "")
+            model_type = model_type.replace("_", "-")
+
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            export_config = LMInputEmbedsConfigHelper(internal_export_config)
+            export_config._normalized_config = internal_export_config._normalized_config
+            return export_config
+
+        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return LlavaQwen2ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+    def rename_ambiguous_inputs(self, inputs):
+        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            model_inputs = {}
+            model_inputs["images"] = inputs["pixel_values"]
+            return model_inputs
+        return super().rename_ambiguous_inputs(inputs)
 
 
 class PooledProjectionsDummyInputGenerator(DummyInputGenerator):
