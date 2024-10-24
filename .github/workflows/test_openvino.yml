@@ -34,7 +34,7 @@ jobs:
 
       - name: Install lowest compatible transformers version
         if: ${{ matrix.transformers-version != 'latest' }}
-        run: pip install transformers==${{ matrix.transformers-version }}
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
       - name: Install dependencies
         run: |
@@ -42,9 +42,6 @@ jobs:
           # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
-
-      - if: ${{ matrix.transformers-version == '4.36.0' }}
-        run: pip install accelerate==0.*
 
       - name: Test with Pytest
         env:
