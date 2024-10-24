@@ -25,6 +25,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from .. import OVQuantizer
+from ...exporters.openvino.utils import save_config
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -318,6 +319,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             part_model = getattr(self, part, None)
             if part_model is not None:
                 part_model._compile()
+
+    def _save_config(self, save_directory):
+        """
+        Saves a model configuration into a directory, so that it can be re-loaded using the
+        [`from_pretrained`] class method.
+        """
+        save_config(self.config, save_directory)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """

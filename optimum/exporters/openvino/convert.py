@@ -71,6 +71,7 @@ from .utils import (
     _get_open_clip_submodels_fn_and_export_configs,
     clear_class_registry,
     remove_none_from_dummy_inputs,
+    save_config,
 )
 
 
@@ -659,7 +660,11 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version(">=", "4.44.99"):
-            misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+            except Exception:
+                misplaced_generation_parameters = {}
             if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
                 logger.warning(
                     "Moving the following attributes in the config to the generation config: "
@@ -671,7 +676,7 @@ def export_from_model(
                     setattr(model.config, param_name, None)
 
         # Saving the model config and preprocessor as this is needed sometimes.
-        model.config.save_pretrained(output)
+        save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
             try:

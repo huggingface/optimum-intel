@@ -14,6 +14,7 @@
 
 import inspect
 from collections import namedtuple
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_torch_available
@@ -209,3 +210,13 @@ def _get_open_clip_submodels_fn_and_export_configs(
 
 
 MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "llava-qwen2", "internvl-chat", "minicpmv"]
+
+
+def save_config(config, save_dir):
+    try:
+        config.save_pretrained(save_dir)
+    except Exception:
+        save_dir = Path(save_dir)
+        save_dir.mkdir(exist_ok=True)
+        output_config_file = Path(save_dir / "config.json")
+        config.to_json_file(output_config_file, use_diff=True)
