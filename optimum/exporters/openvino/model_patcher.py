@@ -2743,3 +2743,25 @@ class FluxTransfromerModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         if hasattr(self._model.pos_embed, "_orig_forward"):
             self._model.pos_embed.forward = self._model.pos_embed._orig_forward
+
+
+class InputEmbeddingPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        # making 16bit tracable overrides embeedings input signature these changes required to prevent this issue
+        model.__orig_forward = model.forward
+
+        def forward(self, input):
+            return self.__orig_forward(input)
+
+        model.forward = types.MethodType(forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
