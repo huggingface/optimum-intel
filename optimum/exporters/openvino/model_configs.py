@@ -75,6 +75,8 @@ from .model_patcher import (
     JaisModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
+    MiniCPMVImageEmbeddingsModelPatcher,
+    MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -1738,3 +1740,272 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
         return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "patch_attention_mask", "position_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        self.patch_size = normalized_config.config.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[
+                    self.batch_size,
+                    self.num_channels,
+                    self.patch_size,
+                    (self.height * self.width) // self.patch_size,
+                ],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+        if input_name == "patch_attention_mask":
+            return self.random_int_tensor(
+                shape=[self.batch_size, 1, (self.height // self.patch_size) * (self.width // self.patch_size)],
+                framework=framework,
+                dtype=float_dtype,
+                min_value=0,
+                max_value=2,
+            )
+
+        if input_name == "position_ids":
+            return self.random_int_tensor(
+                shape=[self.batch_size, (self.height // self.patch_size) * (self.width // self.patch_size)],
+                max_value=self.patch_size,
+            )
+
+
+class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        self.patch_size = normalized_config.config.patch_size
+        self.hidden_size = normalized_config.config.hidden_size
+        self.img_hidden_size = normalized_config.config.vision_config.hidden_size
+        self.feat_size = (normalized_config.config.vision_config.image_size // self.patch_size) * (
+            normalized_config.config.vision_config.image_size // self.patch_size
+        )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "image_feature":
+            return self.random_float_tensor(
+                shape=[self.batch_size, self.feat_size, self.img_hidden_size], framework=framework, dtype=float_dtype
+            )
+
+        if input_name == "key_padding_mask":
+            return self.constant_tensor(
+                shape=[self.batch_size, self.feat_size],
+                framework=framework,
+                value=1,
+                dtype=DTYPE_MAPPER.pt(float_dtype),
+            )
+
+        if input_name == "pos_embed":
+            return self.random_float_tensor(shape=[self.feat_size, self.batch_size, self.hidden_size])
+
+
+class MiniCPMVConfigBehavior(str, enum.Enum):
+    RESAMPLER = "resampler"
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
+class MiniCPMVOpenVINOConfig(OnnxConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = ()
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: MiniCPMVConfigBehavior = MiniCPMVConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVImageInputGenerator,)
+        if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVResampleInputGenerator,)
+        self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+                "patch_attention_mask": {0: "batch_size", 1: "num_patches", 2: "patch_size"},
+                "position_ids": {0: "batch_size", 1: "patch_size"},
+            }
+        if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
+            return {
+                "image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
+                "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"},
+                "key_padding_mask": {0: "batch_size", 1: "patch_size"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "batch_size", 1: "patch_height", 2: "patch_width"}}
+        if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
+            return {"last_hidden_state": {0: "batch_size"}}
+
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, MiniCPMVConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMVConfigBehavior):
+            behavior = MiniCPMVConfigBehavior(behavior)
+
+        if behavior == MiniCPMVConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = "qwen2"
+            model_type = model_type.replace("_", "-")
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+            export_config = InputEmbedOpenvVINOConfig(
+                self._orig_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == MiniCPMVConfigBehavior.LANGUAGE:
+            model_type = "qwen2"
+            model_type = model_type.replace("_", "-")
+
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            export_config = LMInputEmbedsConfigHelper(internal_export_config)
+            export_config._normalized_config = internal_export_config._normalized_config
+            return export_config
+
+        if behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+        if behavior == MiniCPMVConfigBehavior.RESAMPLER:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, MiniCPMVConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMVConfigBehavior):
+            behavior = MiniCPMVConfigBehavior(behavior)
+
+        if behavior == MiniCPMVConfigBehavior.LANGUAGE:
+            return model.llm
+
+        if behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
+            return model.vpm
+
+        if behavior == MiniCPMVConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.llm.config
+            return text_embedding
+        if behavior == MiniCPMVConfigBehavior.RESAMPLER:
+            model.resampler.config = model.vpm.config
+            return model.resampler
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMVImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+        if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
+            return MiniCPMVResamplerModelPatcher(self, model, model_kwargs)
+
+        return super().patch_model_for_export(model, model_kwargs)
