@@ -1433,8 +1433,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
             vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
         if vision_embeds is None:
             inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
-            if kwargs.get("past_key_values") is not None:
-                past_len = self.language_model._get_past_length(kwargs.get("past_key_values"))
+            past_len = self.language_model._get_past_length(kwargs.get("past_key_values"))
             if attention_mask is not None and attention_mask.shape[1] < past_len + input_ids.shape[1]:
                 attention_mask = torch.cat(
                     [
