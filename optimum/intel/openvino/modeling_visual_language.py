@@ -54,14 +54,25 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
     def compile(self):
         if self.request is None:
-            logger.info(f"Compiling the Language model to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+            if self._compile_only:
+                self.request = self.model.create_infer_request()
+            else:
+                logger.info(f"Compiling the Language model to {self._device} ...")
+                self.request = self._compile_model(
+                    self.model, self._device, self.ov_config, self.model_save_dir
+                ).create_infer_request()
         self._compile_text_emb()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
             logger.info(f"Compiling the Text embeddings model to {self._device} ...")
-            self.text_emb_request = core.compile_model(self.text_emb_model, self._device, self.ov_config)
+            if self._compile_only:
+                self.text_emb_request = self.text_emb_model
+            else:
+                logger.info(f"Compiling the Text embeddings model to {self._device} ...")
+                self.text_emb_request = self._compile_model(
+                    self.text_emb_model, self._device, self.ov_config, self.model_save_dir
+                )
 
     def clear_requests(self):
         if self._compile_only:
@@ -122,8 +133,8 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-                if past_key_values:
-                    position_ids = position_ids[:, -input_ids.shape[1] :]
+            if past_len:
+                position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
             inputs["position_ids"] = position_ids
 
@@ -240,11 +251,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             self.lm_model,
             self.text_embdings_model,
             config=config,
-            deivce=device,
+            device=device,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=not self._compile_only,
+            compile=self._compile_only,
             compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
@@ -285,7 +296,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         dst_file_names = [
             "openvino_language_model.xml",
             "openvino_text_embeddings_model.xml",
-            "openvino_vision_embeddings.xml",
+            "openvino_vision_embeddings_model.xml",
         ]
         for part in self.additional_parts:
             model = getattr(self, f"{part}_model", None)
