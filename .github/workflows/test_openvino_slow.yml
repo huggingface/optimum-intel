@@ -1,4 +1,4 @@
-name: OpenVINO - Basic Test
+name: OpenVINO - Slow Test
 
 on:
   workflow_dispatch:

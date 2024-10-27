@@ -1,6 +1,4 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-name: Intel IPEX - Test
+name: IPEX - Test
 
 on:
   push:
@@ -17,36 +15,43 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.9]
+        torch-version: ["2.2.*", "2.3.*", "2.4.*"]
         transformers-version: ["4.39.0", "4.44.*"]
-        ipex-version: ["2.2.0", "2.3.*"]
-        include:
-          - python-version: 3.8
-            transformers-version: 4.39.0
-            ipex-version: 2.2.0
+        python-version: [3.9]
+        os: [ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install torch==${{ matrix.ipex-version }} --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install intel_extension_for_pytorch==${{ matrix.ipex-version }}
-          pip install Pillow parameterized
-          pip install transformers[testing]==${{ matrix.transformers-version }}
+          pip install --upgrade pip
+          pip install torch==${{ matrix.torch-version }} torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install intel_extension_for_pytorch==${{ matrix.torch-version }}
+          pip install transformers==${{ matrix.transformers-version }}
           pip install .[ipex]
 
-      - if: ${{ matrix.ipex-version == '2.2.0' }}
+      - name: Assert versions
+        run: |
+          python -c "import torch; assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+          python -c "import transformers; assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
+          python -c "import intel_extension_for_pytorch; assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+
+      - if: ${{ matrix.torch-version == '2.2.*' }}
+        name: Downgrade numpy for torch 2.2.*
         run: pip install numpy==1.*
 
       - name: Test with Pytest
         run: |
-          pytest tests/ipex/
+          pytest tests/ipex/ -s -vvvv --durations=0

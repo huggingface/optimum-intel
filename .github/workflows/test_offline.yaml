@@ -1,10 +1,13 @@
-name: Offline usage / Python - Test
+name: Offline - Test
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - v*-release
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -15,19 +18,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.9]
+        python-version: ["3.9"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
       - name: Install dependencies
         run: |
           pip install .[tests,openvino]
+
       - name: Test
         run: |
           HF_HOME=/tmp/ huggingface-cli download hf-internal-testing/tiny-random-gpt2

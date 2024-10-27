@@ -71,6 +71,7 @@ EXTRAS_REQUIRE = {
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
+    "peft": ["peft"],
 }
 
 setup(
