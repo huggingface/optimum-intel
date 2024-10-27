@@ -59,7 +59,7 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/${{ matrix.test_pattern }} --duration=0
+          pytest tests/openvino/${{ matrix.test_pattern }} --durations=0
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
