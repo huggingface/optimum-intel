@@ -56,7 +56,7 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/${{ matrix.test_pattern }}.py -s -vvvv --durations=0
+          pytest tests/openvino/${{ matrix.test_pattern }}.py
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
@@ -67,4 +67,4 @@ jobs:
       - name: Test with Pytest
         if: ${{ matrix.test_pattern == 'test_modeling*' }}
         run: |
-          pytest tests/openvino/modeling_basic.py -s -vvvv --durations=0
+          pytest tests/openvino/modeling_basic.py

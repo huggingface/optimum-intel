@@ -52,4 +52,4 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/ipex/ -s -vvvv --durations=0
+          pytest tests/ipex
