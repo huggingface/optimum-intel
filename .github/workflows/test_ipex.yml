@@ -44,9 +44,9 @@ jobs:
 
       - name: Assert versions
         run: |
-          python -c "import torch; assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
-          python -c "import transformers; assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
-          python -c "import intel_extension_for_pytorch; assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+          python -c "import torch; print(torch.__version__); assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+          python -c "import intel_extension_for_pytorch; print(intel_extension_for_pytorch.__version__); assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
       - if: ${{ matrix.torch-version == '2.2.*' }}
         name: Downgrade numpy for torch 2.2.*

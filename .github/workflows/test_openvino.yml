@@ -49,7 +49,7 @@ jobs:
 
       - name: Assert versions
         run: |
-          python -c "import transformers; assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
+          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
       - if: ${{ matrix.transformers-version == '4.36.0' }}
         run: pip install accelerate==0.*

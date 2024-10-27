@@ -18,8 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        torch-version: ["2.3.*", "2.4.*"]
-        python-version: [3.9]
+        torch-version: ["2.2.0", "2.4.*"]
+        python-version: ["3.9"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
@@ -39,6 +39,11 @@ jobs:
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install intel-extension-for-pytorch==${{ matrix.torch-version }}
           pip install .[neural-compressor,ipex,diffusers,peft,tests]
+
+      - name: Assert versions
+        run: |
+          python -c "import torch; print(torch.__version__); assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+          python -c "import intel_extension_for_pytorch; print(intel_extension_for_pytorch.__version__); assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
 
       - name: Test with Pytest
         run: |

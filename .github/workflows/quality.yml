@@ -1,4 +1,4 @@
-name: Code Quality Checks
+name: Quality Checks
 on:
   push:
     branches:
