@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        torch-version: ["2.2.*", "2.3.*", "2.4.*"]
+        torch-version: ["2.2.0", "2.3.*", "2.4.*"]
         transformers-version: ["4.39.0", "4.44.*"]
         python-version: [3.9]
         os: [ubuntu-latest]
@@ -39,18 +39,17 @@ jobs:
           pip install --upgrade pip
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
           pip install intel_extension_for_pytorch==${{ matrix.torch-version }}
-          pip install transformers==${{ matrix.transformers-version }}
-          pip install .[ipex,tests]
+          pip install .[ipex,tests] transformers==${{ matrix.transformers-version }}
+
+      - if: ${{ matrix.torch-version == '2.2.0' }}
+        name: Downgrade Numpy
+        run: pip install numpy==1.*
 
       - name: Assert versions
         run: |
           python -c "import torch; print(torch.__version__); assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
           python -c "import intel_extension_for_pytorch; print(intel_extension_for_pytorch.__version__); assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
           python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
-
-      - if: ${{ matrix.torch-version == '2.2.*' }}
-        name: Downgrade numpy for torch 2.2.*
-        run: pip install numpy==1.*
 
       - name: Test with Pytest
         run: |

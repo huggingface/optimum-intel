@@ -44,8 +44,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers==${{ matrix.transformers-version }}
-          pip install .[openvino,openvino-tokenizers,diffusers,tests]
+          pip install .[openvino,openvino-tokenizers,diffusers,peft,tests] transformers==${{ matrix.transformers-version }}
 
       - name: Assert versions
         run: |
