@@ -40,7 +40,7 @@ jobs:
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
           pip install intel_extension_for_pytorch==${{ matrix.torch-version }}
           pip install transformers==${{ matrix.transformers-version }}
-          pip install .[ipex]
+          pip install .[ipex,tests]
 
       - name: Assert versions
         run: |

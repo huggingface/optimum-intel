@@ -1,4 +1,4 @@
-name: Generation Utils - Test
+name: Generation Utils - Test (deprecated)
 
 on:
   push:
