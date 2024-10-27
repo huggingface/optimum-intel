@@ -62,9 +62,9 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate"],
     "openvino": [
-        "openvino==2024.4.1.dev20240926",
         "nncf>=2.11.0",
-        "openvino-tokenizers[transformers]==2024.4.1.0.dev20240926",
+        "openvino==2024.4.1.dev20240926",
+        "openvino-tokenizers==2024.4.1.0.dev20240926",
     ],
     "nncf": ["nncf>=2.11.0"],
     "ipex": ["intel-extension-for-pytorch", "transformers>=4.39,<4.45"],

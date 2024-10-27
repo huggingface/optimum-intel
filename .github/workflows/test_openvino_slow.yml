@@ -61,7 +61,7 @@ jobs:
           # Install openvino manually to prevent dependency conflicts when .[openvino] pins
           # optimum or transformers to a specific version
           pip install ${{ matrix.openvino }}
-          pip install .[tests] transformers==${{ matrix.transformers-version }}
+          pip install .[tests] transformers[testing]==${{ matrix.transformers-version }}
 
       - name: Pip freeze
         run: pip freeze

@@ -44,18 +44,19 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,openvino-tokenizers,diffusers,peft,tests] transformers==${{ matrix.transformers-version }}
+          pip install .[openvino,openvino-tokenizers,diffusers,peft,tests] transformers[testing]==${{ matrix.transformers-version }}
 
       - name: Assert versions
         run: |
           python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
-      - if: ${{ matrix.transformers-version == '4.36.0' }}
+      - name: Downgrade Accelerate
+        if: ${{ matrix.transformers-version == '4.36.0' }}
         run: pip install accelerate==0.*
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/ -s -vvvv --durations=0
+          pytest tests/openvino/${{ matrix.test_pattern }}.py -s -vvvv --durations=0
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
