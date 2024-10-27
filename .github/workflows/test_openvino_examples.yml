@@ -37,11 +37,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install .[openvino] jstyleson pytest
           pip install -r examples/openvino/audio-classification/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
           pip install -r examples/openvino/image-classification/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
           pip install -r examples/openvino/question-answering/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
           pip install -r examples/openvino/text-classification/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install .[openvino] jstyleson pytest
 
       - name: Test examples
         run: |

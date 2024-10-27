@@ -8,7 +8,11 @@ on:
     branches:
       - v*-release
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types:
+      - opened
+      - labeled
+      - reopened
+      - synchronize
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -20,6 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # TODO: testong python upper bound seems unnecessary
         # Testing lower and upper bound of supported Python versions
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.9", "3.12"]
@@ -47,7 +52,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -55,25 +62,26 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
+          pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          # Install openvino manually to prevent dependency conflicts when .[openvino] pins
-          # optimum or transformers to a specific version
           pip install ${{ matrix.openvino }}
           pip install .[tests] transformers[testing]==${{ matrix.transformers-version }}
 
-      - name: Pip freeze
-        run: pip freeze
+      - name: Assert versions
+        run: |
+          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
       - name: Test with Pytest
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
-      - name: Slow tests
+      - name: Install dependencies (slow)
         run: |
           pip install ${{ matrix.nncf }}
-          pytest tests/openvino -s -m "run_slow" --durations=0
+
+      - name: Test with Pytest (slow)
+        run: |
+          pytest tests/openvino -m "run_slow" --durations=0
         env:
           RUN_SLOW: 1
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}

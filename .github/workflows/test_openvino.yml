@@ -20,10 +20,13 @@ jobs:
       matrix:
         test_pattern:
           [
-            "test_export*",
-            "test_modeling*",
+            "test_modeling.py",
+            "test_modeling_basic.py",
+            "test_modeling_diffusion.py",
+            "test_modeling_sentence_transformers.py",
             "test_quantization*",
             "test_training*",
+            "test_export*",
           ]
         transformers-version: ["4.36.0", "4.45.*"]
         python-version: ["3.9"]
@@ -56,15 +59,15 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/${{ matrix.test_pattern }}.py
+          pytest tests/openvino/${{ matrix.test_pattern }} --duration=0
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
-      - name: Install nightly OpenVINO
+      - name: Install dependencies (nightly)
         run: |
           pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
-      - name: Test with Pytest
-        if: ${{ matrix.test_pattern == 'test_modeling*' }}
+      - name: Test with Pytest (nightly)
+        if: ${{ matrix.test_pattern == 'test_modeling_basic.py' }}
         run: |
           pytest tests/openvino/modeling_basic.py
