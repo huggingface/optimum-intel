@@ -70,4 +70,4 @@ jobs:
       - name: Test with Pytest (nightly)
         if: ${{ matrix.test_pattern == 'test_modeling_basic.py' }}
         run: |
-          pytest tests/openvino/modeling_basic.py
+          pytest tests/openvino/test_modeling_basic.py
