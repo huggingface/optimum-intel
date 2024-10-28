@@ -2505,6 +2505,26 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
 
         self.patched_forward = patched_forward
 
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.45.0"):
+            from transformers.models.gemma2.modeling_gemma2 import GEMMA2_ATTENTION_CLASSES
+
+            sdpa_attn = GEMMA2_ATTENTION_CLASSES["sdpa"]
+            eager_attn = GEMMA2_ATTENTION_CLASSES["eager"]
+
+            for layer in self._model.model.layers:
+                if isinstance(layer.self_attn, eager_attn):
+                    layer.self_attn._orig_forward = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.45.0"):
+            for layer in self._model.model.layers:
+                if hasattr(layer.self_attn, "_orig_forward"):
+                    layer.self_attn.forward = layer.self_attn._orig_forward
+
 
 def _decilm_attn_forward(
     self,
