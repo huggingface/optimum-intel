@@ -20,13 +20,12 @@ jobs:
       matrix:
         test_pattern:
           [
-            "test_modeling.py",
-            "test_modeling_basic.py",
-            "test_modeling_diffusion.py",
-            "test_modeling_sentence_transformers.py",
-            "test_quantization*",
-            "test_training*",
-            "test_export*",
+            "*modeling.py",
+            "*modeling_diffusion.py",
+            "*modeling_sentence_transformers.py",
+            "*quantization*",
+            "*training*",
+            "*export*",
           ]
         transformers-version: ["4.36.0", "4.45.*"]
         python-version: ["3.9"]
@@ -53,11 +52,16 @@ jobs:
         run: |
           python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
-      - name: Downgrade Accelerate
-        if: ${{ matrix.transformers-version == '4.36.0' }}
+      - if: ${{ matrix.transformers-version == '4.36.0' }}
+        name: Downgrade Accelerate
         run: pip install accelerate==0.*
 
-      - name: Test with Pytest
+      - name: Test with Pytest (basic)
+        run: |
+          # catch failures early and quickly
+          pytest tests/openvino/test_modeling_basic.py --durations=0
+
+      - name: Test with Pytest (advanced)
         run: |
           pytest tests/openvino/${{ matrix.test_pattern }} --durations=0
         env:
@@ -68,6 +72,5 @@ jobs:
           pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Test with Pytest (nightly)
-        if: ${{ matrix.test_pattern == 'test_modeling_basic.py' }}
         run: |
           pytest tests/openvino/test_modeling_basic.py
