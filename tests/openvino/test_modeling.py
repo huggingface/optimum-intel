@@ -927,7 +927,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             additional_inputs = {"past_key_values": DynamicCache()}
         transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
-        self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
+        self.assertTrue(
+            torch.allclose(ov_outputs, transformers_outputs),
+            "OV output {ov_outputs}\nTransofrmers output  {transformers_output}",
+        )
 
         del transformers_model
         del ov_model
@@ -1092,6 +1095,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
                 "trust_remote_code": True,
             }
+
+        # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
+        if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
+            model_kwargs["attn_implemenation"] = "sdpa"
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "glm4"]:
             return
