@@ -865,7 +865,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
-            model_kwargs["attn_implemenation"] = "sdpa"
+            model_kwargs["attn_implementation"] = "sdpa"
 
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
