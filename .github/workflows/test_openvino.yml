@@ -22,7 +22,6 @@ jobs:
           [
             "*modeling.py",
             "*modeling_diffusion.py",
-            "*modeling_sentence_transformers.py",
             "*quantization*",
             "*training*",
             "*export*",
