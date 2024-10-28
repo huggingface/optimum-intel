@@ -674,7 +674,6 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("this is a simple input", return_tensors="np")
         self.assertTrue("token_type_ids" in model.input_names)
-        token_type_ids = tokens.pop("token_type_ids")
         outs = model(token_type_ids=token_type_ids, **tokens)
         outs_without_token_type_ids = model(**tokens)
         self.assertTrue(np.allclose(outs.logits, outs_without_token_type_ids.logits))
@@ -868,7 +867,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
-        tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -905,7 +903,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -1169,7 +1166,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
