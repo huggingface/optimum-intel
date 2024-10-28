@@ -55,6 +55,7 @@ TESTS_REQUIRE = [
     "tiktoken",
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
+    "peft",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
@@ -71,7 +72,6 @@ EXTRAS_REQUIRE = {
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
-    "peft": ["peft"],
 }
 
 setup(

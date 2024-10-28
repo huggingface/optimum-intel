@@ -24,7 +24,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # TODO: testong python upper bound seems unnecessary
         # Testing lower and upper bound of supported Python versions
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.9", "3.12"]
