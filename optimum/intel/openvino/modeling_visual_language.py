@@ -722,7 +722,8 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
-        self._legacy_processing = not hasattr(self.config, "image_seq_length")
+        self._support_new_processing = hasattr(self.config, "image_seq_length")
+        self._legacy_processing = not self._support_new_processing
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -758,9 +759,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         if legacy_processing is None:
-            legacy_processing = not (hasattr(self.config, "image_seq_length") and (input_ids.shape[-1] == 1)) or (
-                (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
-            )
+            legacy_processing = self._legacy_processing
 
         if legacy_processing:
             pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
@@ -840,20 +839,19 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_multimodal_embeddings(
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
-        legacy_processing = self._legacy_processing
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
-        if pixel_values is not None and not legacy_processing and past_key_values is None:
+        if pixel_values is not None and self._support_new_processing and past_key_values is None:
             legacy_processing = (input_ids == self.config.image_token_index).sum(
                 1
             ).max() < self.config.image_seq_length
             self._legacy_processing = legacy_processing
 
         inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
-            input_ids, pixel_values, attention_mask, position_ids, legacy_processing=legacy_processing, **kwargs
+            input_ids, pixel_values, attention_mask, position_ids, legacy_processing=self._legacy_processing, **kwargs
         )
 
-        if legacy_processing and pixel_values is not None and past_key_values is not None:
+        if self._legacy_processing and pixel_values is not None and past_key_values is not None:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
 
         return inputs_embeds, attention_mask, position_ids
@@ -966,9 +964,8 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
 
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
-        legacy_processing = self._legacy_processing
 
-        if pixel_values is not None and not legacy_processing and past_key_values is None:
+        if pixel_values is not None and self._support_new_processing and past_key_values is None:
             legacy_processing = (input_ids == self.config.image_token_index).sum(
                 1
             ).max() < self.config.image_seq_length
@@ -1010,11 +1007,16 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
-                    legacy_processing=legacy_processing,
+                    legacy_processing=self._legacy_processing,
                     **kwargs,
                 )
 
-        if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
+        if (
+            self._legacy_processing
+            and pixel_values is not None
+            and past_key_values is not None
+            and input_ids.shape[1] == 1
+        ):
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
 
         return inputs_embeds, attention_mask, position_ids
