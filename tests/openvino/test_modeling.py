@@ -674,6 +674,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("this is a simple input", return_tensors="np")
         self.assertTrue("token_type_ids" in model.input_names)
+        token_type_ids = tokens.pop("token_type_ids")
         outs = model(token_type_ids=token_type_ids, **tokens)
         outs_without_token_type_ids = model(**tokens)
         self.assertTrue(np.allclose(outs.logits, outs_without_token_type_ids.logits))
