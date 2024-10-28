@@ -1096,9 +1096,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "trust_remote_code": True,
             }
 
-        # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
-        if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
-            model_kwargs["attn_implemenation"] = "sdpa"
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "glm4"]:
             return
