@@ -1922,7 +1922,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
         )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
@@ -1932,6 +1932,27 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        ov_model.to("AUTO")
+        self.assertTrue("AUTO" in ov_model._device)
+        self.assertTrue("AUTO" in ov_model.vision_embeddings._device)
+        self.assertTrue(ov_model.vision_embeddings.request is None)
+        self.assertTrue("AUTO" in ov_model.language_model._device)
+        self.assertTrue(ov_model.language_model.request is None)
+        self.assertTrue(ov_model.language_model.text_emb_request is None)
+        for additional_part in ov_model.additional_parts:
+            self.assertTrue("AUTO" in getattr(ov_model, additional_part)._device)
+            self.assertTrue(getattr(ov_model, additional_part).request is None)
+        ov_model.to("CPU")
+        ov_model.compile()
+        self.assertTrue("CPU" in ov_model._device)
+        self.assertTrue("CPU" in ov_model.vision_embeddings._device)
+        self.assertTrue(ov_model.vision_embeddings.request is not None)
+        self.assertTrue("CPU" in ov_model.language_model._device)
+        self.assertTrue(ov_model.language_model.request is not None)
+        self.assertTrue(ov_model.language_model.text_emb_request is not None)
+        for additional_part in ov_model.additional_parts:
+            self.assertTrue("CPU" in getattr(ov_model, additional_part)._device)
+            self.assertTrue(getattr(ov_model, additional_part).request is not None)
         # pytorch minicpmv and internvl are not designed to be used via forward
         if model_arch not in ["minicpmv", "internvl2"]:
             set_seed(SEED)
@@ -2078,6 +2099,15 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             )
             preprocessors = {"processor": processor, "tokenizer": None}
         return preprocessors
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_model_can_be_loaded_after_saving(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        with TemporaryDirectory() as save_dir:
+            ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, compile=False)
+            ov_model.save_pretrained(save_dir)
+            ov_restored_model = OVModelForVisualCausalLM.from_pretrained(save_dir, compile=False)
+            self.assertIsInstance(ov_restored_model, type(ov_model))
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):

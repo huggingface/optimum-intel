@@ -625,6 +625,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 compress_model_transformation(model)
         return self
 
+    def to(self, device):
+        self.language_model.to(device)
+        super().to(device)
+        return self
+
     def forward(
         self,
         input_ids,
