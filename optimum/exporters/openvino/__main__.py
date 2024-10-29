@@ -493,7 +493,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                         f"models won't be generated. Exception: {exception}"
                     )
         elif model:
-            for tokenizer_name in ("tokenizer", "tokenizer_2"):
+            for tokenizer_name in ("tokenizer", "tokenizer_2", "tokenizer_3"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
