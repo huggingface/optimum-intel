@@ -1818,10 +1818,143 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         return result
 
 
+class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_projection"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
+        self.sub_GN = torch.tensor(self.config.sub_GN)
+        self.glb_GN = torch.tensor(self.config.glb_GN)
+
+    def get_vision_embeddings(self, pixel_values, image_sizes, **kwargs):
+        num_images, num_crops, c, h, w = pixel_values.shape
+        img_features = self.vision_embeddings(pixel_values.flatten(0, 1)).last_hidden_state.reshape(
+            num_images, num_crops, -1, self.config.img_processor["image_dim_out"]
+        )
+        image_features_proj = self.hd_feature_transform(img_features, image_sizes)
+        return image_features_proj
+
+    def hd_feature_transform(self, image_features, image_sizes):
+        """
+        image_features: (num_images, num_crops+1, 24*24, 1024)
+        """
+
+        image_features = torch.from_numpy(image_features)
+        global_image_features = image_features[:, 0]  # (num_images, 24*24, 1024)
+        # global feature can be viewed as a special HD case with num_crops 1x1
+        global_image_features_hd = self.reshape_hd_patches_2x2merge(global_image_features, 1, 1)
+        global_image_features_hd_newline = self.add_image_newline(global_image_features_hd)
+
+        all_image_embeddings = []
+        # need a for loop to process each image because of different image sizes
+        # (patch arrangement is different for each image)
+        for i, img_size in enumerate(image_sizes):
+            h, w = img_size
+            h_crop = h // 336
+            w_crop = w // 336
+            num_crops = h_crop * w_crop
+
+            # NOTE: real num_crops is padded
+            # (num_crops, 24*24, 1024)
+            sub_image_features = image_features[i, 1 : 1 + num_crops]
+            sub_image_features_hd = self.reshape_hd_patches_2x2merge(sub_image_features, h_crop, w_crop)
+            sub_image_features_hd_newline = self.add_image_newline(sub_image_features_hd)
+
+            # [sub features, separator, global features]
+            all_image_embeddings.extend(
+                [
+                    sub_image_features_hd_newline.squeeze(0),  # (h_crop*12*(w_crop*12+1), 4096)
+                    self.glb_GN.squeeze(0),
+                    global_image_features_hd_newline[i],
+                ]
+            )
+        image_features_proj = self.vision_projection(torch.cat(all_image_embeddings, dim=0).unsqueeze(0))[0]
+
+        return image_features_proj
+
+    def reshape_hd_patches_2x2merge(self, image_features, h_crop, w_crop):
+        """
+        image_features: (num_images*num_crops, 24*24, 1024)
+        output: (num_images, h_crop*12, w_crop*12, 4096), h_crop*w_crop == num_crops
+        """
+        N, L, C = image_features.shape
+        assert L == 24 * 24 and C == 1024 and N % (h_crop * w_crop) == 0
+        num_images = N // (h_crop * w_crop)
+        H = int(L**0.5)
+        image_features_hd = (
+            image_features.reshape(N, H, H, C)  # N, 24, 24, 1024
+            .reshape(N, H // 2, 2, H // 2, 2, C)  # N, 12, 2, 12, 2, 1024
+            .permute(0, 1, 3, 2, 4, 5)  # N, 12, 12, 2, 2, 1024
+            .reshape(N, -1, 4 * C)  # N, 144, 4096
+            .reshape(num_images, h_crop, w_crop, H // 2, H // 2, -1)  # n_img, h_crop, w_crop, 12, 12, 4096
+            .permute(0, 1, 3, 2, 4, 5)  # n_img, h_crop, 12, w_crop, 12, 4096
+            .reshape(num_images, h_crop * H // 2, w_crop * H // 2, 4 * C)  # n_img, h_crop*12, w_crop*12, 4096
+        )
+
+        return image_features_hd
+
+    def add_image_newline(self, image_features_hd):
+        """
+        image_features_hd: (num_images, h_crop*12, w_crop*12, 4096)
+        output: (num_images, (h_crop*12) * (w_crop*12+1), 4096)
+        """
+        num_images, h, w, hid_dim = image_features_hd.shape
+        # add the newline token to the HD image feature patches
+        newline_embeddings = self.sub_GN.expand(num_images, h, -1, -1)  # (n_img, h, 1, hid_dim)
+        image_features_hd_newline = torch.cat([image_features_hd, newline_embeddings], dim=2).reshape(
+            num_images, -1, hid_dim
+        )
+        return image_features_hd_newline
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, image_sizes=None, **kwargs
+    ):
+        MAX_INPUT_ID = int(1e9)
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+
+        # positions for image tokens
+        positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=True)
+        has_image = len(positions[0].tolist()) > 0
+        input_ids = input_ids.clamp_min(0).clamp_max(self.config.vocab_size)
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids, **kwargs))
+        if has_image:
+            vision_embeds = self.get_vision_embeddings(
+                pixel_values, input_ids=input_ids, image_sizes=image_sizes, **kwargs
+            )
+            image_features_proj = torch.from_numpy(vision_embeds)
+            inputs_embeds = inputs_embeds.index_put(positions, image_features_proj, accumulate=False)
+
+        return inputs_embeds, attention_mask, position_ids
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "internvl_chat": _OvInternVLForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
+    "phi3_v": _OVPhi3VisionForCausalLM,
 }
