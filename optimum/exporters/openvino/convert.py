@@ -712,7 +712,14 @@ def export_from_model(
                 )
 
         model_name_or_path = model.config._name_or_path
-        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
+        if preprocessors is not None:
+            for processor in preprocessors:
+                try:
+                    processor.save_pretrained(output)
+                except Exception as ex:
+                    logger.error(f"Saving {type(processor)} failed with {ex}")
+        else:        
+            maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
 
@@ -890,6 +897,10 @@ def _get_multi_modal_submodels_and_export_configs(
 
     if model_type == "internvl-chat" and preprocessors is not None:
         model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
+    
+    if model_type == "phi3-v":
+        model.config.glb_GN = model.model.vision_embed_tokens.glb_GN.tolist()
+        model.config.sub_GN = model.model.vision_embed_tokens.sub_GN.tolist()
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()

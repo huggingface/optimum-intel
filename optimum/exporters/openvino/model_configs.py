@@ -86,6 +86,7 @@ from .model_patcher import (
     MPTModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
+    Phi3VisionImageEmbeddingsPatcher,
     QwenModelPatcher,
     RotaryEmbPatcher,
     UpdateCausalMaskModelPatcher,
@@ -2195,4 +2196,211 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
             return MiniCPMVResamplerModelPatcher(self, model, model_kwargs)
 
+        return super().patch_model_for_export(model, model_kwargs)
+    
+
+class Phi3VisionConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_PROJECTION = "vision_projection"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("input",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 336,
+        height: int = 336,
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"]
+        self.image_dim_out = normalized_config.config.img_processor["image_dim_out"]
+        self.height = height
+        self.width = width
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        h = self.height // 336
+        w = self.width // 336
+        feat_size = (h * w + 1) * 144 + 1 + (h + 1) * 12
+        if self._embed_layer_realization == "linear":
+            shape = [self.batch_size, feat_size, self.image_dim_out]
+        else:
+            shape = [self.batch_size, feat_size, self.image_dim_out * 4]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+@register_in_tasks_manager("phi3-v", *["image-text-to-text"], library_name="transformers")
+class Phi3VisionOpenVINOConfig(OnnxConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi3VisionConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Phi3VisionConfigBehavior = Phi3VisionConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "img_processor"):
+            self._config = AutoConfig.from_pretrained(
+                config.img_processor["model_name"], trust_remote_code=True
+            ).vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+        if self._behavior == Phi3VisionConfigBehavior.VISION_PROJECTION and hasattr(config, "img_processor"):
+            self._config = config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyPhi3VisionProjectionInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
+            return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+        if self._behavior == Phi3VisionConfigBehavior.VISION_PROJECTION:
+            return {"input": {0: "batch_size", 1: "img_feat_size"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior in [Phi3VisionConfigBehavior.VISION_EMBEDDINGS, Phi3VisionConfigBehavior.VISION_PROJECTION]:
+            return {"last_hidden_state": {0: "batch_size", 1: "height_width_projection"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Phi3VisionConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, Phi3VisionConfigBehavior):
+            behavior = Phi3VisionConfigBehavior(behavior)
+
+        if behavior == Phi3VisionConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = "phi3"
+            model_type = model_type.replace("_", "-")
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+            export_config = InputEmbedOpenvVINOConfig(
+                self._orig_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == Phi3VisionConfigBehavior.LANGUAGE:
+            model_type = "phi3"
+            model_type = model_type.replace("_", "-")
+
+            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+                raise ValueError(
+                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+                )
+
+            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+                raise ValueError(
+                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+                )
+            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
+                "text-generation-with-past"
+            ]
+            internal_export_config = internal_export_config_class(
+                self._orig_config,
+                use_past=True,
+                use_past_in_inputs=True,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            export_config = LMInputEmbedsConfigHelper(internal_export_config)
+            export_config._normalized_config = internal_export_config._normalized_config
+            return export_config
+
+        if behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+        if behavior == Phi3VisionConfigBehavior.VISION_PROJECTION:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Phi3VisionConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Phi3VisionConfigBehavior):
+            behavior = Phi3VisionConfigBehavior(behavior)
+
+        if behavior == Phi3VisionConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
+            vision_embeddings = model.model.vision_embed_tokens
+            vision_embeddings.config = model.config
+            return vision_embeddings
+
+        if behavior == Phi3VisionConfigBehavior.VISION_PROJECTION:
+            projection = model.model.vision_embed_tokens.img_projection
+            projection.config = model.config
+            return projection
+
+        if behavior == Phi3VisionConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
+            return Phi3VisionImageEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)

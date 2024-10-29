@@ -45,6 +45,8 @@ from optimum.utils.save_utils import maybe_load_preprocessors
 from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
 
 
+FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager"}
+
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
@@ -264,6 +266,13 @@ def main_export(
 
         if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
             loading_kwargs["attn_implementation"] = "eager"
+        
+        # some models force flash_attn attention by default thta is not available for cpu
+        logger.warn(model_type)
+        if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
+            loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
+        
+        logger.warn(loading_kwargs)
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
         if (
