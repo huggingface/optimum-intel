@@ -216,6 +216,11 @@ class OVTrainer(Trainer):
         logger.warning("OVTrainer is deprecated and will be removed in optimum-intel v1.22.0.")
 
         if is_transformers_version(">=", "4.45.0"):
+            if is_transformers_version(">=", "4.46.0"):
+                raise ImportError(
+                    f"Unsupported transformers version found is {_transformers_version} which is not supported by the OVTrainer. Please downgrade to v4.44"
+                )
+
             logger.warning(
                 f"The transformers version found is {_transformers_version} which is not officially supported by the OVTrainer, use at your own risk"
             )
