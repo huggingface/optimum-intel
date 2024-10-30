@@ -158,7 +158,6 @@ class IPEXPagedCache(Cache):
         value_states: torch.Tensor,
         layer_idx: int,
         attention_mask: torch.Tensor,
-        position_ids: torch.Tensor,
         input_lens: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -175,7 +174,7 @@ class IPEXPagedCache(Cache):
             A tuple containing the updated key and value states.
         """
 
-        batch_size = position_ids.shape[0]
+        batch_size = input_lens.shape[-1]
         if self.get_seq_length() == 0:
             # prefill
             self.update_for_prefill(key_states, value_states, layer_idx, batch_size, input_lens)

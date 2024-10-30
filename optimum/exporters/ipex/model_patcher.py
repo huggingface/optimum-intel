@@ -13,8 +13,8 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
-from transformers.models.falcon.modeling_falcon import FalconDecoderLayer
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block
+from transformers.models.falcon.modeling_falcon import FalconModel, FalconDecoderLayer
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaModel,
@@ -27,13 +27,14 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
-    _gpt2_block_forward,
     _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
     _IPEXGPT2Attention,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
+    _falcon_model_forward,
+    _gpt2_model_forward,
 )
 
 
@@ -90,7 +91,9 @@ def _patch_falcon_model(model):
         2. Use IPEX Rope and paged cache
         3. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
     """
-    model.transformer._use_sdpa = False
+    num_key_value_heads = model.config.num_kv_heads if (model.config.new_decoder_architecture or not model.config.multi_query) else 1
+    setattr(model.config, "num_key_value_heads", num_key_value_heads)
+    convert_functions(model, FalconModel, "forward", _falcon_model_forward)
     replace_customized_linear_with_linear(model)
     convert_class(model, FalconDecoderLayer, _IPEXFalconDecoderLayer, model.config)
     return model
@@ -102,9 +105,10 @@ def _patch_gpt2_model(model):
         1. Disable SDPA so the attention mask will be compatible to ipex attention.
         2. Use IAKV cache
     """
-    model.transformer._attn_implementation = "eager"
+    num_key_value_heads = model.config.num_attention_heads
+    setattr(model.config, "num_key_value_heads", num_key_value_heads)
+    convert_functions(model, GPT2Model, "forward", _gpt2_model_forward)
     convert_class(model, GPT2Attention, _IPEXGPT2Attention, model.config)
-    convert_functions(model, GPT2Block, "forward", _gpt2_block_forward)
     return model
 
 
