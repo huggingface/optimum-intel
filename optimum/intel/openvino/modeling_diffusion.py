@@ -995,9 +995,9 @@ class OVPipelinePart(ConfigMixin):
 class OVModelTextEncoder(OVPipelinePart):
     def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
         super().__init__(model, parent_pipeline, model_name)
-        self.hidden_states_output_names = sorted(
-            {name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")}
-        )
+        self.hidden_states_output_names = {
+            name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")
+        }
 
     def forward(
         self,
