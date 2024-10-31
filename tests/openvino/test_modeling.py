@@ -933,7 +933,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
-            "OV output {ov_outputs}\nTransofrmers output  {transformers_output}",
+            "OV output {ov_outputs}\nTransformers output  {transformers_output}",
         )
 
         del transformers_model
