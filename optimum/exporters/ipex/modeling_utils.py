@@ -616,9 +616,15 @@ class _IPEXFalconAttention(_IPEXAttention):
 
     def qkv_gemm(self, hidden_states):
         qkv_out = self.query_key_value(hidden_states)
-        query = qkv_out[:, : self.q_slice].view(-1, self.num_heads, self.head_dim)
-        key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
-        value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
+        if self.new_decoder_architecture:
+            qkv_out = qkv_out.view(qkv_out.shape[0], -1, self.num_heads // self.num_kv_heads + 2, self.head_dim)
+            query = qkv_out[:, :, :-2, :].flatten(1, 2)
+            key = qkv_out[:, :, [-2], :].flatten(1, 2)
+            value = qkv_out[:, :, [-1], :].flatten(1, 2)
+        else:
+            query = qkv_out[:, : self.q_slice].view(-1, self.num_heads, self.head_dim)
+            key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
+            value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
         return query, key, value
 
     def rope(self, query, key, **kwargs):
