@@ -526,6 +526,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
+        # added as model.generate validates model inputs based on forward signature
         kwargs["token_type_ids"] = token_type_ids
 
         inputs = self.prepare_inputs(
