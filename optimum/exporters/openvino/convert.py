@@ -39,6 +39,7 @@ from optimum.exporters.utils import (
     get_diffusion_models_for_export,
 )
 from optimum.intel.utils.import_utils import (
+    _diffusers_version,
     _nncf_version,
     _open_clip_version,
     _optimum_intel_version,
@@ -806,7 +807,7 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
 
             model.set_rt_info(sentence_transformers.__version__, ["optimum", "sentence_transformers_version"])
         if library_name == "diffusers":
-            model.set_rt_info(_optimum_version, ["optimum", "diffusers_version"])
+            model.set_rt_info(_diffusers_version, ["optimum", "diffusers_version"])
         elif library_name == "timm":
             model.set_rt_info(_timm_version, ["optimum", "timm_version"])
         elif library_name == "open_clip":
