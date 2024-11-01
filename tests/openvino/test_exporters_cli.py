@@ -93,6 +93,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") else 0,
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") else 0,
+        "llava": 2 if is_tokenizers_version("<", "0.20") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -244,6 +245,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
                 models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+            elif task.startswith("image-text-to-text"):
+                models = [model.language_model, model.vision_embeddings]
             else:
                 models = [model]
 

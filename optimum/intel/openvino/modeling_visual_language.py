@@ -30,7 +30,23 @@ from .. import OVQuantizer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
-from .utils import TemporaryDirectory
+from .utils import (
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_EMBEDDINGS_MODEL_NAME,
+    TemporaryDirectory,
+)
+
+
+try:
+    from transformers import LlavaForConditionalGeneration
+except ImportError:
+    LlavaForConditionalGeneration = None
+
+try:
+    from transformers import LlavaNextForConditionalGeneration
+except ImportError:
+    LlavaNextForConditionalGeneration = None
 
 
 logger = logging.getLogger(__name__)
@@ -66,13 +82,8 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
     def compile(self):
         if self.request is None:
-            if self._compile_only:
-                self.request = self.model.create_infer_request()
-            else:
-                logger.info(f"Compiling the Language model to {self._device} ...")
-                self.request = self._compile_model(
-                    self.model, self._device, self.ov_config, self.model_save_dir
-                ).create_infer_request()
+            logger.info(f"Compiling the Language model to {self._device} ...")
+            super().compile()
         self._compile_text_emb()
 
     def _compile_text_emb(self):
@@ -255,6 +266,7 @@ MODEL_PARTS_CLS_MAPPING = {"resampler": OVResampler, "vision_projection": OVVisi
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
+    auto_model_class = AutoModelForCausalLM
 
     def __init__(
         self,
@@ -356,12 +368,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.lm_model, self.text_embeddings_model, self.vision_embeddings_model]
-        dst_file_names = [
-            "openvino_language_model.xml",
-            "openvino_text_embeddings_model.xml",
-            "openvino_vision_embeddings_model.xml",
-        ]
+        src_files = [self.lm_model, self.text_embdings_model, self.vision_embeddings_model]
+        dst_file_names = [OV_LANGUAGE_MODEL_NAME, OV_TEXT_EMBEDDINGS_MODEL_NAME, OV_VISION_EMBEDDINGS_MODEL_NAME]
         for part in self.additional_parts:
             model = getattr(self, f"{part}_model", None)
             if model is not None:
@@ -440,14 +448,20 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             token = use_auth_token
 
         model_file_names = {
-            "language_model": "openvino_language_model.xml",
-            "text_embeddings": "openvino_text_embeddings_model.xml",
-            "vision_embeddings": "openvino_vision_embeddings_model.xml",
+            "language_model": OV_LANGUAGE_MODEL_NAME,
+            "language_model_bin": OV_LANGUAGE_MODEL_NAME.replace(".xml", ".bin"),
+            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "text_embeddings_bin": OV_TEXT_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
+            "vision_embeddings": OV_VISION_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_bin": OV_VISION_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
         }
 
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         for part in model_cls.additional_parts:
             model_file_names[part] = f"openvino_{part}_model.xml"
+            model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
+        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
@@ -772,6 +786,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
+    auto_model_class = LlavaForConditionalGeneration
+    
     def __init__(
         self,
         language_model: ov.Model,
@@ -957,6 +973,8 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
+    auto_model_class = LlavaNextForConditionalGeneration
+
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
         from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
@@ -1227,7 +1245,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
 
 
-class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
+class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
@@ -1995,8 +2013,8 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
-    "internvl_chat": _OvInternVLForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
+    "internvl_chat": _OVInternVLForCausalLM,
 }

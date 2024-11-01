@@ -96,7 +96,13 @@ from optimum.intel.openvino.modeling_visual_language import (
     OVModelWithEmbedForCausalLM,
     OVVisionEmbedding,
 )
-from optimum.intel.openvino.utils import TemporaryDirectory, _print_compiled_model_properties
+from optimum.intel.openvino.utils import (
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_EMBEDDINGS_MODEL_NAME,
+    TemporaryDirectory,
+    _print_compiled_model_properties,
+)
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
@@ -135,6 +141,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -218,6 +225,64 @@ class OVModelIntegrationTest(unittest.TestCase):
             del compile_only_model
 
         outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        del loaded_model
+        del model
+        gc.collect()
+
+    def test_load_from_hub_and_save_visual_language_model(self):
+        model_id = self.OV_VLM_MODEL_ID
+        processor = get_preprocessor(model_id)
+        prompt = "<image>\n What is shown in this image?"
+        image = Image.open(
+            requests.get(
+                "http://images.cocodataset.org/val2017/000000039769.jpg",
+                stream=True,
+            ).raw
+        )
+        loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
+        self.assertIsInstance(loaded_model.vision_embeddings, OVVisionEmbedding)
+        self.assertIsInstance(loaded_model.language_model, OVModelWithEmbedForCausalLM)
+        for additional_part in loaded_model.additional_parts:
+            self.assertTrue(hasattr(loaded_model, additional_part))
+            self.assertIsInstance(getattr(loaded_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(
+            loaded_model.language_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY"
+        )
+        self.assertEqual(loaded_model.language_model.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(loaded_model.vision_embeddings.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        set_seed(SEED)
+        loaded_model_outputs = loaded_model(**inputs)
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            for xml_file_name in [
+                OV_LANGUAGE_MODEL_NAME,
+                OV_TEXT_EMBEDDINGS_MODEL_NAME,
+                OV_VISION_EMBEDDINGS_MODEL_NAME,
+            ]:
+                self.assertTrue(xml_file_name in folder_contents)
+                self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
+            compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_model.language_model.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.language_model.request, ov.runtime.InferRequest)
+            self.assertIsInstance(compile_only_model.language_model.text_emb_model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.language_model.text_emb_request, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.vision_embeddings.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.vision_embeddings.request, ov.runtime.CompiledModel)
+            outputs = compile_only_model(**inputs)
+            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+            del compile_only_model
+
+        outputs = model(**inputs)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
         del loaded_model
         del model
@@ -2104,9 +2169,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     def test_model_can_be_loaded_after_saving(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         with TemporaryDirectory() as save_dir:
-            ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, compile=False)
+            ov_model = OVModelForVisualCausalLM.from_pretrained(
+                model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
             ov_model.save_pretrained(save_dir)
-            ov_restored_model = OVModelForVisualCausalLM.from_pretrained(save_dir, compile=False)
+            ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
+                save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
 
