@@ -3,7 +3,7 @@ on:
   push:
     branches:
       - main
-
+      - v*-release
   pull_request:
     branches:
       - main
@@ -14,25 +14,21 @@ concurrency:
 
 jobs:
   quality:
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.9"]
-        os: [ubuntu-latest]
+    runs-on: ubuntu-22.04
 
-    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.python-version }}
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.9
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
+          # .[quality] installs too many dependencies
           # TODO: we should remove the the version pinning at some point
           pip install "black~=23.1" "ruff==0.4.4"
 

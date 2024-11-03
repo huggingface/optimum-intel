@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   build_documentation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     env:
       COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
