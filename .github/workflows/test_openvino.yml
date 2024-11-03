@@ -18,10 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test_pattern:
+        test-pattern:
           [
-            "*modeling.py",
-            "*modeling_diffusion.py",
+            "*modeling*",
+            "*diffusion*",
             "*quantization*",
             "*training*",
             "*export*",
@@ -47,29 +47,27 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]==${{ matrix.transformers-version }}
 
-      - name: Assert versions
-        run: |
-          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
-
       - if: ${{ matrix.transformers-version == '4.36.0' }}
         name: Downgrade Accelerate
         run: pip install accelerate==0.*
 
-      - name: Test with Pytest (basic)
+      - name: Assert versions
         run: |
-          # catch failures early and quickly
-          pytest tests/openvino/test_modeling_basic.py --durations=0
+          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
-      - name: Test with Pytest (advanced)
+      - name: Test with Pytest
         run: |
-          pytest tests/openvino/${{ matrix.test_pattern }} --durations=0
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
-      - name: Install dependencies (nightly)
+      - if: ${{ matrix.test-pattern == '*modeling*' }}
+        name: Install dependencies (nightly)
         run: |
           pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          pip uninstall -y nncf
 
-      - name: Test with Pytest (nightly)
+      - if: ${{ matrix.test-pattern == '*modeling*' }}
+        name: Test with Pytest (nightly)
         run: |
-          pytest tests/openvino/test_modeling_basic.py
+          pytest tests/openvino/test_modeling_basic.py --durations=0

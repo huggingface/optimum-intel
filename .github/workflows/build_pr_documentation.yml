@@ -12,6 +12,7 @@ concurrency:
 jobs:
   build_documentation:
     runs-on: ubuntu-latest
+
     env:
       COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.number }}
@@ -28,6 +29,11 @@ jobs:
         with:
           repository: "huggingface/optimum-intel"
           path: optimum-intel
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.9
 
       - name: Setup environment
         run: |
