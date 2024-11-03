@@ -1,3 +1,4 @@
+transformers>=4.36.0,<4.46.0
 datasets>=1.14.0,<2.20.0
 torch >= 1.9.0
 evaluate

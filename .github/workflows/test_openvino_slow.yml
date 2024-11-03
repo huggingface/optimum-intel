@@ -28,7 +28,7 @@ jobs:
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.9", "3.12"]
         os: ["ubuntu-22.04", "windows-latest"]
-        transformers-version: ["4.45.*"]
+        transformers-version: ["latest"]
         openvino: ["openvino openvino-tokenizers"]
         nncf: ["nncf"]
         include:
@@ -39,12 +39,12 @@ jobs:
             nncf: "nncf"
           - python-version: "3.12"
             os: "ubuntu-22.04"
-            transformers-version: "4.45.*"
+            transformers-version: "latest"
             openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
             nncf: "nncf"
           - python-version: "3.12"
             os: "ubuntu-22.04"
-            transformers-version: "4.45.*"
+            transformers-version: "latest"
             openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
             nncf: "git+https://github.com/openvinotoolkit/nncf.git"
 
@@ -64,11 +64,11 @@ jobs:
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install ${{ matrix.openvino }}
-          pip install .[tests] transformers[testing]==${{ matrix.transformers-version }}
+          pip install .[tests] transformers[testing]
 
-      - name: Assert versions
-        run: |
-          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
+      - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Downgrade dependencies
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
       - name: Test with Pytest
         run: |

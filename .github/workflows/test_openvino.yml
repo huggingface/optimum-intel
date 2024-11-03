@@ -26,7 +26,7 @@ jobs:
             "*training*",
             "*export*",
           ]
-        transformers-version: ["4.36.0", "4.45.*"]
+        transformers-version: ["4.36.0", "latest"]
         python-version: ["3.9"]
         os: [ubuntu-latest]
 
@@ -41,19 +41,23 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install lowest compatible transformers version
+        if: ${{ matrix.transformers-version != 'latest' }}
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]==${{ matrix.transformers-version }}
+          pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
 
-      - if: ${{ matrix.transformers-version == '4.36.0' }}
-        name: Downgrade Accelerate
-        run: pip install accelerate==0.*
+      - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Downgrade dependencies
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
-      - name: Assert versions
-        run: |
-          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
+      - if: ${{ matrix.test-pattern == '*modeling*' }}
+        name: Uninstall NNCF
+        run: pip uninstall -y nncf
 
       - name: Test with Pytest
         run: |
@@ -65,7 +69,6 @@ jobs:
         name: Install dependencies (nightly)
         run: |
           pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
-          pip uninstall -y nncf
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Test with Pytest (nightly)

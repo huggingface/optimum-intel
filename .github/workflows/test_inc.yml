@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         torch-version: ["2.2.0", "2.3.*", "2.4.*"]
-        python-version: ["3.9"]
+        python-version: ["3.9", "3.11"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}

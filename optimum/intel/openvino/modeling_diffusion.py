@@ -409,6 +409,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
+            "image_encoder": None,
+            "safety_checker": None,
         }
         for name in submodels.keys():
             if kwargs.get(name) is not None:
@@ -433,6 +435,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "text_encoder_2": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
             "text_encoder_3": model_save_path / DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER / text_encoder_3_file_name,
         }
+
+        for config_key, value in config.items():
+            if config_key not in models and config_key not in kwargs and config_key not in submodels:
+                kwargs[config_key] = value
 
         compile_only = kwargs.get("compile_only", False)
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
@@ -995,9 +1001,9 @@ class OVPipelinePart(ConfigMixin):
 class OVModelTextEncoder(OVPipelinePart):
     def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
         super().__init__(model, parent_pipeline, model_name)
-        self.hidden_states_output_names = sorted(
-            {name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")}
-        )
+        self.hidden_states_output_names = [
+            name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")
+        ]
 
     def forward(
         self,

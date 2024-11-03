@@ -864,12 +864,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in self.REMOTE_CODE_MODELS:
             model_kwargs = {"trust_remote_code": True}
 
+        # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
+        if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
+            model_kwargs["attn_implementation"] = "sdpa"
+
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
-        tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -906,7 +909,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -930,7 +932,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             additional_inputs = {"past_key_values": DynamicCache()}
         transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
-        self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
+        self.assertTrue(
+            torch.allclose(ov_outputs, transformers_outputs),
+            "OV output {ov_outputs}\nTransformers output  {transformers_output}",
+        )
 
         del transformers_model
         del ov_model
@@ -1095,6 +1100,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
                 "trust_remote_code": True,
             }
+
+        # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
+        if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
+            model_kwargs["attn_implementation"] = "sdpa"
+
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "glm4"]:
             return
@@ -1170,7 +1180,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
