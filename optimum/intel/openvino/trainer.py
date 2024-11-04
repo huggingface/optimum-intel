@@ -148,7 +148,12 @@ DEFAULT_QUANTIZATION_CONFIG = {
         "range": {"num_init_samples": 300, "type": "mean_min_max"},
         "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
     },
-    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "scope_overrides": {
+        "activations": {
+            "{re}.*matmul_0": {"mode": "symmetric"},
+            "{re}.*scaled_dot_product_attention_0": {"mode": "symmetric"},
+        }
+    },
     "ignored_scopes": [
         "{re}.*Embedding.*",
         "{re}.*add___.*",
