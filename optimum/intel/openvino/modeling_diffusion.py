@@ -28,7 +28,7 @@ import numpy as np
 import openvino
 import torch
 from diffusers.configuration_utils import ConfigMixin
-from diffusers.pipelines import (
+from diffusers import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
@@ -60,7 +60,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
-
+from diffusers import pipelines
 from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
@@ -409,14 +409,19 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
+            "safety_checker": None,
+            "image_encoder": None,
         }
         for name in submodels.keys():
             if name in kwargs:
                 submodels[name] = kwargs.pop(name)
             elif config.get(name, (None, None))[0] is not None:
-                library_name, library_classes = config.get(name)
-                library = importlib.import_module(library_name)
-                class_obj = getattr(library, library_classes)
+                module_name, module_class = config.get(name)
+                if hasattr(pipelines, module_name):
+                    module = getattr(pipelines, module_name)
+                else:
+                    module = importlib.import_module(module_name)
+                class_obj = getattr(module, module_class)
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
                 if (model_save_path / name).is_dir():
