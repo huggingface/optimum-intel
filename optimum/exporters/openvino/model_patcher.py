@@ -1369,7 +1369,7 @@ def phi3_442_forward(
     output_attentions: Optional[bool] = None,
     output_hidden_states: Optional[bool] = None,
     return_dict: Optional[bool] = None,
-    **kwargs
+    **kwargs,
 ) -> Union[Tuple, BaseModelOutputWithPast]:
     from transformers.cache_utils import Cache, DynamicCache
     from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
@@ -3217,7 +3217,6 @@ class InputEmbeddingPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-
 
 
 def phi3_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):

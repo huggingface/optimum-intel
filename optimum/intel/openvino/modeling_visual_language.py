@@ -237,10 +237,7 @@ class OVVisionProjection(OVModelPart):
         return self.request(img_features)[0]
 
 
-MODEL_PARTS_CLS_MAPPING = {
-    "resampler": OVResampler,
-    "vision_projection": OVVisionProjection
-}
+MODEL_PARTS_CLS_MAPPING = {"resampler": OVResampler, "vision_projection": OVVisionProjection}
 
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
@@ -1952,11 +1949,14 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         input_ids = input_ids.clamp_min(0).clamp_max(self.config.vocab_size)
         inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids, **kwargs))
         if has_image:
-            vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_sizes=image_sizes, **kwargs)
+            vision_embeds = self.get_vision_embeddings(
+                pixel_values, input_ids=input_ids, image_sizes=image_sizes, **kwargs
+            )
             image_features_proj = torch.from_numpy(vision_embeds)
             inputs_embeds = inputs_embeds.index_put(positions, image_features_proj, accumulate=False)
-            
+
         return inputs_embeds, attention_mask, position_ids
+
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,

@@ -2197,7 +2197,7 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
             return MiniCPMVResamplerModelPatcher(self, model, model_kwargs)
 
         return super().patch_model_for_export(model, model_kwargs)
-    
+
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
