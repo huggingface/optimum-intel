@@ -409,11 +409,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
-            "image_encoder": None,
-            "safety_checker": None,
         }
         for name in submodels.keys():
-            if kwargs.get(name) is not None:
+            if name in kwargs:
                 submodels[name] = kwargs.pop(name)
             elif config.get(name, (None, None))[0] is not None:
                 library_name, library_classes = config.get(name)
