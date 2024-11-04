@@ -46,7 +46,7 @@ jobs:
           pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
-        name: Downgrade dependencies
+        name: Downgrade Transformers and Accelerate
         run: |
           pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
