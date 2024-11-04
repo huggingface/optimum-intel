@@ -409,9 +409,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
-            "image_encoder": None,
-            "safety_checker": None,
         }
+
+        additional_submodels = ["image_encoder", "safety_checker"]
         for name in submodels.keys():
             if kwargs.get(name) is not None:
                 submodels[name] = kwargs.pop(name)
@@ -437,7 +437,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         }
 
         for config_key, value in config.items():
-            if config_key not in models and config_key not in kwargs and config_key not in submodels:
+            if (
+                config_key not in models
+                and config_key not in kwargs
+                and config_key not in submodels
+                and config_key not in additional_submodels
+            ):
                 kwargs[config_key] = value
 
         compile_only = kwargs.get("compile_only", False)
