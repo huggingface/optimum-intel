@@ -1,0 +1,83 @@
+name: OpenVINO - Full Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * *" # run every day at 3:41
+  push:
+    branches:
+      - v*-release
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            os: "ubuntu-22.04"
+            transformers-version: "latest"
+            openvino: "ov-release"
+            nncf: "nncf-release"
+          - python-version: "3.12"
+            os: "ubuntu-22.04"
+            transformers-version: "latest"
+            openvino: "ov-nightly"
+            nncf: "nncf-release"
+          - python-version: "3.12"
+            os: "ubuntu-22.04"
+            transformers-version: "latest"
+            openvino: "ov-nightly"
+            nncf: "nncf-develop"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install lowest compatible transformers version
+        if: ${{ matrix.transformers-version != 'latest' }}
+        run: pip install transformers==${{ matrix.transformers-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install .[tests]
+
+      - name: Install openvino-nightly
+        if: ${{ matrix.openvino == 'ov-nightly' }}
+        run: pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Install openvino release
+        if: ${{ matrix.openvino != 'ov-nightly' }}
+        run: pip install .[openvino]
+
+      - name: Install nncf develop
+        if: ${{ matrix.nncf == 'nncf-develop' }}
+        run: pip install git+https://github.com/openvinotoolkit/nncf.git
+
+      - name: Install nncf release
+        if: ${{ matrix.nncf != 'nncf-develop' }}
+        run: pip install .[nncf]
+
+      - name: Pip freeze
+        run: pip freeze
+
+      - name: OpenVINO tests
+        run: pytest tests/openvino -s --durations=0
+        env:
+          RUN_SLOW: 1
+          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
