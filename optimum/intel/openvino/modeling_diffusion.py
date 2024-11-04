@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import openvino
 import torch
-from diffusers.configuration_utils import ConfigMixin
 from diffusers import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
@@ -41,7 +40,9 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLInpaintPipeline,
     StableDiffusionXLPipeline,
+    pipelines,
 )
+from diffusers.configuration_utils import ConfigMixin
 from diffusers.schedulers import SchedulerMixin
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils.constants import CONFIG_NAME
@@ -60,7 +61,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
-from diffusers import pipelines
+
 from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
