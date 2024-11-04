@@ -26,7 +26,7 @@ jobs:
             "*training*",
             "*export*",
           ]
-        transformers-version: ["4.36.0", "4.46.*"]
+        transformers-version: ["4.36.0", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -45,13 +45,15 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
 
-      - name: Assert versions
+      - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Downgrade dependencies
         run: |
-          python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
+          pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Uninstall NNCF
-        run: pip uninstall -y nncf
+        run: |
+          pip uninstall -y nncf
 
       - name: Test with Pytest
         run: |

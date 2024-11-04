@@ -24,29 +24,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Testing lower and upper bound of supported Python versions
-        # This also ensures that the test fails if dependencies break for Python 3.7
-        python-version: ["3.9", "3.12"]
-        os: ["ubuntu-22.04", "windows-latest"]
-        transformers-version: ["latest"]
-        openvino: ["openvino openvino-tokenizers"]
-        nncf: ["nncf"]
-        include:
-          - python-version: "3.12"
-            os: "ubuntu-22.04"
-            transformers-version: "4.36.0"
-            openvino: "openvino openvino-tokenizers"
-            nncf: "nncf"
-          - python-version: "3.12"
-            os: "ubuntu-22.04"
-            transformers-version: "latest"
-            openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
-            nncf: "nncf"
-          - python-version: "3.12"
-            os: "ubuntu-22.04"
-            transformers-version: "latest"
-            openvino: "--pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
-            nncf: "git+https://github.com/openvinotoolkit/nncf.git"
+        os: ["ubuntu-22.04", "windows-2019"]
+        openvino-version: ["stable", "nightly"]
+        transformers-version: ["4.36.0", "latest"]
+        nncf: ["nncf", "git+https://github.com/openvinotoolkit/nncf.git"]
 
     runs-on: ${{ matrix.os }}
 
@@ -54,23 +35,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.python-version }}
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.9
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install ${{ matrix.openvino }}
+          if [ "${{ matrix.openvino-version }}" == "stable" ]; then
+            pip install openvino openvino-tokenizers
+          else
+            pip install openvino openvino-tokenizers --pre --upgrade --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+          fi
           pip install .[tests] transformers[testing]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Downgrade dependencies
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
-      - name: Test with Pytest
+      - name: Test with Pytest (basic)
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
