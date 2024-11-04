@@ -47,7 +47,7 @@ jobs:
           if [ "${{ matrix.openvino-version }}" == "stable" ]; then
             pip install openvino openvino-tokenizers
           else
-            pip install openvino openvino-tokenizers --pre --upgrade --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+            pip install openvino openvino-tokenizers --pre --upgrade --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
           fi
           pip install .[tests] transformers[testing]
 
