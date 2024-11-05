@@ -776,9 +776,7 @@ class OVQuantizer(OptimumQuantizer):
             image = Image.open(requests.get(image_url, stream=True).raw)
 
             instruction = item[dataset_metadata["inputs"]["instruction"]]
-            chat_template = [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image"}]}]
-            prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
-            inputs = processor(images=image, text=prompt, return_tensors="pt")
+            inputs = self.model.assemble_input(processor, instruction, image)
             input_ids = inputs.input_ids
             if input_ids.size(1) > max_tokens:
                 continue

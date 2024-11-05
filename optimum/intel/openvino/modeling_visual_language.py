@@ -1,6 +1,7 @@
 import logging
 import os
 import warnings
+from abc import abstractmethod
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 
@@ -10,7 +11,14 @@ import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from transformers import AutoConfig, GenerationConfig, GenerationMixin, PretrainedConfig
+from PIL.Image import Image
+from transformers import (
+    AutoConfig,
+    GenerationConfig,
+    GenerationMixin,
+    PretrainedConfig,
+    PreTrainedTokenizer,
+)
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
@@ -711,6 +719,18 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
         return True
 
+    @staticmethod
+    @abstractmethod
+    def assemble_input(
+        processor,
+        instruction: str,
+        image: Optional[Image] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        """
+        Assemble a model input from an instruction and an image.
+        """
+
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
@@ -879,6 +899,18 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         attention_mask = torch.cat((extended_attention_mask, attention_mask[:, -target_length:]), dim=1)
         position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
         return attention_mask, position_ids
+
+    @staticmethod
+    def assemble_input(
+        processor,
+        instruction: str,
+        image: Optional[Image] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        chat_template = [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image"}]}]
+        prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        return inputs
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
