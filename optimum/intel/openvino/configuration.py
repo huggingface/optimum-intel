@@ -459,22 +459,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(
                 f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.weight_format}."
             )
-        if self.weight_format == "mxfp4":
+        if self.weight_format in ["mxfp4", "nf4"]:
             if self.bits != 4:
                 raise ValueError(
-                    f"When applying weight compression with 'mxfp4' weight format the `bits` parameters must be set to 4, but found {self.bits}"
+                    f"When applying weight compression with '{self.weight_format}' weight format, the `bits` parameter must be set to 4, but found {self.bits}"
                 )
             if self.quant_method == OVQuantizationMethod.AWQ:
-                raise ValueError("The AWQ algorithm is not supported for 'mxfp4' weight format")
+                raise ValueError(f"The AWQ algorithm is not supported for '{self.weight_format}' weight format")
             if self.scale_estimation:
-                raise ValueError("The Scale Estimation algorithm is not supported for 'mxfp4' weight format")
-            if self.gptq:
+                raise ValueError(f"The Scale Estimation algorithm is not supported for '{self.weight_format}' weight format")
+            if self.weight_format == "mxfp4" and self.gptq:
                 raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
-
-        if self.weight_format == "nf4" and self.bits != 4:
-            raise ValueError(
-                f"When applying weight compression with 'nf4' weight format the `bits` parameters must be set to 4, but found {self.bits}"
-            )
 
 
 @dataclass
