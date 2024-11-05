@@ -1935,7 +1935,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         # pytorch minicpmv and internvl are not designed to be used via forward
-        if not model_arch in ["minicpmv", "internvl2"]:
+        if model_arch not in ["minicpmv", "internvl2"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
