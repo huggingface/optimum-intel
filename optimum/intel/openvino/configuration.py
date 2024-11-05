@@ -471,7 +471,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             if self.gptq:
                 raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
 
-        if self.weight_format in "nf4" and self.bits != 4:
+        if self.weight_format == "nf4" and self.bits != 4:
             raise ValueError(
                 f"When applying weight compression with 'nf4' weight format the `bits` parameters must be set to 4, but found {self.bits}"
             )
