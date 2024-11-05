@@ -354,6 +354,7 @@ def _falcon_model_forward(
         attentions=all_self_attentions,
     )
 
+
 def _gpt2_model_forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,

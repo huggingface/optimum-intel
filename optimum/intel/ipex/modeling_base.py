@@ -305,11 +305,7 @@ class IPEXModel(OptimizedModel):
         return isinstance(self, GenerationMixin)
 
     def _call_model(self, *args, **kwargs):
-        try:
-            with torch.autocast(self.device.type, self.dtype), torch.no_grad():
-                out = self.model(*args, **kwargs)
-        except RuntimeError:
-            out = self.model(*args, **kwargs)
+        out = self.model(*args, **kwargs)
         return out
 
     def _init_warmup(self):
