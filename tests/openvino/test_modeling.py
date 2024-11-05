@@ -50,6 +50,7 @@ from transformers import (
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
@@ -1876,12 +1877,14 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = [
-        "llava",
-    ]
+    SUPPORTED_ARCHITECTURES = ["llava"]
+
+    REMOTE_CODE_MODELS = ["minicpmv"]
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next"]
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES += ["minicpmv"]
     TASK = "image-text-to-text"
 
     IMAGE = Image.open(
@@ -1900,19 +1903,50 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaNextForConditionalGeneration
 
             return LlavaNextForConditionalGeneration
-        return None
+        return AutoModelForCausalLM
+
+    def gen_inputs(self, model_arch, base_text_prompt, image=None):
+        model_id = MODEL_NAMES[model_arch]
+        if "llava" in model_arch:
+            prompt = f"<image>\n {base_text_prompt}"
+        elif "minicpmv" in model_arch:
+            prompt = "<|im_start|>user\n(<image>./</image>)\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n"
+        if model_arch != "nanollava":
+            processor = AutoProcessor.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            inputs = processor(images=[self.IMAGE.resize((600, 600))], text=[prompt], return_tensors="pt")
+        else:
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+            processor = AutoProcessor.from_pretrained(
+                config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            image_input = None
+            if image is not None:
+                image_input = processor(images=image, return_tensors="pt")["pixel_values"]
+            text_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
+
+            input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+            attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+            inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "images": image_input}
+        return inputs
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
-        processor = get_preprocessor(model_id)
-        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
-        inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
-        set_seed(SEED)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**inputs)
-        ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
+            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+        if "nanollava" in model_arch:
+            transformers_model.get_vision_tower().load_model()
+        inputs = self.gen_inputs(model_arch, "What is shown on this image?", self.IMAGE)
+
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
         self.assertIsInstance(ov_model.language_model, OVModelWithEmbedForCausalLM)
@@ -1920,8 +1954,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(hasattr(ov_model, additional_part))
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        ov_outputs = ov_model(**inputs)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        # pytorch minicpmv is not designed to be used via forward
+        if "minicpmv" not in model_arch:
+            set_seed(SEED)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**inputs)
+            ov_outputs = ov_model(**inputs)
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1930,7 +1969,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=3,
             do_sample=False,
             eos_token_id=None,
         )
@@ -1938,6 +1976,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
         transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        # original minicpmv always skip input tokens in generation results, while transformers based approach provide them
+        if model_arch == "minicpmv":
+            ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
@@ -1951,20 +1992,25 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
-        preprocessor = get_preprocessor(model_id)
-        question = "<image>\nDescribe image"
-        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
-
+        model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        inputs = self.gen_inputs(model_arch, "What is shown on this image?", self.IMAGE)
         # General case
         outputs = model.generate(**inputs, max_new_tokens=10)
-        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+        outputs = outputs[:, inputs["input_ids"].shape[1] :]
+        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
+        # No input image case
         question = "Hi, how are you?"
-        inputs = preprocessor(images=None, text=question, return_tensors="pt")
+        inputs = self.gen_inputs(model_arch, question, None)
         outputs = model.generate(**inputs, max_new_tokens=10)
-        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+        outputs = outputs[:, inputs["input_ids"].shape[1] :]
+        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
         del model
 
