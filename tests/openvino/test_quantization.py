@@ -296,23 +296,43 @@ class OVWeightCompressionTest(unittest.TestCase):
     ]
 
     if is_transformers_version(">=", "4.40.0"):
-        LOAD_IN_4_BITS_SCOPE.append(
-            (
-                OVModelForVisualCausalLM,
-                "llava_next",
-                False,
-                dict(
-                    bits=4,
-                    group_size=16,
-                    dataset="contextual",
-                    ratio=0.8,
-                    sensitivity_metric="mean_activation_magnitude",
-                    num_samples=1,
-                    processor=MODEL_NAMES["llava_next"],
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "llava_next",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        processor=MODEL_NAMES["llava_next"],
+                    ),
+                    {"int4": 20, "int8": 10},
                 ),
-                {"int4": 20, "int8": 10},
-            )
+                (
+                    OVModelForVisualCausalLM,
+                    "nanollava",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=8,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        processor=MODEL_NAMES["nanollava_vision_tower"],
+                        tokenizer=MODEL_NAMES["nanollava"],
+                        trust_remote_code=True,
+                    ),
+                    {"int4": 16, "int8": 14},
+                ),
+            ]
         )
+
     if is_transformers_version(">=", "4.45.0"):
         LOAD_IN_4_BITS_SCOPE.append(
             (
@@ -348,6 +368,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
     ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "nanollava", True))
 
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))

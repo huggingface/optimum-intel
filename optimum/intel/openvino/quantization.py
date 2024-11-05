@@ -764,29 +764,37 @@ class OVQuantizer(OptimumQuantizer):
                 "configuration files."
             )
 
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
+            tokenizer_error = None
+        except Exception as tokenizer_error:  # noqa: F841
+            tokenizer = None
+
         dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
         dataset = datasets.load_dataset(dataset_metadata["name"], split=dataset_metadata["split"]).shuffle(seed=0)
         num_samples = min(config.num_samples or 128, len(dataset))
 
         calibration_dataset = []
-        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
         pbar = tqdm(desc="Collecting calibration dataset", total=num_samples)
         for item in dataset:
+            instruction = item[dataset_metadata["inputs"]["instruction"]]
             image_url = item[dataset_metadata["inputs"]["image_url"]]
             image = Image.open(requests.get(image_url, stream=True).raw)
 
-            instruction = item[dataset_metadata["inputs"]["instruction"]]
-            inputs = self.model.assemble_input(processor, instruction, image)
+            try:
+                inputs = self.model.assemble_input(processor, instruction, image, tokenizer)
+            except ValueError as value_error:
+                if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
+                    raise tokenizer_error
+                raise value_error
 
-            position_ids = torch.arange(inputs.input_ids.size(1)).unsqueeze(0).to(inputs.input_ids.device)
+            input_ids = inputs.get("input_ids")
+            position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
+
             inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
-                inputs.input_ids,
-                inputs.pixel_values,
-                image_sizes=inputs.image_sizes,
-                attention_mask=inputs.attention_mask,
+                **inputs,
                 position_ids=position_ids,
-                tgt_sizes=getattr(inputs, "tgt_sizes", None),
-                image_bound=getattr(inputs, "image_bound", None),
             )
 
             language_model_inputs = self.model.language_model.prepare_inputs(

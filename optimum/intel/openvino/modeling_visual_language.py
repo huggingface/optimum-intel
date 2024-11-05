@@ -1612,6 +1612,25 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
 
         return new_input_embeds, attention_mask, position_ids
 
+    @staticmethod
+    def assemble_input(
+        processor,
+        instruction: str,
+        image: Optional[Image] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        messages = [{"role": "user", "content": f"<image>\n{instruction}"}]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
+        input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+        attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+        result = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if image is not None:
+            result["images"] = torch.unsqueeze(processor(images=image, return_tensors="pt")["pixel_values"][0], 0)
+        return result
+
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,

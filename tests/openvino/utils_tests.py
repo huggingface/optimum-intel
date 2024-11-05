@@ -97,6 +97,7 @@ MODEL_NAMES = {
     "mpnet": "hf-internal-testing/tiny-random-MPNetModel",
     "mt5": "stas/mt5-tiny-random",
     "nanollava": "katuni4ka/tiny-random-nanollava",
+    "nanollava_vision_tower": "katuni4ka/tiny-random-siglip",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "olmo": "katuni4ka/tiny-random-olmo-hf",
     "orion": "katuni4ka/tiny-random-orion",
@@ -180,6 +181,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "llava": (30, 18, 2),
     "llava_next": (30, 18, 2),
     "minicpmv": (30, 52, 2, 12),
+    "nanollava": (30, 30, 2),
 }
 
 
