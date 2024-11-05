@@ -57,7 +57,6 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
-    OVFluxPipeline,
     OVQuantizer,
     OVTrainer,
     OVQuantizationConfig,
@@ -192,7 +191,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
-    LOAD_IN_4_BITS_SCOPE = (
+    LOAD_IN_4_BITS_SCOPE = [
         (OVModelForCausalLM, "gpt2", dict(bits=4, sym=False, group_size=-1, ratio=0.8), {"int4": 30, "int8": 14}),
         (
             OVModelForCausalLM,
@@ -286,7 +285,24 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             {"int4": 12, "int8": 8},
         ),
-    )
+    ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        LOAD_IN_4_BITS_SCOPE.append(
+            (
+                OVModelForVisualCausalLM,
+                "llava_next",
+                dict(
+                    bits=4,
+                    group_size=16,
+                    dataset="contextual",
+                    awq=True,
+                    num_samples=2,
+                    processor=MODEL_NAMES["llava_next"],
+                ),
+                {"int4": 28, "int8": 2},
+            )
+        )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
         (OVModelForCausalLM, "gpt2"),
@@ -548,9 +564,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            ov_model = model.model
             if model_cls == OVModelForVisualCausalLM:
                 ov_model = model.lm_model
+            else:
+                ov_model = model.model
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
 
             _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})

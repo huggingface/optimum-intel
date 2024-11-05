@@ -178,6 +178,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
     "llava": (30, 18, 2),
+    "llava_next": (30, 18, 2),
 }
 
 
