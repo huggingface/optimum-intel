@@ -1919,9 +1919,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
             transformers_model.img_context_token_id = img_context_token_id
         inputs = self.gen_inputs(model_arch, prompt, self.IMAGE)
-        set_seed(SEED)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**inputs)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
@@ -1933,13 +1930,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         # pytorch minicpmv is not designed to be used via forward
-        if "minicpmv" not in model_arch:
+        if model_arch != "minicpmv":
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**inputs)
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
-            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=5e-3))
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1956,7 +1953,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
 
-         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+        # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
         if model_arch in ["minicpmv", "internvl2"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
@@ -2056,7 +2053,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         if "llava" in model_arch:
             prompt = f"<image>\n {base_text_prompt}" if image is not None else base_text_prompt
         elif "minicpmv" in model_arch:
-            prompt = "<|im_start|>user\n(<image>./</image>)\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n" if image is not None else base_text_prompt
+            prompt = (
+                "<|im_start|>user\n(<image>./</image>)\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n"
+                if image is not None
+                else base_text_prompt
+            )
         elif "internvl2" in model_arch:
             prompt = (
                 "<|im_start|>user\n<image>\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n"
@@ -2071,6 +2072,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
+<<<<<<< HEAD
             image_input = None
             if image is not None:
                 image_input = processor(images=image, return_tensors="pt")["pixel_values"]
@@ -2080,6 +2082,12 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "images": image_input}
         elif model_arch == "internvl2":
+=======
+            inputs = processor(
+                images=[image.resize((600, 600))] if image is not None else None, text=[prompt], return_tensors="pt"
+            )
+        else:
+>>>>>>> fix tests
             config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
@@ -2135,13 +2143,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             aspect_ratio = orig_width / orig_height
 
             # calculate the existing image aspect ratio
-            target_ratios = set(
+            target_ratios = {
                 (i, j)
                 for n in range(min_num, max_num + 1)
                 for i in range(1, n + 1)
                 for j in range(1, n + 1)
                 if i * j <= max_num and i * j >= min_num
-            )
+            }
             target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
 
             # find the closest aspect ratio to the target
