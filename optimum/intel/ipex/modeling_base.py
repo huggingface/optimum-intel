@@ -230,7 +230,6 @@ class IPEXModel(OptimizedModel):
         }
 
         task = cls.export_feature
-        config.torch_dtype = torch_dtype
         model = TasksManager.get_model_from_task(
             task,
             model_id,
@@ -240,6 +239,7 @@ class IPEXModel(OptimizedModel):
             _commit_hash=commit_hash,
             **model_kwargs,
         )
+        config = model.config
         return cls(model, config=config, export=True, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -305,11 +305,7 @@ class IPEXModel(OptimizedModel):
         return isinstance(self, GenerationMixin)
 
     def _call_model(self, *args, **kwargs):
-        try:
-            with torch.autocast(self.device.type, self.dtype), torch.no_grad():
-                out = self.model(*args, **kwargs)
-        except RuntimeError:
-            out = self.model(*args, **kwargs)
+        out = self.model(*args, **kwargs)
         return out
 
     def _init_warmup(self):
