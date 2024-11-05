@@ -179,6 +179,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "flux": (56, 24, 28, 64),
     "llava": (30, 18, 2),
     "llava_next": (30, 18, 2),
+    "minicpmv": (30, 52, 2, 12),
 }
 
 

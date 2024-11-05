@@ -750,7 +750,7 @@ class OVQuantizer(OptimumQuantizer):
 
         return calibration_dataset
 
-    def _prepare_visual_causal_lm_dataset(self, config: OVWeightQuantizationConfig, max_tokens=32):
+    def _prepare_visual_causal_lm_dataset(self, config: OVWeightQuantizationConfig):
         dataset_name = config.dataset
         if dataset_name not in PREDEFINED_VISUAL_LM_DATASETS:
             raise ValueError(
@@ -777,17 +777,16 @@ class OVQuantizer(OptimumQuantizer):
 
             instruction = item[dataset_metadata["inputs"]["instruction"]]
             inputs = self.model.assemble_input(processor, instruction, image)
-            input_ids = inputs.input_ids
-            if input_ids.size(1) > max_tokens:
-                continue
 
             position_ids = torch.arange(inputs.input_ids.size(1)).unsqueeze(0).to(inputs.input_ids.device)
             inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
-                input_ids,
+                inputs.input_ids,
                 inputs.pixel_values,
                 image_sizes=inputs.image_sizes,
                 attention_mask=inputs.attention_mask,
                 position_ids=position_ids,
+                tgt_sizes=getattr(inputs, "tgt_sizes", None),
+                image_bound=getattr(inputs, "image_bound", None),
             )
 
             language_model_inputs = self.model.language_model.prepare_inputs(

@@ -196,12 +196,14 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "gpt2",
+            False,
             dict(bits=4, weight_format="mxfp4", group_size=32),
             {"f4e2m1": 20, "f8e8m0": 20, "int8": 4},
         ),
         (
             OVModelForCausalLM,
             "gpt2",
+            False,
             dict(
                 bits=4,
                 sym=False,
@@ -213,12 +215,14 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "gpt2",
+            False,
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
             {"int4": 26, "int8": 18},
         ),
         (
             OVModelForCausalLM,
             "opt",
+            False,
             dict(
                 bits=4,
                 sym=True,
@@ -232,6 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "opt",
+            False,
             dict(
                 bits=4,
                 sym=True,
@@ -245,6 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama_awq",
+            False,
             dict(
                 bits=4,
                 sym=True,
@@ -260,6 +266,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama_awq",
+            False,
             dict(
                 bits=4,
                 sym=True,
@@ -274,6 +281,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama_awq",
+            False,
             dict(
                 bits=4,
                 sym=True,
@@ -292,33 +300,57 @@ class OVWeightCompressionTest(unittest.TestCase):
             (
                 OVModelForVisualCausalLM,
                 "llava_next",
+                False,
                 dict(
                     bits=4,
                     group_size=16,
                     dataset="contextual",
-                    awq=True,
-                    num_samples=2,
+                    ratio=0.8,
+                    sensitivity_metric="mean_activation_magnitude",
+                    num_samples=1,
                     processor=MODEL_NAMES["llava_next"],
                 ),
-                {"int4": 28, "int8": 2},
+                {"int4": 20, "int8": 10},
+            )
+        )
+    if is_transformers_version(">=", "4.45.0"):
+        LOAD_IN_4_BITS_SCOPE.append(
+            (
+                OVModelForVisualCausalLM,
+                "minicpmv",
+                True,
+                dict(
+                    bits=4,
+                    group_size=-1,  # TODO: set to 32 after model is updated
+                    dataset="contextual",
+                    ratio=0.8,
+                    sensitivity_metric="mean_activation_magnitude",
+                    num_samples=1,
+                    processor=MODEL_NAMES["minicpmv"],
+                    trust_remote_code=True,
+                ),
+                {"int4": 24, "int8": 6},
             )
         )
 
-    SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
-        (OVModelForCausalLM, "gpt2"),
-        (OVModelForMaskedLM, "bert"),
-        (OVModelForTokenClassification, "roberta"),
-        (OVModelForImageClassification, "vit"),
-        (OVModelForSeq2SeqLM, "t5"),
-        (OVModelForSequenceClassification, "albert"),
-        (OVModelForQuestionAnswering, "distilbert"),
-        (OVModelForAudioClassification, "wav2vec2"),
-        (OVModelForFeatureExtraction, "blenderbot"),
-        (OVStableDiffusionPipeline, "stable-diffusion"),
-        (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
-        (OVModelOpenCLIPForZeroShotImageClassification, "open-clip"),
-        (OVModelForVisualCausalLM, "llava"),
-    )
+    SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
+        (OVModelForCausalLM, "gpt2", False),
+        (OVModelForMaskedLM, "bert", False),
+        (OVModelForTokenClassification, "roberta", False),
+        (OVModelForImageClassification, "vit", False),
+        (OVModelForSeq2SeqLM, "t5", False),
+        (OVModelForSequenceClassification, "albert", False),
+        (OVModelForQuestionAnswering, "distilbert", False),
+        (OVModelForAudioClassification, "wav2vec2", False),
+        (OVModelForFeatureExtraction, "blenderbot", False),
+        (OVStableDiffusionPipeline, "stable-diffusion", False),
+        (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
+        (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
+        (OVModelForVisualCausalLM, "llava", False),
+    ]
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -447,8 +479,14 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
-    def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
-        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
+    def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
+        model = model_cls.from_pretrained(
+            MODEL_NAMES[model_type],
+            export=True,
+            load_in_8bit=True,
+            stateful=False,
+            trust_remote_code=trust_remote_code,
+        )
 
         if model_type == "open-clip":
             self.assertEqual(model.text_model._openvino_config.quantization_config.bits, 8)
@@ -554,23 +592,19 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
-        self, model_cls, model_name, quantization_config, expected_num_weight_nodes
+        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes
     ):
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+            )
             if quantization_config.quant_method.lower() == "awq":
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            if model_cls == OVModelForVisualCausalLM:
-                ov_model = model.lm_model
-            else:
-                ov_model = model.model
-                tokenizer = AutoTokenizer.from_pretrained(model_id)
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
+            ov_model = model.lm_model if model_cls == OVModelForVisualCausalLM else model.model
 
             _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
@@ -599,8 +633,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
-    def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
-        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
+    def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
+        model = model_cls.from_pretrained(
+            MODEL_NAMES[model_type], export=True, load_in_8bit=False, trust_remote_code=trust_remote_code
+        )
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
         elif model.export_feature == "text-to-image":
@@ -698,7 +734,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_dynamic_with_config(
-        self, model_cls, model_name, quantization_config, expected_num_weight_nodes
+        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes
     ):
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
@@ -706,15 +742,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantization_config = OVDynamicQuantizationConfig(
                 weights_group_size=group_size, activations_group_size=group_size, **quantization_config
             )
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+            )
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+            ov_model = model.lm_model if model_cls == OVModelForVisualCausalLM else model.model
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
+            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)

@@ -220,6 +220,7 @@ class OVResampler(OVModelPart):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
 
     def forward(self, image_feature, pos_embed, key_padding_mask):
+        self._compile()
         result = self.request(
             {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
         )[0]
@@ -907,6 +908,8 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
+        if image is None:
+            raise ValueError("Image is required.")
         chat_template = [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image"}]}]
         prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
         inputs = processor(images=image, text=prompt, return_tensors="pt")
@@ -1423,6 +1426,19 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                         cur_vs_hs.view(-1, cur_vs_hs.shape[-1]),
                     )
         return vllm_embedding, attention_mask, position_ids
+
+    @staticmethod
+    def assemble_input(
+        processor,
+        instruction: str,
+        image: Optional[Image] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        if image is None:
+            raise ValueError("Image is required.")
+        prompt = f"<|im_start|>user\n(<image>./</image>)\n{instruction}<|im_end|>\n<|im_start|>assistant\n"
+        inputs = processor([prompt], [image], return_tensors="pt")
+        return inputs
 
 
 class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
