@@ -347,7 +347,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         weight_format (`str`, defaults to 'int'):
-            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4].
+            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
