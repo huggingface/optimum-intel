@@ -2973,3 +2973,21 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
         if is_torch_version(">=", "2.0.0"):
             for layer in self._model.encoder.layers:
                 layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.encode_images
+        super().__init__(config, model, model_kwargs)
+        if not self._model.get_vision_tower().is_loaded:
+            self._model.get_vision_tower().load_model()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
