@@ -1912,6 +1912,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
+        transformers_model.eval()
         if "internvl2" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
@@ -2072,7 +2073,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-<<<<<<< HEAD
             image_input = None
             if image is not None:
                 image_input = processor(images=image, return_tensors="pt")["pixel_values"]
@@ -2082,12 +2082,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "images": image_input}
         elif model_arch == "internvl2":
-=======
-            inputs = processor(
-                images=[image.resize((600, 600))] if image is not None else None, text=[prompt], return_tensors="pt"
-            )
-        else:
->>>>>>> fix tests
             config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
