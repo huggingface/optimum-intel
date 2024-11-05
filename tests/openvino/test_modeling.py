@@ -32,6 +32,7 @@ from evaluate import evaluator
 from huggingface_hub import HfApi
 from parameterized import parameterized
 from PIL import Image
+from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
@@ -2413,4 +2414,37 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         res = model(reshaped_tokens, processed_image)
 
         del model
+        gc.collect()
+
+
+class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("st-bert", "st-mpnet")
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(hasattr(ov_model, "encode"))
+        st_model = SentenceTransformer(model_id)
+        sentences = ["This is an example sentence", "Each sentence is converted"]
+        st_embeddings = st_model.encode(sentences)
+        ov_embeddings = ov_model.encode(sentences)
+        # Compare tensor outputs
+        self.assertTrue(np.allclose(ov_embeddings, st_embeddings, atol=1e-4))
+        del st_embeddings
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_sentence_transformers_save_and_infer(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        with TemporaryDirectory() as tmpdirname:
+            model_save_path = os.path.join(tmpdirname, "sentence_transformers_ov_model")
+            ov_model.save_pretrained(model_save_path)
+            model = OVSentenceTransformer.from_pretrained(model_save_path)
+            sentences = ["This is an example sentence", "Each sentence is converted"]
+            model.encode(sentences)
         gc.collect()

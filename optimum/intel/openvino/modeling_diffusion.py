@@ -27,8 +27,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import openvino
 import torch
-from diffusers.configuration_utils import ConfigMixin
-from diffusers.pipelines import (
+from diffusers import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
@@ -41,7 +40,9 @@ from diffusers.pipelines import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLInpaintPipeline,
     StableDiffusionXLPipeline,
+    pipelines,
 )
+from diffusers.configuration_utils import ConfigMixin
 from diffusers.schedulers import SchedulerMixin
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils.constants import CONFIG_NAME
@@ -409,16 +410,19 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "tokenizer_2": None,
             "tokenizer_3": None,
             "feature_extractor": None,
-            "image_encoder": None,
             "safety_checker": None,
+            "image_encoder": None,
         }
         for name in submodels.keys():
-            if kwargs.get(name) is not None:
+            if name in kwargs:
                 submodels[name] = kwargs.pop(name)
             elif config.get(name, (None, None))[0] is not None:
-                library_name, library_classes = config.get(name)
-                library = importlib.import_module(library_name)
-                class_obj = getattr(library, library_classes)
+                module_name, module_class = config.get(name)
+                if hasattr(pipelines, module_name):
+                    module = getattr(pipelines, module_name)
+                else:
+                    module = importlib.import_module(module_name)
+                class_obj = getattr(module, module_class)
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
                 if (model_save_path / name).is_dir():

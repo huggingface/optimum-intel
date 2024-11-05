@@ -150,6 +150,8 @@ MODEL_NAMES = {
     "glm4": "katuni4ka/tiny-random-glm4",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
+    "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
+    "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
 }
 
 
