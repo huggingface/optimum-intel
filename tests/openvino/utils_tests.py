@@ -195,6 +195,7 @@ def get_num_quantized_nodes(model):
         "int4": 0,
         "f4e2m1": 0,
         "f8e8m0": 0,
+        "nf4": 0,
     }
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
@@ -210,4 +211,6 @@ def get_num_quantized_nodes(model):
                 num_weight_nodes["f4e2m1"] += 1
             if type_name == "f8e8m0":
                 num_weight_nodes["f8e8m0"] += 1
+            if type_name == "nf4":
+                num_weight_nodes["nf4"] += 1
     return num_fake_quantize, num_weight_nodes

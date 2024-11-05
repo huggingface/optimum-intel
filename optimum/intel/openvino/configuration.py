@@ -347,7 +347,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         weight_format (`str`, defaults to 'int'):
-            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4'].
+            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4].
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -455,9 +455,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.weight_format is None:
             self.weight_format = "int4" if self.bits == 4 else "int8"
-        if self.weight_format not in ["int4", "int8", "mxfp4"]:
+        if self.weight_format not in ["int4", "int8", "mxfp4", "nf4"]:
             raise ValueError(
-                f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4'], but found: {self.weight_format}."
+                f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.weight_format}."
             )
         if self.weight_format == "mxfp4":
             if self.bits != 4:
@@ -470,6 +470,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError("The Scale Estimation algorithm is not supported for 'mxfp4' weight format")
             if self.gptq:
                 raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+
+        if self.weight_format in "nf4" and self.bits != 4:
+            raise ValueError(
+                f"When applying weight compression with 'nf4' weight format the `bits` parameters must be set to 4, but found {self.bits}"
+            )
 
 
 @dataclass
