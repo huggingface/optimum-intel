@@ -1909,6 +1909,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         prompt = "What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
@@ -1919,7 +1920,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             )
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
             transformers_model.img_context_token_id = img_context_token_id
+        if "nanollava" in model_arch:
+            transformers_model.get_vision_tower().load_model()
         inputs = self.gen_inputs(model_arch, prompt, self.IMAGE)
+        set_seed(SEED)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
@@ -1930,14 +1934,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(hasattr(ov_model, additional_part))
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        # pytorch minicpmv is not designed to be used via forward
-        if model_arch != "minicpmv":
+        # pytorch minicpmv and internvl are not designed to be used via forward
+        if not model_arch in ["minicpmv", "internvl2"]:
+            set_seed(SEED)
+            ov_outputs = ov_model(**inputs)
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**inputs)
-            set_seed(SEED)
-            ov_outputs = ov_model(**inputs)
-            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=5e-3))
+            self.assertTrue(
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4),
+                f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
+            )
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -2076,9 +2083,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             image_input = None
             if image is not None:
                 image_input = processor(images=image, return_tensors="pt")["pixel_values"]
-            text_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
+                text_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
 
-            input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+                input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+            else:
+                input_ids = tokenizer(prompt, return_tensors="pt").input_ids
             attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "images": image_input}
         elif model_arch == "internvl2":
@@ -2091,7 +2100,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            inputs = processor(images=[image.resize((600, 600))] if image is not None else None, text=[prompt], return_tensors="pt")
+            inputs = processor(
+                images=[image.resize((600, 600))] if image is not None else None, text=[prompt], return_tensors="pt"
+            )
         return inputs
 
     def internvl_input_transform(self, config, tokenizer, prompt, image=None):
