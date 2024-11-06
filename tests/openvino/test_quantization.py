@@ -341,7 +341,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 True,
                 dict(
                     bits=4,
-                    group_size=-1,  # TODO: set to 32 after model is updated
+                    group_size=16,
                     dataset="contextual",
                     ratio=0.8,
                     sensitivity_metric="mean_activation_magnitude",
@@ -349,7 +349,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     processor=MODEL_NAMES["minicpmv"],
                     trust_remote_code=True,
                 ),
-                {"int4": 24, "int8": 6},
+                {"int4": 22, "int8": 8},
             )
         )
 
