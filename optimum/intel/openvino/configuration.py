@@ -467,7 +467,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             if self.quant_method == OVQuantizationMethod.AWQ:
                 raise ValueError(f"The AWQ algorithm is not supported for '{self.weight_format}' weight format")
             if self.scale_estimation:
-                raise ValueError(f"The Scale Estimation algorithm is not supported for '{self.weight_format}' weight format")
+                raise ValueError(
+                    f"The Scale Estimation algorithm is not supported for '{self.weight_format}' weight format"
+                )
             if self.weight_format == "mxfp4" and self.gptq:
                 raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
 
