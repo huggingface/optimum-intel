@@ -21,17 +21,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - python-version: "3.12"
+          - python-version: "3.9"
             os: "ubuntu-22.04"
             transformers-version: "latest"
             openvino: "ov-stable"
             nncf: "nncf-stable"
-          - python-version: "3.12"
+          - python-version: "3.9"
             os: "ubuntu-22.04"
             transformers-version: "latest"
             openvino: "ov-nightly"
             nncf: "nncf-stable"
-          - python-version: "3.12"
+          - python-version: "3.9"
             os: "ubuntu-22.04"
             transformers-version: "latest"
             openvino: "ov-nightly"
