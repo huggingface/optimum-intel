@@ -109,11 +109,19 @@ def patch_model_with_bettertransformer(model):
     return model
 
 
-def patch_update_causal_mask(model, transformers_version):
+def patch_update_causal_mask(model, transformers_version, inner_model_name="model"):
     if is_transformers_version(">=", transformers_version):
-        inner_model = getattr(model, "model", getattr(model, "transformer", None))
+        inner_model = getattr(model, inner_model_name, None)
         if inner_model is not None:
+            if hasattr(inner_model, "_update_causal_mask"):
+                inner_model._orig_update_causal_mask = inner_model._update_causal_mask
             inner_model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, inner_model)
+
+
+def unpatch_update_causal_mask(model, inner_model_name="model"):
+    inner_model = getattr(model, inner_model_name, None)
+    if inner_model is not None and hasattr(inner_model, "._orig_update_causal_mask"):
+        inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
 
 # initialization of sin/cos cached in bf16/fp16 leads to accuracy loss
@@ -579,13 +587,11 @@ class LlamaModelPatcher(DecoderModelPatcher):
 
         # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
         # fill causal mask in slightly different way for avoid overflow on some platforms
-        patch_update_causal_mask(self._model, "4.39.0")
+        patch_update_causal_mask(self._model, "4.39.0", "model" if hasattr(self._model, "model") else "transformer")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        inner_model = getattr(self._model, "model", getattr(self._model, "transformer", None))
-        if hasattr(inner_model, "_orig_update_causal_mask"):
-            inner_model._update_causal_mask = inner_model._orig_update_causal_mask
+        unpatch_update_causal_mask(self._model, "model" if hasattr(self._model, "model") else "transformer")
 
 
 # copied from https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548 to unblock export with transformers 4.42
@@ -1878,9 +1884,11 @@ class CodeGenModelPatcher(DecoderModelPatcher):
                 orig_self_attn_fwd = layer.attn._attn
                 layer.attn._attn = types.MethodType(codegen_wrapped_scaled_dot_product, layer.attn)
                 layer.attn._orig_attn = orig_self_attn_fwd
+        patch_update_causal_mask(self._model, "4.45.0", "transformer")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, "transformer")
         for layer in self._model.transformer.h:
             if hasattr(layer.attn, "_orig_attn"):
                 layer.attn._attn = layer.attn._orig_attn
@@ -2275,8 +2283,7 @@ class PersimmonModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        unpatch_update_causal_mask(self._model)
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
@@ -2413,8 +2420,7 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        unpatch_update_causal_mask(self._model)
 
 
 class RotaryEmbPatcher(DecoderModelPatcher):
@@ -2431,6 +2437,12 @@ class FalconModelPatcher(DecoderModelPatcher):
         if is_transformers_version("<", "4.44.99"):
             for layer in self._model.transformer.h:
                 _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
+        else:
+            patch_update_causal_mask(self._model, "4.45.0", "transformer")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, "transformer")
 
 
 class GptNeoxModelPatcher(DecoderModelPatcher):
@@ -2439,6 +2451,32 @@ class GptNeoxModelPatcher(DecoderModelPatcher):
         if is_transformers_version("<", "4.44.99"):
             for layer in self._model.gpt_neox.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        else:
+            patch_update_causal_mask(self._model, "4.45.0", "gpt_neox")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, "gpt_neox")
+
+
+class GptNeoModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        patch_update_causal_mask(self._model, "4.45.0", "transformer")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, "transformer")
+
+
+class GptJModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        patch_update_causal_mask(self._model, "4.45.0", "transformer")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, "transformer")
 
 
 class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
@@ -2447,6 +2485,12 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
         if is_transformers_version("<", "4.44.99"):
             for layer in self._model.gpt_neox_japanese.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        else:
+            patch_update_causal_mask(self._model, "4.45.0", "gpt_neox_japanese")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
 
 
 class Gemma2ModelPatcher(LlamaModelPatcher):
