@@ -34,6 +34,11 @@ jobs:
           - python-version: "3.9"
             os: "ubuntu-22.04"
             transformers-version: "latest"
+            openvino: "ov-stable"
+            nncf: "nncf-develop"
+          - python-version: "3.9"
+            os: "ubuntu-22.04"
+            transformers-version: "latest"
             openvino: "ov-nightly"
             nncf: "nncf-develop"
 
