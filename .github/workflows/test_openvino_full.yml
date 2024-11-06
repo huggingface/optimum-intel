@@ -24,13 +24,13 @@ jobs:
           - python-version: "3.12"
             os: "ubuntu-22.04"
             transformers-version: "latest"
-            openvino: "ov-release"
-            nncf: "nncf-release"
+            openvino: "ov-stable"
+            nncf: "nncf-stable"
           - python-version: "3.12"
             os: "ubuntu-22.04"
             transformers-version: "latest"
             openvino: "ov-nightly"
-            nncf: "nncf-release"
+            nncf: "nncf-stable"
           - python-version: "3.12"
             os: "ubuntu-22.04"
             transformers-version: "latest"
@@ -62,7 +62,7 @@ jobs:
         run: pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Install openvino release
-        if: ${{ matrix.openvino != 'ov-nightly' }}
+        if: ${{ matrix.openvino == 'ov-stable' }}
         run: pip install .[openvino]
 
       - name: Install nncf develop
@@ -70,7 +70,7 @@ jobs:
         run: pip install git+https://github.com/openvinotoolkit/nncf.git
 
       - name: Install nncf release
-        if: ${{ matrix.nncf != 'nncf-develop' }}
+        if: ${{ matrix.nncf == 'nncf-stable' }}
         run: pip install .[nncf]
 
       - name: Pip freeze

@@ -25,9 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04", "windows-2019"]
-        openvino-version: ["stable", "nightly"]
         transformers-version: ["4.36.0", "latest"]
-        nncf: ["nncf", "git+https://github.com/openvinotoolkit/nncf.git"]
 
     runs-on: ${{ matrix.os }}
 
@@ -47,11 +45,6 @@ jobs:
           pip install .[openvino,tests] transformers[testing]
           pip uninstall -y nncf
 
-      - if: ${{ matrix.openvino-version == 'nightly' }}
-        name: Install nightly OpenVINO
-        run: |
-          pip install openvino openvino-tokenizers --pre --upgrade --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
-
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Downgrade Transformers and Accelerate
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
@@ -65,7 +58,7 @@ jobs:
 
       - name: Install dependencies (slow)
         run: |
-          pip install ${{ matrix.nncf }}
+          pip install .[nncf]
 
       - name: Test with Pytest (slow)
         run: |
