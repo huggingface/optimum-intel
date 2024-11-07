@@ -104,7 +104,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
 
-    TEST_4BIT_CONFIGURATONS = [
+    TEST_4BIT_CONFIGURATIONS = [
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
         ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
         ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
@@ -128,21 +128,29 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
             {"int8": 4, "int4": 14},
         ),
-        (
-            "image-text-to-text",
-            "llava_next",
-            'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" --dataset contextual '
-            "--num-samples 1",
-            {"int8": 8, "int4": 22},
-        ),
-        (
-            "image-text-to-text",
-            "nanollava",
-            'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" --dataset contextual '
-            "--num-samples 1 --trust-remote-code",
-            {"int8": 12, "int4": 18},
-        ),
     ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    (
+                        "image-text-to-text",
+                        "llava_next",
+                        'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                        "--dataset contextual --num-samples 1",
+                        {"int8": 8, "int4": 22},
+                    ),
+                ),
+                (
+                    "image-text-to-text",
+                    "nanollava",
+                    'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" '
+                    "--dataset contextual -num-samples 1 --trust-remote-code",
+                    {"int8": 12, "int4": 18},
+                ),
+            ]
+        )
 
     def _openvino_export(self, model_name: str, task: str):
         with TemporaryDirectory() as tmpdir:
@@ -260,7 +268,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(exp_num_int8, num_weight_nodes["int8"])
             self.assertEqual(exp_num_fq, num_fq)
 
-    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
+    @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
