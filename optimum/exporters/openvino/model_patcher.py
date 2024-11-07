@@ -3000,7 +3000,6 @@ class InputEmbeddingPatcher(ModelPatcher):
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Dict[str, Any],
     ):
-        # making 16bit tracable overrides embeedings input signature these changes required to prevent this issue
         model.__orig_forward = model.forward
 
         def forward(self, input):

@@ -1268,6 +1268,7 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        # making 16bit tracable overrides embeedings input signature these changes required to prevent this issue
         return InputEmbeddingPatcher(self, model, model_kwargs)
 
 
