@@ -192,7 +192,13 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = [
-        (OVModelForCausalLM, "gpt2", dict(bits=4, sym=False, group_size=-1, ratio=0.8), {"int4": 30, "int8": 14}),
+        (
+            OVModelForCausalLM,  # model cls
+            "gpt2",  # model name
+            False,  # trust remote code
+            dict(bits=4, sym=False, group_size=-1, ratio=0.8),  # quantization config
+            {"int4": 30, "int8": 14},  # reference number of low-precision nodes
+        ),
         (
             OVModelForCausalLM,
             "gpt2",
