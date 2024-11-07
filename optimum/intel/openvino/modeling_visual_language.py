@@ -723,7 +723,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         self._support_new_processing = hasattr(self.config, "image_seq_length")
-        self._legacy_processing = not self._support_new_processing
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -753,13 +752,11 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         input_ids,
         attention_mask,
         position_ids=None,
-        legacy_processing=None,
+        legacy_processing=False,
         **kwargs,
     ):
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        if legacy_processing is None:
-            legacy_processing = self._legacy_processing
 
         if legacy_processing:
             pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
@@ -792,15 +789,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             final_attention_mask = torch.zeros(
                 batch_size, max_embed_dim, dtype=attention_mask.dtype, device=inputs_embeds.device
             )
-            # In case the Vision model or the Language model has been offloaded to CPU, we need to manually
-            # set the corresponding tensors into their correct target device.
-            target_device = inputs_embeds.device
-            batch_indices, non_image_indices, text_to_overwrite = (
-                batch_indices.to(target_device),
-                non_image_indices.to(target_device),
-                text_to_overwrite.to(target_device),
-            )
-            attention_mask = attention_mask.to(target_device)
 
             # 4. Fill the embeddings based on the mask. If we have ["hey" "<image>", "how", "are"]
             # we need to index copy on [0, 577, 578, 579] for the text and [1:576] for the image features
@@ -811,7 +799,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                 (batch_size, max_embed_dim), True, dtype=torch.bool, device=inputs_embeds.device
             )
             image_to_overwrite[batch_indices, text_to_overwrite] = False
-            image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None].to(target_device)
+            image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None]
 
             if image_to_overwrite.sum() != image_features.shape[:-1].numel():
                 raise ValueError(
@@ -819,7 +807,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                     f" the number of image given to the model is {num_images}. This prevents correct indexing and breaks batch generation."
                 )
 
-            final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim).to(target_device)
+            final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim)
             final_attention_mask |= image_to_overwrite
             position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
 
@@ -839,37 +827,25 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_multimodal_embeddings(
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
-        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
-
         if pixel_values is not None and self._support_new_processing and past_key_values is None:
             legacy_processing = (input_ids == self.config.image_token_index).sum(
                 1
             ).max() < self.config.image_seq_length
-            self._legacy_processing = legacy_processing
-
+        else:
+            legacy_processing = True
         inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
-            input_ids, pixel_values, attention_mask, position_ids, legacy_processing=self._legacy_processing, **kwargs
+            input_ids, pixel_values, attention_mask, position_ids, legacy_processing=legacy_processing, **kwargs
         )
 
-        if self._legacy_processing and pixel_values is not None and past_key_values is not None:
+        if legacy_processing and pixel_values is not None and past_key_values is not None:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
 
         return inputs_embeds, attention_mask, position_ids
 
     def _filter_unattended_tokens(self, input_ids, attention_mask, past_key_values):
-        if not self.language_model.stateful:
-            first_layer_past_key_value = torch.from_numpy(past_key_values[0][0][:, :, :, 0])
-        else:
-            first_layer_past_key_value = torch.from_numpy(
-                self.language_model.request.query_state()[0].state.data[:, :, :, 0]
-            )
-
-        # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
-        batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
-
         # Get the target length
         target_length = input_ids.shape[1]
-        past_length = first_layer_past_key_value.shape[-1]
+        past_length = self.language_model._get_past_length(past_key_values)
 
         extended_attention_mask = torch.ones(
             (attention_mask.shape[0], past_length),
@@ -877,18 +853,9 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             device=attention_mask.device,
         )
 
-        # Filter out only the tokens that can be un-attended, this can happen
-        # if one uses Llava + Fused modules where the cache on the
-        # first iteration is already big enough, or if one passes custom cache
-        valid_indices = non_attended_tokens < extended_attention_mask.size(-1)
-        new_batch_index = batch_index[valid_indices]
-        new_non_attended_tokens = non_attended_tokens[valid_indices]
-
-        # Zero-out the places where we don't need to attend
-        extended_attention_mask[new_batch_index, new_non_attended_tokens] = 0
-
         attention_mask = torch.cat((extended_attention_mask, attention_mask[:, -target_length:]), dim=1)
-        position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
+        position_ids = torch.cumsum(attention_mask, axis=1) - 1
+        position_ids[attention_mask == 0] = 1
         return attention_mask, position_ids
 
 
@@ -969,7 +936,8 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             legacy_processing = (input_ids == self.config.image_token_index).sum(
                 1
             ).max() < self.config.image_seq_length
-            self._legacy_processing = legacy_processing
+        else:
+            legacy_processing = True
 
         if pixel_values is not None and pixel_values.size(0) > 0:
             # ! infer image_num_patches from image_sizes
@@ -1007,16 +975,11 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
-                    legacy_processing=self._legacy_processing,
+                    legacy_processing=legacy_processing,
                     **kwargs,
                 )
 
-        if (
-            self._legacy_processing
-            and pixel_values is not None
-            and past_key_values is not None
-            and input_ids.shape[1] == 1
-        ):
+        if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
 
         return inputs_embeds, attention_mask, position_ids
@@ -1029,7 +992,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         input_ids,
         attention_mask,
         position_ids=None,
-        legacy_processing=None,
+        legacy_processing=False,
         **kwargs,
     ):
         image_token_index = self.config.image_token_index

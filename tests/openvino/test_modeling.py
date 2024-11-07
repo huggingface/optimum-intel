@@ -1983,43 +1983,69 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             torch.equal(ov_outputs, transformers_outputs),
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
         )
-
-        # previous run was with legacy processing, one more run with features concatenation on preprocessing level
-        if (
-            model_arch in ["llava", "llava-next"]
-            and is_transformers_version(">=", "4.45")
-            and (processor.patch_size is None or processor.vision_feature_select_strategy is None)
-        ):
-            processor.patch_size = ov_model.config.vision_config.patch_size
-            processor.vision_feature_select_strategy = ov_model.config.vision_feature_select_strategy
-            if model_arch == "llava":
-                # testing model for llava does ot have specified image_seq_length and it is different from default
-                transformers_model.config.image_seq_length = 225
-                ov_model.config.image_seq_length = 225
-            self.assertTrue(processor.patch_size is not None)
-            self.assertTrue(processor.vision_feature_select_strategy is not None)
-            inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
-            self.assertTrue(
-                (inputs.input_ids == ov_model.config.image_token_index).sum(1).max()
-                >= ov_model.config.image_seq_length
-            )
-            set_seed(SEED)
-            with torch.no_grad():
-                transformers_outputs = transformers_model(**inputs)
-            set_seed(SEED)
-            ov_outputs = ov_model(**inputs)
-            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-            set_seed(SEED)
-            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-            set_seed(SEED)
-            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
-            self.assertTrue(
-                torch.equal(ov_outputs, transformers_outputs),
-                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
-            )
         del transformers_model
         del ov_model
 
+        gc.collect()
+
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
+    )
+    @parameterized.expand(["llava", "llava_next"])
+    def test_llava_with_new_preprocessing(self, model_arch):
+        prompt = "<image>\n What is shown in this image?"
+        model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            patch_size=config.vision_config.patch_size,
+            vision_feature_select_strategy=config.vision_feature_select_strategy,
+            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+        )
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+        self.assertTrue(ov_model._support_new_processing)
+        if model_arch == "llava":
+            # testing model for llava does ot have specified image_seq_length and it is different from default
+            transformers_model.config.image_seq_length = 225
+            ov_model.config.image_seq_length = 225
+        self.assertTrue(processor.patch_size is not None)
+        self.assertTrue(processor.vision_feature_select_strategy is not None)
+        inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
+        self.assertTrue(
+            (inputs.input_ids == ov_model.config.image_token_index).sum(1).max() >= ov_model.config.image_seq_length
+        )
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        set_seed(SEED)
+        ov_outputs = ov_model(**inputs)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            num_beams=3,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+        )
+
+        del ov_model
+        del transformers_model
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
