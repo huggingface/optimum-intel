@@ -715,6 +715,9 @@ def export_from_model(
         tokenizer_3 = getattr(model, "tokenizer_3", None)
         if tokenizer_3 is not None:
             tokenizer_3.save_pretrained(output.joinpath("tokenizer_3"))
+        safety_checker = getattr(model, "safety_checker", None)
+        if safety_checker is not None:
+            safety_checker.save_pretrained(output.joinpath("safety_checker"))
 
         model.save_config(output)
 
