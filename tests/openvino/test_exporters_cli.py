@@ -134,19 +134,17 @@ class OVCLIExportTestCase(unittest.TestCase):
         TEST_4BIT_CONFIGURATIONS.extend(
             [
                 (
-                    (
-                        "image-text-to-text",
-                        "llava_next",
-                        'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
-                        "--dataset contextual --num-samples 1",
-                        {"int8": 8, "int4": 22},
-                    ),
+                    "image-text-to-text",
+                    "llava_next",
+                    'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1",
+                    {"int8": 8, "int4": 22},
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" '
-                    "--dataset contextual -num-samples 1 --trust-remote-code",
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
                     {"int8": 12, "int4": 18},
                 ),
             ]

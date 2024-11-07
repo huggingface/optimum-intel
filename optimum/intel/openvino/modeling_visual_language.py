@@ -727,14 +727,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
     @staticmethod
     @abstractmethod
-    def assemble_input(
+    def preprocess_inputs(
         processor,
         instruction: str,
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         """
-        Assemble a model input from an instruction and an image.
+        Preprocess input instruction and an image.
         """
 
 
@@ -907,7 +907,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         return attention_mask, position_ids
 
     @staticmethod
-    def assemble_input(
+    def preprocess_inputs(
         processor,
         instruction: str,
         image: Optional[Image] = None,
@@ -1433,7 +1433,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return vllm_embedding, attention_mask, position_ids
 
     @staticmethod
-    def assemble_input(
+    def preprocess_inputs(
         processor,
         instruction: str,
         image: Optional[Image] = None,
@@ -1618,7 +1618,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         return new_input_embeds, attention_mask, position_ids
 
     @staticmethod
-    def assemble_input(
+    def preprocess_inputs(
         processor,
         instruction: str,
         image: Optional[Image] = None,
