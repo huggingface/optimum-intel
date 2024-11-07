@@ -317,7 +317,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         processor=MODEL_NAMES["llava_next"],
                     ),
-                    {"int4": 20, "int8": 10},
+                    {"int4": 24, "int8": 6},
                 ),
                 (
                     OVModelForVisualCausalLM,
