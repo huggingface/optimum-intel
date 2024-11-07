@@ -2007,10 +2007,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
         self.assertTrue(ov_model._support_new_processing)
-        if model_arch == "llava":
-            # testing model for llava does ot have specified image_seq_length and it is different from default
-            transformers_model.config.image_seq_length = 225
-            ov_model.config.image_seq_length = 225
         self.assertTrue(processor.patch_size is not None)
         self.assertTrue(processor.vision_feature_select_strategy is not None)
         inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
