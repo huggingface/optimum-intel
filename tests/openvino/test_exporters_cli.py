@@ -36,6 +36,7 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
@@ -126,6 +127,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
             {"int8": 4, "int4": 14},
+        ),
+        (
+            "image-text-to-text",
+            "llava_next",
+            'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" --dataset contextual '
+            "--num-samples 1",
+            {"int8": 8, "int4": 22},
+        ),
+        (
+            "image-text-to-text",
+            "nanollava",
+            'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" --dataset contextual '
+            "--num-samples 1 --trust-remote-code",
+            {"int8": 12, "int4": 18},
         ),
     ]
 
@@ -255,13 +270,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            if "--trust-remote-code" in option:
+                model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
+            ov_model = model.lm_model if task == "image-text-to-text" else model.model
+
+            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)

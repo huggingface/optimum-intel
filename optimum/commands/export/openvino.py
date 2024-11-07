@@ -329,11 +329,18 @@ class OVExportCommand(BaseOptimumCLICommand):
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
-        elif task.startswith("text-generation") and quantize_with_dataset:
-            from optimum.intel import OVModelForCausalLM
+        elif (task.startswith("text-generation") or task == "image-text-to-text") and quantize_with_dataset:
+            if task.startswith("text-generation"):
+                from optimum.intel import OVModelForCausalLM
 
-            # To quantize a text-generation model with a dataset, an instantiated OVModelForCausalLM is required
-            model = OVModelForCausalLM.from_pretrained(
+                model_cls = OVModelForCausalLM
+            else:
+                from optimum.intel import OVModelForVisualCausalLM
+
+                model_cls = OVModelForVisualCausalLM
+
+            # To quantize a model with a dataset, an instance of a model class is required
+            model = model_cls.from_pretrained(
                 self.args.model,
                 export=True,
                 quantization_config=quantization_config,

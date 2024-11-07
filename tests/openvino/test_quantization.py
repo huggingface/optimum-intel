@@ -313,7 +313,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         group_size=16,
                         dataset="contextual",
                         ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
+                        sensitivity_metric="hessian_input_activation",
                         num_samples=1,
                         processor=MODEL_NAMES["llava_next"],
                     ),
