@@ -48,7 +48,7 @@ else:
         PagedAttention,
     )
 
-
+# TODO: Following XPULinearXXX op classes will be put into ipex after 2.6.0 version
 class XPULinear2SiluMul(torch.nn.Module):
     def __init__(
         self,
@@ -73,6 +73,17 @@ class XPULinear2SiluMul(torch.nn.Module):
             hidden_states += self.up_proj_bias
         return hidden_states
 
+class XPULinearGelu(torch.nn.Module):
+    def __init__(
+        self,
+        module: torch.nn.Module
+    ):
+        super().__init__()
+        self.weight = module.weight.transpose(0, 1).contiguous()
+        self.bias = module.bias
+
+    def forward(self, x):
+        return torch.ops.torch_ipex.matmul_gelu(x, self.weight, self.bias, 1.0, "tanh")
 
 class XPULinearAdd(torch.nn.Module):
     def __init__(
@@ -701,7 +712,11 @@ class _IPEXFalconMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        self.linear_gelu = LinearGelu(module.dense_h_to_4h)
+        self.module_device = next(module.parameters()).device.type
+        if self.module_device == "cpu":
+            self.linear_gelu = LinearGelu(module.dense_h_to_4h)
+        elif self.module_device == "xpu":
+            self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
         del self.__dict__["_modules"]["dense_h_to_4h"]
         if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
             self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
