@@ -138,11 +138,11 @@ class IPEXModel(OptimizedModel):
         self.model.to(self._device)
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
-        self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
+        self._add_patch = _is_patched_with_ipex(model, self.export_feature)
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
-        if self._is_ipex_exported:
+        if self._add_patch:
             model = _patch_model(model)
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -243,12 +243,12 @@ class IPEXModel(OptimizedModel):
         return cls(model, config=config, export=True, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
-        output_path = os.path.join(save_directory, WEIGHTS_NAME)
         if getattr(self.config, "torchscript", None):
+            output_path = os.path.join(save_directory, WEIGHTS_NAME)
             torch.jit.save(self.model, output_path)
         else:
             logger.warning("The module is not a torchscript model, will be treated as a transformers model.")
-            self.model.save_pretrained(output_path)
+            self.model.save_pretrained(save_directory)
 
     def forward(
         self,
@@ -312,7 +312,7 @@ class IPEXModel(OptimizedModel):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
         # TODO : add warmup for IPEX exported model
-        if not self._is_ipex_exported:
+        if not self._add_patch:
             use_cache = "past_key_values" in self.input_names
             dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, use_cache)
             if self._device.type != "cpu":
@@ -479,6 +479,10 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["position_ids"] = position_ids
 
         if self.use_cache:
+            if past_key_values is None and self._add_patch:
+                max_length = self.config.max_length + input_ids.shape[1]
+                batch_size = input_ids.shape[0]
+                past_key_values = IPEXPagedCache(self.config, batch_size, max_length, input_ids.device, dtype=self.dtype)
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
@@ -507,7 +511,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return generation_config, model_kwargs
 
     def generate(self, *args, **kwargs):
-        if is_ipex_version("<", "2.4.0") and self._is_ipex_exported and kwargs.get("assistant_model", None):
+        if is_ipex_version("<", "2.4.0") and self._add_patch and kwargs.get("assistant_model", None):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
@@ -519,9 +523,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
         if kwargs.get("generation_config", None):
             kwargs["generation_config"].cache_implementation = "paged"
-        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+        if self._add_patch and kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
-        elif self._is_ipex_exported:
+        elif self._add_patch:
             transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
 
         try:
@@ -531,7 +535,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
             raise e
 
-        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+        if self._add_patch and kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
 
