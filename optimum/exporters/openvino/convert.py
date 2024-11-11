@@ -91,18 +91,26 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
-def _set_runtime_options(models_and_export_configs: Dict[
-        str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
-        ],
-        task: str,
-    ):
+def _set_runtime_options(
+    models_and_export_configs: Dict[
+        str,
+        Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
+    ],
+    task: str,
+):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
         if "vae_" in model_name or "text-generation" in task:
             sub_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
 
 
-def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None, library_name: Optional[str] = None, config: OnnxConfig = None):
+def _save_model(
+    model,
+    path: str,
+    ov_config: Optional["OVConfig"] = None,
+    library_name: Optional[str] = None,
+    config: OnnxConfig = None,
+):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
 
