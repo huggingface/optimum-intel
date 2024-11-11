@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import inspect
+import logging
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -24,6 +25,9 @@ from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.utils import is_diffusers_available
+
+
+logger = logging.getLogger(__name__)
 
 
 InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
@@ -215,8 +219,11 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "llava-qwen2", "int
 def save_config(config, save_dir):
     try:
         config.save_pretrained(save_dir)
-    except Exception:
+    except Exception as exp:
+        logger.warning(
+            f"Attempt to save config using standard API is failed with {exp}. It may be issue with model config, please check its correctness before usage."
+        )
         save_dir = Path(save_dir)
-        save_dir.mkdir(exist_ok=True)
+        save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)

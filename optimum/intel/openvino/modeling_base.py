@@ -139,7 +139,7 @@ class OVBaseModel(OptimizedModel):
                 # some model configs may have issues with loading without parameters initialization
                 try:
                     misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-                except Exception:
+                except KeyError:
                     misplaced_generation_parameters = {}
                 if len(misplaced_generation_parameters) > 0:
                     logger.warning(

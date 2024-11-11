@@ -1883,7 +1883,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "nanollava", "internvl2"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava"]
 
@@ -1922,7 +1922,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_model.img_context_token_id = img_context_token_id
         if "nanollava" in model_arch:
             transformers_model.get_vision_tower().load_model()
-        inputs = self.gen_inputs(model_arch, prompt, self.IMAGE)
+        preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
@@ -1934,6 +1934,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(hasattr(ov_model, additional_part))
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         # pytorch minicpmv and internvl are not designed to be used via forward
         if model_arch not in ["minicpmv", "internvl2"]:
             set_seed(SEED)
@@ -1959,7 +1960,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
-        transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
         if model_arch in ["minicpmv", "internvl2"]:
@@ -2038,7 +2040,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         question = "Describe image"
-        inputs = self.gen_inputs(model_arch, question, self.IMAGE)
+        preprocessors = self.get_preprocessors(model_arch)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
         # General case
         outputs = model.generate(**inputs, max_new_tokens=10)
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
@@ -2046,7 +2049,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         # No input image case
         question = "Hi, how are you?"
-        inputs = self.gen_inputs(model_arch, question, None)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
         outputs = model.generate(**inputs, max_new_tokens=10)
         # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
         outputs = outputs[:, inputs["input_ids"].shape[1] :]
@@ -2056,22 +2059,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    def gen_inputs(self, model_arch, base_text_prompt, image=None):
+    def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        if "llava" in model_arch:
-            prompt = f"<image>\n {base_text_prompt}" if image is not None else base_text_prompt
-        elif "minicpmv" in model_arch:
-            prompt = (
-                "<|im_start|>user\n(<image>./</image>)\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n"
-                if image is not None
-                else base_text_prompt
-            )
-        elif "internvl2" in model_arch:
-            prompt = (
-                "<|im_start|>user\n<image>\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n"
-                if image is not None
-                else base_text_prompt
-            )
         if model_arch == "nanollava":
             config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             processor = AutoProcessor.from_pretrained(
@@ -2080,134 +2069,19 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            image_input = None
-            if image is not None:
-                image_input = processor(images=image, return_tensors="pt")["pixel_values"]
-                text_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
-
-                input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
-            else:
-                input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-            attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
-            inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "images": image_input}
+            preprocessors = {"processor": processor, "tokenizer": tokenizer}
         elif model_arch == "internvl2":
             config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            inputs = self.internvl_input_transform(config, tokenizer, prompt, image)
+            preprocessors = {"processor": None, "tokenizer": tokenizer}
         else:
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            inputs = processor(
-                images=[image.resize((600, 600))] if image is not None else None, text=[prompt], return_tensors="pt"
-            )
-        return inputs
-
-    def internvl_input_transform(self, config, tokenizer, prompt, image=None):
-        import torchvision.transforms as T
-        from torchvision.transforms.functional import InterpolationMode
-
-        IMG_START_TOKEN = "<img>"
-        IMG_END_TOKEN = "</img>"
-        IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
-
-        IMAGENET_MEAN = (0.485, 0.456, 0.406)
-        IMAGENET_STD = (0.229, 0.224, 0.225)
-
-        def build_transform(input_size):
-            MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
-            transform = T.Compose(
-                [
-                    T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
-                    T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
-                    T.ToTensor(),
-                    T.Normalize(mean=MEAN, std=STD),
-                ]
-            )
-            return transform
-
-        def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
-            best_ratio_diff = float("inf")
-            best_ratio = (1, 1)
-            area = width * height
-            for ratio in target_ratios:
-                target_aspect_ratio = ratio[0] / ratio[1]
-                ratio_diff = abs(aspect_ratio - target_aspect_ratio)
-                if ratio_diff < best_ratio_diff:
-                    best_ratio_diff = ratio_diff
-                    best_ratio = ratio
-                elif ratio_diff == best_ratio_diff:
-                    if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
-                        best_ratio = ratio
-            return best_ratio
-
-        def dynamic_preprocess(image, min_num=1, max_num=12, image_size=28, use_thumbnail=False):
-            orig_width, orig_height = image.size
-            aspect_ratio = orig_width / orig_height
-
-            # calculate the existing image aspect ratio
-            target_ratios = {
-                (i, j)
-                for n in range(min_num, max_num + 1)
-                for i in range(1, n + 1)
-                for j in range(1, n + 1)
-                if i * j <= max_num and i * j >= min_num
-            }
-            target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
-
-            # find the closest aspect ratio to the target
-            target_aspect_ratio = find_closest_aspect_ratio(
-                aspect_ratio, target_ratios, orig_width, orig_height, image_size
-            )
-
-            # calculate the target width and height
-            target_width = image_size * target_aspect_ratio[0]
-            target_height = image_size * target_aspect_ratio[1]
-            blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
-
-            # resize the image
-            resized_img = image.resize((target_width, target_height))
-            processed_images = []
-            for i in range(blocks):
-                box = (
-                    (i % (target_width // image_size)) * image_size,
-                    (i // (target_width // image_size)) * image_size,
-                    ((i % (target_width // image_size)) + 1) * image_size,
-                    ((i // (target_width // image_size)) + 1) * image_size,
-                )
-                # split the image
-                split_img = resized_img.crop(box)
-                processed_images.append(split_img)
-            assert len(processed_images) == blocks
-            if use_thumbnail and len(processed_images) != 1:
-                thumbnail_img = image.resize((image_size, image_size))
-                processed_images.append(thumbnail_img)
-            return processed_images
-
-        def load_image(image, input_size=448, max_num=12):
-            transform = build_transform(input_size=input_size)
-            images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
-            pixel_values = [transform(image) for image in images]
-            pixel_values = torch.stack(pixel_values)
-            return pixel_values
-
-        if image is not None:
-            pixel_values = load_image(image, input_size=config.vision_config.image_size)
-            num_patches = pixel_values.shape[0]
-            num_image_token = int(
-                (config.vision_config.image_size // config.vision_config.patch_size) ** 2
-                * (config.downsample_ratio**2)
-            )
-            image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_token * num_patches + IMG_END_TOKEN
-            prompt = prompt.replace("<image>", image_tokens, 1)
-            text_inputs = tokenizer(prompt, return_tensors="pt")
-            inputs = dict(text_inputs)
-            inputs.update({"pixel_values": pixel_values})
-        else:
-            inputs = tokenizer(prompt, return_tensors="pt")
-        return inputs
+            preprocessors = {"processor": processor, "tokenizer": None}
+        return preprocessors
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):

@@ -24,8 +24,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
-from .. import OVQuantizer
 from ...exporters.openvino.utils import save_config
+from .. import OVQuantizer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -915,10 +915,16 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
-        if image is None:
-            raise ValueError("Image is required.")
-        chat_template = [{"role": "user", "content": [{"type": "text", "text": text}, {"type": "image"}]}]
-        prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
+        if processor.chat_template is not None:
+            chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+            if image is not None:
+                chat_prompt[0]["content"].append({"type": "image"})
+            prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        else:
+            if image is not None and "<image>" not in text:
+                prompt = "<image>\n" + text
+            else:
+                prompt = text
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
 
@@ -1217,6 +1223,120 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
         input_embeds = input_embeds.reshape(B, N, C)
         return input_embeds, attention_mask, position_ids
 
+    def preprocess_inputs(
+        self,
+        processor=None,
+        text: str = "",
+        image: Optional[Image] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        import torchvision.transforms as T
+        from torchvision.transforms.functional import InterpolationMode
+
+        IMG_START_TOKEN = "<img>"
+        IMG_END_TOKEN = "</img>"
+        IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
+
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD = (0.229, 0.224, 0.225)
+
+        def build_transform(input_size):
+            MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
+            transform = T.Compose(
+                [
+                    T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
+                    T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+                    T.ToTensor(),
+                    T.Normalize(mean=MEAN, std=STD),
+                ]
+            )
+            return transform
+
+        def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+            best_ratio_diff = float("inf")
+            best_ratio = (1, 1)
+            area = width * height
+            for ratio in target_ratios:
+                target_aspect_ratio = ratio[0] / ratio[1]
+                ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+                if ratio_diff < best_ratio_diff:
+                    best_ratio_diff = ratio_diff
+                    best_ratio = ratio
+                elif ratio_diff == best_ratio_diff:
+                    if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                        best_ratio = ratio
+            return best_ratio
+
+        def dynamic_preprocess(image, min_num=1, max_num=12, image_size=28, use_thumbnail=False):
+            orig_width, orig_height = image.size
+            aspect_ratio = orig_width / orig_height
+
+            # calculate the existing image aspect ratio
+            target_ratios = {
+                (i, j)
+                for n in range(min_num, max_num + 1)
+                for i in range(1, n + 1)
+                for j in range(1, n + 1)
+                if i * j <= max_num and i * j >= min_num
+            }
+            target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
+
+            # find the closest aspect ratio to the target
+            target_aspect_ratio = find_closest_aspect_ratio(
+                aspect_ratio, target_ratios, orig_width, orig_height, image_size
+            )
+
+            # calculate the target width and height
+            target_width = image_size * target_aspect_ratio[0]
+            target_height = image_size * target_aspect_ratio[1]
+            blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+
+            # resize the image
+            resized_img = image.resize((target_width, target_height))
+            processed_images = []
+            for i in range(blocks):
+                box = (
+                    (i % (target_width // image_size)) * image_size,
+                    (i // (target_width // image_size)) * image_size,
+                    ((i % (target_width // image_size)) + 1) * image_size,
+                    ((i // (target_width // image_size)) + 1) * image_size,
+                )
+                # split the image
+                split_img = resized_img.crop(box)
+                processed_images.append(split_img)
+            assert len(processed_images) == blocks
+            if use_thumbnail and len(processed_images) != 1:
+                thumbnail_img = image.resize((image_size, image_size))
+                processed_images.append(thumbnail_img)
+            return processed_images
+
+        def load_image(image, input_size=448, max_num=12):
+            transform = build_transform(input_size=input_size)
+            images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
+            pixel_values = [transform(image) for image in images]
+            pixel_values = torch.stack(pixel_values)
+            return pixel_values
+
+        if image is not None:
+            if "<image>" not in text:
+                text = "<image>\n" + text
+            pixel_values = load_image(image, input_size=self.config.vision_config.image_size)
+            num_patches = pixel_values.shape[0]
+            num_image_token = int(
+                (self.config.vision_config.image_size // self.config.vision_config.patch_size) ** 2
+                * (self.config.downsample_ratio**2)
+            )
+            image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_token * num_patches + IMG_END_TOKEN
+            text = text.replace("<image>", image_tokens, 1)
+            text_inputs = tokenizer(text, return_tensors="pt")
+            inputs = dict(text_inputs)
+            inputs.update({"pixel_values": pixel_values})
+        else:
+            inputs = tokenizer(text, return_tensors="pt")
+        return inputs
+
 
 class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["resampler"]
@@ -1443,9 +1563,15 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
-        if image is None:
-            raise ValueError("Image is required.")
-        prompt = f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
+        if processor.chat_template is not None:
+            messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+            prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            prompt = (
+                f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
+                if image is not None
+                else text
+            )
         inputs = processor([prompt], [image], return_tensors="pt")
         return inputs
 
@@ -1630,10 +1756,15 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
-        messages = [{"role": "user", "content": f"<image>\n{text}"}]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
-        input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+        text_content = f"<image>\n{text}" if image is not None else text
+        messages = [{"role": "user", "content": text_content}]
+        if tokenizer.chat_template is not None:
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        if image is not None:
+            text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
+            input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+        else:
+            input_ids = tokenizer(text, return_tensors="pt").input_ids
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
         if image is not None:
