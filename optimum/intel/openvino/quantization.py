@@ -19,6 +19,7 @@ import logging
 import os
 import warnings
 from collections import deque
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -774,10 +775,10 @@ class OVQuantizer(OptimumQuantizer):
         dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
         dataset = datasets.load_dataset(dataset_metadata["name"], split=dataset_metadata["split"]).shuffle(seed=0)
         num_samples = min(config.num_samples or 128, len(dataset))
+        dataset = islice(dataset, num_samples)
 
         calibration_dataset = []
-        pbar = tqdm(desc="Collecting calibration dataset", total=num_samples)
-        for item in dataset:
+        for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
             instruction = item[dataset_metadata["inputs"]["instruction"]]
             image_url = item[dataset_metadata["inputs"]["image_url"]]
             image = Image.open(requests.get(image_url, stream=True).raw)
@@ -804,10 +805,7 @@ class OVQuantizer(OptimumQuantizer):
                 inputs_embeds=inputs_embeds,
             )
 
-            pbar.update(1)
             calibration_dataset.append(language_model_inputs)
-            if len(calibration_dataset) == num_samples:
-                break
 
         calibration_dataset = nncf.Dataset(calibration_dataset)
         return calibration_dataset

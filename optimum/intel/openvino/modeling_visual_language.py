@@ -729,7 +729,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     @abstractmethod
     def preprocess_inputs(
         processor,
-        instruction: str,
+        text: str,
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
@@ -909,13 +909,13 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         processor,
-        instruction: str,
+        text: str,
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         if image is None:
             raise ValueError("Image is required.")
-        chat_template = [{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image"}]}]
+        chat_template = [{"role": "user", "content": [{"type": "text", "text": text}, {"type": "image"}]}]
         prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
@@ -1435,13 +1435,13 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         processor,
-        instruction: str,
+        text: str,
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         if image is None:
             raise ValueError("Image is required.")
-        prompt = f"<|im_start|>user\n(<image>./</image>)\n{instruction}<|im_end|>\n<|im_start|>assistant\n"
+        prompt = f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
         inputs = processor([prompt], [image], return_tensors="pt")
         return inputs
 
@@ -1620,13 +1620,13 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         processor,
-        instruction: str,
+        text: str,
         image: Optional[Image] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
-        messages = [{"role": "user", "content": f"<image>\n{instruction}"}]
+        messages = [{"role": "user", "content": f"<image>\n{text}"}]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
         input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
