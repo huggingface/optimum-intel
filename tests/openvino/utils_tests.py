@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import numpy as np
+import openvino as ov
 import torch
 
 
@@ -96,6 +97,7 @@ MODEL_NAMES = {
     "mpnet": "hf-internal-testing/tiny-random-MPNetModel",
     "mt5": "stas/mt5-tiny-random",
     "nanollava": "katuni4ka/tiny-random-nanollava",
+    "nanollava_vision_tower": "katuni4ka/tiny-random-siglip",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "olmo": "katuni4ka/tiny-random-olmo-hf",
     "orion": "katuni4ka/tiny-random-orion",
@@ -178,10 +180,14 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "open-clip": (20, 28),
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
+    "llava": (30, 18, 2),
+    "llava_next": (30, 18, 2),
+    "minicpmv": (30, 52, 2, 12),
+    "nanollava": (30, 30, 2),
 }
 
 
-def get_num_quantized_nodes(ov_model):
+def get_num_quantized_nodes(model):
     num_fake_quantize = 0
     num_weight_nodes = {
         "int8": 0,
@@ -189,7 +195,8 @@ def get_num_quantized_nodes(ov_model):
         "f4e2m1": 0,
         "f8e8m0": 0,
     }
-    for elem in ov_model.model.get_ops():
+    ov_model = model if isinstance(model, ov.Model) else model.model
+    for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):

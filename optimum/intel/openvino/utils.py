@@ -116,6 +116,7 @@ _HEAD_TO_AUTOMODELS = {
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",
+    "image-text-to-text": "OVModelForVisualCausalLM",
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
@@ -133,6 +134,14 @@ PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+PREDEFINED_VISUAL_LM_DATASETS = {
+    "contextual": {
+        "name": "ucla-contextual/contextual_test",
+        "split": "test",
+        "inputs": {"image_url": "image_url", "instruction": "instruction"},
+    }
 }
 
 

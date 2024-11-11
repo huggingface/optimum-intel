@@ -36,6 +36,7 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
@@ -103,7 +104,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
 
-    TEST_4BIT_CONFIGURATONS = [
+    TEST_4BIT_CONFIGURATIONS = [
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
         ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
         ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
@@ -128,6 +129,26 @@ class OVCLIExportTestCase(unittest.TestCase):
             {"int8": 4, "int4": 14},
         ),
     ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "llava_next",
+                    'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1",
+                    {"int8": 8, "int4": 22},
+                ),
+                (
+                    "image-text-to-text",
+                    "nanollava",
+                    'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {"int8": 12, "int4": 18},
+                ),
+            ]
+        )
 
     def _openvino_export(self, model_name: str, task: str):
         with TemporaryDirectory() as tmpdir:
@@ -245,7 +266,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(exp_num_int8, num_weight_nodes["int8"])
             self.assertEqual(exp_num_fq, num_fq)
 
-    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
+    @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
@@ -255,13 +276,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            if "--trust-remote-code" in option:
+                model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
+            ov_model = model.lm_model if task == "image-text-to-text" else model.model
+
+            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
