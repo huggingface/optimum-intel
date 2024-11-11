@@ -91,9 +91,31 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
-def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None, library_name: Optional[str] = None):
+def _set_runtime_options(
+    models_and_export_configs: Dict[
+        str,
+        Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
+    ],
+    task: str,
+):
+    for model_name in models_and_export_configs.keys():
+        _, sub_export_config = models_and_export_configs[model_name]
+        if "vae_" in model_name or "text-generation" in task:
+            sub_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+
+
+def _save_model(
+    model,
+    path: str,
+    ov_config: Optional["OVConfig"] = None,
+    library_name: Optional[str] = None,
+    config: OnnxConfig = None,
+):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
+
+    if hasattr(config, "runtime_options"):
+        model = _add_runtime_options_to_rt_info(model, config.runtime_options)
     save_model(model, path, compress_to_fp16)
 
 
@@ -213,6 +235,7 @@ def export_tensorflow(
         output.parent / output,
         ov_config=ov_config,
         library_name=library_name,
+        config=config,
     )
     del ov_model
     return input_names, output_names, True
@@ -276,6 +299,7 @@ def export_pytorch_via_onnx(
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
         ov_config=ov_config,
         library_name=library_name,
+        config=config,
     )
     del ov_model
     return input_names, output_names, True
@@ -450,6 +474,7 @@ def export_pytorch(
             output,
             ov_config=ov_config,
             library_name=library_name,
+            config=config,
         )
         clear_class_registry()
         del ov_model
@@ -718,6 +743,8 @@ def export_from_model(
 
         model.save_config(output)
 
+    _set_runtime_options(models_and_export_configs, task)
+
     export_models(
         models_and_export_configs=models_and_export_configs,
         output_dir=output,
@@ -790,6 +817,19 @@ def export_tokenizer(
 
     for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
         save_model(model, output / file_name.format(suffix))
+
+
+def _add_runtime_options_to_rt_info(model: Model, options: Dict):
+    """
+    Add runtime optinos
+    """
+    try:
+        for name, value in options.items():
+            model.set_rt_info(value, ["runtime_options", name])
+    except Exception:
+        pass
+
+    return model
 
 
 def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
