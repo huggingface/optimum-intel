@@ -127,8 +127,12 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
 
                 if library_name == "diffusers":
-                    self.assertTrue(ov_model.vae_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
-                    self.assertTrue(ov_model.vae_decoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                    self.assertTrue(
+                        ov_model.vae_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                    )
+                    self.assertTrue(
+                        ov_model.vae_decoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
