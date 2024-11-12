@@ -15,6 +15,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from PIL.Image import Image
 from transformers import (
     AutoConfig,
+    AutoImageProcessor,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -736,9 +737,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     @staticmethod
     @abstractmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         """
@@ -910,12 +911,14 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
     @staticmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
-        if processor.chat_template is not None:
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
             chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
             if image is not None:
                 chat_prompt[0]["content"].append({"type": "image"})
@@ -1225,9 +1228,9 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
 
     def preprocess_inputs(
         self,
-        processor=None,
         text: str = "",
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         if tokenizer is None:
@@ -1558,12 +1561,14 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
     @staticmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
-        if processor.chat_template is not None:
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
             messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
             prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         else:
@@ -1749,13 +1754,15 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
 
     @staticmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
+        if image is not None and processor is None:
+            raise ValueError("Processor is required.")
         text_content = f"<image>\n{text}" if image is not None else text
         messages = [{"role": "user", "content": text_content}]
         if tokenizer.chat_template is not None:
