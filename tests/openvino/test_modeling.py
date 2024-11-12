@@ -2071,7 +2071,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer}
         elif model_arch == "internvl2":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
