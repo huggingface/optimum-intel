@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 
+import copy
 import inspect
 import logging
 import os
@@ -424,6 +425,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         super().__init__(
             model, config, export=export, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache
         )
+        if self._add_patch:
+            self._supports_cache_class = True
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
@@ -440,8 +443,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        if self._add_patch:
-            _supports_cache_class = True
         if is_transformers_version(">=", "4.38.0") and model_type in {
             "llama",
             "phi",
@@ -516,7 +517,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return generation_config, model_kwargs
 
     def generate(self, *args, **kwargs):
-        if is_ipex_version("<", "2.4.0") and self._add_patch and kwargs.get("assistant_model", None):
+        new_kwargs = copy.deepcopy(kwargs)
+        if is_ipex_version("<", "2.4.0") and self._add_patch and new_kwargs.get("assistant_model", None):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
@@ -527,20 +529,22 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             if is_transformers_version(">=", "4.45.0"):
                 if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
                     transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
+            if new_kwargs.get("generation_config", None):
+                new_kwargs["generation_config"].cache_implementation = "paged"
 
-        if self._add_patch and kwargs.get("assistant_model", None):
+        if self._add_patch and new_kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
         elif self._add_patch:
             transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
 
         try:
-            result = super().generate(*args, **kwargs)
+            result = super().generate(*args, **new_kwargs)
         except Exception as e:
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
             raise e
 
-        if self._add_patch and kwargs.get("assistant_model", None):
+        if self._add_patch and new_kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
 
