@@ -295,6 +295,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.tokenizer_3.save_pretrained(save_directory / "tokenizer_3")
         if self.feature_extractor is not None:
             self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
+        if getattr(self, "safety_checker", None) is not None:
+            self.safety_checker.save_pretrained(save_directory / "safety_checker")
 
         self._save_openvino_config(save_directory)
 
