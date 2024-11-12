@@ -69,9 +69,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
-def _is_patched_with_ipex(model,
-                          task,
-                          use_cache: bool=True):
+def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
     if not use_cache:
@@ -140,7 +138,7 @@ class IPEXModel(OptimizedModel):
 
         self.model.to(self._device)
         self._dtype = self.model.dtype if self.model.dtype is not None else torch.float32
-        self.use_cache = kwargs.get('use_cache', False)
+        self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
         self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
 
@@ -487,7 +485,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             if past_key_values is None and self._add_patch:
                 max_length = self.config.max_length + input_ids.shape[1]
                 batch_size = input_ids.shape[0]
-                past_key_values = IPEXPagedCache(self.config, batch_size, max_length, input_ids.device, dtype=self.dtype)
+                past_key_values = IPEXPagedCache(
+                    self.config, batch_size, max_length, input_ids.device, dtype=self.dtype
+                )
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward

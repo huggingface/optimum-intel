@@ -56,7 +56,4 @@ MODEL_NAMES = {
     "vit": "hf-internal-testing/tiny-random-vit",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "xlm": "hf-internal-testing/tiny-random-xlm",
-    "patched_falcon": "Jiqing/patched_tiny_random_falcon_for_causal_lm",
-    "patched_distilgpt2": "Jiqing/patched_tiny_random_distilgpt2_for_causal_lm",
-    "patched_llama2": "Jiqing/patched_tiny_random_llama2_for_causal_lm",
 }

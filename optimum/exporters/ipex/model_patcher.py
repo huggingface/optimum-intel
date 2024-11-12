@@ -13,8 +13,8 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
-from transformers.models.falcon.modeling_falcon import FalconModel, FalconDecoderLayer
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2Model
+from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaModel,
@@ -27,14 +27,14 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _falcon_model_forward,
+    _gpt2_model_forward,
     _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
     _IPEXGPT2Attention,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
-    _falcon_model_forward,
-    _gpt2_model_forward,
 )
 
 
@@ -91,7 +91,9 @@ def _patch_falcon_model(model):
         2. Use IPEX Rope and paged cache
         3. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
     """
-    num_key_value_heads = model.config.num_kv_heads if (model.config.new_decoder_architecture or not model.config.multi_query) else 1
+    num_key_value_heads = (
+        model.config.num_kv_heads if (model.config.new_decoder_architecture or not model.config.multi_query) else 1
+    )
     setattr(model.config, "num_key_value_heads", num_key_value_heads)
     convert_functions(model, FalconModel, "forward", _falcon_model_forward)
     replace_customized_linear_with_linear(model)
