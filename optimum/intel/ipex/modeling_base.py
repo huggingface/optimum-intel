@@ -69,17 +69,20 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
-def _is_patched_with_ipex(model, task):
+def _is_patched_with_ipex(model,
+                          task,
+                          use_cache: bool=True):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
-
+    if not use_cache:
+        return False
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
 
 
 def _prepare_inputs_for_ipex_model(model, task, use_cache):
     task = _TASK_ALIASES.get(task, task)
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
-    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config:
+    if _is_patched_with_ipex(model, task, use_cache) and model.config.model_type in ipex_onnx_config:
         onnx_config_class = make_backend_config_constructor_for_task(
             ipex_onnx_config[model.config.model_type], task=task
         )
@@ -96,7 +99,7 @@ def _prepare_inputs_for_ipex_model(model, task, use_cache):
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
 
     # Check attention_mask shape
-    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config and use_cache:
+    if _is_patched_with_ipex(model, task, use_cache) and model.config.model_type in ipex_onnx_config:
         past_len = dummy_inputs["past_key_values"][0][0].shape[-2]
         input_len = dummy_inputs["input_ids"].shape[-1]
         attention_len = dummy_inputs["attention_mask"].shape[-1]
@@ -136,9 +139,10 @@ class IPEXModel(OptimizedModel):
         OptimizedModel.__init__(self, model=model, config=config)
 
         self.model.to(self._device)
-        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
+        self._dtype = self.model.dtype if self.model.dtype is not None else torch.float32
+        self.use_cache = kwargs.get('use_cache', False)
         self.model_save_dir = model_save_dir
-        self._add_patch = _is_patched_with_ipex(model, self.export_feature)
+        self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
@@ -248,7 +252,7 @@ class IPEXModel(OptimizedModel):
             torch.jit.save(self.model, output_path)
         else:
             logger.warning("The module is not a torchscript model, will be treated as a transformers model.")
-            self.model.save_pretrained(save_directory)
+            self.model.save_pretrained(save_directory, safe_serialization=False)
 
     def forward(
         self,
@@ -313,8 +317,8 @@ class IPEXModel(OptimizedModel):
         # the results of the compute are unpredictable
         # TODO : add warmup for IPEX exported model
         if not self._add_patch:
-            use_cache = "past_key_values" in self.input_names
-            dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, use_cache)
+            # use_cache = "past_key_values" in self.input_names
+            dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, self.use_cache)
             if self._device.type != "cpu":
                 dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
             for _ in range(2):
@@ -405,7 +409,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    _supports_cache_class = True
+    _supports_cache_class = False
     _is_stateful = False
 
     def __init__(
@@ -426,7 +430,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         model_type = self.config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
-        self.use_cache = "past_key_values" in self.input_names
 
         self.config.is_decoder = True
         self.config.is_encoder_decoder = False
@@ -439,6 +442,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
+        if self._add_patch:
+            _supports_cache_class = True
         if is_transformers_version(">=", "4.38.0") and model_type in {
             "llama",
             "phi",
@@ -516,13 +521,13 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
         # Patch functions to support paged cache
-        transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["paged"] = IPEXPagedCache
-        self.generation_config.cache_implementation = "paged"
-        if is_transformers_version(">=", "4.45.0"):
-            if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
-                transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
-        if kwargs.get("generation_config", None):
-            kwargs["generation_config"].cache_implementation = "paged"
+        if self._add_patch:
+            transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["paged"] = IPEXPagedCache
+            self.generation_config.cache_implementation = "paged"
+            if is_transformers_version(">=", "4.45.0"):
+                if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
+                    transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
+
         if self._add_patch and kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
         elif self._add_patch:

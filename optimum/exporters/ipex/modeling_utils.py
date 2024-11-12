@@ -434,7 +434,8 @@ def _gpt2_model_forward(
             hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
 
         input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
-        setattr(past_key_values, "input_lens", input_lens)
+        if past_key_values is not None:
+            setattr(past_key_values, "input_lens", input_lens)
 
         presents = None
         all_self_attentions = () if output_attentions else None
@@ -592,17 +593,13 @@ class _IPEXLlamaAttention(_IPEXAttention):
         self.q_slice = self.q_proj.out_features
         self.k_slice = self.q_slice + self.k_proj.out_features
         self.v_slice = self.k_slice + self.v_proj.out_features
-        del self.__dict__["_modules"]["q_proj"]
-        del self.__dict__["_modules"]["k_proj"]
-        del self.__dict__["_modules"]["v_proj"]
         if self.module_device == "cpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = LinearAdd(module.o_proj)
-                del self.__dict__["_modules"]["o_proj"]
+
         elif self.module_device == "xpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = XPULinearAdd(module.o_proj)
-                del self.__dict__["_modules"]["o_proj"]
 
     def qkv_gemm(self, hidden_states):
         qkv_out = self.concat_qkv(hidden_states)
@@ -678,18 +675,12 @@ class _IPEXLlamaMLP(nn.Module):
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
-                del self.__dict__["_modules"]["down_proj"]
             self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
-            del self.__dict__["_modules"]["gate_proj"]
-            del self.__dict__["_modules"]["up_proj"]
         elif self.module_device == "xpu":
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = XPULinearAdd(module.down_proj)
-                del self.__dict__["_modules"]["down_proj"]
             self.linear_silu_mul = XPULinear2SiluMul(module.gate_proj, module.up_proj)
-            del self.__dict__["_modules"]["gate_proj"]
-            del self.__dict__["_modules"]["up_proj"]
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
@@ -717,10 +708,8 @@ class _IPEXFalconMLP(nn.Module):
             self.linear_gelu = LinearGelu(module.dense_h_to_4h)
         elif self.module_device == "xpu":
             self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
-        del self.__dict__["_modules"]["dense_h_to_4h"]
         if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
             self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
-            del self.__dict__["_modules"]["dense_4h_to_h"]
 
     def forward(
         self,
