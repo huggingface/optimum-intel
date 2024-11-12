@@ -617,11 +617,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
-        images=None,
         **kwargs,
     ):
-        if pixel_values is None and images is not None:
-            pixel_values = images
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -1814,7 +1811,9 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
         if image is not None:
-            result["images"] = torch.unsqueeze(processor(images=image, return_tensors="pt")["pixel_values"][0], 0)
+            result["pixel_values"] = torch.unsqueeze(
+                processor(images=image, return_tensors="pt")["pixel_values"][0], 0
+            )
         return result
 
 
