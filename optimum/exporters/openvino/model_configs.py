@@ -29,6 +29,7 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
+    GPTJOnnxConfig,
     GPTNeoXOnnxConfig,
     IBertOnnxConfig,
     LlamaOnnxConfig,
@@ -66,6 +67,7 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    GptJModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
     IBertModelPatcher,
@@ -724,6 +726,24 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptNeoxJapaneseModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gptj",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GPTJOpenVINOConfig(GPTJOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptJModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
