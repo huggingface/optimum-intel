@@ -1228,7 +1228,7 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
 
     def preprocess_inputs(
         self,
-        text: str = "",
+        text: str,
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
