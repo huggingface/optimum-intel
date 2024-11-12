@@ -221,7 +221,7 @@ def save_config(config, save_dir):
         config.save_pretrained(save_dir)
     except Exception as exp:
         logger.warning(
-            f"Attempt to save config using standard API is failed with {exp}. It may be issue with model config, please check its correctness before usage."
+            f"Attempt to save config using standard API has failed with {exp}. There may be an issue with model config, please check its correctness before usage."
         )
         save_dir = Path(save_dir)
         save_dir.mkdir(exist_ok=True, parents=True)
