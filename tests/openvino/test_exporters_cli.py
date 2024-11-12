@@ -384,3 +384,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["open_clip"]).from_pretrained(tmpdir, compile=False)
             self.assertTrue("text_features" in model.text_model.output_names)
             self.assertTrue("image_features" in model.visual_model.output_names)
+
+    def test_export_openvino_with_missed_weight_format(self):
+        # Test that exception is raised when some compression parameter is given, but weight format is not.
+        with TemporaryDirectory() as tmpdir:
+            with self.assertRaises(subprocess.CalledProcessError) as exc_info:
+                subprocess.run(
+                    f"optimum-cli export openvino --model {MODEL_NAMES['gpt2']} --task text-generation --sym {tmpdir}",
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            self.assertIn(
+                "Some compression parameters are provided, but the weight format is not specified.",
+                str(exc_info.exception.stderr),
+            )
