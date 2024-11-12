@@ -2018,10 +2018,19 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         for additional_part in ov_model.additional_parts:
             self.assertTrue("CPU" in getattr(ov_model, additional_part)._device)
             self.assertTrue(getattr(ov_model, additional_part).request is not None)
-        # pytorch minicpmv and internvl are not designed to be used via forward
-        if model_arch not in ["minicpmv", "internvl2"]:
-            set_seed(SEED)
-            ov_outputs = ov_model(**inputs)
+        ov_model.clear_requests()
+        self.assertTrue("CPU" in ov_model._device)
+        self.assertTrue("CPU" in ov_model.vision_embeddings._device)
+        self.assertTrue(ov_model.vision_embeddings.request is None)
+        self.assertTrue("CPU" in ov_model.language_model._device)
+        self.assertTrue(ov_model.language_model.request is None)
+        self.assertTrue(ov_model.language_model.text_emb_request is None)
+        for additional_part in ov_model.additional_parts:
+            self.assertTrue("CPU" in getattr(ov_model, additional_part)._device)
+            self.assertTrue(getattr(ov_model, additional_part).request is None)
+
+        # pytorch minicpmv is not designed to be used via forward
+        if model_arch in ["minicpmv", "internvl2"]:
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**inputs)

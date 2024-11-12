@@ -16,6 +16,7 @@ from PIL.Image import Image
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
+    AutoModelForCausalLM,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -368,7 +369,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.lm_model, self.text_embdings_model, self.vision_embeddings_model]
+        src_files = [self.lm_model, self.text_embeddings_model, self.vision_embeddings_model]
         dst_file_names = [OV_LANGUAGE_MODEL_NAME, OV_TEXT_EMBEDDINGS_MODEL_NAME, OV_VISION_EMBEDDINGS_MODEL_NAME]
         for part in self.additional_parts:
             model = getattr(self, f"{part}_model", None)
