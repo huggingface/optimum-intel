@@ -1340,6 +1340,45 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
             inputs = tokenizer(text, return_tensors="pt")
         return inputs
 
+    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        using_model_generation_config = False
+        if generation_config is None:
+            if (
+                self.generation_config._from_model_config  # 1)
+                and self.generation_config._original_object_hash == hash(self.generation_config)  # 2)
+            ):
+                new_generation_config = GenerationConfig.from_model_config(self.config)
+                if new_generation_config != self.generation_config:  # 4)
+                    warnings.warn(
+                        "You have modified the pretrained model configuration to control generation. This is a"
+                        " deprecated strategy to control generation and will be removed in v5."
+                        " Please use and modify the model generation configuration (see"
+                        " https://huggingface.co/docs/transformers/generation_strategies#default-text-generation-configuration )",
+                        UserWarning,
+                    )
+                    self.generation_config = new_generation_config
+
+            generation_config = self.generation_config
+            using_model_generation_config = True
+
+        generation_config = copy.deepcopy(generation_config)
+        model_kwargs = generation_config.update(**kwargs)
+        # If `generation_config` is provided, let's fallback ALL special tokens to the default values for the model
+        if not using_model_generation_config:
+            if generation_config.bos_token_id is None:
+                generation_config.bos_token_id = self.generation_config.bos_token_id
+            if generation_config.eos_token_id is None:
+                generation_config.eos_token_id = self.generation_config.eos_token_id
+            if generation_config.pad_token_id is None:
+                generation_config.pad_token_id = self.generation_config.pad_token_id
+            if generation_config.decoder_start_token_id is None:
+                generation_config.decoder_start_token_id = self.generation_config.decoder_start_token_id
+
+        return generation_config, model_kwargs
+
 
 class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["resampler"]
