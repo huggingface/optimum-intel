@@ -424,15 +424,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     module = getattr(pipelines, module_name)
                 else:
                     module = importlib.import_module(module_name)
-                logger.warn(module)
                 class_obj = getattr(module, module_class)
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
                 if (model_save_path / name).is_dir():
-                    logger.warn(name)
                     submodels[name] = load_method(model_save_path / name)
                 else:
-                    logger.warn(name)
                     submodels[name] = load_method(model_save_path)
 
         models = {
@@ -454,10 +451,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
             for name, path in models.items():
                 if name in kwargs:
-                    logger.warn(name)
                     models[name] = kwargs.pop(name)
                 else:
-                    logger.warn(name)
                     models[name] = cls.load_model(path, quantization_config) if path.is_file() else None
         elif compile_only:
             ov_config = kwargs.get("ov_config", {})
