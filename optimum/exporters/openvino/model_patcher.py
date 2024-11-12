@@ -1872,7 +1872,7 @@ class InternLMModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-# copied from  https://github.com/huggingface/optimum/blob/v1.22.0/optimum/bettertransformer/models/attention.py#L169
+# copied from  https://github.com/huggingface/optimum/blob/2112e99122d7f23a1da1a9d263fef64301050ea7/optimum/bettertransformer/models/attention.py#L168
 # for preserving backward compatibility between outdated codegen remote code and new transformers
 def _codegen_wrapped_scaled_dot_product_legacy(
     self,
