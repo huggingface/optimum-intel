@@ -1914,8 +1914,7 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     else:
         query_length, key_length = query.size(-2), key.size(-2)
 
-        # causal_mask is always [True, ..., True] otherwise, so executing this
-        # is unnecessary
+        # causal_mask is always [True, ..., True] otherwise, so executing this is unnecessary
         if query_length > 1:
             causal_mask = self.causal_mask[:, :, key_length - query_length : key_length, :key_length].to(torch.bool)
 
@@ -1944,8 +1943,8 @@ class CodeGenModelPatcher(DecoderModelPatcher):
 
         attn_fn = codegen_wrapped_scaled_dot_product
         if is_torch_version(">=", "2.1.0") and is_transformers_version(">=", "4.45"):
-            # in transformers 4.45 removed causal_mask const buffer from model
-            # if it is still exists, it means legacy remote code loaded
+            # in transformers 4.45 causal_mask const buffer was removed from the model
+            # if it still exists, it means legacy remote code was loaded
             if hasattr(self._model.transformer.h[0].attn, "causal_mask"):
                 attn_fn = _codegen_wrapped_scaled_dot_product_legacy
 
