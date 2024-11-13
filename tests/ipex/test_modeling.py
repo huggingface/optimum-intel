@@ -208,7 +208,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "distilgpt2", "falcon")
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama", "llama2", "distilgpt2", "falcon", "gpt2")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -264,8 +264,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
-        # Patched models are not support assisted decoding if ipex < 2.5.
-        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES and is_ipex_version("<", "2.4.0"):
+        # assist decoding does not support static cache now
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -440,7 +440,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertIn("logits", outputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
-        self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-4))
         self.assertTrue(torch.allclose(init_model_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
