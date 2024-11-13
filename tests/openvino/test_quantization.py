@@ -340,23 +340,40 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
 
     if is_transformers_version(">=", "4.45.0"):
-        LOAD_IN_4_BITS_SCOPE.append(
-            (
-                OVModelForVisualCausalLM,
-                "minicpmv",
-                True,
-                dict(
-                    bits=4,
-                    group_size=16,
-                    dataset="contextual",
-                    ratio=0.8,
-                    sensitivity_metric="mean_activation_magnitude",
-                    num_samples=1,
-                    processor=MODEL_NAMES["minicpmv"],
-                    trust_remote_code=True,
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "minicpmv",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        processor=MODEL_NAMES["minicpmv"],
+                        trust_remote_code=True,
+                    ),
+                    {"int4": 22, "int8": 8},
                 ),
-                {"int4": 22, "int8": 8},
-            )
+                (
+                    OVModelForVisualCausalLM,
+                    "internvl2",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=4,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        trust_remote_code=True,
+                    ),
+                    {"int4": 22, "int8": 8},
+                ),
+            ]
         )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
