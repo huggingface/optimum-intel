@@ -2,8 +2,6 @@ ARG PLATFORM=cpu
 
 FROM ubuntu:22.04 as cpu
 WORKDIR /usr/src/
-COPY optimum optimum
-COPY Makefile setup.cfg setup.py pyproject.toml README.md ./
 RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
     sh -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
     ca-certificates \
@@ -45,12 +43,9 @@ ARG KMP_HW_SUBSET=1T
 ENV KMP_HW_SUBSET=${KMP_HW_SUBSET}
 ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc.so"
 
-RUN pip install .
-
 FROM intel/intel-extension-for-pytorch:2.3.110-xpu as xpu
 WORKDIR /usr/src/
-COPY optimum optimum
-COPY Makefile setup.cfg setup.py pyproject.toml README.md ./
+
 RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
     sh -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
     ca-certificates \
@@ -70,4 +65,9 @@ RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRO
 | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt install -y intel-basekit xpu-smi cmake ninja-build pciutils
+
+FROM ${PLATFORM}
+
+COPY optimum optimum
+COPY Makefile setup.cfg setup.py pyproject.toml README.md ./
 RUN pip install .
