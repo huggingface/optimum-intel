@@ -210,6 +210,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             False,
+            dict(bits=4, weight_format="nf4", group_size=32),
+            {"nf4": 20, "int8": 4},
+        ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            False,
             dict(
                 bits=4,
                 sym=False,
