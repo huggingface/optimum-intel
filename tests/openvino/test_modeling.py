@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import gc
 import os
 import tempfile
@@ -1997,6 +1998,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        transformers_inputs = copy.deepcopy(inputs)
         ov_model.to("AUTO")
         self.assertTrue("AUTO" in ov_model._device)
         self.assertTrue("AUTO" in ov_model.vision_embeddings._device)
@@ -2029,11 +2031,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue("CPU" in getattr(ov_model, additional_part)._device)
             self.assertTrue(getattr(ov_model, additional_part).request is None)
 
+        # nanollava pixel_values input named as images
+        if model_arch == "nanollava":
+            pixel_values = transformers_inputs.pop("pixel_values", None)
+            transformers_inputs["images"] = pixel_values
         # pytorch minicpmv is not designed to be used via forward
-        if model_arch in ["minicpmv", "internvl2"]:
+        if model_arch not in ["minicpmv", "internvl2"]:
+            set_seed(SEED)
+            ov_outputs = ov_model(**inputs)
             set_seed(SEED)
             with torch.no_grad():
-                transformers_outputs = transformers_model(**inputs)
+                transformers_outputs = transformers_model(**transformers_inputs)
             self.assertTrue(
                 torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
@@ -2053,7 +2061,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
         with torch.no_grad():
-            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+            transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
         if model_arch in ["minicpmv", "internvl2"]:

@@ -313,7 +313,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=not self._compile_only and enable_compilation,
+            compile=self._compile_only or enable_compilation,
             compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
@@ -656,11 +656,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
-        images=None,
         **kwargs,
     ):
-        if pixel_values is None and images is not None:
-            pixel_values = images
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -764,7 +761,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_sizes": image_sizes,
                 "image_bound": kwargs.get("image_bound"),
                 "tgt_sizes": kwargs.get("tgt_sizes"),
-                "images": kwargs.get("images"),
             }
         )
         return model_inputs
@@ -788,7 +784,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     auto_model_class = LlavaForConditionalGeneration
-    
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -1857,7 +1853,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
         if image is not None:
-            result["images"] = torch.unsqueeze(processor(images=image, return_tensors="pt")["pixel_values"][0], 0)
+            result["pixel_values"] = processor(images=[image], return_tensors="pt")["pixel_values"]
         return result
 
 
