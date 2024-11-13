@@ -439,7 +439,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model.xml$",
+                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
