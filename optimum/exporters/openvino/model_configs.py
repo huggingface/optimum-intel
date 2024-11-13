@@ -1464,7 +1464,7 @@ class InternVLChatConfigBehavior(str, enum.Enum):
 @register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in InternVLChatConfigBehavior]
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
 
     def __init__(

@@ -1880,9 +1880,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv"]
-    REMOTE_CODE_MODELS = ["minicpmv", "nanollava"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2"]
     TASK = "image-text-to-text"
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava"]
 
     IMAGE = Image.open(
         requests.get(
@@ -1902,45 +1902,25 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             return LlavaNextForConditionalGeneration
         return AutoModelForCausalLM
 
-    def gen_inputs(self, model_arch, base_text_prompt, image=None):
-        model_id = MODEL_NAMES[model_arch]
-        if "llava" in model_arch:
-            prompt = f"<image>\n {base_text_prompt}"
-        elif "minicpmv" in model_arch:
-            prompt = "<|im_start|>user\n(<image>./</image>)\n {base_text_prompt}<|im_end|>\n<|im_start|>assistant\n"
-        if model_arch != "nanollava":
-            processor = AutoProcessor.from_pretrained(
-                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
-            inputs = processor(images=[self.IMAGE.resize((600, 600))], text=[prompt], return_tensors="pt")
-        else:
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-            processor = AutoProcessor.from_pretrained(
-                config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
-            image_input = None
-            if image is not None:
-                image_input = processor(images=image, return_tensors="pt")["pixel_values"]
-            text_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split("<image>")]
-
-            input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
-            attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
-            inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "images": image_input}
-        return inputs
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        prompt = "What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
             model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
+        transformers_model.eval()
+        if "internvl2" in model_arch:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+            transformers_model.img_context_token_id = img_context_token_id
         if "nanollava" in model_arch:
             transformers_model.get_vision_tower().load_model()
-        inputs = self.gen_inputs(model_arch, "What is shown on this image?", self.IMAGE)
-
+        preprocessors = self.get_preprocessors(model_arch)
+        set_seed(SEED)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
@@ -1951,13 +1931,18 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(hasattr(ov_model, additional_part))
             self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        # pytorch minicpmv is not designed to be used via forward
-        if "minicpmv" not in model_arch:
+        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        # pytorch minicpmv and internvl are not designed to be used via forward
+        if model_arch not in ["minicpmv", "internvl2"]:
+            set_seed(SEED)
+            ov_outputs = ov_model(**inputs)
             set_seed(SEED)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**inputs)
-            ov_outputs = ov_model(**inputs)
-            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4),
+                f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
+            )
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1972,9 +1957,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
-        transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
-        # original minicpmv always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch == "minicpmv":
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+
+        # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+        if model_arch in ["minicpmv", "internvl2"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -2047,18 +2034,19 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         model = OVModelForVisualCausalLM.from_pretrained(
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
         )
+
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        inputs = self.gen_inputs(model_arch, "What is shown on this image?", self.IMAGE)
+        question = "Describe image"
+        preprocessors = self.get_preprocessors(model_arch)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
         # General case
         outputs = model.generate(**inputs, max_new_tokens=10)
-        # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-        outputs = outputs[:, inputs["input_ids"].shape[1] :]
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
         # No input image case
         question = "Hi, how are you?"
-        inputs = self.gen_inputs(model_arch, question, None)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
         outputs = model.generate(**inputs, max_new_tokens=10)
         # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
         outputs = outputs[:, inputs["input_ids"].shape[1] :]
@@ -2067,6 +2055,29 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         del model
 
         gc.collect()
+
+    def get_preprocessors(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        if model_arch == "nanollava":
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+            processor = AutoProcessor.from_pretrained(
+                config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": tokenizer}
+        elif model_arch == "internvl2":
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": None, "tokenizer": tokenizer}
+        else:
+            processor = AutoProcessor.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": None}
+        return preprocessors
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
