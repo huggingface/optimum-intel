@@ -19,9 +19,7 @@ from typing import List, Optional, Tuple, Union
 import torch
 from torch import nn
 from transformers.cache_utils import Cache
-from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPastAndCrossAttentions
-from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 
 from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
@@ -49,6 +47,7 @@ else:
     )
 
 
+# TODO: Following XPULinearXXX op classes will be put into ipex after 2.6.0 version
 class XPULinear2SiluMul(torch.nn.Module):
     def __init__(
         self,
@@ -72,6 +71,16 @@ class XPULinear2SiluMul(torch.nn.Module):
         if self.up_proj_bias is not None:
             hidden_states += self.up_proj_bias
         return hidden_states
+
+
+class XPULinearGelu(torch.nn.Module):
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        self.weight = module.weight.transpose(0, 1).contiguous()
+        self.bias = module.bias
+
+    def forward(self, x):
+        return torch.ops.torch_ipex.matmul_gelu(x, self.weight, self.bias, 1.0, "tanh")
 
 
 class XPULinearAdd(torch.nn.Module):
@@ -343,9 +352,7 @@ def _falcon_model_forward(
     hidden_states = hidden_states.view(batch_size, -1, hidden_states.shape[-1])
 
     if not return_dict:
-        return tuple(
-            v for v in [hidden_states, next_cache, all_hidden_states, all_self_attentions] if v is not None
-        )
+        return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attentions] if v is not None)
 
     return BaseModelOutputWithPastAndCrossAttentions(
         last_hidden_state=hidden_states,
@@ -356,127 +363,128 @@ def _falcon_model_forward(
 
 
 def _gpt2_model_forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+    self,
+    input_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    token_type_ids: Optional[torch.LongTensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    use_cache = use_cache if use_cache is not None else self.config.use_cache
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
-            input_shape = input_ids.size()
-            input_ids = input_ids.view(-1, input_shape[-1])
-        elif inputs_embeds is not None:
-            input_shape = inputs_embeds.size()[:-1]
-        else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+    if input_ids is not None and inputs_embeds is not None:
+        raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+    elif input_ids is not None:
+        self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+    elif inputs_embeds is not None:
+        input_shape = inputs_embeds.size()[:-1]
+    else:
+        raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-        device = input_ids.device if input_ids is not None else inputs_embeds.device
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
 
-        if token_type_ids is not None:
-            token_type_ids = token_type_ids.view(-1, input_shape[-1])
+    if token_type_ids is not None:
+        token_type_ids = token_type_ids.view(-1, input_shape[-1])
 
-        past_length = past_key_values.get_seq_length() if past_key_values is not None else 0
-        if position_ids is None:
-            position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
-            position_ids = position_ids.unsqueeze(0)
+    past_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    if position_ids is None:
+        position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
+        position_ids = position_ids.unsqueeze(0)
 
-        if inputs_embeds is None:
-            inputs_embeds = self.wte(input_ids)
-        batch_size, seq_length, _ = inputs_embeds.shape
-        position_embeddings = self.wpe(position_ids)
-        hidden_states = inputs_embeds + position_embeddings
+    if inputs_embeds is None:
+        inputs_embeds = self.wte(input_ids)
+    batch_size, seq_length, _ = inputs_embeds.shape
+    position_embeddings = self.wpe(position_ids)
+    hidden_states = inputs_embeds + position_embeddings
 
-        encoder_attention_mask = None
-        head_mask = self.get_head_mask(head_mask, self.config.n_layer)
+    encoder_attention_mask = None
+    head_mask = self.get_head_mask(head_mask, self.config.n_layer)
 
-        if token_type_ids is not None:
-            token_type_embeds = self.wte(token_type_ids)
-            hidden_states = hidden_states + token_type_embeds
+    if token_type_ids is not None:
+        token_type_embeds = self.wte(token_type_ids)
+        hidden_states = hidden_states + token_type_embeds
 
-        hidden_states = self.drop(hidden_states)
+    hidden_states = self.drop(hidden_states)
 
-        if past_length == 0:
-            # first token, remove the padding from hidden_states, varlen do not accept attention mask
-            hidden_states_copy = hidden_states
-            index = attention_mask.view(-1) != 0
-            hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        else:
-            hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+    if past_length == 0:
+        # first token, remove the padding from hidden_states, varlen do not accept attention mask
+        hidden_states_copy = hidden_states
+        index = attention_mask.view(-1) != 0
+        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+    else:
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
 
-        input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    if past_key_values is not None:
         setattr(past_key_values, "input_lens", input_lens)
 
-        presents = None
-        all_self_attentions = () if output_attentions else None
-        all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
-        all_hidden_states = () if output_hidden_states else None
-        for i, block in enumerate(self.h):
-            if output_hidden_states:
-                all_hidden_states = all_hidden_states + (hidden_states,)
-
-            outputs = block(
-                hidden_states,
-                layer_past=past_key_values,
-                attention_mask=attention_mask,
-                head_mask=head_mask[i],
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_attention_mask,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-            )
-
-            hidden_states = outputs[0]
-            if use_cache is True:
-                presents = outputs[1]
-
-            if output_attentions:
-                all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
-                if self.config.add_cross_attention:
-                    all_cross_attentions = all_cross_attentions + (outputs[3 if use_cache else 2],)
-
-        hidden_states = self.ln_f(hidden_states)
-        if hidden_states.shape[0] != batch_size * seq_length:
-            (hidden_states_copy.view(-1, hidden_states.shape[-1]))[attention_mask.view(-1) != 0] = hidden_states
-            hidden_states = hidden_states_copy
-
-        hidden_states = hidden_states.view(batch_size, -1, hidden_states.shape[-1])
-        # Add last hidden state
+    presents = None
+    all_self_attentions = () if output_attentions else None
+    all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
+    all_hidden_states = () if output_hidden_states else None
+    for i, block in enumerate(self.h):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions]
-                if v is not None
-            )
-
-        return BaseModelOutputWithPastAndCrossAttentions(
-            last_hidden_state=hidden_states,
-            past_key_values=presents,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attentions,
-            cross_attentions=all_cross_attentions,
+        outputs = block(
+            hidden_states,
+            layer_past=past_key_values,
+            attention_mask=attention_mask,
+            head_mask=head_mask[i],
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
         )
+
+        hidden_states = outputs[0]
+        if use_cache is True:
+            presents = outputs[1]
+
+        if output_attentions:
+            all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
+            if self.config.add_cross_attention:
+                all_cross_attentions = all_cross_attentions + (outputs[3 if use_cache else 2],)
+
+    hidden_states = self.ln_f(hidden_states)
+    if hidden_states.shape[0] != batch_size * seq_length:
+        (hidden_states_copy.view(-1, hidden_states.shape[-1]))[attention_mask.view(-1) != 0] = hidden_states
+        hidden_states = hidden_states_copy
+
+    hidden_states = hidden_states.view(batch_size, -1, hidden_states.shape[-1])
+    # Add last hidden state
+    if output_hidden_states:
+        all_hidden_states = all_hidden_states + (hidden_states,)
+
+    if not return_dict:
+        return tuple(
+            v
+            for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions]
+            if v is not None
+        )
+
+    return BaseModelOutputWithPastAndCrossAttentions(
+        last_hidden_state=hidden_states,
+        past_key_values=presents,
+        hidden_states=all_hidden_states,
+        attentions=all_self_attentions,
+        cross_attentions=all_cross_attentions,
+    )
 
 
 class _IPEXAttention(nn.Module):
@@ -520,9 +528,7 @@ class _IPEXAttention(nn.Module):
         query, key = self.rope(query, key, **kwargs)
 
         if past_key_value is not None:
-            key_cache, value_cache = past_key_value.update(
-                key, value, self.layer_idx, attention_mask, input_lens
-            )
+            key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask, input_lens)
 
         attn_output = torch.empty_like(query)
         if past_len == 0:
@@ -581,17 +587,13 @@ class _IPEXLlamaAttention(_IPEXAttention):
         self.q_slice = self.q_proj.out_features
         self.k_slice = self.q_slice + self.k_proj.out_features
         self.v_slice = self.k_slice + self.v_proj.out_features
-        del self.__dict__["_modules"]["q_proj"]
-        del self.__dict__["_modules"]["k_proj"]
-        del self.__dict__["_modules"]["v_proj"]
         if self.module_device == "cpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = LinearAdd(module.o_proj)
-                del self.__dict__["_modules"]["o_proj"]
+
         elif self.module_device == "xpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = XPULinearAdd(module.o_proj)
-                del self.__dict__["_modules"]["o_proj"]
 
     def qkv_gemm(self, hidden_states):
         qkv_out = self.concat_qkv(hidden_states)
@@ -667,18 +669,12 @@ class _IPEXLlamaMLP(nn.Module):
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
-                del self.__dict__["_modules"]["down_proj"]
             self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
-            del self.__dict__["_modules"]["gate_proj"]
-            del self.__dict__["_modules"]["up_proj"]
         elif self.module_device == "xpu":
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = XPULinearAdd(module.down_proj)
-                del self.__dict__["_modules"]["down_proj"]
             self.linear_silu_mul = XPULinear2SiluMul(module.gate_proj, module.up_proj)
-            del self.__dict__["_modules"]["gate_proj"]
-            del self.__dict__["_modules"]["up_proj"]
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
@@ -701,11 +697,13 @@ class _IPEXFalconMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        self.linear_gelu = LinearGelu(module.dense_h_to_4h)
-        del self.__dict__["_modules"]["dense_h_to_4h"]
+        self.module_device = next(module.parameters()).device.type
+        if self.module_device == "cpu":
+            self.linear_gelu = LinearGelu(module.dense_h_to_4h)
+        elif self.module_device == "xpu":
+            self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
         if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
             self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
-            del self.__dict__["_modules"]["dense_4h_to_h"]
 
     def forward(
         self,

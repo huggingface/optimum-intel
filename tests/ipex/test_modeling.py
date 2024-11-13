@@ -97,7 +97,6 @@ class IPEXModelTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**tokens)
-        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
@@ -163,7 +162,6 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**tokens)
-        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         self.assertIn("start_logits", outputs)
         self.assertIn("end_logits", outputs)
@@ -187,21 +185,6 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
-
-    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_patched_model(self):
-        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
-            "Jiqing/patched_tiny_random_bert_for_question_answering"
-        )
-        transformers_model = AutoModelForQuestionAnswering.from_pretrained("hf-internal-testing/tiny-random-bert")
-        tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-bert")
-        inputs = "This is a sample input"
-        tokens = tokenizer(inputs, return_tensors="pt")
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
-        outputs = ipex_model(**tokens)
-        self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
-        self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
 
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
@@ -246,7 +229,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         outputs = ipex_model(**inputs)
 
         self.assertIsInstance(outputs.logits, torch.Tensor)
-        self.assertIsInstance(outputs.past_key_values, (tuple, list))
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         with torch.no_grad():
@@ -261,7 +243,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**inputs)
-        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
@@ -319,7 +300,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
-        trasnformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         self.assertEqual(model.use_cache, use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -338,43 +319,24 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             tokens = tokenizer(text, padding=True, return_tensors="pt")
             for generation_config in generation_configs:
                 outputs = model.generate(**tokens, generation_config=generation_config)
-                transformers_outputs = trasnformers_model.generate(**tokens, generation_config=generation_config)
+                transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 
-    @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_patched_model(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        patched_model_id = MODEL_NAMES["patched_" + model_arch]
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(
-            "This is a sample",
-            return_tensors="pt",
-            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
-        )
-        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
-        ipex_outputs = ipex_model(**inputs)
-        exported_outputs = exported_model(**inputs)
-        self.assertTrue(torch.allclose(ipex_outputs.logits, exported_outputs.logits, atol=1e-7))
-
     def test_compare_with_and_without_past_key_values(self):
-        model_id = "echarlaix/tiny-random-gpt2-torchscript"
+        model_id = "Jiqing/tiny_random_llama2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
-        model_with_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=True, subfolder="model_with_pkv")
+        model_with_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=True)
         # Warmup
         model_with_pkv.generate(**tokens)
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
-        model_without_pkv = IPEXModelForCausalLM.from_pretrained(
-            model_id, use_cache=False, subfolder="model_without_pkv"
-        )
+        model_without_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=False)
         # Warmup
         model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
@@ -421,7 +383,6 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**inputs)
-        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
@@ -475,7 +436,6 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**inputs)
-        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         self.assertIn("logits", outputs)
         # Compare tensor outputs
@@ -493,18 +453,3 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
-
-    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_patched_model(self):
-        ipex_model = IPEXModelForImageClassification.from_pretrained(
-            "Jiqing/patched_tiny_random_vit_for_image_classification"
-        )
-        transformers_model = self.IPEX_MODEL_CLASS.from_pretrained("hf-internal-testing/tiny-random-vit")
-        preprocessor = AutoFeatureExtractor.from_pretrained("hf-internal-testing/tiny-random-vit")
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        image = Image.open(requests.get(url, stream=True).raw)
-        inputs = preprocessor(images=image, return_tensors="pt")
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**inputs)
-        outputs = ipex_model(**inputs)
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))

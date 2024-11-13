@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 
+import copy
 import inspect
 import logging
 import os
@@ -69,17 +70,18 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
-def _is_patched_with_ipex(model, task):
+def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
-
+    if not use_cache:
+        return False
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
 
 
 def _prepare_inputs_for_ipex_model(model, task, use_cache):
     task = _TASK_ALIASES.get(task, task)
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
-    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config:
+    if _is_patched_with_ipex(model, task, use_cache) and model.config.model_type in ipex_onnx_config:
         onnx_config_class = make_backend_config_constructor_for_task(
             ipex_onnx_config[model.config.model_type], task=task
         )
@@ -96,7 +98,7 @@ def _prepare_inputs_for_ipex_model(model, task, use_cache):
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
 
     # Check attention_mask shape
-    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config and use_cache:
+    if _is_patched_with_ipex(model, task, use_cache) and model.config.model_type in ipex_onnx_config:
         past_len = dummy_inputs["past_key_values"][0][0].shape[-2]
         input_len = dummy_inputs["input_ids"].shape[-1]
         attention_len = dummy_inputs["attention_mask"].shape[-1]
@@ -136,13 +138,14 @@ class IPEXModel(OptimizedModel):
         OptimizedModel.__init__(self, model=model, config=config)
 
         self.model.to(self._device)
-        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
+        self._dtype = self.model.dtype if self.model.dtype is not None else torch.float32
+        self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
-        self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
+        self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
-        if self._is_ipex_exported:
+        if self._add_patch:
             model = _patch_model(model)
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -243,12 +246,12 @@ class IPEXModel(OptimizedModel):
         return cls(model, config=config, export=True, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
-        output_path = os.path.join(save_directory, WEIGHTS_NAME)
         if getattr(self.config, "torchscript", None):
+            output_path = os.path.join(save_directory, WEIGHTS_NAME)
             torch.jit.save(self.model, output_path)
         else:
             logger.warning("The module is not a torchscript model, will be treated as a transformers model.")
-            self.model.save_pretrained(output_path)
+            self.model.save_pretrained(save_directory, safe_serialization=False)
 
     def forward(
         self,
@@ -312,9 +315,9 @@ class IPEXModel(OptimizedModel):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
         # TODO : add warmup for IPEX exported model
-        if not self._is_ipex_exported:
-            use_cache = "past_key_values" in self.input_names
-            dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, use_cache)
+        if not self._add_patch:
+            # use_cache = "past_key_values" in self.input_names
+            dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, self.use_cache)
             if self._device.type != "cpu":
                 dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
             for _ in range(2):
@@ -405,7 +408,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    _supports_cache_class = True
+    _supports_cache_class = False
     _is_stateful = False
 
     def __init__(
@@ -422,11 +425,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         super().__init__(
             model, config, export=export, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache
         )
+        if self._add_patch:
+            self._supports_cache_class = True
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
-        self.use_cache = "past_key_values" in self.input_names
 
         self.config.is_decoder = True
         self.config.is_encoder_decoder = False
@@ -479,6 +483,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["position_ids"] = position_ids
 
         if self.use_cache:
+            if past_key_values is None and self._add_patch:
+                max_length = self.config.max_length + input_ids.shape[1]
+                batch_size = input_ids.shape[0]
+                past_key_values = IPEXPagedCache(
+                    self.config, batch_size, max_length, input_ids.device, dtype=self.dtype
+                )
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
@@ -507,31 +517,34 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return generation_config, model_kwargs
 
     def generate(self, *args, **kwargs):
-        if is_ipex_version("<", "2.4.0") and self._is_ipex_exported and kwargs.get("assistant_model", None):
+        new_kwargs = copy.deepcopy(kwargs)
+        if is_ipex_version("<", "2.4.0") and self._add_patch and new_kwargs.get("assistant_model", None):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
         # Patch functions to support paged cache
-        transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["paged"] = IPEXPagedCache
-        self.generation_config.cache_implementation = "paged"
-        if is_transformers_version(">=", "4.45.0"):
-            if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
-                transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
-        if kwargs.get("generation_config", None):
-            kwargs["generation_config"].cache_implementation = "paged"
-        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+        if self._add_patch:
+            transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["paged"] = IPEXPagedCache
+            self.generation_config.cache_implementation = "paged"
+            if is_transformers_version(">=", "4.45.0"):
+                if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
+                    transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
+            if new_kwargs.get("generation_config", None):
+                new_kwargs["generation_config"].cache_implementation = "paged"
+
+        if self._add_patch and new_kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
-        elif self._is_ipex_exported:
+        elif self._add_patch:
             transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
 
         try:
-            result = super().generate(*args, **kwargs)
+            result = super().generate(*args, **new_kwargs)
         except Exception as e:
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
             raise e
 
-        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+        if self._add_patch and new_kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
 
