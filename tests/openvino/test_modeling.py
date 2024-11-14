@@ -1883,7 +1883,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v"]
     REMOTE_CODE_MODELS = ["minicpmv", "nanollava", "phi3_v"]
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava"]
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
 
     IMAGE = Image.open(
         requests.get(

@@ -1809,8 +1809,8 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
             raise ValueError("Tokenizer is required.")
         if image is not None and processor is None:
             raise ValueError("Processor is required.")
-        text_content = f"<image>\n{text}" if image is not None else text
-        messages = [{"role": "user", "content": text_content}]
+        text = f"<image>\n{text}" if image is not None else text
+        messages = [{"role": "user", "content": text}]
         if tokenizer.chat_template is not None:
             text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         if image is not None:
@@ -1956,6 +1956,23 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
             inputs_embeds = inputs_embeds.index_put(positions, image_features_proj, accumulate=False)
 
         return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if image is not None and "<|image_1|>" not in text:
+            text = "<|image_1|>\n" + text
+        if getattr(processor.tokenizer, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": text}]
+            text = processor.tokenizer.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=image, text=text, return_tensors="pt")
+        return inputs
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
