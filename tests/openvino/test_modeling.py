@@ -2004,7 +2004,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
         ov_model.to("AUTO")
-        self.asserEqual(ov_model._device, "AUTO")
+        self.assertEqual(ov_model._device, "AUTO")
         self.assertEqual(ov_model.vision_embeddings._device, "AUTO")
         self.assertTrue(ov_model.vision_embeddings.request is None)
         self.assertEqual(ov_model.language_model._device, "AUTO")
