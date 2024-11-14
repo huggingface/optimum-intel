@@ -1880,9 +1880,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v"]
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava"]
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
 
     IMAGE = Image.open(
         requests.get(
