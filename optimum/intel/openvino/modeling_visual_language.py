@@ -261,12 +261,11 @@ class OVVisionProjection(OVModelPart):
         return self.request(img_features)[0]
 
 
-
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
     "vision_embeddings": OVVisionEmbedding,
-    "vision_projection": OVVisionProjection
+    "vision_projection": OVVisionProjection,
 }
 
 

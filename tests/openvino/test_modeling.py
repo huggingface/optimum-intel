@@ -94,8 +94,6 @@ from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
-    OVModelWithEmbedForCausalLM,
-    OVVisionEmbedding,
 )
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
