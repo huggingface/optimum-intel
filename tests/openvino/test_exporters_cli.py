@@ -108,6 +108,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
         ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
         ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
+        ("text-generation-with-past", "opt125m", "nf4", {"int8": 4, "nf4": 72}),
         ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 8 --all-layers", {"int4": 16}),
         (
             "text-generation-with-past",
@@ -280,7 +281,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(exp_num_fq, num_fq)
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
-    def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
+    def test_exporters_cli_4bit(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
