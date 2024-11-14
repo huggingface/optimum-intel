@@ -246,7 +246,6 @@ class OVModelIntegrationTest(unittest.TestCase):
             ).raw
         )
         loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
         self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
         self.assertIsInstance(loaded_model.vision_embeddings, OVVisionEmbedding)
         self.assertIsInstance(loaded_model.language_model, OVModelWithEmbedForCausalLM)

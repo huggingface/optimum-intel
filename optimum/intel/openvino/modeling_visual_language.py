@@ -462,7 +462,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_file_names[part] = f"openvino_{part}_model.xml"
             model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
