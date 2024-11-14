@@ -231,6 +231,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45"),
+        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
+    )
     def test_load_from_hub_and_save_visual_language_model(self):
         model_id = self.OV_VLM_MODEL_ID
         processor = get_preprocessor(model_id)
