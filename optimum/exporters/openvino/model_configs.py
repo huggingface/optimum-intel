@@ -1293,6 +1293,48 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
         return InputEmbeddingPatcher(self, model, model_kwargs)
 
 
+def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype):
+    model_type = model_type.replace("_", "-")
+
+    if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+        raise ValueError(
+            f"Unsupported language model type provided `{model_type}`. Please define custom export config"
+        )
+
+    if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
+        raise ValueError(
+            f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
+        )
+    export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]["text-generation-with-past"]
+    export_config = export_config_class(
+        model_config,
+        use_past=True,
+        use_past_in_inputs=True,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    return export_config
+
+
+def get_vlm_text_embeddings_config(model_type, model_config, int_dtype, float_dtype):
+    internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
+    InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
+    export_config = InputEmbedOpenvVINOConfig(
+        model_config,
+        task="feature-extraction",
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    return export_config
+
+
+def get_vlm_text_generation_config(model_type, model_config, int_dtype, float_dtype):
+    internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
+    export_config = LMInputEmbedsConfigHelper(internal_export_config)
+    export_config._normalized_config = internal_export_config._normalized_config
+    return export_config
+
+
 class LlavaConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
@@ -1356,61 +1398,15 @@ class LlavaOpenVINOConfig(OnnxConfig):
 
         if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.text_config.model_type
-            model_type = model_type.replace("_", "-")
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config.text_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
+            return get_vlm_text_embeddings_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
             )
-            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-            export_config = InputEmbedOpenvVINOConfig(
-                self._orig_config.text_config,
-                task="feature-extraction",
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
 
         if behavior == LlavaConfigBehavior.LANGUAGE:
             model_type = self._orig_config.text_config.model_type
-            model_type = model_type.replace("_", "-")
-
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config.text_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
+            return get_vlm_text_generation_config(
+                model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
             )
-            export_config = LMInputEmbedsConfigHelper(internal_export_config)
-            export_config._normalized_config = internal_export_config._normalized_config
-            return export_config
 
         if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -1518,61 +1514,15 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
 
         if behavior == InternVLChatConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.llm_config.model_type
-            model_type = model_type.replace("_", "-")
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config.llm_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
+            return get_vlm_text_embeddings_config(
+                model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
             )
-            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-            export_config = InputEmbedOpenvVINOConfig(
-                self._orig_config.llm_config,
-                task="feature-extraction",
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
 
         if behavior == InternVLChatConfigBehavior.LANGUAGE:
             model_type = self._orig_config.llm_config.model_type
-            model_type = model_type.replace("_", "-")
-
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config.llm_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
+            return get_vlm_text_generation_config(
+                model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
             )
-            export_config = LMInputEmbedsConfigHelper(internal_export_config)
-            export_config._normalized_config = internal_export_config._normalized_config
-            return export_config
 
         if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -1584,7 +1534,8 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, LlavaConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
             behavior = InternVLChatConfigBehavior(behavior)
 
@@ -1654,7 +1605,8 @@ class LlavaQwen2OpenVINOConfig(OnnxConfig):
             return {}
         return {"last_hidden_state": {0: "batch_size"}}
 
-    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, LlavaConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
             behavior = LlavaConfigBehavior(behavior)
 
@@ -1685,61 +1637,11 @@ class LlavaQwen2OpenVINOConfig(OnnxConfig):
 
         if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.model_type.replace("llava-", "")
-            model_type = model_type.replace("_", "-")
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-            export_config = InputEmbedOpenvVINOConfig(
-                self._orig_config,
-                task="feature-extraction",
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
+            return get_vlm_text_embeddings_config(model_type, self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == LlavaConfigBehavior.LANGUAGE:
             model_type = self._orig_config.model_type.replace("llava-", "")
-            model_type = model_type.replace("_", "-")
-
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            export_config = LMInputEmbedsConfigHelper(internal_export_config)
-            export_config._normalized_config = internal_export_config._normalized_config
-            return export_config
+            return get_vlm_text_generation_config(model_type, self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -2091,62 +1993,10 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
             behavior = MiniCPMVConfigBehavior(behavior)
 
         if behavior == MiniCPMVConfigBehavior.TEXT_EMBEDDINGS:
-            model_type = "qwen2"
-            model_type = model_type.replace("_", "-")
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-            export_config = InputEmbedOpenvVINOConfig(
-                self._orig_config,
-                task="feature-extraction",
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
+            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == MiniCPMVConfigBehavior.LANGUAGE:
-            model_type = "qwen2"
-            model_type = model_type.replace("_", "-")
-
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            export_config = LMInputEmbedsConfigHelper(internal_export_config)
-            export_config._normalized_config = internal_export_config._normalized_config
-            return export_config
+            return get_vlm_text_generation_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -2168,7 +2018,8 @@ class MiniCPMVOpenVINOConfig(OnnxConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def get_model_for_behavior(self, model, behavior: Union[str, MiniCPMVConfigBehavior]):
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, MiniCPMVConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, MiniCPMVConfigBehavior):
             behavior = MiniCPMVConfigBehavior(behavior)
 
@@ -2299,62 +2150,10 @@ class Phi3VisionOpenVINOConfig(OnnxConfig):
             behavior = Phi3VisionConfigBehavior(behavior)
 
         if behavior == Phi3VisionConfigBehavior.TEXT_EMBEDDINGS:
-            model_type = "phi3"
-            model_type = model_type.replace("_", "-")
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = internal_export_config.NORMALIZED_CONFIG_CLASS
-            export_config = InputEmbedOpenvVINOConfig(
-                self._orig_config,
-                task="feature-extraction",
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
+            return get_vlm_text_embeddings_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Phi3VisionConfigBehavior.LANGUAGE:
-            model_type = "phi3"
-            model_type = model_type.replace("_", "-")
-
-            if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-                raise ValueError(
-                    f"Unsupported language model type provided `{model_type}`. Please define custom export config"
-                )
-
-            if "text-generation-with-past" not in TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"]:
-                raise ValueError(
-                    f"Export config for text generation for `{model_type}` is not available. Please define custom export config"
-                )
-            internal_export_config_class = TasksManager._SUPPORTED_MODEL_TYPE[model_type]["openvino"][
-                "text-generation-with-past"
-            ]
-            internal_export_config = internal_export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            export_config = LMInputEmbedsConfigHelper(internal_export_config)
-            export_config._normalized_config = internal_export_config._normalized_config
-            return export_config
+            return get_vlm_text_generation_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -2375,7 +2174,8 @@ class Phi3VisionOpenVINOConfig(OnnxConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def get_model_for_behavior(self, model, behavior: Union[str, Phi3VisionConfigBehavior]):
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, Phi3VisionConfigBehavior]):
         if isinstance(behavior, str) and not isinstance(behavior, Phi3VisionConfigBehavior):
             behavior = Phi3VisionConfigBehavior(behavior)
 
