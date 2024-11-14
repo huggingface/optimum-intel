@@ -247,19 +247,22 @@ class OVModelIntegrationTest(unittest.TestCase):
         )
         loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id)
         self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
-        self.assertIsInstance(loaded_model.vision_embeddings, OVVisionEmbedding)
-        self.assertIsInstance(loaded_model.language_model, OVModelWithEmbedForCausalLM)
-        for additional_part in loaded_model.additional_parts:
-            self.assertTrue(hasattr(loaded_model, additional_part))
-            self.assertIsInstance(getattr(loaded_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
+        for component_name, component in loaded_model.components.items():
+            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
-        self.assertEqual(
-            loaded_model.language_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY"
-        )
-        self.assertEqual(loaded_model.language_model.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
-        self.assertEqual(loaded_model.vision_embeddings.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+
+        for component_name, component in loaded_model.components.items():
+            if component_name == "language_model":
+                self.assertIsInstance(component.model, ov.Model)
+                self.assertEqual(component.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
+                self.assertIsInstance(component.text_emb_model, ov.Model)
+                self.assertEqual(component.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
+            else:
+                self.assertIsInstance(component.model, ov.Model)
+                self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         set_seed(SEED)
         loaded_model_outputs = loaded_model(**inputs)
@@ -267,21 +270,28 @@ class OVModelIntegrationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            for xml_file_name in [
+            model_files = [
                 OV_LANGUAGE_MODEL_NAME,
                 OV_TEXT_EMBEDDINGS_MODEL_NAME,
                 OV_VISION_EMBEDDINGS_MODEL_NAME,
-            ]:
+            ]
+            model_files += ["openvino_{part}_model.xml" for part in loaded_model.additional_parts]
+            for xml_file_name in model_files:
                 self.assertTrue(xml_file_name in folder_contents)
                 self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
             model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
             compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
-            self.assertIsInstance(compile_only_model.language_model.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.language_model.request, ov.runtime.InferRequest)
-            self.assertIsInstance(compile_only_model.language_model.text_emb_model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.language_model.text_emb_request, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.vision_embeddings.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.vision_embeddings.request, ov.runtime.CompiledModel)
+            for _, submodel in compile_only_model.submodels.items():
+                self.assertIsInstance(submodel, ov.runtime.CompiledModel)
+            for component_name, component in compile_only_model.components.items():
+                self.assertIsInstance(component.model, ov.runtime.CompiledModel)
+                if component_name == "language_model":
+                    self.assertIsInstance(component.request, ov.runtime.InferRequest)
+                    self.assertIsInstance(component.text_emb_model, ov.runtime.CompiledModel)
+                    self.assertIsInstance(component.text_emb_request, ov.runtime.CompiledModel)
+                else:
+                    self.assertIsInstance(component.request, ov.runtime.CompiledModel)
+
             outputs = compile_only_model(**inputs)
             self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
             del compile_only_model
@@ -1971,6 +1981,15 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             return LlavaNextForConditionalGeneration
         return AutoModelForCausalLM
 
+    def _check_device_and_request(self, ov_model, expected_device, has_request):
+        request_check_fn = self.assertFalse if has_request else self.assertTrue
+        self.assertEqual(ov_model._device, expected_device)
+        for component_name, component in ov_model.components.items():
+            if component_name == "language_model":
+                request_check_fn(component.text_emb_request is None)
+            self.assertEqual(component._device, expected_device)
+            request_check_fn(component.request is None)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         prompt = "What is shown in this image?"
@@ -1994,45 +2013,20 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
         )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
-        self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
-        self.assertIsInstance(ov_model.language_model, OVModelWithEmbedForCausalLM)
-        for additional_part in ov_model.additional_parts:
-            self.assertTrue(hasattr(ov_model, additional_part))
-            self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
+        for component_name, component in ov_model.components.items():
+            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
-        ov_model.to("AUTO")
-        self.assertEqual(ov_model._device, "AUTO")
-        self.assertEqual(ov_model.vision_embeddings._device, "AUTO")
-        self.assertTrue(ov_model.vision_embeddings.request is None)
-        self.assertEqual(ov_model.language_model._device, "AUTO")
-        self.assertTrue(ov_model.language_model.request is None)
-        self.assertTrue(ov_model.language_model.text_emb_request is None)
-        for additional_part in ov_model.additional_parts:
-            self.assertEqual(getattr(ov_model, additional_part)._device, "AUTO")
-            self.assertTrue(getattr(ov_model, additional_part).request is None)
-        ov_model.to("CPU")
+        test_device = "AUTO"
+        ov_model.to(test_device)
+        self._check_device_and_request(ov_model, test_device, False)
+        test_device = "CPU"
+        ov_model.to(test_device)
         ov_model.compile()
-        self.assertEqual(ov_model._device, "CPU")
-        self.assertEqual(ov_model.vision_embeddings._device, "CPU")
-        self.assertTrue(ov_model.vision_embeddings.request is not None)
-        self.assertEqual(ov_model.language_model._device, "CPU")
-        self.assertTrue(ov_model.language_model.request is not None)
-        self.assertTrue(ov_model.language_model.text_emb_request is not None)
-        for additional_part in ov_model.additional_parts:
-            self.assertEqual(getattr(ov_model, additional_part)._device, "CPU")
-            self.assertTrue(getattr(ov_model, additional_part).request is not None)
+        self._check_device_and_request(ov_model, test_device, True)
         ov_model.clear_requests()
-        self.assertEqual(ov_model._device, "CPU")
-        self.assertEqual(ov_model.vision_embeddings._device, "CPU")
-        self.assertTrue(ov_model.vision_embeddings.request is None)
-        self.assertEqual(ov_model.language_model._device, "CPU")
-        self.assertTrue(ov_model.language_model.request is None)
-        self.assertTrue(ov_model.language_model.text_emb_request is None)
-        for additional_part in ov_model.additional_parts:
-            self.assertEqual(getattr(ov_model, additional_part)._device, "CPU")
-            self.assertTrue(getattr(ov_model, additional_part).request is None)
+        self._check_device_and_request(ov_model, test_device, False)
 
         # nanollava pixel_values input named as images
         if model_arch == "nanollava":

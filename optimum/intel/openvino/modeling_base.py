@@ -832,3 +832,6 @@ class OVModelPart:
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    def clear_requests(self):
+        self.request = None

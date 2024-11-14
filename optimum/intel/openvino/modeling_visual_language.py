@@ -261,7 +261,13 @@ class OVVisionProjection(OVModelPart):
         return self.request(img_features)[0]
 
 
-MODEL_PARTS_CLS_MAPPING = {"resampler": OVResampler, "vision_projection": OVVisionProjection}
+
+MODEL_PARTS_CLS_MAPPING = {
+    "resampler": OVResampler,
+    "language_model": OVModelWithEmbedForCausalLM,
+    "vision_embeddings": OVVisionEmbedding,
+    "vision_projection": OVVisionProjection
+}
 
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
@@ -339,19 +345,15 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        self.language_model.clear_requests()
-        components = [self.vision_embeddings] + [getattr(self, part) for part in self.additional_parts]
-        for component in components:
-            if component is not None:
-                component.request = None
+        for _, component in self.components.items():
+            component.clear_requests()
 
     def compile(self):
-        self.language_model.compile()
-        self.vision_embeddings._compile()
-        for part in self.additional_parts:
-            part_model = getattr(self, part, None)
-            if part_model is not None:
-                part_model._compile()
+        for _, component in self.components.items():
+            if isinstance(component, OVModelPart):
+                component._compile()
+            else:
+                component.compile()
 
     def _save_config(self, save_directory):
         """
@@ -369,17 +371,21 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.lm_model, self.text_embeddings_model, self.vision_embeddings_model]
-        dst_file_names = [OV_LANGUAGE_MODEL_NAME, OV_TEXT_EMBEDDINGS_MODEL_NAME, OV_VISION_EMBEDDINGS_MODEL_NAME]
-        for part in self.additional_parts:
-            model = getattr(self, f"{part}_model", None)
-            if model is not None:
-                src_files.append(model)
-                dst_file_names.append(f"openvino_{part}_model.xml")
+        src_models = self.submodels
+        dst_file_names = {
+            "lm_model": OV_LANGUAGE_MODEL_NAME,
+            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
+        }
+        for name in self._submodel_names:
+            if name not in dst_file_names:
+                dst_file_names[name] = f"openvino_{name}.xml"
 
-        for src_file, dst_file_name in zip(src_files, dst_file_names):
+        for name in self._submodel_names:
+            model = src_models[name]
+            dst_file_name = dst_file_names[name]
             dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(src_file, dst_path, compress_to_fp16=False)
+            ov.save_model(model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -461,7 +467,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         for part in model_cls.additional_parts:
             model_file_names[part] = f"openvino_{part}_model.xml"
             model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
@@ -618,6 +623,28 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             **kwargs,
         )
 
+    @property
+    def _component_names(self):
+        base_components = ["language_model", "vision_embeddings"]
+        additional_components = [part for part in self.additional_parts if getattr(self, part, None) is not None]
+        return base_components + additional_components
+
+    @property
+    def components(self):
+        return {component_name: getattr(self, component_name) for component_name in self._component_names}
+
+    @property
+    def _submodel_names(self):
+        model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
+        for part in self.additional_parts:
+            if getattr(self, part, None) is not None:
+                model_names.append(part + "_model")
+        return model_names
+
+    @property
+    def submodels(self):
+        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._submodel_names}
+
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
@@ -626,17 +653,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        apply_moc_transformations(self.lm_model, cf=False)
-        compress_model_transformation(self.lm_model)
-        apply_moc_transformations(self.text_embeddings_model, cf=False)
-        compress_model_transformation(self.text_embeddings_model)
-        apply_moc_transformations(self.vision_embeddings_model, cf=False)
-        compress_model_transformation(self.vision_embeddings_model)
-        for part in self.additional_parts:
-            model = getattr(self, f"{part}_model", None)
-            if model is not None:
-                apply_moc_transformations(model, cf=False)
-                compress_model_transformation(model)
+        for _, submodel in self.submodels.items():
+            apply_moc_transformations(submodel, cf=False)
+            compress_model_transformation(submodel)
         return self
 
     def to(self, device):
