@@ -188,6 +188,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 30, 2),
 }
 
+TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
+
 
 def get_num_quantized_nodes(model):
     num_fake_quantize = 0

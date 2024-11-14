@@ -62,7 +62,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
@@ -239,7 +239,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         prompt = "<image>\n What is shown in this image?"
         image = Image.open(
             requests.get(
-                "http://images.cocodataset.org/val2017/000000039769.jpg",
+                TEST_IMAGE_URL,
                 stream=True,
             ).raw
         )
@@ -1409,7 +1409,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
@@ -1435,7 +1435,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
-        inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        inputs = TEST_IMAGE_URL
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
@@ -1456,7 +1456,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         timm_model = timm.create_model(model_id, pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
@@ -1963,7 +1963,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     IMAGE = Image.open(
         requests.get(
-            "http://images.cocodataset.org/val2017/000000039769.jpg",
+            TEST_IMAGE_URL,
             stream=True,
         ).raw
     )
@@ -2267,7 +2267,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     SPEEDUP_CACHE = 1.1
 
     def _get_sample_image(self):
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
@@ -2374,7 +2374,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES = ["vit-with-hidden-states"]
 
     def _get_sample_image(self):
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
@@ -2458,7 +2458,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
     OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
 
     def _get_sample_image(self):
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
