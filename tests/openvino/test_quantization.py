@@ -380,6 +380,21 @@ class OVWeightCompressionTest(unittest.TestCase):
                     ),
                     {"int4": 22, "int8": 8},
                 ),
+                (
+                    OVModelForVisualCausalLM,
+                    "phi3_v",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        trust_remote_code=True,
+                    ),
+                    {"int4": 14, "int8": 4},
+                ),
             ]
         )
 
