@@ -234,6 +234,7 @@ class OVVisionProjection(OVModelPart):
     _model_name = "vision_projection"
 
     def forward(self, img_features):
+        self._compile()
         return self.request(img_features)[0]
 
 
