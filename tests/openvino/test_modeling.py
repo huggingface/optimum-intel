@@ -252,13 +252,12 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
 
         for component_name, component in loaded_model.components.items():
+            self.assertIsInstance(component.model, ov.Model)
             if component_name == "language_model":
-                self.assertIsInstance(component.model, ov.Model)
                 self.assertEqual(component.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
                 self.assertIsInstance(component.text_emb_model, ov.Model)
                 self.assertEqual(component.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
             else:
-                self.assertIsInstance(component.model, ov.Model)
                 self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
         inputs = processor(images=image, text=prompt, return_tensors="pt")
