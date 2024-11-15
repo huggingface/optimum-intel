@@ -41,12 +41,14 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
+    OVModelForVisualCausalLM,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
+from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
@@ -70,12 +72,13 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
+        "llava": OVModelForVisualCausalLM,
     }
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.update({"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline})
 
-    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper")
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava")
 
     def _openvino_export(
         self,
@@ -93,6 +96,10 @@ class ExportModelTest(unittest.TestCase):
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
+        elif model_type == "llava":
+            model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
+                model_name, **loading_kwargs
+            )
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
@@ -144,8 +151,12 @@ class ExportModelTest(unittest.TestCase):
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
-
-        model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
+        if model_type == "llava":
+            model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
+                model_name, **loading_kwargs
+            )
+        else:
+            model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
         model.generation_config.top_k = 42
         model.generation_config.do_sample = True

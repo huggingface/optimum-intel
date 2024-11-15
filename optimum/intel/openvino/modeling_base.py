@@ -782,7 +782,7 @@ class OVModelPart:
             for inputs in self.model.inputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
+        self.request = None if not self.parent_model._compile_only else self.model
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
@@ -832,3 +832,6 @@ class OVModelPart:
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    def clear_requests(self):
+        self.request = None
