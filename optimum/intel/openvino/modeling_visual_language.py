@@ -15,6 +15,8 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from PIL.Image import Image
 from transformers import (
     AutoConfig,
+    AutoImageProcessor,
+    AutoModelForCausalLM,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -24,11 +26,28 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
+from ...exporters.openvino.utils import save_config
 from .. import OVQuantizer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
-from .utils import TemporaryDirectory
+from .utils import (
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_EMBEDDINGS_MODEL_NAME,
+    TemporaryDirectory,
+)
+
+
+try:
+    from transformers import LlavaForConditionalGeneration
+except ImportError:
+    LlavaForConditionalGeneration = None
+
+try:
+    from transformers import LlavaNextForConditionalGeneration
+except ImportError:
+    LlavaNextForConditionalGeneration = None
 
 
 logger = logging.getLogger(__name__)
@@ -65,13 +84,19 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     def compile(self):
         if self.request is None:
             logger.info(f"Compiling the Language model to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+            super().compile()
         self._compile_text_emb()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
             logger.info(f"Compiling the Text embeddings model to {self._device} ...")
-            self.text_emb_request = core.compile_model(self.text_emb_model, self._device, self.ov_config)
+            if self._compile_only:
+                self.text_emb_request = self.text_emb_model
+            else:
+                logger.info(f"Compiling the Text embeddings model to {self._device} ...")
+                self.text_emb_request = self._compile_model(
+                    self.text_emb_model, self._device, self.ov_config, self.model_save_dir
+                )
 
     def clear_requests(self):
         if self._compile_only:
@@ -228,12 +253,26 @@ class OVResampler(OVModelPart):
         return result
 
 
-MODEL_PARTS_CLS_MAPPING = {"resampler": OVResampler}
+class OVVisionProjection(OVModelPart):
+    _model_name = "vision_projection"
+
+    def forward(self, img_features):
+        self._compile()
+        return self.request(img_features)[0]
+
+
+MODEL_PARTS_CLS_MAPPING = {
+    "resampler": OVResampler,
+    "language_model": OVModelWithEmbedForCausalLM,
+    "vision_embeddings": OVVisionEmbedding,
+    "vision_projection": OVVisionProjection,
+}
 
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
+    auto_model_class = AutoModelForCausalLM
 
     def __init__(
         self,
@@ -275,11 +314,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             self.lm_model,
             self.text_embeddings_model,
             config=config,
-            deivce=device,
+            device=device,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=not self._compile_only and enable_compilation,
+            compile=self._compile_only or enable_compilation,
             compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
@@ -305,19 +344,22 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        self.language_model.clear_requests()
-        components = [self.vision_embeddings] + [getattr(self, part) for part in self.additional_parts]
-        for component in components:
-            if component is not None:
-                component.request = None
+        for _, component in self.components.items():
+            component.clear_requests()
 
     def compile(self):
-        self.language_model.compile()
-        self.vision_embeddings._compile()
-        for part in self.additional_parts:
-            part_model = getattr(self, part, None)
-            if part_model is not None:
-                part_model._compile()
+        for _, component in self.components.items():
+            if isinstance(component, OVModelPart):
+                component._compile()
+            else:
+                component.compile()
+
+    def _save_config(self, save_directory):
+        """
+        Saves a model configuration into a directory, so that it can be re-loaded using the
+        [`from_pretrained`] class method.
+        """
+        save_config(self.config, save_directory)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -328,21 +370,21 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.lm_model, self.text_embeddings_model, self.vision_embeddings_model]
-        dst_file_names = [
-            "openvino_language_model.xml",
-            "openvino_text_embeddings_model.xml",
-            "openvino_vision_embeddings_model.xml",
-        ]
-        for part in self.additional_parts:
-            model = getattr(self, f"{part}_model", None)
-            if model is not None:
-                src_files.append(model)
-                dst_file_names.append(f"openvino_{part}_model.xml")
+        src_models = self.submodels
+        dst_file_names = {
+            "lm_model": OV_LANGUAGE_MODEL_NAME,
+            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
+        }
+        for name in self._submodel_names:
+            if name not in dst_file_names:
+                dst_file_names[name] = f"openvino_{name}.xml"
 
-        for src_file, dst_file_name in zip(src_files, dst_file_names):
+        for name in self._submodel_names:
+            model = src_models[name]
+            dst_file_name = dst_file_names[name]
             dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(src_file, dst_path, compress_to_fp16=False)
+            ov.save_model(model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -412,14 +454,18 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             token = use_auth_token
 
         model_file_names = {
-            "language_model": "openvino_language_model.xml",
-            "text_embeddings": "openvino_text_embeddings_model.xml",
-            "vision_embeddings": "openvino_vision_embeddings_model.xml",
+            "language_model": OV_LANGUAGE_MODEL_NAME,
+            "language_model_bin": OV_LANGUAGE_MODEL_NAME.replace(".xml", ".bin"),
+            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "text_embeddings_bin": OV_TEXT_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
+            "vision_embeddings": OV_VISION_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_bin": OV_VISION_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
         }
 
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         for part in model_cls.additional_parts:
             model_file_names[part] = f"openvino_{part}_model.xml"
+            model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
@@ -576,6 +622,28 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             **kwargs,
         )
 
+    @property
+    def _component_names(self):
+        base_components = ["language_model", "vision_embeddings"]
+        additional_components = [part for part in self.additional_parts if getattr(self, part, None) is not None]
+        return base_components + additional_components
+
+    @property
+    def components(self):
+        return {component_name: getattr(self, component_name) for component_name in self._component_names}
+
+    @property
+    def _submodel_names(self):
+        model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
+        for part in self.additional_parts:
+            if getattr(self, part, None) is not None:
+                model_names.append(part + "_model")
+        return model_names
+
+    @property
+    def submodels(self):
+        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._submodel_names}
+
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
@@ -584,17 +652,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        apply_moc_transformations(self.lm_model, cf=False)
-        compress_model_transformation(self.lm_model)
-        apply_moc_transformations(self.text_embeddings_model, cf=False)
-        compress_model_transformation(self.text_embeddings_model)
-        apply_moc_transformations(self.vision_embeddings_model, cf=False)
-        compress_model_transformation(self.vision_embeddings_model)
-        for part in self.additional_parts:
-            model = getattr(self, f"{part}_model", None)
-            if model is not None:
-                apply_moc_transformations(model, cf=False)
-                compress_model_transformation(model)
+        for _, submodel in self.submodels.items():
+            apply_moc_transformations(submodel, cf=False)
+            compress_model_transformation(submodel)
+        return self
+
+    def to(self, device):
+        self.language_model.to(device)
+        super().to(device)
         return self
 
     def forward(
@@ -608,11 +673,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         position_ids=None,
         image_bound=None,
         tgt_sizes=None,
-        images=None,
         **kwargs,
     ):
-        if pixel_values is None and images is not None:
-            pixel_values = images
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -716,7 +778,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_sizes": image_sizes,
                 "image_bound": kwargs.get("image_bound"),
                 "tgt_sizes": kwargs.get("tgt_sizes"),
-                "images": kwargs.get("images"),
             }
         )
         return model_inputs
@@ -728,9 +789,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     @staticmethod
     @abstractmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         """
@@ -739,6 +800,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
+    auto_model_class = LlavaForConditionalGeneration
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -902,20 +965,30 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
     @staticmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
-        if image is None:
-            raise ValueError("Image is required.")
-        chat_template = [{"role": "user", "content": [{"type": "text", "text": text}, {"type": "image"}]}]
-        prompt = processor.apply_chat_template(chat_template, add_generation_prompt=True)
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+            if image is not None:
+                chat_prompt[0]["content"].append({"type": "image"})
+            prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        else:
+            if image is not None and "<image>" not in text:
+                prompt = "<image>\n" + text
+            else:
+                prompt = text
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
+    auto_model_class = LlavaNextForConditionalGeneration
+
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
         from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
@@ -1186,7 +1259,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
 
 
-class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
+class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
@@ -1208,6 +1281,159 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
 
         input_embeds = input_embeds.reshape(B, N, C)
         return input_embeds, attention_mask, position_ids
+
+    def preprocess_inputs(
+        self,
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        import torchvision.transforms as T
+        from torchvision.transforms.functional import InterpolationMode
+
+        IMG_START_TOKEN = "<img>"
+        IMG_END_TOKEN = "</img>"
+        IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
+
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD = (0.229, 0.224, 0.225)
+
+        def build_transform(input_size):
+            MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
+            transform = T.Compose(
+                [
+                    T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
+                    T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+                    T.ToTensor(),
+                    T.Normalize(mean=MEAN, std=STD),
+                ]
+            )
+            return transform
+
+        def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+            best_ratio_diff = float("inf")
+            best_ratio = (1, 1)
+            area = width * height
+            for ratio in target_ratios:
+                target_aspect_ratio = ratio[0] / ratio[1]
+                ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+                if ratio_diff < best_ratio_diff:
+                    best_ratio_diff = ratio_diff
+                    best_ratio = ratio
+                elif ratio_diff == best_ratio_diff:
+                    if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                        best_ratio = ratio
+            return best_ratio
+
+        def dynamic_preprocess(image, min_num=1, max_num=12, image_size=28, use_thumbnail=False):
+            orig_width, orig_height = image.size
+            aspect_ratio = orig_width / orig_height
+
+            # calculate the existing image aspect ratio
+            target_ratios = {
+                (i, j)
+                for n in range(min_num, max_num + 1)
+                for i in range(1, n + 1)
+                for j in range(1, n + 1)
+                if i * j <= max_num and i * j >= min_num
+            }
+            target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
+
+            # find the closest aspect ratio to the target
+            target_aspect_ratio = find_closest_aspect_ratio(
+                aspect_ratio, target_ratios, orig_width, orig_height, image_size
+            )
+
+            # calculate the target width and height
+            target_width = image_size * target_aspect_ratio[0]
+            target_height = image_size * target_aspect_ratio[1]
+            blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+
+            # resize the image
+            resized_img = image.resize((target_width, target_height))
+            processed_images = []
+            for i in range(blocks):
+                box = (
+                    (i % (target_width // image_size)) * image_size,
+                    (i // (target_width // image_size)) * image_size,
+                    ((i % (target_width // image_size)) + 1) * image_size,
+                    ((i // (target_width // image_size)) + 1) * image_size,
+                )
+                # split the image
+                split_img = resized_img.crop(box)
+                processed_images.append(split_img)
+            assert len(processed_images) == blocks
+            if use_thumbnail and len(processed_images) != 1:
+                thumbnail_img = image.resize((image_size, image_size))
+                processed_images.append(thumbnail_img)
+            return processed_images
+
+        def load_image(image, input_size=448, max_num=12):
+            transform = build_transform(input_size=input_size)
+            images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
+            pixel_values = [transform(image) for image in images]
+            pixel_values = torch.stack(pixel_values)
+            return pixel_values
+
+        if image is not None:
+            if "<image>" not in text:
+                text = "<image>\n" + text
+            pixel_values = load_image(image, input_size=self.config.vision_config.image_size)
+            num_patches = pixel_values.shape[0]
+            num_image_token = int(
+                (self.config.vision_config.image_size // self.config.vision_config.patch_size) ** 2
+                * (self.config.downsample_ratio**2)
+            )
+            image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_token * num_patches + IMG_END_TOKEN
+            text = text.replace("<image>", image_tokens, 1)
+            text_inputs = tokenizer(text, return_tensors="pt")
+            inputs = dict(text_inputs)
+            inputs.update({"pixel_values": pixel_values})
+        else:
+            inputs = tokenizer(text, return_tensors="pt")
+        return inputs
+
+    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        using_model_generation_config = False
+        if generation_config is None:
+            if (
+                self.generation_config._from_model_config  # 1)
+                and self.generation_config._original_object_hash == hash(self.generation_config)  # 2)
+            ):
+                new_generation_config = GenerationConfig.from_model_config(self.config)
+                if new_generation_config != self.generation_config:  # 4)
+                    warnings.warn(
+                        "You have modified the pretrained model configuration to control generation. This is a"
+                        " deprecated strategy to control generation and will be removed in v5."
+                        " Please use and modify the model generation configuration (see"
+                        " https://huggingface.co/docs/transformers/generation_strategies#default-text-generation-configuration )",
+                        UserWarning,
+                    )
+                    self.generation_config = new_generation_config
+
+            generation_config = self.generation_config
+            using_model_generation_config = True
+
+        generation_config = copy.deepcopy(generation_config)
+        model_kwargs = generation_config.update(**kwargs)
+        # If `generation_config` is provided, let's fallback ALL special tokens to the default values for the model
+        if not using_model_generation_config:
+            if generation_config.bos_token_id is None:
+                generation_config.bos_token_id = self.generation_config.bos_token_id
+            if generation_config.eos_token_id is None:
+                generation_config.eos_token_id = self.generation_config.eos_token_id
+            if generation_config.pad_token_id is None:
+                generation_config.pad_token_id = self.generation_config.pad_token_id
+            if generation_config.decoder_start_token_id is None:
+                generation_config.decoder_start_token_id = self.generation_config.decoder_start_token_id
+
+        return generation_config, model_kwargs
 
 
 class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
@@ -1430,14 +1656,22 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
     @staticmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
-        if image is None:
-            raise ValueError("Image is required.")
-        prompt = f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
+            messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+            prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            prompt = (
+                f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
+                if image is not None
+                else text
+            )
         inputs = processor([prompt], [image], return_tensors="pt")
         return inputs
 
@@ -1615,28 +1849,186 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
 
     @staticmethod
     def preprocess_inputs(
-        processor,
         text: str,
         image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
-        messages = [{"role": "user", "content": f"<image>\n{text}"}]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
-        input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+        if image is not None and processor is None:
+            raise ValueError("Processor is required.")
+        text = f"<image>\n{text}" if image is not None else text
+        messages = [{"role": "user", "content": text}]
+        if tokenizer.chat_template is not None:
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        if image is not None:
+            text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
+            input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+        else:
+            input_ids = tokenizer(text, return_tensors="pt").input_ids
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
         if image is not None:
-            result["images"] = torch.unsqueeze(processor(images=image, return_tensors="pt")["pixel_values"][0], 0)
+            result["pixel_values"] = processor(images=[image], return_tensors="pt")["pixel_values"]
         return result
+
+
+class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_projection"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
+        self.sub_GN = torch.tensor(self.config.sub_GN)
+        self.glb_GN = torch.tensor(self.config.glb_GN)
+
+    def get_vision_embeddings(self, pixel_values, image_sizes, **kwargs):
+        num_images, num_crops, c, h, w = pixel_values.shape
+        img_features = self.vision_embeddings(pixel_values.flatten(0, 1)).last_hidden_state.reshape(
+            num_images, num_crops, -1, self.config.img_processor["image_dim_out"]
+        )
+        image_features_proj = self.hd_feature_transform(img_features, image_sizes)
+        return image_features_proj
+
+    def hd_feature_transform(self, image_features, image_sizes):
+        """
+        image_features: (num_images, num_crops+1, 24*24, 1024)
+        """
+
+        image_features = torch.from_numpy(image_features)
+        global_image_features = image_features[:, 0]  # (num_images, 24*24, 1024)
+        # global feature can be viewed as a special HD case with num_crops 1x1
+        global_image_features_hd = self.reshape_hd_patches_2x2merge(global_image_features, 1, 1)
+        global_image_features_hd_newline = self.add_image_newline(global_image_features_hd)
+
+        all_image_embeddings = []
+        # need a for loop to process each image because of different image sizes
+        # (patch arrangement is different for each image)
+        for i, img_size in enumerate(image_sizes):
+            h, w = img_size
+            h_crop = h // 336
+            w_crop = w // 336
+            num_crops = h_crop * w_crop
+
+            # NOTE: real num_crops is padded
+            # (num_crops, 24*24, 1024)
+            sub_image_features = image_features[i, 1 : 1 + num_crops]
+            sub_image_features_hd = self.reshape_hd_patches_2x2merge(sub_image_features, h_crop, w_crop)
+            sub_image_features_hd_newline = self.add_image_newline(sub_image_features_hd)
+
+            # [sub features, separator, global features]
+            all_image_embeddings.extend(
+                [
+                    sub_image_features_hd_newline.squeeze(0),  # (h_crop*12*(w_crop*12+1), 4096)
+                    self.glb_GN.squeeze(0),
+                    global_image_features_hd_newline[i],
+                ]
+            )
+        image_features_proj = self.vision_projection(torch.cat(all_image_embeddings, dim=0).unsqueeze(0))[0]
+
+        return image_features_proj
+
+    def reshape_hd_patches_2x2merge(self, image_features, h_crop, w_crop):
+        """
+        image_features: (num_images*num_crops, 24*24, 1024)
+        output: (num_images, h_crop*12, w_crop*12, 4096), h_crop*w_crop == num_crops
+        """
+        N, L, C = image_features.shape
+        assert L == 24 * 24 and C == 1024 and N % (h_crop * w_crop) == 0
+        num_images = N // (h_crop * w_crop)
+        H = int(L**0.5)
+        image_features_hd = (
+            image_features.reshape(N, H, H, C)  # N, 24, 24, 1024
+            .reshape(N, H // 2, 2, H // 2, 2, C)  # N, 12, 2, 12, 2, 1024
+            .permute(0, 1, 3, 2, 4, 5)  # N, 12, 12, 2, 2, 1024
+            .reshape(N, -1, 4 * C)  # N, 144, 4096
+            .reshape(num_images, h_crop, w_crop, H // 2, H // 2, -1)  # n_img, h_crop, w_crop, 12, 12, 4096
+            .permute(0, 1, 3, 2, 4, 5)  # n_img, h_crop, 12, w_crop, 12, 4096
+            .reshape(num_images, h_crop * H // 2, w_crop * H // 2, 4 * C)  # n_img, h_crop*12, w_crop*12, 4096
+        )
+
+        return image_features_hd
+
+    def add_image_newline(self, image_features_hd):
+        """
+        image_features_hd: (num_images, h_crop*12, w_crop*12, 4096)
+        output: (num_images, (h_crop*12) * (w_crop*12+1), 4096)
+        """
+        num_images, h, w, hid_dim = image_features_hd.shape
+        # add the newline token to the HD image feature patches
+        newline_embeddings = self.sub_GN.expand(num_images, h, -1, -1)  # (n_img, h, 1, hid_dim)
+        image_features_hd_newline = torch.cat([image_features_hd, newline_embeddings], dim=2).reshape(
+            num_images, -1, hid_dim
+        )
+        return image_features_hd_newline
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, image_sizes=None, **kwargs
+    ):
+        MAX_INPUT_ID = int(1e9)
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+
+        # positions for image tokens
+        positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=True)
+        has_image = len(positions[0].tolist()) > 0
+        input_ids = input_ids.clamp_min(0).clamp_max(self.config.vocab_size)
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids, **kwargs))
+        if has_image:
+            vision_embeds = self.get_vision_embeddings(
+                pixel_values, input_ids=input_ids, image_sizes=image_sizes, **kwargs
+            )
+            image_features_proj = torch.from_numpy(vision_embeds)
+            inputs_embeds = inputs_embeds.index_put(positions, image_features_proj, accumulate=False)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if image is not None and "<|image_1|>" not in text:
+            text = "<|image_1|>\n" + text
+        if getattr(processor.tokenizer, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": text}]
+            text = processor.tokenizer.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=image, text=text, return_tensors="pt")
+        return inputs
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
-    "internvl_chat": _OvInternVLForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
+    "phi3_v": _OVPhi3VisionForCausalLM,
+    "internvl_chat": _OVInternVLForCausalLM,
 }

@@ -71,7 +71,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4"],
         default=None,
         help="The weight format of the exported model.",
     )
@@ -262,8 +262,9 @@ class OVExportCommand(BaseOptimumCLICommand):
         if self.args.weight_format is None:
             ov_config = None
             if not no_compression_parameter_provided(self.args):
-                logger.warning(
-                    "The provided compression parameters will not affect conversion because of the missing --weight-format argument."
+                raise ValueError(
+                    "Some compression parameters are provided, but the weight format is not specified. "
+                    "Please provide it with --weight-format argument."
                 )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)

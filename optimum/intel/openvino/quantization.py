@@ -784,7 +784,9 @@ class OVQuantizer(OptimumQuantizer):
             image = Image.open(requests.get(image_url, stream=True).raw)
 
             try:
-                inputs = self.model.preprocess_inputs(processor, instruction, image, tokenizer)
+                inputs = self.model.preprocess_inputs(
+                    text=instruction, image=image, processor=processor, tokenizer=tokenizer
+                )
             except ValueError as value_error:
                 if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
                     raise tokenizer_error
@@ -928,6 +930,8 @@ def _weight_only_quantization(
 
     if config.weight_format == "mxfp4":
         mode = CompressWeightsMode.E2M1
+    elif config.weight_format == "nf4":
+        mode = CompressWeightsMode.NF4
     else:
         if config.bits == 8:
             mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM

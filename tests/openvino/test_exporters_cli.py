@@ -94,6 +94,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -109,6 +110,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
         ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
         ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
+        ("text-generation-with-past", "opt125m", "nf4", {"int8": 4, "nf4": 72}),
         ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 8 --all-layers", {"int4": 16}),
         (
             "text-generation-with-past",
@@ -244,6 +246,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
                 models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+            elif task.startswith("image-text-to-text"):
+                models = [model.language_model, model.vision_embeddings]
             else:
                 models = [model]
 
@@ -268,7 +272,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(exp_num_fq, num_fq)
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
-    def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
+    def test_exporters_cli_4bit(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -385,3 +389,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["open_clip"]).from_pretrained(tmpdir, compile=False)
             self.assertTrue("text_features" in model.text_model.output_names)
             self.assertTrue("image_features" in model.visual_model.output_names)
+
+    def test_export_openvino_with_missed_weight_format(self):
+        # Test that exception is raised when some compression parameter is given, but weight format is not.
+        with TemporaryDirectory() as tmpdir:
+            with self.assertRaises(subprocess.CalledProcessError) as exc_info:
+                subprocess.run(
+                    f"optimum-cli export openvino --model {MODEL_NAMES['gpt2']} --task text-generation --sym {tmpdir}",
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            self.assertIn(
+                "Some compression parameters are provided, but the weight format is not specified.",
+                str(exc_info.exception.stderr),
+            )

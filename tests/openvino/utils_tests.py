@@ -71,6 +71,7 @@ MODEL_NAMES = {
     "ibert": "hf-internal-testing/tiny-random-ibert",
     "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
+    "internvl2": "katuni4ka/tiny-random-internvl2",
     "jais": "katuni4ka/tiny-random-jais",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
@@ -108,6 +109,7 @@ MODEL_NAMES = {
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
     "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
+    "phi3_v": "katuni4ka/tiny-random-phi3-vision",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
@@ -186,6 +188,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 30, 2),
 }
 
+TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
+
 
 def get_num_quantized_nodes(model):
     num_fake_quantize = 0
@@ -194,6 +198,7 @@ def get_num_quantized_nodes(model):
         "int4": 0,
         "f4e2m1": 0,
         "f8e8m0": 0,
+        "nf4": 0,
     }
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
@@ -209,4 +214,6 @@ def get_num_quantized_nodes(model):
                 num_weight_nodes["f4e2m1"] += 1
             if type_name == "f8e8m0":
                 num_weight_nodes["f8e8m0"] += 1
+            if type_name == "nf4":
+                num_weight_nodes["nf4"] += 1
     return num_fake_quantize, num_weight_nodes
