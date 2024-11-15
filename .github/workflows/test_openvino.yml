@@ -55,16 +55,16 @@ jobs:
         run: |
           pip uninstall -y nncf
 
+      - if: ${{ matrix.test-pattern == '*modeling*' }}
+        name: Install dependencies (nightly)
+        run: |
+            pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
       - name: Test with Pytest
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
-
-      - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Install dependencies (nightly)
-        run: |
-          pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Test with Pytest (nightly)
