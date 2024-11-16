@@ -21,9 +21,10 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
+from ...exporters.openvino.convert import save_preprocessors
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
+from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
@@ -350,11 +351,9 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
-            maybe_save_preprocessors(self.args.model, self.args.output, trust_remote_code=self.args.trust_remote_code)
+            preprocessors = maybe_load_preprocessors(self.args.model, trust_remote_code=self.args.trust_remote_code)
+            save_preprocessors(preprocessors, model.config, self.args.output, self.args.trust_remote_code)
             if not self.args.disable_convert_tokenizer:
-                preprocessors = maybe_load_preprocessors(
-                    self.args.model, trust_remote_code=self.args.trust_remote_code
-                )
                 maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors, task=task)
         else:
             # TODO : add input shapes
