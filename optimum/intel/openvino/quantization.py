@@ -437,7 +437,7 @@ class OVQuantizer(OptimumQuantizer):
                     sub_model_names = ["vision_embeddings", "text_embeddings"] + self.model.additional_parts
                     sub_models = [getattr(self.model, f"{name}_model") for name in sub_model_names]
                     for sub_model in sub_models:
-                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8, sym=False))
+                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8, sym=True))
                     self.model.clear_requests()
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
