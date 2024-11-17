@@ -183,9 +183,9 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
     "llava": (30, 18, 2),
-    "llava_next": (30, 18, 2),
-    "minicpmv": (30, 52, 2, 12),
-    "nanollava": (30, 30, 2),
+    "llava_next": (30, 9, 2),
+    "minicpmv": (30, 26, 2, 12),
+    "nanollava": (30, 15, 2),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
