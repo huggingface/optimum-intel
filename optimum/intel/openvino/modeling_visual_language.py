@@ -793,6 +793,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
     ):
         """
         Preprocess input instruction and an image.
@@ -969,6 +970,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
@@ -1282,12 +1284,13 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         input_embeds = input_embeds.reshape(B, N, C)
         return input_embeds, attention_mask, position_ids
 
+    @staticmethod
     def preprocess_inputs(
-        self,
         text: str,
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
@@ -1379,13 +1382,15 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
             return pixel_values
 
         if image is not None:
+            if config is None:
+                raise ValueError("Config is required.")
             if "<image>" not in text:
                 text = "<image>\n" + text
-            pixel_values = load_image(image, input_size=self.config.vision_config.image_size)
+            pixel_values = load_image(image, input_size=config.vision_config.image_size)
             num_patches = pixel_values.shape[0]
             num_image_token = int(
-                (self.config.vision_config.image_size // self.config.vision_config.patch_size) ** 2
-                * (self.config.downsample_ratio**2)
+                (config.vision_config.image_size // config.vision_config.patch_size) ** 2
+                * (config.downsample_ratio**2)
             )
             image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_token * num_patches + IMG_END_TOKEN
             text = text.replace("<image>", image_tokens, 1)
@@ -1660,6 +1665,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
@@ -1673,6 +1679,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 else text
             )
         inputs = processor([prompt], [image], return_tensors="pt")
+        inputs.pop("image_sizes", None)
         return inputs
 
 
@@ -1853,6 +1860,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
@@ -2012,6 +2020,7 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         image: Optional[Image] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
