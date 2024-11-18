@@ -785,7 +785,7 @@ class OVQuantizer(OptimumQuantizer):
 
             try:
                 inputs = self.model.preprocess_inputs(
-                    text=instruction, image=image, processor=processor, tokenizer=tokenizer
+                    text=instruction, image=image, processor=processor, tokenizer=tokenizer, config=self.model.config
                 )
             except ValueError as value_error:
                 if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
