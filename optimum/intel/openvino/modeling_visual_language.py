@@ -1,8 +1,9 @@
+import copy
 import logging
 import os
 import warnings
+from abc import abstractmethod
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -11,14 +12,42 @@ import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from transformers import AutoConfig, GenerationConfig, GenerationMixin, PretrainedConfig
+from PIL.Image import Image
+from transformers import (
+    AutoConfig,
+    AutoImageProcessor,
+    AutoModelForCausalLM,
+    GenerationConfig,
+    GenerationMixin,
+    PretrainedConfig,
+    PreTrainedTokenizer,
+)
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
-from ...exporters.openvino.stateful import ensure_stateful_is_available
+from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
+from ...exporters.openvino.utils import save_config
+from .. import OVQuantizer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from .utils import (
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_EMBEDDINGS_MODEL_NAME,
+    TemporaryDirectory,
+)
+
+
+try:
+    from transformers import LlavaForConditionalGeneration
+except ImportError:
+    LlavaForConditionalGeneration = None
+
+try:
+    from transformers import LlavaNextForConditionalGeneration
+except ImportError:
+    LlavaNextForConditionalGeneration = None
 
 
 logger = logging.getLogger(__name__)
@@ -55,13 +84,19 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     def compile(self):
         if self.request is None:
             logger.info(f"Compiling the Language model to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+            super().compile()
         self._compile_text_emb()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
             logger.info(f"Compiling the Text embeddings model to {self._device} ...")
-            self.text_emb_request = core.compile_model(self.text_emb_model, self._device, self.ov_config)
+            if self._compile_only:
+                self.text_emb_request = self.text_emb_model
+            else:
+                logger.info(f"Compiling the Text embeddings model to {self._device} ...")
+                self.text_emb_request = self._compile_model(
+                    self.text_emb_model, self._device, self.ov_config, self.model_save_dir
+                )
 
     def clear_requests(self):
         if self._compile_only:
@@ -122,8 +157,8 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-                if past_key_values:
-                    position_ids = position_ids[:, -input_ids.shape[1] :]
+            if past_len:
+                position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
             inputs["position_ids"] = position_ids
 
@@ -171,14 +206,23 @@ class OVVisionEmbedding(OVModelPart):
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.hidden_states_output_names = []
         if len(self.model.outputs) > 2:
             self.hidden_states_output_names = [
                 key.get_any_name() for key in self.model.outputs[2:] if "hidden_states" in key.get_any_name()
             ]
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        self._main_input = "images" if model_has_input_output_name(self.model, "images") else "pixel_values"
 
     def forward(self, pixel_values, **kwargs):
-        result = self.request({"pixel_values": pixel_values})
+        self._compile()
+        inputs = {self._main_input: pixel_values}
+        if len(self.input_names) > 1:
+            for name in self.input_names:
+                if name in kwargs:
+                    inputs[name] = kwargs[name]
+        result = self.request(inputs)
         last_hidden_state = result[0]
         hidden_states = None
         pooler_out = None
@@ -193,12 +237,42 @@ class OVVisionEmbedding(OVModelPart):
         )
 
 
-MODEL_PARTS_CLS_MAPPING = {}
+class OVResampler(OVModelPart):
+    _model_name = "resampler"
+
+    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+        super().__init__(model, parent_model, model_name=self._model_name)
+        self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
+        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+
+    def forward(self, image_feature, pos_embed, key_padding_mask):
+        self._compile()
+        result = self.request(
+            {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
+        )[0]
+        return result
+
+
+class OVVisionProjection(OVModelPart):
+    _model_name = "vision_projection"
+
+    def forward(self, img_features):
+        self._compile()
+        return self.request(img_features)[0]
+
+
+MODEL_PARTS_CLS_MAPPING = {
+    "resampler": OVResampler,
+    "language_model": OVModelWithEmbedForCausalLM,
+    "vision_embeddings": OVVisionEmbedding,
+    "vision_projection": OVVisionProjection,
+}
 
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
+    auto_model_class = AutoModelForCausalLM
 
     def __init__(
         self,
@@ -221,7 +295,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self.lm_model = language_model
-        self.text_embdings_model = text_embeddings
+        self.text_embeddings_model = text_embeddings
         self.vision_embeddings_model = vision_embeddings
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
@@ -238,13 +312,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._set_ov_config_parameters()
         self.language_model = OVModelWithEmbedForCausalLM(
             self.lm_model,
-            self.text_embdings_model,
+            self.text_embeddings_model,
             config=config,
-            deivce=device,
+            device=device,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            compile=not self._compile_only,
+            compile=self._compile_only or enable_compilation,
             compile_only=self._compile_only,
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
@@ -264,13 +338,28 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except AttributeError:
             pass
 
+    def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
+        for _, component in self.components.items():
+            component.clear_requests()
+
     def compile(self):
-        self.language_model.compile()
-        self.vision_embeddings._compile()
-        for part in self.additional_parts:
-            part_model = getattr(self, part, None)
-            if part_model is not None:
-                part_model._compile()
+        for _, component in self.components.items():
+            if isinstance(component, OVModelPart):
+                component._compile()
+            else:
+                component.compile()
+
+    def _save_config(self, save_directory):
+        """
+        Saves a model configuration into a directory, so that it can be re-loaded using the
+        [`from_pretrained`] class method.
+        """
+        save_config(self.config, save_directory)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -281,21 +370,21 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.lm_model, self.text_embdings_model, self.vision_embeddings_model]
-        dst_file_names = [
-            "openvino_language_model.xml",
-            "openvino_text_embeddings_model.xml",
-            "openvino_vision_embeddings.xml",
-        ]
-        for part in self.additional_parts:
-            model = getattr(self, f"{part}_model", None)
-            if model is not None:
-                src_files.append(model)
-                dst_file_names.append(f"openvino_{part}_model.xml")
+        src_models = self.submodels
+        dst_file_names = {
+            "lm_model": OV_LANGUAGE_MODEL_NAME,
+            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
+        }
+        for name in self._submodel_names:
+            if name not in dst_file_names:
+                dst_file_names[name] = f"openvino_{name}.xml"
 
-        for src_file, dst_file_name in zip(src_files, dst_file_names):
+        for name in self._submodel_names:
+            model = src_models[name]
+            dst_file_name = dst_file_names[name]
             dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(src_file, dst_path, compress_to_fp16=False)
+            ov.save_model(model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -364,26 +453,22 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-        compile_only = kwargs.get("compile_only", False)
-
-        # Load model from a local directory
-        if os.path.isdir(model_id):
-            model_save_dir = Path(model_id)
         model_file_names = {
-            "language_model": "openvino_language_model.xml",
-            "text_embeddings": "openvino_text_embeddings_model.xml",
-            "vision_embeddings": "openvino_vision_embeddings_model.xml",
+            "language_model": OV_LANGUAGE_MODEL_NAME,
+            "language_model_bin": OV_LANGUAGE_MODEL_NAME.replace(".xml", ".bin"),
+            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "text_embeddings_bin": OV_TEXT_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
+            "vision_embeddings": OV_VISION_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_bin": OV_VISION_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
         }
 
+        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
         for part in model_cls.additional_parts:
             model_file_names[part] = f"openvino_{part}_model.xml"
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+            model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
+            # Load model from a local directory
             model_save_dir = Path(model_id)
             file_names = {k: os.path.join(model_id, model_file_names[k]) for k in model_file_names}
         else:
@@ -401,11 +486,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 file_names[name] = model_cache_path
             model_save_dir = Path(model_cache_path).parent
         if not compile_only:
-            language_model = model_cls.load_model(file_names["language_model"], quantization_config)
-            text_embeddings = model_cls.load_model(file_names["text_embeddings"], quantization_config)
-            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"], quantization_config)
+            language_model = model_cls.load_model(file_names["language_model"])
+            text_embeddings = model_cls.load_model(file_names["text_embeddings"])
+            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"])
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[part], quantization_config)
+                kwargs[part] = model_cls.load_model(file_names[part])
         else:
             language_model = model_cls._compile_model(
                 file_names["language_model"],
@@ -445,7 +530,12 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        return model_cls(
+        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        to_quantize = not compile_only and quantization_config is not None
+        if to_quantize:
+            kwargs["compile"] = False
+
+        model = model_cls(
             language_model=language_model,
             text_embeddings=text_embeddings,
             vision_embeddings=vision_embeddings,
@@ -454,6 +544,15 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             quantization_config=quantization_config,
             **kwargs,
         )
+
+        if to_quantize:
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
+            quantization_config_copy.processor = quantization_config.processor or potential_processor_id
+            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+
+        return model
 
     @classmethod
     def _from_transformers(
@@ -513,7 +612,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             stateful=stateful,
         )
-        config = AutoConfig.from_pretrained(save_dir_path)
+        config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -523,6 +622,28 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             **kwargs,
         )
 
+    @property
+    def _component_names(self):
+        base_components = ["language_model", "vision_embeddings"]
+        additional_components = [part for part in self.additional_parts if getattr(self, part, None) is not None]
+        return base_components + additional_components
+
+    @property
+    def components(self):
+        return {component_name: getattr(self, component_name) for component_name in self._component_names}
+
+    @property
+    def _submodel_names(self):
+        model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
+        for part in self.additional_parts:
+            if getattr(self, part, None) is not None:
+                model_names.append(part + "_model")
+        return model_names
+
+    @property
+    def submodels(self):
+        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._submodel_names}
+
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
@@ -531,28 +652,27 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        apply_moc_transformations(self.lm_model, cf=False)
-        compress_model_transformation(self.lm_model)
-        apply_moc_transformations(self.text_embdings_model, cf=False)
-        compress_model_transformation(self.text_embdings_model)
-        apply_moc_transformations(self.vision_embeddings_model, cf=False)
-        compress_model_transformation(self.vision_embeddings_model)
-        for part in self.additional_parts:
-            model = getattr(self, f"{part}_model", None)
-            if model is not None:
-                apply_moc_transformations(model, cf=False)
-                compress_model_transformation(model)
+        for _, submodel in self.submodels.items():
+            apply_moc_transformations(submodel, cf=False)
+            compress_model_transformation(submodel)
+        return self
+
+    def to(self, device):
+        self.language_model.to(device)
+        super().to(device)
         return self
 
     def forward(
         self,
         input_ids,
-        pixel_values,
+        pixel_values=None,
         past_key_values=None,
         inputs_embeds=None,
         image_sizes=None,
         attention_mask=None,
         position_ids=None,
+        image_bound=None,
+        tgt_sizes=None,
         **kwargs,
     ):
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
@@ -562,6 +682,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
+            image_bound=image_bound,
+            tgt_sizes=tgt_sizes,
             **kwargs,
         )
         return self.language_model.forward(
@@ -604,6 +726,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 )
         return inputs_embeds, attention_mask, position_ids
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L521
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -621,21 +744,22 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
             # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
             # input)
-            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
-                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+            if attention_mask is not None and past_length + 1 > input_ids.shape[1]:
+                input_discount = max(attention_mask.shape[1] - past_length, 1)
+                input_ids = input_ids[:, -input_discount:]
             # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
             # input_ids based on the past_length.llava
             elif past_length < input_ids.shape[1]:
                 input_ids = input_ids[:, past_length:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
-            elif self.config.image_token_index in input_ids:
+            elif getattr(self.config, "image_token_index", -1) in input_ids:
                 input_ids = input_ids[:, input_ids.shape[1] - 1 :]
 
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
+            if past_key_values is not None:
                 position_ids = position_ids[:, -input_ids.shape[1] :]
 
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
@@ -652,6 +776,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "attention_mask": attention_mask,
                 "pixel_values": pixel_values,
                 "image_sizes": image_sizes,
+                "image_bound": kwargs.get("image_bound"),
+                "tgt_sizes": kwargs.get("tgt_sizes"),
             }
         )
         return model_inputs
@@ -660,8 +786,50 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
         return True
 
+    @staticmethod
+    @abstractmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        """
+        Preprocess input instruction and an image.
+        """
+
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
+    auto_model_class = LlavaForConditionalGeneration
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self._support_new_processing = hasattr(self.config, "image_seq_length")
+
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
@@ -690,17 +858,11 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         input_ids,
         attention_mask,
         position_ids=None,
-        legacy_processing=None,
+        legacy_processing=False,
         **kwargs,
     ):
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        if legacy_processing is None:
-            legacy_processing = (
-                not hasattr(self.config, "image_seq_length")
-                or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
-                or (input_ids.shape[-1] == 1)
-            )
 
         if legacy_processing:
             pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
@@ -733,15 +895,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             final_attention_mask = torch.zeros(
                 batch_size, max_embed_dim, dtype=attention_mask.dtype, device=inputs_embeds.device
             )
-            # In case the Vision model or the Language model has been offloaded to CPU, we need to manually
-            # set the corresponding tensors into their correct target device.
-            target_device = inputs_embeds.device
-            batch_indices, non_image_indices, text_to_overwrite = (
-                batch_indices.to(target_device),
-                non_image_indices.to(target_device),
-                text_to_overwrite.to(target_device),
-            )
-            attention_mask = attention_mask.to(target_device)
 
             # 4. Fill the embeddings based on the mask. If we have ["hey" "<image>", "how", "are"]
             # we need to index copy on [0, 577, 578, 579] for the text and [1:576] for the image features
@@ -752,7 +905,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                 (batch_size, max_embed_dim), True, dtype=torch.bool, device=inputs_embeds.device
             )
             image_to_overwrite[batch_indices, text_to_overwrite] = False
-            image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None].to(target_device)
+            image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None]
 
             if image_to_overwrite.sum() != image_features.shape[:-1].numel():
                 raise ValueError(
@@ -760,7 +913,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                     f" the number of image given to the model is {num_images}. This prevents correct indexing and breaks batch generation."
                 )
 
-            final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim).to(target_device)
+            final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim)
             final_attention_mask |= image_to_overwrite
             position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
 
@@ -780,11 +933,12 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_multimodal_embeddings(
         self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs
     ):
-        legacy_processing = (
-            not hasattr(self.config, "image_seq_length")
-            or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
-            or (input_ids.shape[-1] == 1 and pixel_values is not None)
-        )
+        if pixel_values is not None and self._support_new_processing and past_key_values is None:
+            legacy_processing = (input_ids == self.config.image_token_index).sum(
+                1
+            ).max() < self.config.image_seq_length
+        else:
+            legacy_processing = True
         inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
             input_ids, pixel_values, attention_mask, position_ids, legacy_processing=legacy_processing, **kwargs
         )
@@ -795,19 +949,9 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     def _filter_unattended_tokens(self, input_ids, attention_mask, past_key_values):
-        if not self.language_model.stateful:
-            first_layer_past_key_value = torch.from_numpy(past_key_values[0][0][:, :, :, 0])
-        else:
-            first_layer_past_key_value = torch.from_numpy(
-                self.language_model.request.query_state()[0].state.data[:, :, :, 0]
-            )
-
-        # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
-        batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
-
         # Get the target length
         target_length = input_ids.shape[1]
-        past_length = first_layer_past_key_value.shape[-1]
+        past_length = self.language_model._get_past_length(past_key_values)
 
         extended_attention_mask = torch.ones(
             (attention_mask.shape[0], past_length),
@@ -815,22 +959,38 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             device=attention_mask.device,
         )
 
-        # Filter out only the tokens that can be un-attended, this can happen
-        # if one uses Llava + Fused modules where the cache on the
-        # first iteration is already big enough, or if one passes custom cache
-        valid_indices = non_attended_tokens < extended_attention_mask.size(-1)
-        new_batch_index = batch_index[valid_indices]
-        new_non_attended_tokens = non_attended_tokens[valid_indices]
-
-        # Zero-out the places where we don't need to attend
-        extended_attention_mask[new_batch_index, new_non_attended_tokens] = 0
-
         attention_mask = torch.cat((extended_attention_mask, attention_mask[:, -target_length:]), dim=1)
-        position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
+        position_ids = torch.cumsum(attention_mask, axis=1) - 1
+        position_ids[attention_mask == 0] = 1
         return attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+            if image is not None:
+                chat_prompt[0]["content"].append({"type": "image"})
+            prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        else:
+            if image is not None and "<image>" not in text:
+                prompt = "<image>\n" + text
+            else:
+                prompt = text
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        return inputs
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
+    auto_model_class = LlavaNextForConditionalGeneration
+
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
         from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
@@ -903,11 +1063,13 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
-        legacy_processing = (
-            not hasattr(self.config, "image_seq_length")
-            or ((input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length)
-            or (input_ids.shape[-1] == 1 and pixel_values is not None)
-        )
+        if pixel_values is not None and self._support_new_processing and past_key_values is None:
+            legacy_processing = (input_ids == self.config.image_token_index).sum(
+                1
+            ).max() < self.config.image_seq_length
+        else:
+            legacy_processing = True
+
         if pixel_values is not None and pixel_values.size(0) > 0:
             # ! infer image_num_patches from image_sizes
             image_num_patches = [
@@ -961,7 +1123,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         input_ids,
         attention_mask,
         position_ids=None,
-        legacy_processing=None,
+        legacy_processing=False,
         **kwargs,
     ):
         image_token_index = self.config.image_token_index
@@ -1099,7 +1261,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
 
 
-class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
+class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
@@ -1122,9 +1284,760 @@ class _OvInternVLForCausalLM(OVModelForVisualCausalLM):
         input_embeds = input_embeds.reshape(B, N, C)
         return input_embeds, attention_mask, position_ids
 
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        import torchvision.transforms as T
+        from torchvision.transforms.functional import InterpolationMode
+
+        IMG_START_TOKEN = "<img>"
+        IMG_END_TOKEN = "</img>"
+        IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
+
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD = (0.229, 0.224, 0.225)
+
+        def build_transform(input_size):
+            MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
+            transform = T.Compose(
+                [
+                    T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
+                    T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+                    T.ToTensor(),
+                    T.Normalize(mean=MEAN, std=STD),
+                ]
+            )
+            return transform
+
+        def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+            best_ratio_diff = float("inf")
+            best_ratio = (1, 1)
+            area = width * height
+            for ratio in target_ratios:
+                target_aspect_ratio = ratio[0] / ratio[1]
+                ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+                if ratio_diff < best_ratio_diff:
+                    best_ratio_diff = ratio_diff
+                    best_ratio = ratio
+                elif ratio_diff == best_ratio_diff:
+                    if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                        best_ratio = ratio
+            return best_ratio
+
+        def dynamic_preprocess(image, min_num=1, max_num=12, image_size=28, use_thumbnail=False):
+            orig_width, orig_height = image.size
+            aspect_ratio = orig_width / orig_height
+
+            # calculate the existing image aspect ratio
+            target_ratios = {
+                (i, j)
+                for n in range(min_num, max_num + 1)
+                for i in range(1, n + 1)
+                for j in range(1, n + 1)
+                if i * j <= max_num and i * j >= min_num
+            }
+            target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
+
+            # find the closest aspect ratio to the target
+            target_aspect_ratio = find_closest_aspect_ratio(
+                aspect_ratio, target_ratios, orig_width, orig_height, image_size
+            )
+
+            # calculate the target width and height
+            target_width = image_size * target_aspect_ratio[0]
+            target_height = image_size * target_aspect_ratio[1]
+            blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+
+            # resize the image
+            resized_img = image.resize((target_width, target_height))
+            processed_images = []
+            for i in range(blocks):
+                box = (
+                    (i % (target_width // image_size)) * image_size,
+                    (i // (target_width // image_size)) * image_size,
+                    ((i % (target_width // image_size)) + 1) * image_size,
+                    ((i // (target_width // image_size)) + 1) * image_size,
+                )
+                # split the image
+                split_img = resized_img.crop(box)
+                processed_images.append(split_img)
+            assert len(processed_images) == blocks
+            if use_thumbnail and len(processed_images) != 1:
+                thumbnail_img = image.resize((image_size, image_size))
+                processed_images.append(thumbnail_img)
+            return processed_images
+
+        def load_image(image, input_size=448, max_num=12):
+            transform = build_transform(input_size=input_size)
+            images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
+            pixel_values = [transform(image) for image in images]
+            pixel_values = torch.stack(pixel_values)
+            return pixel_values
+
+        if image is not None:
+            if config is None:
+                raise ValueError("Config is required.")
+            if "<image>" not in text:
+                text = "<image>\n" + text
+            pixel_values = load_image(image, input_size=config.vision_config.image_size)
+            num_patches = pixel_values.shape[0]
+            num_image_token = int(
+                (config.vision_config.image_size // config.vision_config.patch_size) ** 2
+                * (config.downsample_ratio**2)
+            )
+            image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_token * num_patches + IMG_END_TOKEN
+            text = text.replace("<image>", image_tokens, 1)
+            text_inputs = tokenizer(text, return_tensors="pt")
+            inputs = dict(text_inputs)
+            inputs.update({"pixel_values": pixel_values})
+        else:
+            inputs = tokenizer(text, return_tensors="pt")
+        return inputs
+
+    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        using_model_generation_config = False
+        if generation_config is None:
+            if (
+                self.generation_config._from_model_config  # 1)
+                and self.generation_config._original_object_hash == hash(self.generation_config)  # 2)
+            ):
+                new_generation_config = GenerationConfig.from_model_config(self.config)
+                if new_generation_config != self.generation_config:  # 4)
+                    warnings.warn(
+                        "You have modified the pretrained model configuration to control generation. This is a"
+                        " deprecated strategy to control generation and will be removed in v5."
+                        " Please use and modify the model generation configuration (see"
+                        " https://huggingface.co/docs/transformers/generation_strategies#default-text-generation-configuration )",
+                        UserWarning,
+                    )
+                    self.generation_config = new_generation_config
+
+            generation_config = self.generation_config
+            using_model_generation_config = True
+
+        generation_config = copy.deepcopy(generation_config)
+        model_kwargs = generation_config.update(**kwargs)
+        # If `generation_config` is provided, let's fallback ALL special tokens to the default values for the model
+        if not using_model_generation_config:
+            if generation_config.bos_token_id is None:
+                generation_config.bos_token_id = self.generation_config.bos_token_id
+            if generation_config.eos_token_id is None:
+                generation_config.eos_token_id = self.generation_config.eos_token_id
+            if generation_config.pad_token_id is None:
+                generation_config.pad_token_id = self.generation_config.pad_token_id
+            if generation_config.decoder_start_token_id is None:
+                generation_config.decoder_start_token_id = self.generation_config.decoder_start_token_id
+
+        return generation_config, model_kwargs
+
+
+class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["resampler"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
+        self.embed_dim = self.language_model.config.hidden_size
+        max_size = self.config.vision_config.image_size // self.config.vision_config.patch_size
+        self._pos_embeds = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
+        self.max_size = (max_size, max_size)
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        tgt_sizes = kwargs["tgt_sizes"]
+        pixel_values_list = pixel_values
+        vision_hidden_states = []
+        all_pixel_values = []
+        img_cnt = []
+        for pixel_value in pixel_values_list:
+            img_cnt.append(len(pixel_value))
+            all_pixel_values.extend([i.flatten(end_dim=1).permute(1, 0) for i in pixel_value])
+
+        vision_embedding = None
+        # exist image
+        if all_pixel_values:
+            tgt_sizes = [tgt_size for tgt_size in tgt_sizes if isinstance(tgt_size, torch.Tensor)]
+            tgt_sizes = torch.vstack(tgt_sizes).type(torch.int32)
+
+            max_patches = torch.max(tgt_sizes[:, 0] * tgt_sizes[:, 1])
+
+            all_pixel_values = torch.nn.utils.rnn.pad_sequence(all_pixel_values, batch_first=True, padding_value=0.0)
+            B, L, _ = all_pixel_values.shape
+            all_pixel_values = all_pixel_values.permute(0, 2, 1).reshape(B, 3, -1, L)
+
+            patch_attn_mask = torch.zeros((B, 1, max_patches), dtype=torch.bool)
+            for i in range(B):
+                patch_attn_mask[i, 0, : tgt_sizes[i][0] * tgt_sizes[i][1]] = True
+            position_ids = self._prepare_vis_position_ids(
+                all_pixel_values,
+                patch_attn_mask,
+                tgt_sizes,
+                self.config.vision_config.patch_size,
+                self.config.vision_config.image_size // self.config.patch_size,
+            )
+            vision_embedding = torch.from_numpy(
+                self.vision_embeddings(
+                    pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
+                )[0]
+            )
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes)
+
+            start = 0
+            for pixel_value in pixel_values_list:
+                img_cnt = len(pixel_value)
+                if img_cnt > 0:
+                    vision_hidden_states.append(vision_embedding[start : start + img_cnt])
+                    start += img_cnt
+                else:
+                    vision_hidden_states.append([])
+        else:  # no image
+            dummy_feature = []
+            for _ in range(len(pixel_values_list)):
+                vision_hidden_states.append(dummy_feature)
+        return vision_hidden_states
+
+    def resampling(self, x, tgt_sizes):
+        bs = x.shape[0]
+
+        patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
+
+        self._adjust_pos_cache(tgt_sizes)
+
+        max_patch_len = torch.max(patch_len)
+        key_padding_mask = torch.zeros((bs, max_patch_len), dtype=torch.bool)
+
+        pos_embed = []
+        for i in range(bs):
+            tgt_h, tgt_w = tgt_sizes[i]
+            pos_embed.append(self._pos_embeds[:tgt_h, :tgt_w, :].reshape((tgt_h * tgt_w, -1)))  # patches * D
+            key_padding_mask[i, patch_len[i] :] = True
+
+        pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
+            1, 0, 2
+        )  # BLD => L * B * D
+        res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
+        return res
+
+    def _set_2d_pos_cache(self, max_size):
+        pos_embed = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
+        self._pos_embed = pos_embed
+
+    def _adjust_pos_cache(self, tgt_sizes):
+        max_h = torch.max(tgt_sizes[:, 0])
+        max_w = torch.max(tgt_sizes[:, 1])
+        if max_h > self.max_size[0] or max_w > self.max_size[1]:
+            self.max_size = [max(max_h, self.max_size[0]), max(max_w, self.max_size[1])]
+            self._set_2d_pos_cache(self.max_size)
+
+    def _get_2d_sincos_pos_embed(self, embed_dim, image_size):
+        """
+        image_size: image_size or (image_height, image_width)
+        return:
+        pos_embed: [image_height, image_width, embed_dim]
+        """
+        if isinstance(image_size, int):
+            grid_h_size, grid_w_size = image_size, image_size
+        else:
+            grid_h_size, grid_w_size = image_size[0], image_size[1]
+
+        grid_h = np.arange(grid_h_size, dtype=np.float32)
+        grid_w = np.arange(grid_w_size, dtype=np.float32)
+        grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+        grid = np.stack(grid, axis=0)
+
+        pos_embed = self._get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+        return pos_embed
+
+    def _get_2d_sincos_pos_embed_from_grid(self, embed_dim, grid):
+        assert embed_dim % 2 == 0
+
+        # use half of dimensions to encode grid_h
+        emb_h = self._get_1d_sincos_pos_embed_from_grid_new(embed_dim // 2, grid[0])  # (H, W, D/2)
+        emb_w = self._get_1d_sincos_pos_embed_from_grid_new(embed_dim // 2, grid[1])  # (H, W, D/2)
+
+        emb = np.concatenate([emb_h, emb_w], axis=-1)  # (H, W, D)
+        return emb
+
+    def _get_1d_sincos_pos_embed_from_grid_new(self, embed_dim, pos):
+        """
+        embed_dim: output dimension for each position
+        pos: a list of positions to be encoded: size (H, W)
+        out: (H, W, D)
+        """
+        assert embed_dim % 2 == 0
+        omega = np.arange(embed_dim // 2, dtype=np.float32)
+        omega /= embed_dim / 2.0
+        omega = 1.0 / 10000**omega  # (D/2,)
+
+        out = np.einsum("hw,d->hwd", pos, omega)  # (H, W, D/2), outer product
+
+        emb_sin = np.sin(out)  # (H, W, D/2)
+        emb_cos = np.cos(out)  # (H, W, D/2)
+
+        emb = np.concatenate([emb_sin, emb_cos], axis=-1)  # (H, W, D)
+        return emb
+
+    def _prepare_vis_position_ids(
+        self, pixel_values, patch_attention_mask, tgt_sizes, patch_size, num_patches_per_side
+    ):
+        batch_size = pixel_values.size(0)
+        max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+        max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
+        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        position_ids = torch.full(size=(batch_size, max_nb_patches_h * max_nb_patches_w), fill_value=0)
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            if tgt_sizes is not None:
+                nb_patches_h = tgt_sizes[batch_idx][0]
+                nb_patches_w = tgt_sizes[batch_idx][1]
+            else:
+                nb_patches_h = p_attn_mask[:, 0].sum()
+                nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+
+        return position_ids
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, input_embeds, input_ids, attention_mask, position_ids=None, **kwargs
+    ):
+        bs = input_ids.shape[0]
+        image_bound = kwargs["image_bound"]
+        vllm_embedding = torch.from_numpy(input_embeds)
+        for i in range(bs):
+            cur_vs_hs = vision_embeds[i]
+            if len(cur_vs_hs) > 0:
+                cur_vllm_emb = vllm_embedding[i]
+                cur_image_bound = image_bound[i]
+                if len(cur_image_bound) > 0:
+                    image_indices = torch.stack([torch.arange(r[0], r[1], dtype=torch.long) for r in cur_image_bound])
+
+                    cur_vllm_emb.scatter_(
+                        0,
+                        image_indices.view(-1, 1).repeat(1, cur_vllm_emb.shape[-1]),
+                        cur_vs_hs.view(-1, cur_vs_hs.shape[-1]),
+                    )
+        return vllm_embedding, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
+            messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+            prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            prompt = (
+                f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
+                if image is not None
+                else text
+            )
+        inputs = processor([prompt], [image], return_tensors="pt")
+        inputs.pop("image_sizes", None)
+        return inputs
+
+
+class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        if isinstance(pixel_values, list) or pixel_values.ndim == 5:
+            concat_images = torch.cat(pixel_values, dim=0) if isinstance(pixel_values, list) else pixel_values
+            image_features = torch.from_numpy(self.vision_embeddings(concat_images).last_hidden_state)
+            split_sizes = [image.shape[0] for image in pixel_values]
+            image_features = torch.split(image_features, split_sizes, dim=0)
+            image_features = [x.flatten(0, 1).to(self.device) for x in image_features]
+        else:
+            image_features = self.vision_embeddings(pixel_values).last_hidden_state
+
+        return image_features
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        vision_embeds = None
+        IGNORE_INDEX = -100
+        IMAGE_TOKEN_INDEX = -200
+        if pixel_values is not None:
+            vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
+        if vision_embeds is None:
+            inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+            past_len = self.language_model._get_past_length(kwargs.get("past_key_values"))
+            if attention_mask is not None and attention_mask.shape[1] < past_len + input_ids.shape[1]:
+                attention_mask = torch.cat(
+                    [
+                        attention_mask,
+                        torch.ones(attention_mask.shape[0], past_len + input_ids.shape[1] - attention_mask.shape[1]),
+                    ],
+                    dim=1,
+                )
+                position_ids = None
+            return inputs_embeds, attention_mask, position_ids
+
+        vision_embeds = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+        if position_ids is None:
+            position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=input_ids.device)
+        labels = torch.full_like(input_ids, IGNORE_INDEX)
+
+        # remove the padding using attention_mask -- TODO: double check
+        input_ids = [
+            cur_input_ids[cur_attention_mask]
+            for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask.bool())
+        ]
+        labels = [
+            cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask.bool())
+        ]
+
+        new_input_embeds = []
+        new_labels = []
+        cur_image_idx = 0
+        for batch_idx, cur_input_ids in enumerate(input_ids):
+            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
+            if num_images == 0:
+                cur_image_features = vision_embeds[cur_image_idx]
+                cur_input_embeds_1 = torch.from_numpy(self.get_text_embeddings(cur_input_ids.unsqueeze(0))[0])
+                cur_input_embeds = torch.cat([cur_input_embeds_1, cur_image_features[0:0]], dim=0)
+                new_input_embeds.append(cur_input_embeds)
+                new_labels.append(labels[batch_idx])
+                cur_image_idx += 1
+                continue
+
+            image_token_indices = (
+                [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            )
+            cur_input_ids_noim = []
+            cur_labels = labels[batch_idx]
+            cur_labels_noim = []
+            for i in range(len(image_token_indices) - 1):
+                cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
+                cur_labels_noim.append(cur_labels[image_token_indices[i] + 1 : image_token_indices[i + 1]])
+            split_sizes = [x.shape[0] for x in cur_labels_noim]
+            cur_input_embeds = torch.from_numpy(
+                self.get_text_embeddings(torch.cat(cur_input_ids_noim).unsqueeze(0))[0]
+            )
+            cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
+            cur_new_input_embeds = []
+            cur_new_labels = []
+
+            for i in range(num_images + 1):
+                cur_new_input_embeds.append(cur_input_embeds_no_im[i])
+                cur_new_labels.append(cur_labels_noim[i])
+                if i < num_images:
+                    cur_image_features = vision_embeds[cur_image_idx]
+                    cur_image_idx += 1
+                    cur_new_input_embeds.append(cur_image_features)
+                    cur_new_labels.append(
+                        torch.full(
+                            (cur_image_features.shape[0],),
+                            IGNORE_INDEX,
+                            device=cur_labels.device,
+                            dtype=cur_labels.dtype,
+                        )
+                    )
+
+            cur_new_input_embeds = torch.cat(cur_new_input_embeds)
+            cur_new_labels = torch.cat(cur_new_labels)
+
+            new_input_embeds.append(cur_new_input_embeds)
+            new_labels.append(cur_new_labels)
+
+        # Truncate sequences to max length as image embeddings can make the sequence longer
+        tokenizer_model_max_length = getattr(self.config, "tokenizer_model_max_length", None)
+        if tokenizer_model_max_length is not None:
+            new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
+            new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
+
+        # Combine them
+        max_len = max(x.shape[0] for x in new_input_embeds)
+        batch_size = len(new_input_embeds)
+
+        new_input_embeds_padded = []
+        new_labels_padded = torch.full(
+            (batch_size, max_len), IGNORE_INDEX, dtype=new_labels[0].dtype, device=new_labels[0].device
+        )
+        attention_mask = torch.zeros((batch_size, max_len), dtype=attention_mask.dtype, device=attention_mask.device)
+        position_ids = torch.zeros((batch_size, max_len), dtype=position_ids.dtype, device=position_ids.device)
+
+        for i, (cur_new_embed, cur_new_labels) in enumerate(zip(new_input_embeds, new_labels)):
+            cur_len = cur_new_embed.shape[0]
+            if getattr(self.config, "tokenizer_padding_side", "right") == "left":
+                new_input_embeds_padded.append(
+                    torch.cat(
+                        (
+                            torch.zeros(
+                                (max_len - cur_len, cur_new_embed.shape[1]),
+                                dtype=cur_new_embed.dtype,
+                                device=cur_new_embed.device,
+                            ),
+                            cur_new_embed,
+                        ),
+                        dim=0,
+                    )
+                )
+                if cur_len > 0:
+                    new_labels_padded[i, -cur_len:] = cur_new_labels
+                    attention_mask[i, -cur_len:] = True
+                    position_ids[i, -cur_len:] = torch.arange(
+                        0, cur_len, dtype=position_ids.dtype, device=position_ids.device
+                    )
+            else:
+                new_input_embeds_padded.append(
+                    torch.cat(
+                        (
+                            cur_new_embed,
+                            torch.zeros(
+                                (max_len - cur_len, cur_new_embed.shape[1]),
+                                dtype=cur_new_embed.dtype,
+                                device=cur_new_embed.device,
+                            ),
+                        ),
+                        dim=0,
+                    )
+                )
+                if cur_len > 0:
+                    new_labels_padded[i, :cur_len] = cur_new_labels
+                    attention_mask[i, :cur_len] = True
+                    position_ids[i, :cur_len] = torch.arange(
+                        0, cur_len, dtype=position_ids.dtype, device=position_ids.device
+                    )
+
+        new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
+
+        return new_input_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required.")
+        if image is not None and processor is None:
+            raise ValueError("Processor is required.")
+        text = f"<image>\n{text}" if image is not None else text
+        messages = [{"role": "user", "content": text}]
+        if tokenizer.chat_template is not None:
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        if image is not None:
+            text_chunks = [tokenizer(chunk).input_ids for chunk in text.split("<image>")]
+            input_ids = torch.tensor(text_chunks[0] + [-200] + text_chunks[1], dtype=torch.long).unsqueeze(0)
+        else:
+            input_ids = tokenizer(text, return_tensors="pt").input_ids
+        attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+        result = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if image is not None:
+            result["pixel_values"] = processor(images=[image], return_tensors="pt")["pixel_values"]
+        return result
+
+
+class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_projection"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
+        self.sub_GN = torch.tensor(self.config.sub_GN)
+        self.glb_GN = torch.tensor(self.config.glb_GN)
+
+    def get_vision_embeddings(self, pixel_values, image_sizes, **kwargs):
+        num_images, num_crops, c, h, w = pixel_values.shape
+        img_features = self.vision_embeddings(pixel_values.flatten(0, 1)).last_hidden_state.reshape(
+            num_images, num_crops, -1, self.config.img_processor["image_dim_out"]
+        )
+        image_features_proj = self.hd_feature_transform(img_features, image_sizes)
+        return image_features_proj
+
+    def hd_feature_transform(self, image_features, image_sizes):
+        """
+        image_features: (num_images, num_crops+1, 24*24, 1024)
+        """
+
+        image_features = torch.from_numpy(image_features)
+        global_image_features = image_features[:, 0]  # (num_images, 24*24, 1024)
+        # global feature can be viewed as a special HD case with num_crops 1x1
+        global_image_features_hd = self.reshape_hd_patches_2x2merge(global_image_features, 1, 1)
+        global_image_features_hd_newline = self.add_image_newline(global_image_features_hd)
+
+        all_image_embeddings = []
+        # need a for loop to process each image because of different image sizes
+        # (patch arrangement is different for each image)
+        for i, img_size in enumerate(image_sizes):
+            h, w = img_size
+            h_crop = h // 336
+            w_crop = w // 336
+            num_crops = h_crop * w_crop
+
+            # NOTE: real num_crops is padded
+            # (num_crops, 24*24, 1024)
+            sub_image_features = image_features[i, 1 : 1 + num_crops]
+            sub_image_features_hd = self.reshape_hd_patches_2x2merge(sub_image_features, h_crop, w_crop)
+            sub_image_features_hd_newline = self.add_image_newline(sub_image_features_hd)
+
+            # [sub features, separator, global features]
+            all_image_embeddings.extend(
+                [
+                    sub_image_features_hd_newline.squeeze(0),  # (h_crop*12*(w_crop*12+1), 4096)
+                    self.glb_GN.squeeze(0),
+                    global_image_features_hd_newline[i],
+                ]
+            )
+        image_features_proj = self.vision_projection(torch.cat(all_image_embeddings, dim=0).unsqueeze(0))[0]
+
+        return image_features_proj
+
+    def reshape_hd_patches_2x2merge(self, image_features, h_crop, w_crop):
+        """
+        image_features: (num_images*num_crops, 24*24, 1024)
+        output: (num_images, h_crop*12, w_crop*12, 4096), h_crop*w_crop == num_crops
+        """
+        N, L, C = image_features.shape
+        assert L == 24 * 24 and C == 1024 and N % (h_crop * w_crop) == 0
+        num_images = N // (h_crop * w_crop)
+        H = int(L**0.5)
+        image_features_hd = (
+            image_features.reshape(N, H, H, C)  # N, 24, 24, 1024
+            .reshape(N, H // 2, 2, H // 2, 2, C)  # N, 12, 2, 12, 2, 1024
+            .permute(0, 1, 3, 2, 4, 5)  # N, 12, 12, 2, 2, 1024
+            .reshape(N, -1, 4 * C)  # N, 144, 4096
+            .reshape(num_images, h_crop, w_crop, H // 2, H // 2, -1)  # n_img, h_crop, w_crop, 12, 12, 4096
+            .permute(0, 1, 3, 2, 4, 5)  # n_img, h_crop, 12, w_crop, 12, 4096
+            .reshape(num_images, h_crop * H // 2, w_crop * H // 2, 4 * C)  # n_img, h_crop*12, w_crop*12, 4096
+        )
+
+        return image_features_hd
+
+    def add_image_newline(self, image_features_hd):
+        """
+        image_features_hd: (num_images, h_crop*12, w_crop*12, 4096)
+        output: (num_images, (h_crop*12) * (w_crop*12+1), 4096)
+        """
+        num_images, h, w, hid_dim = image_features_hd.shape
+        # add the newline token to the HD image feature patches
+        newline_embeddings = self.sub_GN.expand(num_images, h, -1, -1)  # (n_img, h, 1, hid_dim)
+        image_features_hd_newline = torch.cat([image_features_hd, newline_embeddings], dim=2).reshape(
+            num_images, -1, hid_dim
+        )
+        return image_features_hd_newline
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, image_sizes=None, **kwargs
+    ):
+        MAX_INPUT_ID = int(1e9)
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+
+        # positions for image tokens
+        positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=True)
+        has_image = len(positions[0].tolist()) > 0
+        input_ids = input_ids.clamp_min(0).clamp_max(self.config.vocab_size)
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids, **kwargs))
+        if has_image:
+            vision_embeds = self.get_vision_embeddings(
+                pixel_values, input_ids=input_ids, image_sizes=image_sizes, **kwargs
+            )
+            image_features_proj = torch.from_numpy(vision_embeds)
+            inputs_embeds = inputs_embeds.index_put(positions, image_features_proj, accumulate=False)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional[Image] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if image is not None and "<|image_1|>" not in text:
+            text = "<|image_1|>\n" + text
+        if getattr(processor.tokenizer, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": text}]
+            text = processor.tokenizer.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=image, text=text, return_tensors="pt")
+        return inputs
+
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
-    "internvl_chat": _OvInternVLForCausalLM,
+    "minicpmv": _OVMiniCPMVForCausalLM,
+    "llava-qwen2": _OVNanoLlavaForCausalLM,
+    "phi3_v": _OVPhi3VisionForCausalLM,
+    "internvl_chat": _OVInternVLForCausalLM,
 }

@@ -15,7 +15,6 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
@@ -36,6 +35,7 @@ from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
+    TemporaryDirectory,
 )
 
 
@@ -84,7 +84,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
         if is_transformers_version(">=", "4.44.99"):
-            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            except KeyError:
+                misplaced_generation_parameters = {}
             if len(misplaced_generation_parameters) > 0:
                 logger.warning(
                     "Moving the following attributes in the config to the generation config: "

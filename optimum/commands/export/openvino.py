@@ -21,9 +21,10 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
+from ...exporters.openvino.convert import save_preprocessors
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
+from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
@@ -71,7 +72,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4"],
         default=None,
         help="The weight format of the exported model.",
     )
@@ -262,8 +263,9 @@ class OVExportCommand(BaseOptimumCLICommand):
         if self.args.weight_format is None:
             ov_config = None
             if not no_compression_parameter_provided(self.args):
-                logger.warning(
-                    "The provided compression parameters will not affect conversion because of the missing --weight-format argument."
+                raise ValueError(
+                    "Some compression parameters are provided, but the weight format is not specified. "
+                    "Please provide it with --weight-format argument."
                 )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
@@ -318,6 +320,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVStableDiffusionPipeline
 
                 model_cls = OVStableDiffusionPipeline
+            elif class_name == "StableDiffusion3Pipeline":
+                from optimum.intel import OVStableDiffusion3Pipeline
+
+                model_cls = OVStableDiffusion3Pipeline
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
@@ -325,11 +331,18 @@ class OVExportCommand(BaseOptimumCLICommand):
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
-        elif task.startswith("text-generation") and quantize_with_dataset:
-            from optimum.intel import OVModelForCausalLM
+        elif (task.startswith("text-generation") or task == "image-text-to-text") and quantize_with_dataset:
+            if task.startswith("text-generation"):
+                from optimum.intel import OVModelForCausalLM
 
-            # To quantize a text-generation model with a dataset, an instantiated OVModelForCausalLM is required
-            model = OVModelForCausalLM.from_pretrained(
+                model_cls = OVModelForCausalLM
+            else:
+                from optimum.intel import OVModelForVisualCausalLM
+
+                model_cls = OVModelForVisualCausalLM
+
+            # To quantize a model with a dataset, an instance of a model class is required
+            model = model_cls.from_pretrained(
                 self.args.model,
                 export=True,
                 quantization_config=quantization_config,
@@ -338,11 +351,9 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
-            maybe_save_preprocessors(self.args.model, self.args.output, trust_remote_code=self.args.trust_remote_code)
+            preprocessors = maybe_load_preprocessors(self.args.model, trust_remote_code=self.args.trust_remote_code)
+            save_preprocessors(preprocessors, model.config, self.args.output, self.args.trust_remote_code)
             if not self.args.disable_convert_tokenizer:
-                preprocessors = maybe_load_preprocessors(
-                    self.args.model, trust_remote_code=self.args.trust_remote_code
-                )
                 maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors, task=task)
         else:
             # TODO : add input shapes

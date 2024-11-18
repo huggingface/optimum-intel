@@ -15,7 +15,6 @@
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +24,7 @@ import torch
 import torch.cuda
 from parameterized import parameterized
 
-from optimum.intel.openvino.utils import OV_XML_FILE_NAME
+from optimum.intel.openvino.utils import OV_XML_FILE_NAME, TemporaryDirectory
 
 
 PROJECT_ROOT = Path(__file__).parents[2]
@@ -148,7 +147,7 @@ class OVTrainingExampleTest(unittest.TestCase):
             self.skipTest("No enough cuda devices.")
 
         self.env[CUDA_VISIBLE_DEVICES] = str(self.available_cuda_device_ids[0])
-        with tempfile.TemporaryDirectory() as output_dir:
+        with TemporaryDirectory() as output_dir:
             args = ["torchrun", "--nproc_per_node=1", desc.filename, *desc.get_args_with_output_dir(output_dir)]
             proc = subprocess.Popen(
                 args=args,
@@ -165,7 +164,7 @@ class OVTrainingExampleTest(unittest.TestCase):
             self.skipTest("No enough cuda devices.")
 
         self.env[CUDA_VISIBLE_DEVICES] = ",".join(map(str, self.available_cuda_device_ids[:2]))
-        with tempfile.TemporaryDirectory() as output_dir:
+        with TemporaryDirectory() as output_dir:
             args = [sys.executable, desc.filename, *desc.get_args_with_output_dir(output_dir)]
             proc = subprocess.Popen(
                 args=args,
@@ -182,7 +181,7 @@ class OVTrainingExampleTest(unittest.TestCase):
             self.skipTest("No enough cuda devices.")
 
         self.env[CUDA_VISIBLE_DEVICES] = ",".join(map(str, self.available_cuda_device_ids[:2]))
-        with tempfile.TemporaryDirectory() as output_dir:
+        with TemporaryDirectory() as output_dir:
             args = [
                 "torchrun",
                 "--rdzv_backend=c10d",

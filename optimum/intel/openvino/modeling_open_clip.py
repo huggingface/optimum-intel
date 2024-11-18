@@ -16,7 +16,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import numpy as np
@@ -39,6 +38,7 @@ from ...exporters.openvino import main_export
 from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
+from .utils import TemporaryDirectory
 
 
 logger = logging.getLogger(__name__)

@@ -148,7 +148,12 @@ DEFAULT_QUANTIZATION_CONFIG = {
         "range": {"num_init_samples": 300, "type": "mean_min_max"},
         "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
     },
-    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "scope_overrides": {
+        "activations": {
+            "{re}.*matmul_0": {"mode": "symmetric"},
+            "{re}.*scaled_dot_product_attention_0": {"mode": "symmetric"},
+        }
+    },
     "ignored_scopes": [
         "{re}.*Embedding.*",
         "{re}.*add___.*",
@@ -216,6 +221,11 @@ class OVTrainer(Trainer):
         logger.warning("OVTrainer is deprecated and will be removed in optimum-intel v1.22.0.")
 
         if is_transformers_version(">=", "4.45.0"):
+            if is_transformers_version(">=", "4.46.0"):
+                raise ImportError(
+                    f"Unsupported transformers version found is {_transformers_version} which is not supported by the OVTrainer. Please downgrade to v4.44"
+                )
+
             logger.warning(
                 f"The transformers version found is {_transformers_version} which is not officially supported by the OVTrainer, use at your own risk"
             )

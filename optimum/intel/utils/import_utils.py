@@ -43,6 +43,13 @@ if _transformers_available:
     except importlib_metadata.PackageNotFoundError:
         _transformers_available = False
 
+_tokenizers_available = importlib.util.find_spec("tokenizers") is not None
+_tokenizers_version = "N/A"
+if _tokenizers_available:
+    try:
+        _tokenizers_version = importlib_metadata.version("tokenizers")
+    except importlib_metadata.PackageNotFoundError:
+        _tokenizers_available = False
 
 _torch_available = importlib.util.find_spec("torch") is not None
 _torch_version = "N/A"
@@ -179,6 +186,10 @@ if _sentence_transformers_available:
 
 def is_transformers_available():
     return _transformers_available
+
+
+def is_tokenizers_available():
+    return _tokenizers_available
 
 
 def is_neural_compressor_available():
@@ -340,6 +351,15 @@ def is_transformers_version(operation: str, version: str):
     return compare_versions(parse(_transformers_version), operation, version)
 
 
+def is_tokenizers_version(operation: str, version: str):
+    """
+    Compare the current Tokenizers version to a given reference with an operation.
+    """
+    if not _tokenizers_available:
+        return False
+    return compare_versions(parse(_tokenizers_version), operation, version)
+
+
 def is_optimum_version(operation: str, version: str):
     return compare_versions(parse(_optimum_version), operation, version)
 
@@ -360,6 +380,24 @@ def is_openvino_version(operation: str, version: str):
     if not _openvino_available:
         return False
     return compare_versions(parse(_openvino_version), operation, version)
+
+
+def is_openvino_tokenizers_version(operation: str, version: str):
+    if not is_openvino_available():
+        return False
+    if not is_openvino_tokenizers_available():
+        return False
+    import openvino_tokenizers
+
+    tokenizers_version = openvino_tokenizers.__version__
+
+    if tokenizers_version == "0.0.0.0":
+        try:
+            tokenizers_version = importlib_metadata.version("openvino_tokenizers") or tokenizers_version
+        except importlib_metadata.PackageNotFoundError:
+            pass
+
+    return compare_versions(parse(tokenizers_version), operation, version)
 
 
 def is_diffusers_version(operation: str, version: str):
