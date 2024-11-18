@@ -431,7 +431,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
-        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
         # hub model
         for revision in ("main", "ov", "itrex"):
             ov_files = _find_files_matching_pattern(
@@ -452,7 +452,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
     def test_find_files_matching_pattern_sd(self, model_arch):
-        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
         model_id = MODEL_NAMES[model_arch]
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
@@ -470,7 +470,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_find_files_matching_pattern_with_config_in_root(self, subfolder):
         # Notably, the model has a config.json file in the root directory and not in the subfolder
         model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
-        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
         self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
@@ -482,6 +482,24 @@ class OVModelIntegrationTest(unittest.TestCase):
             api.snapshot_download(repo_id=model_id, local_dir=local_dir)
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
             self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
+
+    def test_find_files_matching_pattern_with_quantized_ov_model(self):
+        # This model only has "openvino/openvino_model_qint8_quantized.xml" and "openvino/openvino_model_qint8_quantized.bin"
+        # We want to ensure that this model is found, so the `export` isn't forced to True
+        model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino-quantized-only"
+        subfolder = "openvino"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
+        # hub model
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
+        self.assertTrue(len(ov_files) == 1)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
+            self.assertTrue(len(ov_files) == 1)
 
 
 class PipelineTest(unittest.TestCase):
