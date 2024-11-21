@@ -30,13 +30,17 @@ Quantization can be applied on the model's Linear, Convolutional and Embedding l
 
 #### 8-bit
 
-For the 8-bit weight quantization you can set `load_in_8bit=True` to load your model's weights in 8-bit:
+For the 8-bit weight quantization you can provide `quantization_config` equal to `OVWeightQuantizationConfig(bits=8)` to load your model's weights in 8-bit:
 
 ```python
-from optimum.intel import OVModelForCausalLM
+from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
 
 model_id = "helenai/gpt2-ov"
-model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
+quantization_config = OVWeightQuantizationConfig(bits=8)
+model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+
+# Weights of language models inside vision-language pipelines can be quantized as well:
+# model = OVModelForVisualCausalLM.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", quantization_config=quantization_config)
 
 # Saves the int8 model that will be x4 smaller than its fp32 counterpart
 model.save_pretrained(saving_directory)
@@ -44,27 +48,29 @@ model.save_pretrained(saving_directory)
 
 <Tip warning={true}>
 
-If not specified, `load_in_8bit` will be set to `True` by default when models larger than 1 billion parameters are exported to the OpenVINO format (with `export=True`). You can disable it with `load_in_8bit=False`.
+If quantization_config is not provided, model will be exported in 8 bits by default when it has more than 1 billion parameters. You can disable it with `load_in_8bit=False`.
 
 </Tip>
 
-You can also provide a `quantization_config` instead to specify additional optimization parameters.
 
 #### 4-bit
 
-For the 4-bit weight quantization, you need a `quantization_config` to define the optimization parameters, for example:
+4-bit weight quantization can be achieved in a similar way:
 
 ```python
 from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
 
 quantization_config = OVWeightQuantizationConfig(bits=4)
 model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+
+# Or for vision-language pipelines:
+# model = OVModelForVisualCausalLM.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", quantization_config=quantization_config)
 ```
 
 You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
 
 ```python
-quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="wikitext2")
+quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, quant_method="awq", dataset="wikitext2")
 ```
 
 By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#symmetric-quantization) you can add `sym=True`.
@@ -76,12 +82,13 @@ For 4-bit quantization you can also specify the following arguments in the quant
 Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
 
 Quality of 4-bit weight compressed model can further be improved by employing one of the following data-dependent methods:
-* AWQ which stands for Activation Aware Quantization is an algorithm that tunes model weights for more accurate 4-bit compression. It slightly improves generation quality of compressed LLMs, but requires significant additional time and memory for tuning weights on a calibration dataset. Please note that it is possible that there will be no matching patterns in the model to apply AWQ, in such case it will be skipped.
-* Scale Estimation is a method that tunes quantization scales to minimize the `L2` error between the original and compressed layers. Providing a dataset is required to run scale estimation. Using this method also incurs additional time and memory overhead.
+* **AWQ** which stands for Activation Aware Quantization is an algorithm that tunes model weights for more accurate 4-bit compression. It slightly improves generation quality of compressed LLMs, but requires significant additional time and memory for tuning weights on a calibration dataset. Please note that it is possible that there will be no matching patterns in the model to apply AWQ, in such case it will be skipped.
+* **Scale Estimation** is a method that tunes quantization scales to minimize the `L2` error between the original and compressed layers. Providing a dataset is required to run scale estimation. Using this method also incurs additional time and memory overhead.
+* **GPTQ** optimizes compressed weights in a layer-wise fashion to minimize the difference between activations of a compressed and original layer.
 
-AWQ and Scale Estimation algorithms can be applied together or separately. For that, provide corresponding arguments to the 4-bit `OVWeightQuantizationConfig` together with a dataset. For example:
+Data-aware algorithms can be applied together or separately. For that, provide corresponding arguments to the 4-bit `OVWeightQuantizationConfig` together with a dataset. For example:
 ```python
-quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, quant_method="awq", scale_estimation=True, dataset="wikitext2")
+quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, quant_method="awq", scale_estimation=True, gptq=True, dataset="wikitext2")
 ```
 
 ### Static quantization
