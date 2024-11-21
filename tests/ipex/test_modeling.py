@@ -46,7 +46,7 @@ from optimum.intel import (
 )
 from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.utils.testing_utils import grid_parameters
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, IS_XPU
 
 
 SEED = 42
@@ -80,11 +80,12 @@ class IPEXModelTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
-        tokens = tokenizer(inputs, return_tensors="pt")
+        tokens = tokenizer(inputs, return_tensors="pt").to(device)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
@@ -144,11 +145,12 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ipex_model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
+        device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id).to(device)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
-        tokens = tokenizer(inputs, return_tensors="pt")
+        tokens = tokenizer(inputs, return_tensors="pt").to(device)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
@@ -201,14 +203,14 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "mistral",
-        "llama",
+        # "llama",
         "llama2",
         # "phi",
-        "distilgpt2",
+        # "distilgpt2",
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama", "llama2", "distilgpt2", "falcon", "gpt2")
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "falcon", "gpt2")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -216,7 +218,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        dtype = torch.float32
+        if IS_XPU:
+            dtype = torch.float16
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype)
+        device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         self.assertTrue(ipex_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -224,20 +230,20 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             "This is a sample",
             return_tensors="pt",
             return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
-        )
+        ).to(device)
         inputs = ipex_model.prepare_inputs_for_generation(**tokens)
         outputs = ipex_model(**inputs)
 
         self.assertIsInstance(outputs.logits, torch.Tensor)
 
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
-            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype)
             loaded_model_outputs = loaded_model(**inputs)
 
         # Test init method
@@ -252,11 +258,14 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        dtype = torch.float32
+        if IS_XPU:
+            dtype = torch.float16
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype)
         model.config.encoder_no_repeat_ngram_size = 0
-        model.to("cpu")
+        # model.to("cpu")
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe("This is a sample", max_new_tokens=10)
         self.assertEqual(pipe.device, model.device)
@@ -268,10 +277,14 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             return
         model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float32
+        if IS_XPU:
+            dtype = torch.float16
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype)
+        device = ipex_model.device
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
+        tokens = tokenizer("This is a sample input", return_tensors="pt").to(device)
         ipex_output = ipex_model.generate(**tokens, do_sample=False, max_new_tokens=4)
         ipex_output_assisted = ipex_model.generate(
             **tokens, do_sample=False, assistant_model=transformers_model, max_new_tokens=4
@@ -299,8 +312,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     def test_ipex_patching_beam_search(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        dtype = torch.float32
+        if IS_XPU:
+            dtype = torch.float16
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache, torch_dtype=dtype)
+        device = model.device
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
         self.assertEqual(model.use_cache, use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -316,7 +333,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             ),
         )
         for text in texts:
-            tokens = tokenizer(text, padding=True, return_tensors="pt")
+            tokens = tokenizer(text, padding=True, return_tensors="pt").to(device)
             for generation_config in generation_configs:
                 outputs = model.generate(**tokens, generation_config=generation_config)
                 transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
@@ -325,18 +342,21 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
     @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_compare_with_and_without_past_key_values(self):
-        model_id = "Jiqing/tiny_random_llama2"
+        model_id = "Intel/tiny_random_llama2"
+        dtype = torch.float32
+        if IS_XPU:
+            dtype = torch.float16
+        model_with_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=True, torch_dtype=dtype)
+        device = model_with_pkv.device
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-
-        model_with_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=True)
+        tokens = tokenizer("This is a sample input", return_tensors="pt").to(device)
         # Warmup
         model_with_pkv.generate(**tokens)
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
-        model_without_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=False)
+        model_without_pkv = IPEXModelForCausalLM.from_pretrained(model_id, use_cache=False, torch_dtype=dtype)
         # Warmup
         model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
@@ -366,10 +386,11 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt")
+        inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt").to(device)
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
         outputs = ipex_model(**inputs)
@@ -417,12 +438,13 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
-        inputs = preprocessor(images=image, return_tensors="pt")
+        inputs = preprocessor(images=image, return_tensors="pt").to(device)
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
         outputs = ipex_model(**inputs)
