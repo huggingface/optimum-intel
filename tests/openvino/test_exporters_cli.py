@@ -50,6 +50,7 @@ from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
+    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -80,20 +81,20 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend([("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux")])
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
-        "gpt2": 2 if is_tokenizers_version("<", "0.20") else 0,
+        "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
         "distilbert": 1,  # no detokenizer
-        "roberta": 2 if is_tokenizers_version("<", "0.20") else 0,
+        "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
         "bert": 1,  # no detokenizer
-        "blenderbot": 2 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 2,
-        "flux": 4 if is_tokenizers_version("<", "0.20") else 0,
-        "llava": 2 if is_tokenizers_version("<", "0.20") else 0,
+        "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
+        "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
