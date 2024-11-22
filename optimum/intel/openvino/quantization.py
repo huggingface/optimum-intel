@@ -19,11 +19,14 @@ import logging
 import os
 import warnings
 from collections import deque
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+import datasets
 import nncf
 import openvino
+import requests
 import torch
 import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
@@ -33,9 +36,11 @@ from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
+from PIL import Image
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
+from tqdm import tqdm
+from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
@@ -62,6 +67,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     PREDEFINED_SD_DATASETS,
+    PREDEFINED_VISUAL_LM_DATASETS,
 )
 
 
@@ -313,8 +319,10 @@ class OVQuantizer(OptimumQuantizer):
         remove_unused_columns: bool = True,
         **kwargs,
     ):
+        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM
+
         if is_diffusers_available():
-            from optimum.intel.openvino.modeling_diffusion import OVStableDiffusionPipelineBase
+            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         if save_directory is not None:
             save_directory = Path(save_directory)
@@ -324,7 +332,7 @@ class OVQuantizer(OptimumQuantizer):
         if calibration_dataset is not None:
             # Process custom calibration dataset
 
-            if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+            if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 calibration_dataset = self._prepare_unet_dataset(
                     quantization_config.num_samples, dataset=calibration_dataset
                 )
@@ -361,7 +369,9 @@ class OVQuantizer(OptimumQuantizer):
 
                 if isinstance(self.model, OVModelForCausalLM):
                     calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
-                elif is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                elif isinstance(self.model, OVModelForVisualCausalLM):
+                    calibration_dataset = self._prepare_visual_causal_lm_dataset(quantization_config)
+                elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     if not isinstance(quantization_config.dataset, str):
                         raise ValueError("Please provide dataset as one of the accepted dataset labels.")
                     calibration_dataset = self._prepare_unet_dataset(
@@ -375,31 +385,59 @@ class OVQuantizer(OptimumQuantizer):
             if quantization_config.quant_method == OVQuantizationMethod.HYBRID:
                 if calibration_dataset is None:
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
-                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     # Apply weight-only quantization to all SD submodels except UNet
                     quantization_config_copy = copy.deepcopy(quantization_config)
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]
+                    sub_model_names = [
+                        "vae_encoder",
+                        "vae_decoder",
+                        "text_encoder",
+                        "text_encoder_2",
+                        "text_encoder_3",
+                    ]
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config_copy)
 
-                    # Apply hybrid quantization to UNet
-                    self.model.unet.model = _hybrid_quantization(
-                        self.model.unet.model, quantization_config, calibration_dataset
-                    )
+                    if self.model.unet is not None:
+                        # Apply hybrid quantization to UNet
+                        self.model.unet.model = _hybrid_quantization(
+                            self.model.unet.model, quantization_config, calibration_dataset
+                        )
+                    else:
+                        self.model.transformer.model = _hybrid_quantization(
+                            self.model.transformer.model, quantization_config, calibration_dataset
+                        )
+
                     self.model.clear_requests()
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
                     self.model.request = None
             else:
-                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
-                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
+                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                    sub_model_names = [
+                        "vae_encoder",
+                        "vae_decoder",
+                        "text_encoder",
+                        "text_encoder_2",
+                        "unet",
+                        "transformer",
+                        "text_encoder_3",
+                    ]
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config)
+                    self.model.clear_requests()
+                elif isinstance(self.model, OVModelForVisualCausalLM):
+                    language_model = self.model.language_model
+                    _weight_only_quantization(language_model.model, quantization_config, calibration_dataset)
+                    sub_model_names = ["vision_embeddings", "text_embeddings"] + self.model.additional_parts
+                    sub_models = [getattr(self.model, f"{name}_model") for name in sub_model_names]
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8, sym=True))
                     self.model.clear_requests()
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
@@ -713,6 +751,67 @@ class OVQuantizer(OptimumQuantizer):
 
         return calibration_dataset
 
+    def _prepare_visual_causal_lm_dataset(self, config: OVWeightQuantizationConfig):
+        dataset_name = config.dataset
+        if dataset_name not in PREDEFINED_VISUAL_LM_DATASETS:
+            raise ValueError(
+                "You have entered a string value for dataset. You can only choose between"
+                f"{list(PREDEFINED_VISUAL_LM_DATASETS.keys())}, but the {dataset_name} was found"
+            )
+        if config.processor is None:
+            raise ValueError(
+                "`processor` must be specified in order to run data-aware weight compression. "
+                "Please provide it as a model id, or a path to a directory containing all the required "
+                "configuration files."
+            )
+
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
+            tokenizer_error = None
+        except Exception as tokenizer_error:  # noqa: F841
+            tokenizer = None
+
+        dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[dataset_name]
+        dataset = datasets.load_dataset(dataset_metadata["name"], split=dataset_metadata["split"]).shuffle(seed=0)
+        num_samples = min(config.num_samples or 128, len(dataset))
+        dataset = islice(dataset, num_samples)
+
+        calibration_dataset = []
+        for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
+            instruction = item[dataset_metadata["inputs"]["instruction"]]
+            image_url = item[dataset_metadata["inputs"]["image_url"]]
+            image = Image.open(requests.get(image_url, stream=True).raw)
+
+            try:
+                inputs = self.model.preprocess_inputs(
+                    text=instruction, image=image, processor=processor, tokenizer=tokenizer, config=self.model.config
+                )
+            except ValueError as value_error:
+                if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
+                    raise tokenizer_error
+                raise value_error
+
+            input_ids = inputs.get("input_ids")
+            position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
+
+            inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
+                **inputs,
+                position_ids=position_ids,
+            )
+
+            language_model_inputs = self.model.language_model.prepare_inputs(
+                input_ids=None,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
+            )
+
+            calibration_dataset.append(language_model_inputs)
+
+        calibration_dataset = nncf.Dataset(calibration_dataset)
+        return calibration_dataset
+
     def _prepare_text_generation_dataset(
         self, quantization_config: OVQuantizationConfig, calibration_dataloader: OVDataLoader
     ) -> nncf.Dataset:
@@ -743,7 +842,9 @@ class OVQuantizer(OptimumQuantizer):
     ) -> nncf.Dataset:
         self.model.compile()
 
-        size = self.model.unet.config.get("sample_size", 64) * self.model.vae_scale_factor
+        diffuser = self.model.unet if self.model.unet is not None else self.model.transformer
+
+        size = diffuser.config.get("sample_size", 64) * self.model.vae_scale_factor
         height, width = 2 * (min(size, 512),)
         num_samples = num_samples or 200
 
@@ -784,7 +885,7 @@ class OVQuantizer(OptimumQuantizer):
 
         calibration_data = []
         try:
-            self.model.unet.request = InferRequestWrapper(self.model.unet.request, calibration_data)
+            diffuser.request = InferRequestWrapper(diffuser.request, calibration_data)
 
             for inputs in dataset:
                 inputs = transform_fn(inputs)
@@ -795,7 +896,7 @@ class OVQuantizer(OptimumQuantizer):
                 if len(calibration_data) >= num_samples:
                     break
         finally:
-            self.model.unet.request = self.model.unet.request.request
+            diffuser.request = diffuser.request.request
 
         calibration_dataset = nncf.Dataset(calibration_data[:num_samples])
         return calibration_dataset
@@ -829,6 +930,8 @@ def _weight_only_quantization(
 
     if config.weight_format == "mxfp4":
         mode = CompressWeightsMode.E2M1
+    elif config.weight_format == "nf4":
+        mode = CompressWeightsMode.NF4
     else:
         if config.bits == 8:
             mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM

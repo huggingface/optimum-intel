@@ -70,7 +70,117 @@ class OVStableDiffusionXLImg2ImgPipeline(metaclass=DummyObject):
         requires_backends(cls, ["openvino", "diffusers"])
 
 
+class OVStableDiffusionXLInpaintPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
 class OVLatentConsistencyModelPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVLatentConsistencyModelImg2ImgPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVDiffusionPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVPipelineForText2Image(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVPipelineForImage2Image(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVPipelineForInpainting(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVStableDiffusion3Img2ImgPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVStableDiffusion3Pipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVStableDiffusion3InpaintPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVFluxPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
     def __init__(self, *args, **kwargs):

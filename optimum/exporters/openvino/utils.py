@@ -13,7 +13,9 @@
 #  limitations under the License.
 
 import inspect
+import logging
 from collections import namedtuple
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_torch_available
@@ -23,6 +25,9 @@ from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.utils import is_diffusers_available
+
+
+logger = logging.getLogger(__name__)
 
 
 InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
@@ -103,7 +108,7 @@ def _get_input_info(
                     symbol = name_to_symbol[dim_name]
                 else:
                     symbol = Symbol()
-                    name_to_symbol[name] = symbol
+                    name_to_symbol[dim_name] = symbol
                 dim = Dimension(-1)
                 dim.set_symbol(symbol)
                 shape[idx] = dim
@@ -208,4 +213,17 @@ def _get_open_clip_submodels_fn_and_export_configs(
     return custom_export, fn_get_submodels
 
 
-MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "internvl-chat"]
+MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "llava-qwen2", "internvl-chat", "minicpmv", "phi3-v"]
+
+
+def save_config(config, save_dir):
+    try:
+        config.save_pretrained(save_dir)
+    except Exception as exp:
+        logger.warning(
+            f"Attempt to save config using standard API has failed with {exp}. There may be an issue with model config, please check its correctness before usage."
+        )
+        save_dir = Path(save_dir)
+        save_dir.mkdir(exist_ok=True, parents=True)
+        output_config_file = Path(save_dir / "config.json")
+        config.to_json_file(output_config_file, use_diff=True)
