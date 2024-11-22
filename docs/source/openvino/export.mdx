@@ -98,16 +98,20 @@ Optional arguments:
                         Do not add converted tokenizer and detokenizer OpenVINO models.
 ```
 
-You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
+You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.
 
+Export with INT8 weights compression:
 ```bash
-# Compress to int8
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int8 ov_model/
+```
 
-# Compress to int4
+Export with INT4 weights compression:
+```bash
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 ov_model/
+```
 
-# Compress to int4 with a data-aware AWQ algorithm
+Export with INT4 weights compression and a data-aware AWQ algorithm:
+```bash
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 --awq --dataset wikitext2 ov_model/
 ```
 

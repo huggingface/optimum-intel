@@ -39,11 +39,13 @@ model_id = "helenai/gpt2-ov"
 quantization_config = OVWeightQuantizationConfig(bits=8)
 model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
 
-# Weights of language models inside vision-language pipelines can be quantized as well:
-# model = OVModelForVisualCausalLM.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", quantization_config=quantization_config)
-
 # Saves the int8 model that will be x4 smaller than its fp32 counterpart
 model.save_pretrained(saving_directory)
+```
+
+Weights of language models inside vision-language pipelines can be quantized in a similar fashion:
+```python
+model = OVModelForVisualCausalLM.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", quantization_config=quantization_config)
 ```
 
 <Tip warning={true}>
@@ -62,9 +64,11 @@ from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
 
 quantization_config = OVWeightQuantizationConfig(bits=4)
 model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+```
 
-# Or for vision-language pipelines:
-# model = OVModelForVisualCausalLM.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", quantization_config=quantization_config)
+Or for vision-language pipelines:
+```python
+model = OVModelForVisualCausalLM.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", quantization_config=quantization_config)
 ```
 
 You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
