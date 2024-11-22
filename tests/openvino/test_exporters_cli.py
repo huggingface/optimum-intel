@@ -135,8 +135,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --lora --dataset wikitext2 --num-samples 1",
-            {"int8": 4, "int4": 14},
+            {"int8": 60, "int4": 14},
         ),
+        ("text-generation-with-past", "llama_awq", "int4 --group-size 16 --backup-precision none", {"int4": 28}),
     ]
 
     if is_transformers_version(">=", "4.40.0"):

@@ -905,6 +905,7 @@ def _weight_only_quantization(
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
     dataset = None
+    print(quantization_config.dataset, calibration_dataset)
     if calibration_dataset is not None:
         if is_datasets_available() and isinstance(calibration_dataset, Dataset):
             raise ValueError(
@@ -945,6 +946,7 @@ def _weight_only_quantization(
         scale_estimation=config.scale_estimation,
         gptq=config.gptq,
         lora_correction=config.lora,
+        backup_mode=None if config.backup_precision is None else nncf.BackupMode(config.backup_precision),
     )
 
 

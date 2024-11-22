@@ -361,6 +361,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             introduced during weight compression by leveraging low-rank adaptation. It calculates low-rank matrices via
             singular value decomposition (SVD) on the difference between the original and quantized weights. These
             matrices are iteratively refined by solving a system of linear equations to improve accuracy.
+        backup_precision (`str`, defaults to None):
+            Defines a backup precision for mixed-precision weight compression.
+            - "none" stands for original floating-point precision of the model weights, in this case weights are
+                retained in their original precision without any quantization.
+            - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
+            - "int8_asym" stands for 8-bit integer asymmetric quantization with a typical non-fixed zero point.
     """
 
     def __init__(
@@ -382,6 +388,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         gptq: bool = None,
         processor: Optional[str] = None,
         lora: bool = None,
+        backup_precision: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -398,6 +405,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.gptq = gptq
         self.processor = processor
         self.lora = lora
+        self.backup_precision = backup_precision
         self.post_init()
 
     def post_init(self):
@@ -453,6 +461,20 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     "The GPTQ algorithm is not supported for 8-bit quantization and got `gptq=True`, please set `gptq=False`"
                 )
+            if self.lora:
+                raise ValueError(
+                    "The LoRA algorithm is not supported for 8-bit quantization and got `lora=True`, please set `lora=False`"
+                )
+            if self.backup_precision is not None:
+                raise ValueError(
+                    f"The `backup_precision` parameter is not supported for 8-bit quantization and got "
+                    f"`backup_precision={self.backup_precision}`, please set `backup_precision=None`"
+                )
+
+        if self.backup_precision is not None and self.backup_precision not in ["none", "int8_sym", "int8_asym"]:
+            raise ValueError(
+                f"`backup_precision` parameter must be on of the following: ['none', 'int8_sym', 'int8_asym'], but found{self.backup_precision}"
+            )
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")

@@ -312,11 +312,19 @@ class OVWeightCompressionTest(unittest.TestCase):
             False,
             dict(
                 bits=4,
+                group_size=16,
                 num_samples=1,
                 dataset="c4",
                 lora=True,
             ),
-            {"int4": 12, "int8": 8},
+            {"int4": 28, "int8": 60},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(bits=4, backup_precision="none", group_size=16),
+            {"int4": 28},
         ),
     ]
 
@@ -762,6 +770,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "subset_size": 128,
                     "scale_estimation": None,
                     "gptq": None,
+                    "lora": None,
                 }
                 compress_weights_patch.assert_called_with(
                     unittest.mock.ANY,
@@ -810,6 +819,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "subset_size": 128,
                     "scale_estimation": None,
                     "gptq": None,
+                    "lora": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 

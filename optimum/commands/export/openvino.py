@@ -118,6 +118,19 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
+        "--backup-precision",
+        type=str,
+        choices=["none", "int8_sym", "int8_asym"],
+        default=None,
+        help=(
+            "Defines a backup precision for mixed-precision weight compression. Only valid for int4 weight format. "
+            "If not provided, backup precision is int8_asym. 'none' stands for original floating-point precision of "
+            "the model weights, in this case weights are retained in their original precision without any "
+            "quantization. 'int8_sym' stands for 8-bit integer symmetric quantization without zero point. 'int8_asym' "
+            "stands for 8-bit integer asymmetric quantization with a typical non-fixed zero point."
+        ),
+    )
+    optional_group.add_argument(
         "--dataset",
         type=str,
         default=None,
@@ -227,6 +240,7 @@ def no_compression_parameter_provided(args):
                 args.gptq,
                 args.lora,
                 args.sensitivity_metric,
+                args.backup_precision,
             )
         )
     )
@@ -300,6 +314,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "gptq": self.args.gptq,
                     "lora": self.args.lora,
                     "weight_format": self.args.weight_format,
+                    "backup_precision": self.args.backup_precision,
                 }
 
             if quantization_config.get("dataset", None) is not None:
