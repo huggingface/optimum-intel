@@ -905,7 +905,6 @@ def _weight_only_quantization(
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
     dataset = None
-    print(quantization_config.dataset, calibration_dataset)
     if calibration_dataset is not None:
         if is_datasets_available() and isinstance(calibration_dataset, Dataset):
             raise ValueError(

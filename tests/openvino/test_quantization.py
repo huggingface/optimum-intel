@@ -770,7 +770,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "subset_size": 128,
                     "scale_estimation": None,
                     "gptq": None,
-                    "lora": None,
+                    "lora_correction": None,
+                    "backup_mode": None,
                 }
                 compress_weights_patch.assert_called_with(
                     unittest.mock.ANY,
@@ -819,7 +820,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "subset_size": 128,
                     "scale_estimation": None,
                     "gptq": None,
-                    "lora": None,
+                    "lora_correction": None,
+                    "backup_mode": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
