@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install .[tests] transformers[testing]==4.43.*
+          pip install .[tests] transformers[testing]==4.45.*
 
       - name: Test with Pytest
         run: |
