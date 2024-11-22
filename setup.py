@@ -55,19 +55,16 @@ TESTS_REQUIRE = [
     "tiktoken",
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
+    "peft",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate"],
-    "openvino": [
-        "openvino==2024.4.1.dev20240926",
-        "nncf>=2.11.0",
-        "openvino-tokenizers[transformers]==2024.4.1.0.dev20240926",
-    ],
     "nncf": ["nncf>=2.11.0"],
     "ipex": ["intel-extension-for-pytorch", "transformers>=4.45,<4.46"],
+    "openvino": ["nncf>=2.11.0", "openvino==2024.5.0", "openvino-tokenizers==2024.5.0"],
+    "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
@@ -88,7 +85,6 @@ setup(
         "Intended Audience :: Education",
         "Intended Audience :: Science/Research",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",

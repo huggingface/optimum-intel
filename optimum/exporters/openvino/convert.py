@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import functools
 import gc
 import logging
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import onnx
+from transformers import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
@@ -31,8 +33,14 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-from optimum.exporters.utils import _get_submodels_and_export_configs as _default_get_submodels_and_export_configs
+from optimum.exporters.utils import (
+    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
+)
+from optimum.exporters.utils import (
+    get_diffusion_models_for_export,
+)
 from optimum.intel.utils.import_utils import (
+    _diffusers_version,
     _nncf_version,
     _open_clip_version,
     _optimum_intel_version,
@@ -41,6 +49,8 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_openvino_tokenizers_version,
+    is_tokenizers_version,
     is_transformers_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
@@ -62,6 +72,7 @@ from .utils import (
     _get_open_clip_submodels_fn_and_export_configs,
     clear_class_registry,
     remove_none_from_dummy_inputs,
+    save_config,
 )
 
 
@@ -82,9 +93,31 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
-def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None, library_name: Optional[str] = None):
+def _set_runtime_options(
+    models_and_export_configs: Dict[
+        str,
+        Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
+    ],
+    task: str,
+):
+    for model_name in models_and_export_configs.keys():
+        _, sub_export_config = models_and_export_configs[model_name]
+        if "vae_" in model_name or "text-generation" in task:
+            sub_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+
+
+def _save_model(
+    model,
+    path: str,
+    ov_config: Optional["OVConfig"] = None,
+    library_name: Optional[str] = None,
+    config: OnnxConfig = None,
+):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
+
+    if hasattr(config, "runtime_options"):
+        model = _add_runtime_options_to_rt_info(model, config.runtime_options)
     save_model(model, path, compress_to_fp16)
 
 
@@ -204,7 +237,9 @@ def export_tensorflow(
         output.parent / output,
         ov_config=ov_config,
         library_name=library_name,
+        config=config,
     )
+    del ov_model
     return input_names, output_names, True
 
 
@@ -266,7 +301,9 @@ def export_pytorch_via_onnx(
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
         ov_config=ov_config,
         library_name=library_name,
+        config=config,
     )
+    del ov_model
     return input_names, output_names, True
 
 
@@ -439,8 +476,10 @@ def export_pytorch(
             output,
             ov_config=ov_config,
             library_name=library_name,
+            config=config,
         )
         clear_class_registry()
+        del ov_model
         del model
         gc.collect()
     return input_names, output_names, False
@@ -614,23 +653,27 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
-    logging.disable(logging.INFO)
-    export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
-        model=model,
-        task=task,
-        monolith=False,
-        custom_export_configs=custom_export_configs if custom_export_configs is not None else {},
-        custom_architecture=custom_architecture,
-        fn_get_submodels=fn_get_submodels,
-        preprocessors=preprocessors,
-        library_name=library_name,
-        model_kwargs=model_kwargs,
-        _variant="default",
-        legacy=False,
-        exporter="openvino",
-        stateful=stateful,
-    )
-    logging.disable(logging.NOTSET)
+    if library_name == "diffusers":
+        export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
+        stateful_submodels = False
+    else:
+        logging.disable(logging.INFO)
+        export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
+            model=model,
+            task=task,
+            monolith=False,
+            custom_export_configs=custom_export_configs if custom_export_configs is not None else {},
+            custom_architecture=custom_architecture,
+            fn_get_submodels=fn_get_submodels,
+            preprocessors=preprocessors,
+            library_name=library_name,
+            model_kwargs=model_kwargs,
+            _variant="default",
+            legacy=False,
+            exporter="openvino",
+            stateful=stateful,
+        )
+        logging.disable(logging.NOTSET)
 
     if library_name == "open_clip":
         if hasattr(model.config, "save_pretrained"):
@@ -643,7 +686,11 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version(">=", "4.44.99"):
-            misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+            except KeyError:
+                misplaced_generation_parameters = {}
             if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
                 logger.warning(
                     "Moving the following attributes in the config to the generation config: "
@@ -655,7 +702,7 @@ def export_from_model(
                     setattr(model.config, param_name, None)
 
         # Saving the model config and preprocessor as this is needed sometimes.
-        model.config.save_pretrained(output)
+        save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
             try:
@@ -665,8 +712,7 @@ def export_from_model(
                     f"The generation config will not be saved, saving failed with following error:\n{exception}"
                 )
 
-        model_name_or_path = model.config._name_or_path
-        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
+        save_preprocessors(preprocessors, model.config, output, trust_remote_code)
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
 
@@ -696,7 +742,16 @@ def export_from_model(
         if tokenizer_2 is not None:
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
 
+        tokenizer_3 = getattr(model, "tokenizer_3", None)
+        if tokenizer_3 is not None:
+            tokenizer_3.save_pretrained(output.joinpath("tokenizer_3"))
+        safety_checker = getattr(model, "safety_checker", None)
+        if safety_checker is not None:
+            safety_checker.save_pretrained(output.joinpath("safety_checker"))
+
         model.save_config(output)
+
+    _set_runtime_options(models_and_export_configs, task)
 
     export_models(
         models_and_export_configs=models_and_export_configs,
@@ -729,6 +784,12 @@ def export_tokenizer(
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
         return
+
+    if is_tokenizers_version(">", "0.19") and is_openvino_tokenizers_version("<", "2024.5.0.0"):
+        logger.warning(
+            "Exporting tokenizers to OpenVINO is not supported for tokenizers version > 0.19 and openvino version <= 2024.4. "
+            "Please downgrade to tokenizers version <= 0.19 to export tokenizers to OpenVINO."
+        )
 
     if not isinstance(output, Path):
         output = Path(output)
@@ -766,6 +827,41 @@ def export_tokenizer(
         save_model(model, output / file_name.format(suffix))
 
 
+def save_preprocessors(
+    preprocessors: List, config: PretrainedConfig, output: Union[str, Path], trust_remote_code: bool
+):
+    model_name_or_path = config._name_or_path
+    if hasattr(config, "export_model_type"):
+        model_type = config.export_model_type.replace("_", "-")
+    else:
+        model_type = config.model_type.replace("_", "-")
+    if preprocessors is not None:
+        # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
+        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
+            if not hasattr(preprocessors[1], "chat_template"):
+                preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
+        for processor in preprocessors:
+            try:
+                processor.save_pretrained(output)
+            except Exception as ex:
+                logger.error(f"Saving {type(processor)} failed with {ex}")
+    else:
+        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
+
+
+def _add_runtime_options_to_rt_info(model: Model, options: Dict):
+    """
+    Add runtime optinos
+    """
+    try:
+        for name, value in options.items():
+            model.set_rt_info(value, ["runtime_options", name])
+    except Exception:
+        pass
+
+    return model
+
+
 def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
     """
     Add dependency versions to OpenVINO model
@@ -781,7 +877,7 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
 
             model.set_rt_info(sentence_transformers.__version__, ["optimum", "sentence_transformers_version"])
         if library_name == "diffusers":
-            model.set_rt_info(_optimum_version, ["optimum", "diffusers_version"])
+            model.set_rt_info(_diffusers_version, ["optimum", "diffusers_version"])
         elif library_name == "timm":
             model.set_rt_info(_timm_version, ["optimum", "timm_version"])
         elif library_name == "open_clip":
@@ -816,6 +912,10 @@ def _get_multi_modal_submodels_and_export_configs(
 
     if model_type == "internvl-chat" and preprocessors is not None:
         model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
+
+    if model_type == "phi3-v":
+        model.config.glb_GN = model.model.vision_embed_tokens.glb_GN.tolist()
+        model.config.sub_GN = model.model.vision_embed_tokens.sub_GN.tolist()
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
@@ -878,3 +978,218 @@ def _get_submodels_and_export_configs(
     )
     stateful_per_model = [stateful] * len(models_for_export)
     return export_config, models_for_export, stateful_per_model
+
+
+def get_diffusion_models_for_export_ext(
+    pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
+):
+    try:
+        from diffusers import (
+            StableDiffusion3Img2ImgPipeline,
+            StableDiffusion3InpaintPipeline,
+            StableDiffusion3Pipeline,
+        )
+
+        is_sd3 = isinstance(
+            pipeline, (StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline)
+        )
+    except ImportError:
+        is_sd3 = False
+
+    try:
+        from diffusers import FluxPipeline
+
+        is_flux = isinstance(pipeline, FluxPipeline)
+    except ImportError:
+        is_flux = False
+
+    if not is_sd3 and not is_flux:
+        return None, get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+    if is_sd3:
+        models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    else:
+        models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+
+    return None, models_for_export
+
+
+def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    # Text encoder
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        text_encoder.config.output_hidden_states = True
+        text_encoder.text_model.config.output_hidden_states = True
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="clip-text-with-projection",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
+    transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="sd3-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
+    if text_encoder_2 is not None:
+        text_encoder_2.config.output_hidden_states = True
+        text_encoder_2.text_model.config.output_hidden_states = True
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder_2,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="clip-text-with-projection",
+        )
+        export_config = export_config_constructor(text_encoder_2.config, int_dtype=int_dtype, float_dtype=float_dtype)
+        models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
+
+    text_encoder_3 = getattr(pipeline, "text_encoder_3", None)
+    if text_encoder_3 is not None:
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder_3,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="t5-encoder-model",
+        )
+        export_config = export_config_constructor(
+            text_encoder_3.config,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+        )
+        models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
+
+    return models_for_export
+
+
+def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+
+    # Text encoder
+    text_encoder = getattr(pipeline, "text_encoder", None)
+    if text_encoder is not None:
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="clip-text-model",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
+    transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="flux-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
+    if text_encoder_2 is not None:
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder_2,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="t5-encoder-model",
+        )
+        export_config = export_config_constructor(
+            text_encoder_2.config,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+        )
+        models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
+
+    return models_for_export

@@ -1,0 +1,75 @@
+name: OpenVINO - Slow Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 1 * * *" # run every day at 1:41
+  push:
+    branches:
+      - v*-release
+  pull_request:
+    types:
+      - opened
+      - labeled
+      - reopened
+      - synchronize
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-22.04", "windows-2019"]
+        openvino-version: ["stable", "nightly"]
+        transformers-version: ["4.36.0", "latest"]
+        nncf: ["nncf", "git+https://github.com/openvinotoolkit/nncf.git"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.9
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install .[openvino,tests] transformers[testing]
+          pip uninstall -y nncf
+
+      - if: ${{ matrix.openvino-version == 'nightly' }}
+        name: Install nightly OpenVINO
+        run: |
+          pip install openvino openvino-tokenizers --pre --upgrade --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Downgrade Transformers and Accelerate
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
+
+      - name: Pip freeze
+        run: pip freeze
+
+      - name: Test with Pytest (basic)
+        run: |
+          pytest tests/openvino/test_modeling_basic.py
+
+      - name: Install dependencies (slow)
+        run: |
+          pip install ${{ matrix.nncf }}
+
+      - name: Test with Pytest (slow)
+        run: |
+          pytest tests/openvino -m "run_slow" --durations=0
+        env:
+          RUN_SLOW: 1
+          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}

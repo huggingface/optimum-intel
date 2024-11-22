@@ -1,5 +1,4 @@
-name: Generation Utils - Test (deprecated)
-
+name: Quality Checks
 on:
   push:
     branches:
@@ -14,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  quality:
     runs-on: ubuntu-22.04
 
     steps:
@@ -29,8 +28,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install .[tests] transformers[testing]==4.43.*
+          # .[quality] installs too many dependencies
+          # TODO: we should remove the the version pinning at some point
+          pip install "black~=23.1" "ruff==0.4.4"
 
-      - name: Test with Pytest
+      - name: Check style with black
         run: |
-          pytest tests/generation/
+          black --check .
+
+      - name: Check style with ruff
+        run: |
+          ruff check .

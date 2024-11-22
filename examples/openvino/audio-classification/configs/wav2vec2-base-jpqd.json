@@ -54,6 +54,9 @@
             "activations": {
                 "{re}.*matmul_0": {
                     "mode": "symmetric"
+                },
+                "{re}.*scaled_dot_product_attention_0": {
+                    "mode": "symmetric"
                 }
             }
         },
