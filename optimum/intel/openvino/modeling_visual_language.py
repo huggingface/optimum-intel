@@ -4,7 +4,7 @@ import os
 import warnings
 from abc import abstractmethod
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino as ov
@@ -12,7 +12,6 @@ import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from PIL.Image import Image
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
@@ -48,6 +47,10 @@ try:
     from transformers import LlavaNextForConditionalGeneration
 except ImportError:
     LlavaNextForConditionalGeneration = None
+
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 logger = logging.getLogger(__name__)
@@ -790,7 +793,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     @abstractmethod
     def preprocess_inputs(
         text: str,
-        image: Optional[Image] = None,
+        image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -967,7 +970,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional[Image] = None,
+        image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -1287,7 +1290,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional[Image] = None,
+        image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -1662,7 +1665,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional[Image] = None,
+        image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -1857,7 +1860,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional[Image] = None,
+        image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
@@ -2017,7 +2020,7 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
     @staticmethod
     def preprocess_inputs(
         text: str,
-        image: Optional[Image] = None,
+        image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
