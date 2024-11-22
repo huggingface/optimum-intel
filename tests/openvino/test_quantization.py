@@ -306,6 +306,18 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             {"int4": 12, "int8": 8},
         ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                num_samples=1,
+                dataset="c4",
+                lora=True,
+            ),
+            {"int4": 12, "int8": 8},
+        ),
     ]
 
     if is_transformers_version(">=", "4.40.0"):
@@ -685,6 +697,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
             )
             self.assertEqual(quantization_config.gptq or False, wc_rt_info["gptq"].value == "True")
+            self.assertEqual(quantization_config.lora or False, wc_rt_info["lora_correction"].value == "True")
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)

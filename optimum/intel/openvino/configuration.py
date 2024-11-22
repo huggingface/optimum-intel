@@ -356,6 +356,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
                 - A path to a *directory* containing files required by the processor, for instance saved
                     using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
+        lora (`bool`, *optional*):
+            If True, apply LoRA Correction algorithm. When enabled, this algorithm mitigates quantization noise
+            introduced during weight compression by leveraging low-rank adaptation. It calculates low-rank matrices via
+            singular value decomposition (SVD) on the difference between the original and quantized weights. These
+            matrices are iteratively refined by solving a system of linear equations to improve accuracy.
     """
 
     def __init__(
@@ -376,6 +381,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         weight_format: Optional[str] = None,
         gptq: bool = None,
         processor: Optional[str] = None,
+        lora: bool = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -391,6 +397,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.weight_format = weight_format
         self.gptq = gptq
         self.processor = processor
+        self.lora = lora
         self.post_init()
 
     def post_init(self):
@@ -464,14 +471,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     f"When applying weight compression with '{self.weight_format}' weight format, the `bits` parameter must be set to 4, but found {self.bits}"
                 )
-            if self.quant_method == OVQuantizationMethod.AWQ:
-                raise ValueError(f"The AWQ algorithm is not supported for '{self.weight_format}' weight format")
-            if self.scale_estimation:
-                raise ValueError(
-                    f"The Scale Estimation algorithm is not supported for '{self.weight_format}' weight format"
-                )
-            if self.weight_format == "mxfp4" and self.gptq:
-                raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+            if self.weight_format == "mxfp4":
+                if self.quant_method == OVQuantizationMethod.AWQ:
+                    raise ValueError("The AWQ algorithm is not supported for 'mxpf4' weight format")
+                if self.scale_estimation:
+                    raise ValueError("The Scale Estimation algorithm is not supported for 'mxpf4' weight format")
+                if self.gptq:
+                    raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+                if self.lora:
+                    raise ValueError("The LoRA algorithm is not supported for 'mxfp4' weight format")
+        if self.gptq and self.lora:
+            raise ValueError("The GPTQ and LoRA algorithms can't be applied simultaneously")
 
 
 @dataclass

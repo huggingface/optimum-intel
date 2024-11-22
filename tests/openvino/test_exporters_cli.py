@@ -131,6 +131,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
             {"int8": 4, "int4": 14},
         ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --lora --dataset wikitext2 --num-samples 1",
+            {"int8": 4, "int4": 14},
+        ),
     ]
 
     if is_transformers_version(">=", "4.40.0"):
@@ -317,6 +323,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
+            self.assertTrue("--lora" not in option or b"with correction of low-rank adapters" in result.stdout)
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:

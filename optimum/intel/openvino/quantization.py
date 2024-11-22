@@ -453,20 +453,13 @@ class OVQuantizer(OptimumQuantizer):
         if calibration_dataset is None:
             raise ValueError("Calibration dataset is required to run quantization.")
 
-        # TODO: remove after update to NNCF 2.14
-        model_type = nncf.ModelType(quantization_config.model_type)
-        ignored_scope = quantization_config.get_ignored_scope_instance()
-        if model_type == nncf.ModelType.TRANSFORMER:
-            ignored_scope.types += ["GroupNormalization"]
-            ignored_scope.validate = False
-
         # Actual model quantization
         quantized_model = nncf.quantize(
             self.model.model,
             calibration_dataset,
             subset_size=quantization_config.num_samples,
-            ignored_scope=ignored_scope,
-            model_type=model_type,
+            ignored_scope=quantization_config.get_ignored_scope_instance(),
+            model_type=nncf.ModelType(quantization_config.model_type),
             preset=nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED,
             fast_bias_correction=quantization_config.fast_bias_correction,
             advanced_parameters=nncf.AdvancedQuantizationParameters(
@@ -951,6 +944,7 @@ def _weight_only_quantization(
         subset_size=config.num_samples if config.num_samples else 128,
         scale_estimation=config.scale_estimation,
         gptq=config.gptq,
+        lora_correction=config.lora,
     )
 
 
@@ -1026,10 +1020,6 @@ def _hybrid_quantization(
 
     ptq_ignored_scope = quantization_config.get_ignored_scope_instance()
     ptq_ignored_scope.names += ops_to_compress
-
-    # TODO: remove after update to NNCF 2.14
-    ptq_ignored_scope.types += ["GroupNormalization"]
-    ptq_ignored_scope.validate = False
 
     subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
     quantized_model = nncf.quantize(
