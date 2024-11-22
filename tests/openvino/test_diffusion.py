@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import json
 import unittest
 from pathlib import Path
 
@@ -134,8 +135,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -330,6 +331,15 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             ]:
                 subdir_path = Path(tmpdirname) / subdir
                 self.assertTrue(subdir_path.is_dir())
+            # check that config contains original model classes
+            pipeline_config = Path(tmpdirname) / "model_index.json"
+            self.assertTrue(pipeline_config.exists())
+            with pipeline_config.open("r") as f:
+                config = json.load(f)
+                for key in ["unet", "vae", "text_encoder"]:
+                    model_lib, model_class = config[key]
+                    self.assertTrue(model_lib in ["diffusers", "transformers"])
+                    self.assertFalse(model_class.startswith("OV"))
             loaded_pipeline = self.OVMODEL_CLASS.from_pretrained(tmpdirname)
             self.assertTrue(loaded_pipeline.safety_checker is not None)
             self.assertIsInstance(loaded_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -398,6 +408,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+        SUPPORTED_ARCHITECTURES.append("flux")
 
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
@@ -410,6 +421,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         inputs["image"] = _generate_images(
             height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
         )
+        inputs["height"] = height
+        inputs["width"] = width
 
         inputs["strength"] = 0.75
 
@@ -490,20 +503,26 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
-                    out_channels = (
-                        pipeline.unet.config.out_channels
-                        if pipeline.unet is not None
-                        else pipeline.transformer.config.out_channels
-                    )
-                    self.assertEqual(
-                        outputs.shape,
-                        (
-                            batch_size,
-                            out_channels,
-                            height // pipeline.vae_scale_factor,
-                            width // pipeline.vae_scale_factor,
-                        ),
-                    )
+                    if model_arch != "flux":
+                        out_channels = (
+                            pipeline.unet.config.out_channels
+                            if pipeline.unet is not None
+                            else pipeline.transformer.config.out_channels
+                        )
+                        self.assertEqual(
+                            outputs.shape,
+                            (
+                                batch_size,
+                                out_channels,
+                                height // pipeline.vae_scale_factor,
+                                width // pipeline.vae_scale_factor,
+                            ),
+                        )
+                    else:
+                        packed_height = height // pipeline.vae_scale_factor
+                        packed_width = width // pipeline.vae_scale_factor
+                        channels = pipeline.transformer.config.in_channels
+                        self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -511,8 +530,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], text_encoder_3=None)
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             print(output_type)
@@ -586,9 +605,13 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        if ov_pipeline.unet is None or "timestep_cond" not in {
-            inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs
-        }:
+        if (
+            ov_pipeline.unet is not None
+            and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
+        ) or (
+            ov_pipeline.transformer is not None
+            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+        ):
             expected_batch *= 2
         self.assertEqual(ov_pipeline.batch_size, expected_batch)
         self.assertEqual(ov_pipeline.height, height)
@@ -624,6 +647,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
+        SUPPORTED_ARCHITECTURES.append("flux")
 
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
@@ -721,20 +745,26 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
-                    out_channels = (
-                        pipeline.unet.config.out_channels
-                        if pipeline.unet is not None
-                        else pipeline.transformer.config.out_channels
-                    )
-                    self.assertEqual(
-                        outputs.shape,
-                        (
-                            batch_size,
-                            out_channels,
-                            height // pipeline.vae_scale_factor,
-                            width // pipeline.vae_scale_factor,
-                        ),
-                    )
+                    if model_arch != "flux":
+                        out_channels = (
+                            pipeline.unet.config.out_channels
+                            if pipeline.unet is not None
+                            else pipeline.transformer.config.out_channels
+                        )
+                        self.assertEqual(
+                            outputs.shape,
+                            (
+                                batch_size,
+                                out_channels,
+                                height // pipeline.vae_scale_factor,
+                                width // pipeline.vae_scale_factor,
+                            ),
+                        )
+                    else:
+                        packed_height = height // pipeline.vae_scale_factor
+                        packed_width = width // pipeline.vae_scale_factor
+                        channels = pipeline.transformer.config.in_channels
+                        self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -816,9 +846,13 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        if ov_pipeline.unet is None or "timestep_cond" not in {
-            inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs
-        }:
+        if (
+            ov_pipeline.unet is not None
+            and "timestep_cond" not in {inputs.get_any_name() for inputs in ov_pipeline.unet.model.inputs}
+        ) or (
+            ov_pipeline.transformer is not None
+            and "txt_ids" not in {inputs.get_any_name() for inputs in ov_pipeline.transformer.model.inputs}
+        ):
             expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
