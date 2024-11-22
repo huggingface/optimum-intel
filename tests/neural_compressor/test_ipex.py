@@ -53,7 +53,6 @@ class IPEXQuantizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("text-classification", "bert", 21),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    @unittest.skip(reason="INC is going to deprecate, skip this failed test")
     def test_ipex_static_quantization_with_smoothquant(self, task, model_arch, expected_quantized_matmuls):
         recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
         num_samples = 10
@@ -81,5 +80,5 @@ class IPEXQuantizationTest(INCTestMixin):
                 is_static=True,
                 num_samples=num_samples,
                 load_inc_model=False,
-                load_ipex_model=True,
+                load_ipex_model=False,
             )
