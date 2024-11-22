@@ -48,6 +48,7 @@ from optimum.exporters.onnx.model_configs import (
     VaeEncoderOnnxConfig,
     WhisperOnnxConfig,
 )
+from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES, DummyInputGenerator
@@ -99,6 +100,7 @@ from .model_patcher import (
     QwenModelPatcher,
     RotaryEmbPatcher,
     UpdateCausalMaskModelPatcher,
+    WhisperStatefulDecoderPatcher,
     XverseModelPatcher,
 )
 
@@ -2227,18 +2229,13 @@ class Phi3VisionOpenVINOConfig(OnnxConfig):
     library_name="transformers",
 )
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
-    def _create_dummy_input_generator_classes(self, **kwargs) -> List[DummyInputGenerator]:
-        """
-        Instantiates the dummy input generators from `self.DUMMY_INPUT_GENERATOR_CLASSES`.
-        Each dummy input generator is independent, so this method instantiates the first generator, and
-        forces the other generators to use the same batch size, meaning they will all produce inputs of the same batch
-        size. Override this method for custom behavior.
-        """
-        if getattr(self, "stateful", False):
-            if "encoder_sequence_length" not in kwargs:
-                sequence_len = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
-                kwargs["encoder_sequence_length"] = sequence_len + 2
-        return super()._create_dummy_input_generator_classes(**kwargs)
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            print("HERE")
+            return WhisperStatefulDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 @register_in_tasks_manager(

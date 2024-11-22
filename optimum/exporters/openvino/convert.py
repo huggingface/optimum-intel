@@ -648,7 +648,7 @@ def export_from_model(
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
-    
+
     logging.disable(logging.INFO)
 
     if library_name == "open_clip":
@@ -667,7 +667,7 @@ def export_from_model(
         export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(
             model=model, task=task, preprocessors=preprocessors, library_name=library_name, _variant="default"
         )
-        stateful = [False, True]
+        stateful_submodels = [False, True]
 
     elif library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
@@ -911,7 +911,6 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
     return model
 
 
-
 def _get_multi_modal_submodels_and_export_configs(
     model: Union["PreTrainedModel", "TFPreTrainedModel"],
     task: str,
@@ -949,6 +948,7 @@ def _get_multi_modal_submodels_and_export_configs(
         models_for_export[model_id] = (model_part, model_part_config)
         stateful_parts.append(stateful if getattr(model_part_config, "use_past", False) else False)
     return main_config, models_for_export, stateful_parts
+
 
 def _get_submodels_and_export_configs(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "DiffusionPipeline"],

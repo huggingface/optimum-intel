@@ -311,11 +311,13 @@ def patch_stateful_decoder(config: PretrainedConfig, ov_model: ov.Model):
 
 
 def patch_stateful_encoder_decoder(config, ov_model):
+    log.warn(ov_model)
     encoder_key_value_input_names = [
         key.get_any_name()
         for key in ov_model.inputs
         if any("key_values" in key_name and "encoder" in key_name for key_name in key.get_names())
     ]
+    log.warn(encoder_key_value_input_names)
     remove_parameters_by_names(ov_model, encoder_key_value_input_names)
     patch_stateful_decoder(config, ov_model)
     insert_state_for_nodes(

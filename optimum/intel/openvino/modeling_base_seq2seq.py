@@ -262,15 +262,15 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
                     for name in ["decoder_with_past", "decoder_with_past_bin"]:
                         model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=model_file_names[name],
-                        token=token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                        subfolder=subfolder,
-                    )
+                            repo_id=model_id,
+                            filename=model_file_names[name],
+                            token=token,
+                            revision=revision,
+                            cache_dir=cache_dir,
+                            force_download=force_download,
+                            local_files_only=local_files_only,
+                            subfolder=subfolder,
+                        )
                         file_names[name] = model_cache_path
                     decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
             else:
@@ -285,15 +285,15 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
                     for name in ["decoder_with_past", "decoder_with_past_bin"]:
                         model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=model_file_names[name],
-                        token=token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                        subfolder=subfolder,
-                    )
+                            repo_id=model_id,
+                            filename=model_file_names[name],
+                            token=token,
+                            revision=revision,
+                            cache_dir=cache_dir,
+                            force_download=force_download,
+                            local_files_only=local_files_only,
+                            subfolder=subfolder,
+                        )
                         file_names[name] = model_cache_path
                     decoder_with_past = cls._compile_model(
                         file_names["decoder_with_past"],
@@ -392,7 +392,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config = None
         else:
             ov_config = OVConfig(dtype="fp32")
-        
+
         stateful = kwargs.get("stateful", True)
 
         main_export(
@@ -407,7 +407,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
-            stateful=stateful
+            stateful=stateful,
         )
 
         return cls._from_pretrained(

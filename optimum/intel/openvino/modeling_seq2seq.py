@@ -37,7 +37,8 @@ from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 from ...exporters.openvino.stateful import model_has_state
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
-from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties, is_transformers_version
+from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
+from ..utils import is_transformers_version
 
 
 if is_transformers_version(">=", "4.43.0"):
@@ -387,6 +388,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 encoder_attention_mask=attention_mask,
                 decoder_attention_mask=decoder_attention_mask,
                 past_key_values=past_key_values,
+                cache_position=cache_position,
             )
         else:
             decoder_outputs = self.decoder_with_past(
@@ -628,6 +630,7 @@ class OVDecoder:
 
         if self.stateful and past_key_values is None:
             self.request.reset_state()
+            self._past_len = 0
 
         if past_key_values is not None and not self.stateful:
             # Flatten the past_key_values
@@ -651,7 +654,9 @@ class OVDecoder:
         if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
             inputs["decoder_attention_mask"] = decoder_attention_mask
 
-        if "cache_position" in self.input_names and cache_position is not None:
+        if "cache_position" in self.input_names:
+            if cache_position is None:
+                cache_position = torch.arange(self._past_len, self._past_len + input_ids.shape[1])
             inputs["cache_position"] = cache_position
 
         if "beam_idx" in self.input_names:
@@ -664,9 +669,13 @@ class OVDecoder:
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
-        # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
-        # self-attention layer and 2 to the cross-attention layer)
-        out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+        self._past_len += input_ids.shape[1]
+
+        out_past_key_values = ()
+        if not self.stateful:
+            # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
+            # self-attention layer and 2 to the cross-attention layer)
+            out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
         # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
@@ -1002,9 +1011,6 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     """
 
     auto_model_class = WhisperForConditionalGeneration
-
-    # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
-    prepare_inputs_for_generation = WhisperForConditionalGeneration.prepare_inputs_for_generation
     generate = WhisperForConditionalGeneration.generate
 
     @classmethod
@@ -1032,3 +1038,67 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # a dummy model attribute that's used in the generate method to compute the input stride
     # input_stride = self.model.encoder.conv1.stride[0] * self.model.encoder.conv2.stride[0]
     model = DummyWhisperModel()
+
+    def prepare_inputs_for_generation(
+        self,
+        decoder_input_ids,
+        past_key_values=None,
+        use_cache=None,
+        encoder_outputs=None,
+        attention_mask=None,
+        decoder_attention_mask=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        # Overwritten -- encoder-decoder whisper has custom logic, but it's close to the general function. Next time
+        # this function needs to be touched, let's try to sort out the commonalities between the two and remove the
+        # overwrite.
+
+        decoder_position_ids = None
+        if decoder_attention_mask is not None:
+            decoder_position_ids = (decoder_attention_mask.cumsum(-1) - 1).clamp(min=0)
+
+        past_length = 0
+        if past_key_values is not None:
+            if self.decoder.stateful:
+                past_length = getattr(self.decoder, "_past_len", 0)
+            else:
+                if isinstance(past_key_values, EncoderDecoderCache):
+                    past_length = cache_position[0] if cache_position is not None else past_key_values.get_seq_length()
+                else:
+                    past_length = past_key_values[0][0].shape[2]
+
+            # Some generation methods already pass only the last input ID
+            if decoder_input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = decoder_input_ids.shape[1] - 1
+
+            decoder_input_ids = decoder_input_ids[:, remove_prefix_length:]
+
+            if decoder_position_ids is not None:
+                decoder_position_ids = decoder_position_ids[:, remove_prefix_length:]
+                # This `clone` call is needed to avoid recapturing cuda graphs with `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case, `position_ids` is already contiguous but with varying stride which retriggers a capture.
+                decoder_position_ids = decoder_position_ids.clone(memory_format=torch.contiguous_format)
+
+        if cache_position is None:
+            cache_position = torch.arange(
+                past_length, past_length + decoder_input_ids.shape[1], device=decoder_input_ids.device
+            )
+        elif use_cache:
+            cache_position = cache_position[-decoder_input_ids.shape[1] :]
+
+        # The `contiguous()` here is necessary to have a static stride during decoding. torchdynamo otherwise
+        # recompiles graphs as the stride of the inputs is a guard. Ref: https://github.com/huggingface/transformers/pull/29114
+        decoder_input_ids = decoder_input_ids.contiguous()
+
+        return {
+            "encoder_outputs": encoder_outputs,
+            "past_key_values": past_key_values,
+            "decoder_input_ids": decoder_input_ids,
+            "use_cache": use_cache,
+            "decoder_attention_mask": decoder_attention_mask,
+            "decoder_position_ids": decoder_position_ids,
+            "cache_position": cache_position,
+        }
