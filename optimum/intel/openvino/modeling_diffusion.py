@@ -86,20 +86,20 @@ else:
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 else:
-    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = object, object
 
 if is_diffusers_version(">=", "0.30.0"):
     from diffusers import FluxPipeline, StableDiffusion3InpaintPipeline
 else:
-    StableDiffusion3InpaintPipeline = StableDiffusionInpaintPipeline
-    FluxPipeline = StableDiffusionPipeline
+    StableDiffusion3InpaintPipeline = object
+    FluxPipeline = object
 
 
 if is_diffusers_version(">=", "0.31.0"):
     from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
 else:
-    FluxImg2ImgPipeline = StableDiffusionImg2ImgPipeline
-    FluxInpaintPipeline = StableDiffusionInpaintPipeline
+    FluxImg2ImgPipeline = object
+    FluxInpaintPipeline = object
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
