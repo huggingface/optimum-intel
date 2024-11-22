@@ -121,7 +121,7 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32",  "KV_CACHE_PRECISION": "f32"}
 
 
 class Timer(object):
@@ -201,7 +201,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache)
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache, ov_conifg={"KV_CACHE_PRECISION": "f16"})
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -213,10 +213,10 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache, ov_conifg={"KV_CACHE_PRECISION": "f16"})
             self.assertEqual(model.use_cache, use_cache)
 
-            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache)
+            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache, ov_conifg={"KV_CACHE_PRECISION": "f16"})
             self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
             outputs = compile_only_model(**tokens)
@@ -1235,11 +1235,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ]
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=True, **model_kwargs
+            model_id, export=True, use_cache=True, stateful=True, **model_kwargs,  ov_conifg={"KV_CACHE_PRECISION": "f16"}
         )
         set_seed(SEED)
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=False, **model_kwargs
+            model_id, export=True, use_cache=True, stateful=False, **model_kwargs,  ov_conifg={"KV_CACHE_PRECISION": "f16"}
         )
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
@@ -2007,7 +2007,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False, ov_conifg={"KV_CACHE_PRECISION": "f16"}
         )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         for component_name, component in ov_model.components.items():
@@ -2085,7 +2085,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, ov_conifg={"KV_CACHE_PRECISION": "f16"}
         )
         self.assertTrue(ov_model._support_new_processing)
         self.assertTrue(processor.patch_size is not None)
@@ -2129,7 +2129,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, ov_conifg={"KV_CACHE_PRECISION": "f16"}
         )
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -2181,11 +2181,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         with TemporaryDirectory() as save_dir:
             ov_model = OVModelForVisualCausalLM.from_pretrained(
-                model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, ov_conifg={"KV_CACHE_PRECISION": "f16"}
             )
             ov_model.save_pretrained(save_dir)
             ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
-                save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, ov_conifg={"KV_CACHE_PRECISION": "f16"}
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
