@@ -17,6 +17,7 @@
 
 import os
 import tempfile
+import unittest
 
 from neural_compressor.config import PostTrainingQuantConfig
 
