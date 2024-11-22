@@ -489,6 +489,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
                 batch_size=5,
                 seq_len=32,
                 block_size=16,
+                user_layer_wise=True,
             )
         else:
             quantization_config = RtnConfig(bits=bits, group_size=8)
