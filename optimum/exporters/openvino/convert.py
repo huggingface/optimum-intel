@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import onnx
-from transformers import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
@@ -54,7 +53,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
-from optimum.utils.save_utils import maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
@@ -73,6 +71,7 @@ from .utils import (
     clear_class_registry,
     remove_none_from_dummy_inputs,
     save_config,
+    save_preprocessors,
 )
 
 
@@ -825,28 +824,6 @@ def export_tokenizer(
 
     for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
         save_model(model, output / file_name.format(suffix))
-
-
-def save_preprocessors(
-    preprocessors: List, config: PretrainedConfig, output: Union[str, Path], trust_remote_code: bool
-):
-    model_name_or_path = config._name_or_path
-    if hasattr(config, "export_model_type"):
-        model_type = config.export_model_type.replace("_", "-")
-    else:
-        model_type = config.model_type.replace("_", "-")
-    if preprocessors is not None:
-        # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
-        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
-            if not hasattr(preprocessors[1], "chat_template"):
-                preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
-        for processor in preprocessors:
-            try:
-                processor.save_pretrained(output)
-            except Exception as ex:
-                logger.error(f"Saving {type(processor)} failed with {ex}")
-    else:
-        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
 
 def _add_runtime_options_to_rt_info(model: Model, options: Dict):
