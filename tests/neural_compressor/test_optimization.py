@@ -489,10 +489,10 @@ class WeightOnlyQuantizationTest(INCTestMixin):
                 batch_size=5,
                 seq_len=32,
                 block_size=16,
-                user_layer_wise=True,
+                use_layer_wise=True,
             )
         else:
-            quantization_config = RtnConfig(bits=bits, group_size=8)
+            quantization_config = RtnConfig(bits=bits, group_size=8, use_layer_wise=True)
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
@@ -504,6 +504,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
         with torch.no_grad():
             quantizer_outputs = quantized_model(**tokens)
         quantized_model.save_pretrained(tmp_dir)
+
         loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
         with torch.no_grad():
             loaded_outputs = loaded_model(**tokens)

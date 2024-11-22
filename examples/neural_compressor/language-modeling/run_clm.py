@@ -217,9 +217,7 @@ class OptimizationArguments:
     )
     use_layer_wise: bool = field(
         default=False,
-        metadata={
-            "help": "Use layer wise to do quantization to save memory."
-        },
+        metadata={"help": "Use layer wise to do quantization to save memory."},
     )
     quantization_methodology: str = field(
         default="rtn",
@@ -673,6 +671,7 @@ def main():
                         damp_percent=optim_args.damp_percent,
                         nsamples=optim_args.num_calibration_samples,
                         blocksize=optim_args.gptq_block_size,
+                        tokenizer=tokenizer,
                         **algorithm_args,
                     )
                 else:

@@ -398,6 +398,12 @@ def _weight_only_quantization(
     if (not torch.cuda.is_available() or device_map == "cpu") and model.config.model_type == "chatglm":
         model = model.float()
 
+    from neural_compressor.torch import load_empty_model
+
+    model = load_empty_model(
+        model_id,
+        trust_remote_code=trust_remote_code,
+    )
     model = convert_to_quantized_model(model, quantization_config, device=device_map)
     quantization_config.remove_redundant_parameters()
     model.config.quantization_config = quantization_config
