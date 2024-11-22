@@ -272,6 +272,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skip(reason="Paged attention do not support assisted decoding for now")
     def test_assisted_decoding(self, model_arch):
         # assist decoding does not support static cache now
         if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
