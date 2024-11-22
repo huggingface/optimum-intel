@@ -28,8 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
+    "optimum~=1.23",
     "transformers>=4.45,<4.46",
-    "optimum",
     "datasets>=1.4.0",
     "sentencepiece",
     "setuptools",
