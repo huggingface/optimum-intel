@@ -29,7 +29,7 @@ from .cache_utils import IPEXPagedCache
 
 logger = logging.getLogger(__name__)
 
-_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.4.0"
 
 
 if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
