@@ -415,14 +415,16 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
     TASK = "image-to-image"
 
-    def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil"):
+    def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil", model_type=None):
         inputs = _generate_prompts(batch_size=batch_size)
 
         inputs["image"] = _generate_images(
             height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
         )
-        inputs["height"] = height
-        inputs["width"] = width
+
+        if "flux" == model_type:
+            inputs["height"] = height
+            inputs["width"] = width
 
         inputs["strength"] = 0.75
 
@@ -452,7 +454,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
             for height in [64, 128]:
                 for width in [64, 128]:
                     for num_images_per_prompt in [1, 3]:
-                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        inputs = self.generate_inputs(
+                            height=height, width=width, batch_size=batch_size, model_type=model_arch
+                        )
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
                         self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
@@ -460,7 +464,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_callback(self, model_arch: str):
         height, width, batch_size = 32, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         class Callback:
             def __init__(self):
@@ -491,7 +495,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 64, 1
 
         for input_type in ["pil", "np", "pt"]:
-            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, input_type=input_type)
+            inputs = self.generate_inputs(
+                height=height, width=width, batch_size=batch_size, input_type=input_type, model_type=model_arch
+            )
 
             for output_type in ["pil", "np", "pt", "latent"]:
                 inputs["output_type"] = output_type
@@ -528,7 +534,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 128, 128, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
@@ -548,7 +554,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         for generator_framework in ["np", "pt"]:
             ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
@@ -570,7 +576,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
 
         height, width, batch_size = 32, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
         diffusers_output = pipeline(**inputs, generator=get_generator("pt", SEED))
@@ -627,7 +633,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         model_id = "runwayml/stable-diffusion-v1-5"
         ti_id = "sd-concepts-library/cat-toy"
 
-        inputs = self.generate_inputs()
+        inputs = self.generate_inputs(model_type="stable-diffusion")
         inputs["prompt"] = "A <cat-toy> backpack"
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
