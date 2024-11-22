@@ -101,7 +101,14 @@ Optional arguments:
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
 ```bash
+# Compress to int8
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int8 ov_model/
+
+# Compress to int4
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 ov_model/
+
+# Compress to int4 with a data-aware AWQ algorithm
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 --awq --dataset wikitext2 ov_model/
 ```
 
 For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
@@ -139,6 +146,13 @@ To export your Stable Diffusion XL model to the OpenVINO IR format with the CLI 
 ```bash
 optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 ov_sdxl/
 ```
+
+You can also apply hybrid quantization during model export. For example:
+```bash
+optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 --weight-format int8 --dataset conceptual_captions ov_sdxl/
+```
+
+For more information about hybrid quantization, take a look at this jupyter [notebook](https://github.com/huggingface/optimum-intel/blob/main/notebooks/openvino/stable_diffusion_hybrid_quantization.ipynb).
 
 ## When loading your model
 
