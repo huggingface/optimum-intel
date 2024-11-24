@@ -314,9 +314,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression with NNCF. For language models you can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new']. For diffusion models it
-            must be one of ['conceptual_captions', 'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            The dataset used for data-aware compression with NNCF.
+            - For language models you can provide your own dataset in a list of strings or just use one from the list
+                ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
+            - For diffusion models the dataset must be one of ['conceptual_captions',
+                'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            - For visual language models the dataset must be set to 'contextual'.
             Alternatively, you can provide data objects via `calibration_dataset` argument of `OVQuantizer.quantize()`
             method.
         ratio (`float`, defaults to 1.0):
@@ -423,7 +426,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            lm_datasets = ["wikitext2", "c4", "c4-new"]
+            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
             if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:

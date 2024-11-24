@@ -734,7 +734,11 @@ class OVQuantizer(OptimumQuantizer):
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
         config_dataset = quantization_config.dataset
         if isinstance(config_dataset, str):
-            calibration_dataset = get_dataset(config_dataset, tokenizer, seqlen=32, nsamples=nsamples)
+            if config_dataset == "auto":
+                generated_data = nncf.data.generate_text_data(self.model, tokenizer, dataset_size=nsamples)
+                calibration_dataset = [tokenizer(text, return_tensors="pt") for text in generated_data]
+            else:
+                calibration_dataset = get_dataset(config_dataset, tokenizer, seqlen=32, nsamples=nsamples)
         elif isinstance(config_dataset, list) and all(isinstance(it, str) for it in config_dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config_dataset[:nsamples]]
         else:

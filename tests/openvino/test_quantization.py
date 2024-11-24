@@ -313,8 +313,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(
                 bits=4,
                 group_size=16,
-                num_samples=1,
-                dataset="c4",
+                num_samples=16,
+                dataset="auto",
                 lora=True,
             ),
             {"int4": 28, "int8": 60},
