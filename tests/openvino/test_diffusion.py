@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -35,6 +36,7 @@ from optimum.intel.openvino import (
     OVPipelineForInpainting,
     OVPipelineForText2Image,
 )
+from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
 
@@ -308,6 +310,31 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         diffusers_images = diffusers_output.images
 
         np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
+
+    @require_diffusers
+    def test_load_and_save_pipeline_with_safety_checker(self):
+        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id)
+        self.assertTrue(ov_pipeline.safety_checker is not None)
+        self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
+        with TemporaryDirectory() as tmpdirname:
+            ov_pipeline.save_pretrained(tmpdirname)
+            for subdir in [
+                "text_encoder",
+                "tokenizer",
+                "unet",
+                "vae_encoder",
+                "vae_decoder",
+                "scheduler",
+                "feature_extractor",
+            ]:
+                subdir_path = Path(tmpdirname) / subdir
+                self.assertTrue(subdir_path.is_dir())
+            loaded_pipeline = self.OVMODEL_CLASS.from_pretrained(tmpdirname)
+            self.assertTrue(loaded_pipeline.safety_checker is not None)
+            self.assertIsInstance(loaded_pipeline.safety_checker, StableDiffusionSafetyChecker)
+            del loaded_pipeline
+        del ov_pipeline
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_height_width_properties(self, model_arch: str):

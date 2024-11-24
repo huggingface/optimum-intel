@@ -295,6 +295,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.tokenizer_3.save_pretrained(save_directory / "tokenizer_3")
         if self.feature_extractor is not None:
             self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
+        if getattr(self, "safety_checker", None) is not None:
+            self.safety_checker.save_pretrained(save_directory / "safety_checker")
 
         self._save_openvino_config(save_directory)
 
@@ -427,6 +429,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 # Check if the module is in a subdirectory
                 if (model_save_path / name).is_dir():
                     submodels[name] = load_method(model_save_path / name)
+                # For backward compatibility with models exported using previous optimum version, where safety_checker saving was disabled
+                elif name == "safety_checker":
+                    logger.warning(
+                        "Pipeline config contains `safety_checker` subcomponent, while `safety_checker` is not available in model directory. "
+                        "`safety_checker` will be disabled. If you want to enable it please set it explicitly to `from_pretrained` method "
+                        "or reexport model with new optimum-intel version"
+                    )
+                    submodels[name] = None
                 else:
                     submodels[name] = load_method(model_save_path)
 

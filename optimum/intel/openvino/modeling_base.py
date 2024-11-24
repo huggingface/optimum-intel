@@ -136,7 +136,11 @@ class OVBaseModel(OptimizedModel):
             self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
             if is_transformers_version(">=", "4.44.99"):
-                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                # some model configs may have issues with loading without parameters initialization
+                try:
+                    misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                except KeyError:
+                    misplaced_generation_parameters = {}
                 if len(misplaced_generation_parameters) > 0:
                     logger.warning(
                         "Moving the following attributes in the config to the generation config: "
@@ -440,7 +444,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model.xml$",
+                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -778,7 +782,7 @@ class OVModelPart:
             for inputs in self.model.inputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
+        self.request = None if not self.parent_model._compile_only else self.model
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
@@ -828,3 +832,6 @@ class OVModelPart:
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    def clear_requests(self):
+        self.request = None

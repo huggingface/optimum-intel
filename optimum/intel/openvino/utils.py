@@ -42,6 +42,9 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
+OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
+OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
 
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
 OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
@@ -116,6 +119,7 @@ _HEAD_TO_AUTOMODELS = {
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",
+    "image-text-to-text": "OVModelForVisualCausalLM",
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
@@ -133,6 +137,14 @@ PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+PREDEFINED_VISUAL_LM_DATASETS = {
+    "contextual": {
+        "name": "ucla-contextual/contextual_test",
+        "split": "test",
+        "inputs": {"image_url": "image_url", "instruction": "instruction"},
+    }
 }
 
 
