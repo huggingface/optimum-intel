@@ -27,7 +27,7 @@ from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, SEED
+from utils_tests import MODEL_NAMES, SEED, remove_model_from_cache
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
@@ -352,19 +352,22 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         model_id = "runwayml/stable-diffusion-v1-5"
         ti_id = "sd-concepts-library/cat-toy"
 
-        inputs = self.generate_inputs()
-        inputs["prompt"] = "A <cat-toy> backpack"
+        try:
+            inputs = self.generate_inputs()
+            inputs["prompt"] = "A <cat-toy> backpack"
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion(ti_id)
+            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+            diffusers_pipeline.load_textual_inversion(ti_id)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
-        ov_pipeline.load_textual_inversion(ti_id)
+            ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+            ov_pipeline.load_textual_inversion(ti_id)
 
-        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+        finally:
+            remove_model_from_cache(model_id)
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
@@ -577,19 +580,22 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         model_id = "runwayml/stable-diffusion-v1-5"
         ti_id = "sd-concepts-library/cat-toy"
 
-        inputs = self.generate_inputs()
-        inputs["prompt"] = "A <cat-toy> backpack"
+        try:
+            inputs = self.generate_inputs()
+            inputs["prompt"] = "A <cat-toy> backpack"
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion(ti_id)
+            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+            diffusers_pipeline.load_textual_inversion(ti_id)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
-        ov_pipeline.load_textual_inversion(ti_id)
+            ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+            ov_pipeline.load_textual_inversion(ti_id)
 
-        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+        finally:
+            remove_model_from_cache(model_id)
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -810,16 +816,19 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         model_id = "runwayml/stable-diffusion-v1-5"
         ti_id = "sd-concepts-library/cat-toy"
 
-        inputs = self.generate_inputs()
-        inputs["prompt"] = "A <cat-toy> backpack"
+        try:
+            inputs = self.generate_inputs()
+            inputs["prompt"] = "A <cat-toy> backpack"
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion(ti_id)
+            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+            diffusers_pipeline.load_textual_inversion(ti_id)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
-        ov_pipeline.load_textual_inversion(ti_id)
+            ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+            ov_pipeline.load_textual_inversion(ti_id)
 
-        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+        finally:
+            remove_model_from_cache(model_id)
