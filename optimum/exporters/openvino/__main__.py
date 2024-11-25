@@ -445,11 +445,13 @@ def main_export(
         else:
             quantization_config = ov_config.quantization_config
         if quantization_config is None:
+            del submodel
+            gc.collect()
             continue
 
         if not is_nncf_available():
             raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
-
+ 
         from optimum.intel.openvino.quantization import _weight_only_quantization
 
         _weight_only_quantization(submodel, quantization_config)
@@ -457,6 +459,7 @@ def main_export(
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
         save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
         del submodel
+        gc.collect()
 
         submodel_path.unlink()
         submodel_path.with_suffix(".bin").unlink()
