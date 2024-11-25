@@ -44,7 +44,6 @@ from optimum.intel import (
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
 )
-from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.utils.testing_utils import grid_parameters
 from utils_tests import MODEL_NAMES, IS_XPU
 
@@ -307,20 +306,19 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     @parameterized.expand(
         grid_parameters(
             {
-                "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
+                "model_arch": SUPPORTED_ARCHITECTURES,
                 "use_cache": [True, False],
             }
         )
     )
-    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_ipex_patching_beam_search(self, test_name, model_arch, use_cache):
+    def test_ipex_beam_search(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         dtype = torch.float32
         if IS_XPU:
             dtype = torch.float16
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache, torch_dtype=dtype)
-        if use_cache:
+        if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
         device = model.device
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
@@ -346,7 +344,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 
-    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_compare_with_and_without_past_key_values(self):
         model_id = "Intel/tiny_random_llama2"
         dtype = torch.float32
