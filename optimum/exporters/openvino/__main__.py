@@ -432,6 +432,7 @@ def main_export(
             for op in submodel.get_ops():
                 if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
                     num_parameters += reduce(operator.mul, op.shape, 1)
+                del op
             if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
                 if is_nncf_available():
                     quantization_config = {"bits": 8, "sym": False}
@@ -451,13 +452,14 @@ def main_export(
 
         if not is_nncf_available():
             raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
- 
+
         from optimum.intel.openvino.quantization import _weight_only_quantization
 
-        _weight_only_quantization(submodel, quantization_config)
+        compressed_submodel = _weight_only_quantization(submodel, quantization_config)
 
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
-        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        save_model(compressed_submodel, compressed_submodel_path, compress_to_fp16=False)
+        del compressed_submodel
         del submodel
         gc.collect()
 

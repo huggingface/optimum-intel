@@ -21,7 +21,8 @@ import warnings
 import weakref
 from glob import glob
 from pathlib import Path
-from tempfile import TemporaryDirectory as OrigTemporaryDirectory, mkdtemp
+from tempfile import TemporaryDirectory as OrigTemporaryDirectory
+from tempfile import mkdtemp
 from typing import Tuple, Type, Union
 
 import numpy as np
