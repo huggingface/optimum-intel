@@ -81,6 +81,7 @@ from .model_patcher import (
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
+    MiniCPM3Patcher,
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -239,6 +240,11 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return MiniCPM3Patcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
