@@ -413,8 +413,6 @@ class IPEXModelForQuestionAnswering(IPEXModel):
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    _supports_cache_class = False
-    _is_stateful = False
 
     def __init__(
         self,
@@ -434,6 +432,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._supports_cache_class = True
         GenerationMixin.__init__(self)
 
+        self._supports_cache_class = getattr(model, "_supports_cache_class", None)
+        self._supports_sdpa = getattr(model, "_supports_sdpa", None)
+        self._supports_cache_class = getattr(model, "_supports_cache_class", None)
+        self._supports_quantized_cache = getattr(model, "_supports_quantized_cache", None)
+        self._supports_static_cache = getattr(model, "_supports_static_cache", None)
+
         model_type = self.config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
 
@@ -447,18 +451,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             )
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
-
-        if is_transformers_version(">=", "4.38.0") and model_type in {
-            "llama",
-            "phi",
-            "persimmon",
-            "mistral",
-            "falcon",
-            "gpt2",
-        }:
-            self.prepare_inputs_for_generation = _ipex_prepare_inputs_for_generation
-        else:
-            self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
@@ -524,6 +516,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     def _reorder_cache(self, *args, **kwargs):
         return self.model._reorder_cache(*args, **kwargs)
 
+    def prepare_inputs_for_generation(self, *args, **kwargs):
+        return self.model.prepare_inputs_for_generation(*args, **kwargs)
+
     def generate(self, *args, **kwargs):
         new_kwargs = copy.deepcopy(kwargs)
         if is_ipex_version("<", "2.4.0") and self._add_patch and new_kwargs.get("assistant_model", None):
@@ -557,64 +552,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
 
         return result
-
-
-def _ipex_prepare_inputs_for_generation(
-    input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-):
-    from transformers.cache_utils import Cache
-
-    if past_key_values is not None:
-        if isinstance(past_key_values, Cache):
-            past_length = cache_length = past_key_values.get_seq_length()
-            max_cache_length = past_key_values.get_max_length()
-        else:
-            cache_length = past_length = past_key_values[0][0].shape[2]
-            max_cache_length = None
-
-        # Keep only the unprocessed tokens:
-        # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
-        # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
-        # input)
-        if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
-            input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
-        # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
-        # input_ids based on the past_length.
-        elif past_length < input_ids.shape[1]:
-            input_ids = input_ids[:, past_length:]
-        # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
-
-        # If we are about to go beyond the maximum cache length, we need to crop the input attention mask.
-        if (
-            max_cache_length is not None
-            and attention_mask is not None
-            and cache_length + input_ids.shape[1] > max_cache_length
-        ):
-            attention_mask = attention_mask[:, -max_cache_length:]
-
-    position_ids = kwargs.get("position_ids", None)
-    if attention_mask is not None and position_ids is None:
-        # create position_ids on the fly for batch generation
-        position_ids = attention_mask.long().cumsum(-1) - 1
-        position_ids.masked_fill_(attention_mask == 0, 1)
-        if past_key_values:
-            position_ids = position_ids[:, -input_ids.shape[1] :]
-
-    # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-    if inputs_embeds is not None and past_key_values is None:
-        model_inputs = {"inputs_embeds": inputs_embeds}
-    else:
-        model_inputs = {"input_ids": input_ids}
-
-    model_inputs.update(
-        {
-            "position_ids": position_ids,
-            "past_key_values": past_key_values,
-            "use_cache": kwargs.get("use_cache"),
-            "attention_mask": attention_mask,
-        }
-    )
-    return model_inputs
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
