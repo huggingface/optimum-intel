@@ -806,7 +806,6 @@ class _IPEXIntermediate(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.linear_gelu = LinearGelu(module.dense)
-        del self.__dict__["_modules"]["dense"]
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.linear_gelu(hidden_states)

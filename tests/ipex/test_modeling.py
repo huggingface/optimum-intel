@@ -74,12 +74,15 @@ class IPEXModelTest(unittest.TestCase):
         "squeezebert",
         "xlm",
     )
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("bert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
+            self.assertTrue(ipex_model.add_patch)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
@@ -317,6 +320,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         if IS_XPU:
             dtype = torch.float16
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache, torch_dtype=dtype)
+        if use_cache:
+            self.assertTrue(model.add_patch)
         device = model.device
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
         self.assertEqual(model.use_cache, use_cache)
@@ -433,12 +438,15 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         "resnet",
         "vit",
     )
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("vit",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
+            self.assertTrue(ipex_model.add_patch)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)

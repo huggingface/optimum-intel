@@ -54,6 +54,7 @@ from optimum.utils import NormalizedConfigManager
 from ...exporters.ipex.cache_utils import IPEXPagedCache
 from ...exporters.ipex.model_config import ipex_onnx_config
 from ...exporters.ipex.model_patcher import (
+    _IPEX_EXPORTED_GENERATION_TASKS,
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
@@ -73,7 +74,7 @@ _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
-    if not use_cache:
+    if not use_cache and task in _IPEX_EXPORTED_GENERATION_TASKS:
         return False
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
 
@@ -298,6 +299,10 @@ class IPEXModel(OptimizedModel):
             "access to the `model_dtype` attribute is deprecated and will be removed after v1.18.0, please use `_dtype` instead."
         )
         return self._dtype
+
+    @property
+    def add_patch(self) -> bool:
+        return self._add_patch
 
     def to(self, device: Union[torch.device, str]):
         self._device = device if isinstance(device, torch.device) else torch.device(device)
