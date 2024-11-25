@@ -386,8 +386,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         # for now we only test for stable-diffusion
         # this is very slow and costly to run right now
 
-        model_id = "runwayml/stable-diffusion-v1-5"
-        ti_id = "sd-concepts-library/cat-toy"
+        model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
+        ti_id = "katuni4ka/textual_inversion_cat"
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
@@ -630,8 +630,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         # for now we only test for stable-diffusion
         # this is very slow and costly to run right now
 
-        model_id = "runwayml/stable-diffusion-v1-5"
-        ti_id = "sd-concepts-library/cat-toy"
+        model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
+        ti_id = "katuni4ka/textual_inversion_cat"
 
         inputs = self.generate_inputs(model_type="stable-diffusion")
         inputs["prompt"] = "A <cat-toy> backpack"
@@ -874,8 +874,8 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         # for now we only test for stable-diffusion
         # this is very slow and costly to run right now
 
-        model_id = "runwayml/stable-diffusion-v1-5"
-        ti_id = "sd-concepts-library/cat-toy"
+        model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
+        ti_id = "katuni4ka/textual_inversion_cat"
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
