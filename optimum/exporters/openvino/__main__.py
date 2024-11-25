@@ -455,11 +455,10 @@ def main_export(
 
         from optimum.intel.openvino.quantization import _weight_only_quantization
 
-        compressed_submodel = _weight_only_quantization(submodel, quantization_config)
+        _weight_only_quantization(submodel, quantization_config)
 
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
-        save_model(compressed_submodel, compressed_submodel_path, compress_to_fp16=False)
-        del compressed_submodel
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
         del submodel
         gc.collect()
 
