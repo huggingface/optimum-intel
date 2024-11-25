@@ -118,6 +118,8 @@ def _save_model(
     if hasattr(config, "runtime_options"):
         model = _add_runtime_options_to_rt_info(model, config.runtime_options)
     save_model(model, path, compress_to_fp16)
+    del model
+    gc.collect()
 
 
 def export(
@@ -239,6 +241,7 @@ def export_tensorflow(
         config=config,
     )
     del ov_model
+    gc.collect()
     return input_names, output_names, True
 
 
@@ -303,6 +306,7 @@ def export_pytorch_via_onnx(
         config=config,
     )
     del ov_model
+    gc.collect()
     return input_names, output_names, True
 
 
