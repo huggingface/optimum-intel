@@ -311,7 +311,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             }
         )
     )
-    def test_ipex_beam_search(self, model_arch, use_cache):
+    def test_ipex_beam_search(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         dtype = torch.float32
