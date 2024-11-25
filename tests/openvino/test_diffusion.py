@@ -17,7 +17,6 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-import pytest
 import torch
 from diffusers import (
     AutoPipelineForImage2Image,
@@ -28,7 +27,6 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
-from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel.openvino import (
@@ -379,13 +377,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @pytest.mark.run_slow
-    @slow
     @require_diffusers
     def test_textual_inversion(self):
-        # for now we only test for stable-diffusion
-        # this is very slow and costly to run right now
-
         model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
         ti_id = "katuni4ka/textual_inversion_cat"
 
@@ -623,13 +616,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @pytest.mark.run_slow
-    @slow
     @require_diffusers
     def test_textual_inversion(self):
-        # for now we only test for stable-diffusion
-        # this is very slow and costly to run right now
-
         model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
         ti_id = "katuni4ka/textual_inversion_cat"
 
@@ -867,13 +855,8 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @pytest.mark.run_slow
-    @slow
     @require_diffusers
     def test_textual_inversion(self):
-        # for now we only test for stable-diffusion
-        # this is very slow and costly to run right now
-
         model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
         ti_id = "katuni4ka/textual_inversion_cat"
 
