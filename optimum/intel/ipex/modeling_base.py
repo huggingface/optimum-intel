@@ -521,6 +521,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return generation_config, model_kwargs
 
+    def _reorder_cache(self, *args, **kwargs):
+        return self.model._reorder_cache(*args, **kwargs)
+
     def generate(self, *args, **kwargs):
         new_kwargs = copy.deepcopy(kwargs)
         if is_ipex_version("<", "2.4.0") and self._add_patch and new_kwargs.get("assistant_model", None):
@@ -617,7 +620,9 @@ def _ipex_prepare_inputs_for_generation(
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
     if isinstance(model, IPEXModel) and _is_patched_with_ipex(model, "text-generation"):
         if isinstance(past_key_values, IPEXPagedCache):
-            return past_key_values.crop(max_length)
+            # .crop is an inplace op, returns None
+            past_key_values = past_key_values.crop(max_length)
+            return past_key_values
         else:
             raise ValueError("only support IPEXPagedCache input now")
     return _crop_past_key_values(model, past_key_values, max_length)
