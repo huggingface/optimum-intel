@@ -86,13 +86,20 @@ else:
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 else:
-    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+    StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline = object, object
 
 if is_diffusers_version(">=", "0.30.0"):
     from diffusers import FluxPipeline, StableDiffusion3InpaintPipeline
 else:
-    StableDiffusion3InpaintPipeline = StableDiffusionInpaintPipeline
-    FluxPipeline = StableDiffusionPipeline
+    StableDiffusion3InpaintPipeline = object
+    FluxPipeline = object
+
+
+if is_diffusers_version(">=", "0.31.0"):
+    from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
+else:
+    FluxImg2ImgPipeline = object
+    FluxInpaintPipeline = object
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
@@ -887,9 +894,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
         return cls.load_config(config_name_or_path, **kwargs)
 
-    def _save_config(self, save_directory):
-        self.save_config(save_directory)
-
     @property
     def components(self) -> Dict[str, Any]:
         components = {
@@ -1447,6 +1451,18 @@ class OVFluxPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxPip
     auto_model_class = FluxPipeline
 
 
+class OVFluxImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxImg2ImgPipeline):
+    main_input_name = "prompt"
+    export_feature = "image-to-image"
+    auto_model_class = FluxImg2ImgPipeline
+
+
+class OVFluxInpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxInpaintPipeline):
+    main_input_name = "prompt"
+    export_feature = "inpainting"
+    auto_model_class = FluxInpaintPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1510,6 +1526,10 @@ if is_diffusers_version(">=", "0.30.0"):
     OV_INPAINT_PIPELINES_MAPPING["stable-diffusion-3"] = OVStableDiffusion3InpaintPipeline
     OV_TEXT2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxPipeline
 
+if is_diffusers_version(">=", "0.31.0"):
+    SUPPORTED_OV_PIPELINES.extend([OVFluxImg2ImgPipeline, OVFluxInpaintPipeline])
+    OV_INPAINT_PIPELINES_MAPPING["flux"] = OVFluxInpaintPipeline
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxImg2ImgPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

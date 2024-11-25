@@ -18,13 +18,16 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from transformers import PretrainedConfig
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Dimension, PartialShape, Symbol
 from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
+from optimum.intel.utils import is_transformers_version
 from optimum.utils import is_diffusers_available
+from optimum.utils.save_utils import maybe_save_preprocessors
 
 
 logger = logging.getLogger(__name__)
@@ -227,3 +230,25 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+
+def save_preprocessors(
+    preprocessors: List, config: PretrainedConfig, output: Union[str, Path], trust_remote_code: bool
+):
+    model_name_or_path = config._name_or_path
+    if hasattr(config, "export_model_type"):
+        model_type = config.export_model_type.replace("_", "-")
+    else:
+        model_type = config.model_type.replace("_", "-")
+    if preprocessors is not None:
+        # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
+        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
+            if not hasattr(preprocessors[1], "chat_template"):
+                preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
+        for processor in preprocessors:
+            try:
+                processor.save_pretrained(output)
+            except Exception as ex:
+                logger.error(f"Saving {type(processor)} failed with {ex}")
+    else:
+        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)

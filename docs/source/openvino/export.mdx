@@ -19,6 +19,8 @@ To export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/document
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_model/
 ```
 
+To export a private model or a model that requires access, you can either run `huggingface-cli login` to log in permanently, or set the environment variable `HF_TOKEN` to a [token](https://huggingface.co/settings/tokens) with access to the model. See the [authentication documentation](https://huggingface.co/docs/huggingface_hub/quick-start#authentication) for more information.
+
 The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
 
 ```bash
