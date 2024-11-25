@@ -914,6 +914,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "arctic",
             "exaone",
             "mistral-nemo",
+            "minicpm3",
         )
 
     GENERATION_LENGTH = 100
@@ -935,6 +936,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4",
         "exaone",
         "decilm",
+        "minicpm3",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1182,8 +1184,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
+    # @pytest.mark.run_slow
+    # @slow
     def test_beam_search(self, model_arch):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
