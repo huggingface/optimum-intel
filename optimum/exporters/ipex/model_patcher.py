@@ -13,14 +13,9 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
-from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2LMHeadModel
-from transformers.models.llama.modeling_llama import (
-    LlamaDecoderLayer,
-    LlamaForCausalLM,
-    LlamaModel,
-    LlamaRMSNorm,
-)
+from transformers.models.falcon.modeling_falcon import FalconDecoderLayer
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaModel, LlamaRMSNorm
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
@@ -136,11 +131,11 @@ def _patch_model(model):
         raise ImportError(
             f"Only transformers versions {_TRANSFORMERS_MIN_VERSION} ~ {_TRANSFORMERS_MAX_VERSION} are verified."
         )
-    if isinstance(model, LlamaForCausalLM):
+    if model.config.model_type == "llama":
         model = _patch_llama_model(model)
-    elif isinstance(model, FalconForCausalLM):
+    elif model.config.model_type == "falcon":
         model = _patch_falcon_model(model)
-    elif isinstance(model, GPT2LMHeadModel):
+    elif model.config.model_type == "gpt2":
         model = _patch_gpt2_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
