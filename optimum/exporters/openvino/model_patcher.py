@@ -3274,10 +3274,6 @@ def minicpm3_attn_forward(
         Returns:
             `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
         """
-        # cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-        # sin = sin[position_ids].unsqueeze(unsqueeze_dim)
-        # q_embed = (q * cos) + (rotate_half(q) * sin)
-        # k_embed = (k * cos) + (rotate_half(k) * sin)
         orig_dtype = k.dtype
         cos = cos[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
         sin = sin[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
