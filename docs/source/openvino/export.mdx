@@ -127,7 +127,7 @@ optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format i
 Export with INT4 weights compression and a data-aware AWQ and Scale Estimation algorithms:
 ```bash
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B \
-    --weight-format int4 --awq --dataset wikitext2 ov_model/
+    --weight-format int4 --awq --scale-estimation --dataset wikitext2 ov_model/
 ```
 
 For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
