@@ -11,9 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import os
-import shutil
-from pathlib import Path
 
 import numpy as np
 import openvino as ov
@@ -220,13 +217,3 @@ def get_num_quantized_nodes(model):
             if type_name == "nf4":
                 num_weight_nodes["nf4"] += 1
     return num_fake_quantize, num_weight_nodes
-
-
-def remove_model_from_cache(model_id: str):
-    hf_home = os.environ.get("HF_HOME", "~/.cache/huggingface")
-    hf_hub_cache = os.environ.get("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
-    hf_hub_cache = Path(hf_hub_cache).expanduser()
-    model_id_namespace, model_id_label = model_id.split("/")
-    model_path = hf_hub_cache / f"models--{model_id_namespace}--{model_id_label}"
-    if model_path.exists():
-        shutil.rmtree(model_path)
