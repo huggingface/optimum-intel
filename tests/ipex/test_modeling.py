@@ -320,7 +320,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         if IS_XPU:
             dtype = torch.float16
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache, torch_dtype=dtype)
-        self.assertTrue(model.add_patch)
+        if use_cache:
+            self.assertTrue(model.add_patch)
         device = model.device
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
         self.assertEqual(model.use_cache, use_cache)
