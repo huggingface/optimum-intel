@@ -428,15 +428,16 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         super().__init__(
             model, config, export=export, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache
         )
-        if self._add_patch:
-            self._supports_cache_class = True
-        GenerationMixin.__init__(self)
 
         self._supports_cache_class = getattr(model, "_supports_cache_class", None)
         self._supports_sdpa = getattr(model, "_supports_sdpa", None)
         self._supports_cache_class = getattr(model, "_supports_cache_class", None)
         self._supports_quantized_cache = getattr(model, "_supports_quantized_cache", None)
         self._supports_static_cache = getattr(model, "_supports_static_cache", None)
+
+        if self._add_patch:
+            self._supports_cache_class = True
+        GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
