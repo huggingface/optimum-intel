@@ -43,7 +43,7 @@ model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantiz
 model.save_pretrained(saving_directory)
 ```
 
-Weights of language models inside vision-language pipelines can be quantized in a similar fashion:
+Weights of language models inside vision-language pipelines can be quantized in a similar way:
 ```python
 model = OVModelForVisualCausalLM.from_pretrained(
     "llava-hf/llava-v1.6-mistral-7b-hf",
