@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        torch-version: ["2.2.0", "2.3.*", "2.4.*"]
+        torch-version: ["2.4.*", "2.5.0"]
 
     runs-on: ubuntu-22.04
 
@@ -36,10 +36,6 @@ jobs:
           pip install --upgrade pip
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install .[neural-compressor,ipex,diffusers,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
-
-      - if: ${{ matrix.torch-version == '2.2.0' }}
-        name: Downgrade Numpy
-        run: pip install numpy==1.*
 
       - name: Assert versions
         run: |
