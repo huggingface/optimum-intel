@@ -308,8 +308,8 @@ class IPEXModel(OptimizedModel):
         if not self._add_patch:
             # use_cache = "past_key_values" in self.input_names
             dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, self.use_cache)
-            if self._device.type != "cpu":
-                dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
+            if self.device.type != "cpu":
+                dummy_inputs = recursive_to_device(value=dummy_inputs, device=self.device)
             for _ in range(2):
                 self(**dummy_inputs)
 
