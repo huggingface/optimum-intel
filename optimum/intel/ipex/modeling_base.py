@@ -38,7 +38,6 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.generation.candidate_generator import _crop_past_key_values
@@ -127,18 +126,9 @@ class IPEXModel(OptimizedModel):
         warmup: bool = True,
         **kwargs,
     ):
-        if is_torch_xpu_available(check_device=True):
-            self._device = torch.device("xpu:0")
-        elif torch.cuda.is_available():
-            self._device = torch.device("cuda:0")
-        else:
-            self._device = torch.device("cpu")
-
         config = config or model.config
-
         OptimizedModel.__init__(self, model=model, config=config)
 
-        self.model.to(self._device)
         self._dtype = self.model.dtype if self.model.dtype is not None else torch.float32
         self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
@@ -174,7 +164,6 @@ class IPEXModel(OptimizedModel):
         local_files_only: bool = False,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
-        file_name: Optional[str] = WEIGHTS_NAME,
         **kwargs,
     ):
         """
@@ -207,9 +196,6 @@ class IPEXModel(OptimizedModel):
                 float16 or bfloat16 or float32: load in a specified dtype, ignoring the model config.torch_dtype if one exists. If not specified, the model will get loaded in float32.
             trust_remote_code (`bool`, *optional*)
                 Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the model repository.
-            file_name (`str`, *optional*):
-                The file name of the model to load. Overwrites the default file name and allows one to load the model
-                with a different name.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -287,7 +273,7 @@ class IPEXModel(OptimizedModel):
 
     @property
     def device(self) -> torch.device:
-        return self._device
+        return self.model.device
 
     @property
     def dtype(self) -> torch.dtype:
@@ -305,8 +291,7 @@ class IPEXModel(OptimizedModel):
         return self._add_patch
 
     def to(self, device: Union[torch.device, str]):
-        self._device = device if isinstance(device, torch.device) else torch.device(device)
-        self.model.to(self._device)
+        self.model.to(self.device)
         return self
 
     def can_generate(self):
@@ -526,15 +511,15 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
-        # Patch functions to support paged cache
+        # Patch functions to support ipex_paged cache
         if self._add_patch:
-            transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["paged"] = IPEXPagedCache
-            self.generation_config.cache_implementation = "paged"
+            transformers.generation.utils.NEED_SETUP_CACHE_CLASSES_MAPPING["ipex_paged"] = IPEXPagedCache
+            self.generation_config.cache_implementation = "ipex_paged"
             if is_transformers_version(">=", "4.45.0"):
-                if "paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
-                    transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("paged")
+                if "ipex_paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
+                    transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("ipex_paged")
             if new_kwargs.get("generation_config", None):
-                new_kwargs["generation_config"].cache_implementation = "paged"
+                new_kwargs["generation_config"].cache_implementation = "ipex_paged"
 
         if self._add_patch and new_kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
