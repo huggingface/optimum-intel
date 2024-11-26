@@ -22,6 +22,7 @@ import weakref
 from glob import glob
 from pathlib import Path
 from tempfile import TemporaryDirectory as OrigTemporaryDirectory
+from tempfile import mkdtemp
 from typing import Tuple, Type, Union
 
 import numpy as np
@@ -472,7 +473,7 @@ def _rmtree(path, ignore_errors=False, onerror=None, *, onexc=None, dir_fd=None)
 # to add behaviour that available only for python3.10+ for older python version
 class TemporaryDirectory(OrigTemporaryDirectory):
     def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=True, *, delete=True):
-        super().__init__(suffix=suffix, prefix=prefix, dir=dir)
+        self.name = mkdtemp(suffix, prefix, dir)
         self._ignore_cleanup_errors = ignore_cleanup_errors
         self._delete = delete
         self._finalizer = weakref.finalize(
@@ -485,13 +486,13 @@ class TemporaryDirectory(OrigTemporaryDirectory):
         )
 
     @classmethod
-    def _cleanup(cls, name, warn_message, ignore_errors=False, delete=True):
+    def _cleanup(cls, name, warn_message, ignore_errors=True, delete=True):
         if delete:
             cls._rmtree(name, ignore_errors=ignore_errors)
             warnings.warn(warn_message, ResourceWarning)
 
     @classmethod
-    def _rmtree(cls, name, ignore_errors=False, repeated=False):
+    def _rmtree(cls, name, ignore_errors=True, repeated=False):
         def _dont_follow_symlinks(func, path, *args):
             # Pass follow_symlinks=False, unless not supported on this platform.
             if func in os.supports_follow_symlinks:
@@ -545,7 +546,7 @@ class TemporaryDirectory(OrigTemporaryDirectory):
                 if not ignore_errors:
                     raise
 
-        _rmtree(name, onexc=onexc)
+        _rmtree(name, onexc=onexc, ignore_errors=ignore_errors)
 
     def cleanup(self):
         if self._finalizer.detach() or os.path.exists(self.name):
