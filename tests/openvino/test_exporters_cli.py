@@ -134,7 +134,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --lora --dataset auto --num-samples 16",
+            "int4 --ratio 1.0 --sym --group-size 16 --lora-correction --dataset auto --num-samples 16",
             {"int8": 60, "int4": 14},
         ),
         ("text-generation-with-past", "llama_awq", "int4 --group-size 16 --backup-precision none", {"int4": 28}),
@@ -324,7 +324,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
-            self.assertTrue("--lora" not in option or b"with correction of low-rank adapters" in result.stdout)
+            self.assertTrue(
+                "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
+            )
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:

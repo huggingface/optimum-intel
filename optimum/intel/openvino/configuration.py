@@ -359,7 +359,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
                 - A path to a *directory* containing files required by the processor, for instance saved
                     using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
-        lora (`bool`, *optional*):
+        lora_correction (`bool`, *optional*):
             If True, apply LoRA Correction algorithm. When enabled, this algorithm mitigates quantization noise
             introduced during weight compression by leveraging low-rank adaptation. It calculates low-rank matrices via
             singular value decomposition (SVD) on the difference between the original and quantized weights. These
@@ -390,7 +390,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         weight_format: Optional[str] = None,
         gptq: bool = None,
         processor: Optional[str] = None,
-        lora: bool = None,
+        lora_correction: bool = None,
         backup_precision: Optional[str] = None,
         **kwargs,
     ):
@@ -407,7 +407,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.weight_format = weight_format
         self.gptq = gptq
         self.processor = processor
-        self.lora = lora
+        self.lora_correction = lora_correction
         self.backup_precision = backup_precision
         self.post_init()
 
@@ -464,9 +464,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     "The GPTQ algorithm is not supported for 8-bit quantization and got `gptq=True`, please set `gptq=False`"
                 )
-            if self.lora:
+            if self.lora_correction:
                 raise ValueError(
-                    "The LoRA algorithm is not supported for 8-bit quantization and got `lora=True`, please set `lora=False`"
+                    "The LoRA Correction algorithm is not supported for 8-bit quantization and got `lora_correction=True`, please set `lora_correction=False`"
                 )
             if self.backup_precision is not None:
                 raise ValueError(
@@ -503,10 +503,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     raise ValueError("The Scale Estimation algorithm is not supported for 'mxpf4' weight format")
                 if self.gptq:
                     raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
-                if self.lora:
-                    raise ValueError("The LoRA algorithm is not supported for 'mxfp4' weight format")
-        if self.gptq and self.lora:
-            raise ValueError("The GPTQ and LoRA algorithms can't be applied simultaneously")
+                if self.lora_correction:
+                    raise ValueError("The LoRA Correction algorithm is not supported for 'mxfp4' weight format")
+        if self.gptq and self.lora_correction:
+            raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
 
 @dataclass

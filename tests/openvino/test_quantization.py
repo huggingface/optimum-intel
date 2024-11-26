@@ -315,7 +315,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=16,
                 num_samples=16,
                 dataset="auto",
-                lora=True,
+                lora_correction=True,
             ),
             {"int4": 28, "int8": 60},
         ),
@@ -705,7 +705,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
             )
             self.assertEqual(quantization_config.gptq or False, wc_rt_info["gptq"].value == "True")
-            self.assertEqual(quantization_config.lora or False, wc_rt_info["lora_correction"].value == "True")
+            self.assertEqual(
+                quantization_config.lora_correction or False, wc_rt_info["lora_correction"].value == "True"
+            )
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)

@@ -35,9 +35,9 @@ usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,
                                    [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
                                    [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
                                    [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
-                                   [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--gptq] [--lora]
-                                   [--sensitivity-metric SENSITIVITY_METRIC] [--num-samples NUM_SAMPLES]
-                                   [--disable-stateful] [--disable-convert-tokenizer]
+                                   [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--gptq]
+                                   [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
+                                   [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
                                    output
 
 optional arguments:
@@ -107,9 +107,9 @@ Optional arguments:
   --gptq                Indicates whether to apply GPTQ algorithm that optimizes compressed weights in a layer-wise
                         fashion to minimize the difference between activations of a compressed and original layer.
                         Please note, that applying GPTQ takes additional memory and time.
-  --lora                Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm mitigates
+  --lora-correction     Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm mitigates
                         quantization noise introduced during weight compression by leveraging low-rank adaptation.
-                        Please note, that applying LoRA algorithm takes additional memory and time.
+                        Please note, that applying LoRA Correction algorithm takes additional memory and time.
   --sensitivity-metric SENSITIVITY_METRIC
                         The sensitivity metric for assigning quantization precision to layers. It can be one of the
                         following: ['weight_quantization_error', 'hessian_input_activation',

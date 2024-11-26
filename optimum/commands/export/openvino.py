@@ -184,13 +184,13 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "--lora",
+        "--lora-correction",
         action="store_true",
         default=None,
         help=(
             "Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm mitigates quantization "
             "noise introduced during weight compression by leveraging low-rank adaptation. Please note, that applying "
-            "LoRA algorithm takes additional memory and time."
+            "LoRA Correction algorithm takes additional memory and time."
         ),
     )
     optional_group.add_argument(
@@ -241,7 +241,7 @@ def no_compression_parameter_provided(args):
                 args.awq,
                 args.scale_estimation,
                 args.gptq,
-                args.lora,
+                args.lora_correction,
                 args.sensitivity_metric,
                 args.backup_precision,
             )
@@ -315,7 +315,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
                     "gptq": self.args.gptq,
-                    "lora": self.args.lora,
+                    "lora_correction": self.args.lora_correction,
                     "weight_format": self.args.weight_format,
                     "backup_precision": self.args.backup_precision,
                 }

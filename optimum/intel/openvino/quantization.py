@@ -948,7 +948,7 @@ def _weight_only_quantization(
         subset_size=config.num_samples if config.num_samples else 128,
         scale_estimation=config.scale_estimation,
         gptq=config.gptq,
-        lora_correction=config.lora,
+        lora_correction=config.lora_correction,
         backup_mode=None if config.backup_precision is None else nncf.BackupMode(config.backup_precision),
     )
 
