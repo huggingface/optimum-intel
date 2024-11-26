@@ -138,8 +138,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "The dataset used for data-aware compression or quantization with NNCF. "
             "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the "
             "dataset will be collected from model's generations. "
-            "For diffusion models -- on of ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS',"
-            "'laion/filtered-wit']."
+            "For diffusion models it should be on of ['conceptual_captions',"
+            "'laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. "
             "For visual language models the dataset must be set to 'contextual'."
         ),
     )
