@@ -308,43 +308,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        position_ids: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        # 1. Prepare model inputs
-        if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-
-        inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-        }
-
-        if "position_ids" in self.input_names or not self.input_names:
-            inputs["position_ids"] = position_ids
-
-        if self.use_cache:
-            if past_key_values is None and self._add_patch:
-                max_length = self.config.max_length + input_ids.shape[1]
-                batch_size = input_ids.shape[0]
-                past_key_values = IPEXPagedCache(
-                    self.config, batch_size, max_length, input_ids.device, dtype=self.dtype
-                )
-            inputs["past_key_values"] = past_key_values
-
-        # 2. Model forward
-        outputs = self.model(**inputs)
-
-        # 3. Process model outputs
-        if isinstance(outputs, (list, tuple)):
-            logits = outputs[0]
-            past_key_values = outputs[1] if self.use_cache else None
-        else:
-            logits = outputs["logits"]
-            past_key_values = outputs["past_key_values"] if self.use_cache else None
-
-        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], **kwargs: Dict
