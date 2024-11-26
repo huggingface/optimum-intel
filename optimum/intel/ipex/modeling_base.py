@@ -16,7 +16,6 @@
 import copy
 import inspect
 import logging
-import os
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,9 +40,8 @@ from transformers import (
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.generation.candidate_generator import _crop_past_key_values
-from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
-from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.exporters.tasks import make_backend_config_constructor_for_task
