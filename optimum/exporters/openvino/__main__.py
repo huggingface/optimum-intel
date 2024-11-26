@@ -15,6 +15,7 @@
 import gc
 import logging
 import operator
+import os
 import warnings
 from functools import reduce
 from pathlib import Path
@@ -332,6 +333,37 @@ def main_export(
                 return model
 
             GPTQQuantizer.post_init_model = post_init_model
+    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+        if os.path.exists(model_name_or_path):
+            path = model_name_or_path
+        else:
+            from diffusers import DiffusionPipeline
+            path = DiffusionPipeline.download(model_name_or_path)
+        model_part_name = None
+        if os.path.exists(os.path.join(path, "transformer")):
+            model_part_name = "transformer"
+        elif os.path.exists(os.path.join(path, "unet")):
+            model_part_name = "unet"
+        dtype = None
+        if model_part_name:
+            directory = os.path.join(path, model_part_name)
+            safetensors_files = [f for f in os.listdir(directory) if f.endswith(".safetensors")]
+            safetensors_file = None
+            if len(safetensors_files) > 0:
+                safetensors_file = safetensors_files.pop(0)
+                # filtering out fp16, fp8, etc variants to check the default variant first
+                while (len(safetensors_files) > 0
+                       and safetensors_file[:-len(".safetensors")].find(".") != -1):
+                    safetensors_file = safetensors_files.pop(0)
+            if safetensors_file:
+                from safetensors import safe_open
+                safetensors_path = os.path.join(path, model_part_name, safetensors_file)
+                with safe_open(safetensors_path, framework="pt", device="cpu") as f:
+                    if len(f.keys()) > 0:
+                        dtype = f.get_tensor(f.keys()[0]).dtype
+        if dtype in [torch.float16, torch.bfloat16]:
+            loading_kwargs["torch_dtype"] = dtype
+            patch_16bit = True
 
     if library_name == "open_clip":
         model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
