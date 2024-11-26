@@ -354,7 +354,11 @@ def main_export(
                 from safetensors import safe_open
                 with safe_open(safetensors_file, framework="pt", device="cpu") as f:
                     if len(f.keys()) > 0:
-                        dtype = f.get_tensor(f.keys()[0]).dtype
+                        for key in f.keys():
+                            tensor = f.get_tensor(key)
+                            if tensor.dtype.is_floating_point:
+                                dtype = tensor.dtype
+                                break
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
