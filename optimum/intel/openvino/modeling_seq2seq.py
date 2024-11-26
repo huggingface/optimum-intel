@@ -34,10 +34,11 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
-
-from ..utils import is_transformers_version
+from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
+from ...exporters.openvino.stateful import model_has_state
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
+from ..utils import is_transformers_version
 
 
 if is_transformers_version(">=", "4.43.0"):
@@ -132,9 +133,7 @@ TRANSLATION_EXAMPLE = r"""
     >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}")
-    >>> pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
-    >>> text = "He never went out without a book under his arm, and he often came back with two."
+    >>> model = {model_class}.from_pretrained("{checkpoint}")Whisper
     >>> outputs = pipe(text)
     ```
 """
@@ -329,7 +328,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.encoder = OVEncoder(self.encoder_model, parent_model=self)
         self.decoder = OVDecoder(self.decoder_model, parent_model=self)
 
-        if self.use_cache:
+        if self.use_cache and self.decoder_with_past_model is not None:
             self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
         if enable_compilation:
             self.compile()
@@ -344,6 +343,19 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     @property
     def dtype(self) -> Optional[torch.dtype]:
         return self.encoder.dtype or self.decoder.dtype
+
+    def to(self, device: str):
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.encoder._device = self._device
+            self.decoder._device = self._device
+            if self.use_cache and self.decoder_with_past is not None:
+                self.decoder_with_past._device = self._device
+            self.clear_requests()
+        else:
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
+
+        return self
 
     @add_start_docstrings_to_model_forward(
         SEQ2SEQ_MODEL_DOCSTRING.format("batch_size, sequence_length")
@@ -369,12 +381,14 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
 
         # Decode
-        if past_key_values is None or self.decoder_with_past is None:
+        if past_key_values is None or self.decoder.stateful:
             decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids,
+                input_ids=decoder_input_ids[:, -1:] if past_key_values is not None else decoder_input_ids,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
                 decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
+                cache_position=cache_position,
             )
         else:
             decoder_outputs = self.decoder_with_past(
@@ -414,16 +428,8 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     def get_encoder(self):
         return self.encoder
 
-    # Copied from transformers.models.bart.modeling_bart.BartForConditionalGeneration._reorder_cache
-    @staticmethod
-    def _reorder_cache(past, beam_idx) -> Tuple[Tuple[torch.FloatTensor]]:
-        reordered_past = ()
-        for layer_past in past:
-            # Cached cross_attention states don't have to be reordered -> they are always the same
-            reordered_past += (
-                tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past[:2]) + layer_past[2:],
-            )
-        return reordered_past
+    def _reorder_cache(self, past, beam_idx) -> Tuple[Tuple[torch.FloatTensor]]:
+        self.decoder._reorder_cache(past, beam_idx)
 
     def reshape(self, batch_size: int, sequence_length: int):
         """
@@ -458,13 +464,13 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             )
         self.encoder.request = None
         self.decoder.request = None
-        if self.use_cache:
+        if self.use_cache and self.decoder_with_past is not None:
             self.decoder_with_past.request = None
 
     def compile(self):
         self.encoder._compile()
         self.decoder._compile()
-        if self.use_cache:
+        if self.use_cache and self.decoder_with_past is not None:
             self.decoder_with_past._compile()
 
 
@@ -575,15 +581,15 @@ class OVDecoder:
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.key_value_output_names = [key for key in self.output_names if "key_values" in key or "present" in key]
+        self.stateful = model_has_state(self.model)
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
+        self.use_past = len(self.key_value_input_names) > 0 or self.stateful
+        self.next_beam_idx = None
 
         if len(self.key_value_input_names) > 0 and not is_legacy:
-            self.use_past = True
             self.num_pkv = 2
         else:
-            self.use_past = False
             self.num_pkv = 4
-
         self.request = None if not self._compile_only else self.model.create_infer_request()
 
     @property
@@ -622,7 +628,11 @@ class OVDecoder:
         # Model inputs
         inputs = {}
 
-        if past_key_values is not None:
+        if self.stateful and past_key_values is None:
+            self.request.reset_state()
+            self._past_len = 0
+
+        if past_key_values is not None and not self.stateful:
             # Flatten the past_key_values
             past_key_values = tuple(
                 past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
@@ -644,17 +654,28 @@ class OVDecoder:
         if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
             inputs["decoder_attention_mask"] = decoder_attention_mask
 
-        if "cache_position" in self.input_names and cache_position is not None:
+        if "cache_position" in self.input_names:
+            if cache_position is None:
+                cache_position = torch.arange(self._past_len, self._past_len + input_ids.shape[1])
             inputs["cache_position"] = cache_position
 
+        if "beam_idx" in self.input_names:
+            batch_size = input_ids.shape[0]
+            inputs["beam_idx"] = (
+                self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
+            )
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
-        # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
-        # self-attention layer and 2 to the cross-attention layer)
-        out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+        self._past_len += input_ids.shape[1]
+
+        out_past_key_values = ()
+        if not self.stateful:
+            # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
+            # self-attention layer and 2 to the cross-attention layer)
+            out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
         # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
@@ -664,11 +685,12 @@ class OVDecoder:
                 out_past_key_values[i : i + self.num_pkv] for i in range(0, len(out_past_key_values), self.num_pkv)
             )
         else:
-            # grab the cross attention key/values from the inputs
-            out_past_key_values = tuple(
-                out_past_key_values[i : i + self.num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
-                for i in range(0, len(out_past_key_values), self.num_pkv)
-            )
+            if not self.stateful:
+                # grab the cross attention key/values from the inputs
+                out_past_key_values = tuple(
+                    out_past_key_values[i : i + self.num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
+                    for i in range(0, len(out_past_key_values), self.num_pkv)
+                )
 
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
@@ -693,6 +715,26 @@ class OVDecoder:
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(compiled_model)
+
+    def _reorder_cache(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        if self.stateful:
+            self.next_beam_idx = np.array(beam_idx)
+            return past_key_values
+        else:
+            reordered_past = ()
+            for layer_past in past_key_values:
+                # Cached cross_attention states don't have to be reordered -> they are always the same
+                reordered_past += (
+                    tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past[:2]) + layer_past[2:],
+                )
+        return reordered_past
 
 
 @add_start_docstrings(
@@ -785,7 +827,9 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder"):
+                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
+                    "beam_idx"
+                ):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
@@ -868,7 +912,9 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder"):
+                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
+                    "beam_idx"
+                ):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
@@ -965,9 +1011,6 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     """
 
     auto_model_class = WhisperForConditionalGeneration
-
-    # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
-    prepare_inputs_for_generation = WhisperForConditionalGeneration.prepare_inputs_for_generation
     generate = WhisperForConditionalGeneration.generate
 
     @classmethod
@@ -995,3 +1038,67 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # a dummy model attribute that's used in the generate method to compute the input stride
     # input_stride = self.model.encoder.conv1.stride[0] * self.model.encoder.conv2.stride[0]
     model = DummyWhisperModel()
+
+    def prepare_inputs_for_generation(
+        self,
+        decoder_input_ids,
+        past_key_values=None,
+        use_cache=None,
+        encoder_outputs=None,
+        attention_mask=None,
+        decoder_attention_mask=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        # Overwritten -- encoder-decoder whisper has custom logic, but it's close to the general function. Next time
+        # this function needs to be touched, let's try to sort out the commonalities between the two and remove the
+        # overwrite.
+
+        decoder_position_ids = None
+        if decoder_attention_mask is not None:
+            decoder_position_ids = (decoder_attention_mask.cumsum(-1) - 1).clamp(min=0)
+
+        past_length = 0
+        if past_key_values is not None:
+            if self.decoder.stateful:
+                past_length = getattr(self.decoder, "_past_len", 0)
+            else:
+                if isinstance(past_key_values, EncoderDecoderCache):
+                    past_length = cache_position[0] if cache_position is not None else past_key_values.get_seq_length()
+                else:
+                    past_length = past_key_values[0][0].shape[2]
+
+            # Some generation methods already pass only the last input ID
+            if decoder_input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = decoder_input_ids.shape[1] - 1
+
+            decoder_input_ids = decoder_input_ids[:, remove_prefix_length:]
+
+            if decoder_position_ids is not None:
+                decoder_position_ids = decoder_position_ids[:, remove_prefix_length:]
+                # This `clone` call is needed to avoid recapturing cuda graphs with `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case, `position_ids` is already contiguous but with varying stride which retriggers a capture.
+                decoder_position_ids = decoder_position_ids.clone(memory_format=torch.contiguous_format)
+
+        if cache_position is None:
+            cache_position = torch.arange(
+                past_length, past_length + decoder_input_ids.shape[1], device=decoder_input_ids.device
+            )
+        elif use_cache:
+            cache_position = cache_position[-decoder_input_ids.shape[1] :]
+
+        # The `contiguous()` here is necessary to have a static stride during decoding. torchdynamo otherwise
+        # recompiles graphs as the stride of the inputs is a guard. Ref: https://github.com/huggingface/transformers/pull/29114
+        decoder_input_ids = decoder_input_ids.contiguous()
+
+        return {
+            "encoder_outputs": encoder_outputs,
+            "past_key_values": past_key_values,
+            "decoder_input_ids": decoder_input_ids,
+            "use_cache": use_cache,
+            "decoder_attention_mask": decoder_attention_mask,
+            "decoder_position_ids": decoder_position_ids,
+            "cache_position": cache_position,
+        }

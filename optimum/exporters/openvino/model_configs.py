@@ -18,9 +18,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from packaging import version
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
+from optimum.exporters.onnx.base import ConfigBehavior
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
+from optimum.exporters.onnx.config import (
+    TextDecoderOnnxConfig,
+    TextDecoderWithPositionIdsOnnxConfig,
+)
 from optimum.exporters.onnx.model_configs import (
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
@@ -34,14 +38,20 @@ from optimum.exporters.onnx.model_configs import (
     IBertOnnxConfig,
     LlamaOnnxConfig,
     MistralOnnxConfig,
+    M2M100OnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    T5OnnxConfig,
     UNetOnnxConfig,
     VisionOnnxConfig,
+    VaeDecoderOnnxConfig,
+    VaeEncoderOnnxConfig,
+    WhisperOnnxConfig,
 )
+from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
-from optimum.utils import DEFAULT_DUMMY_SHAPES
+from optimum.utils import DEFAULT_DUMMY_SHAPES, DummyInputGenerator
 from optimum.utils.input_generators import (
     DTYPE_MAPPER,
     DummyInputGenerator,
@@ -90,6 +100,7 @@ from .model_patcher import (
     QwenModelPatcher,
     RotaryEmbPatcher,
     UpdateCausalMaskModelPatcher,
+    WhisperStatefulDecoderPatcher,
     XverseModelPatcher,
 )
 
@@ -2204,3 +2215,205 @@ class Phi3VisionOpenVINOConfig(OnnxConfig):
         if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
             return Phi3VisionImageEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "whisper",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "audio-classification",
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class WhisperOpenVINOConfig(WhisperOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            print("HERE")
+            return WhisperStatefulDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "t5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class T5OpenVINOConfig(T5OnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
+            self.task, self._normalized_config, **kwargs
+        )
+        dummy_decoder_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[1](
+            self.task,
+            self._normalized_config,
+            **kwargs,
+        )
+        dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2](
+            self.task,
+            self._normalized_config,
+            encoder_sequence_length=dummy_text_input_generator.sequence_length
+            if not getattr(self, "stateful", False)
+            else dummy_text_input_generator.sequence_length + 2,
+            **kwargs,
+        )
+        dummy_inputs_generators = [
+            dummy_text_input_generator,
+            dummy_decoder_text_input_generator,
+            dummy_seq2seq_past_key_values_generator,
+        ]
+
+        return dummy_inputs_generators
+
+
+@register_in_tasks_manager(
+    "mt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class MT5OpenVINOConfig(T5OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "longt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class LongT5OpenVINOConfig(T5OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "m2m-100",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class M2M100OpenVINOConfig(M2M100OnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
+            self.task, self._normalized_config, **kwargs
+        )
+        task = "feature-extraction" if self.task != "text-generation" else "text-generation"
+        dummy_decoder_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[1][task](
+            self.task, self._normalized_config, **kwargs
+        )
+        if self.task != "text-generation":
+            kwargs["encoder_sequence_length"] = dummy_text_input_generator.sequence_length
+            if getattr(self, "stateful", False):
+                kwargs["encoder_sequence_length"] = kwargs["encoder_sequence_length"] + 2
+
+        dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2][task](
+            self.task, self._normalized_config, **kwargs
+        )
+        dummy_inputs_generators = [
+            dummy_text_input_generator,
+            dummy_decoder_text_input_generator,
+            dummy_seq2seq_past_key_values_generator,
+        ]
+
+        return dummy_inputs_generators
+
+
+@register_in_tasks_manager(
+    "bart",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+        "text-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class BartOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "mbart",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+        "text-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class MBartOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "blenderbot",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "blenderbot-small",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotSmallOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "marian",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class MarianOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class PegasusOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
