@@ -374,22 +374,33 @@ def _weight_only_quantization(
     }
 
     low_cpu_mem_usage = True
+
     if use_xpu:
-        try:
-            # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
-            model = model_class.from_pretrained(
-                model_id, low_cpu_mem_usage=low_cpu_mem_usage, device_map="cpu", **loading_kwargs
-            )
-        except NotImplementedError:
-            logger.info(
-                "Failed to load models with `low_cpu_mem_usage=True`, will fall to traditional load method resulting in higher memory consumption."
-            )
-            low_cpu_mem_usage = False
-            model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
+        if hasattr(quantization_config, "use_layer_wise") and quantization_config.use_layer_wise:
+            from neural_compressor.torch import load_empty_model
+
+            model = load_empty_model(model_id, **loading_kwargs)
+        else:
+            try:
+                # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
+                model = model_class.from_pretrained(
+                    model_id, low_cpu_mem_usage=low_cpu_mem_usage, device_map="cpu", **loading_kwargs
+                )
+            except NotImplementedError:
+                logger.info(
+                    "Failed to load models with `low_cpu_mem_usage=True`, will fall to traditional load method resulting in higher memory consumption."
+                )
+                low_cpu_mem_usage = False
+                model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
             quantization_config.update(**{"device": "xpu"})
             quantization_config.post_init_xpu()
     else:
-        model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
+        if hasattr(quantization_config, "use_layer_wise") and quantization_config.use_layer_wise:
+            from neural_compressor.torch import load_empty_model
+
+            model = load_empty_model(model_id, **loading_kwargs)
+        else:
+            model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
         quantization_config.post_init_cpu()
 
     model.config.update({"low_cpu_mem_usage": low_cpu_mem_usage})
@@ -398,12 +409,6 @@ def _weight_only_quantization(
     if (not torch.cuda.is_available() or device_map == "cpu") and model.config.model_type == "chatglm":
         model = model.float()
 
-    from neural_compressor.torch import load_empty_model
-
-    model = load_empty_model(
-        model_id,
-        trust_remote_code=trust_remote_code,
-    )
     model = convert_to_quantized_model(model, quantization_config, device=device_map)
     quantization_config.remove_redundant_parameters()
     model.config.quantization_config = quantization_config
