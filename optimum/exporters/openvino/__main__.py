@@ -334,30 +334,25 @@ def main_export(
 
             GPTQQuantizer.post_init_model = post_init_model
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
-        if os.path.exists(model_name_or_path):
-            path = model_name_or_path
+        if Path(model_name_or_path).is_dir():
+            path = Path(model_name_or_path)
         else:
             from diffusers import DiffusionPipeline
             path = DiffusionPipeline.download(model_name_or_path)
         model_part_name = None
-        if os.path.exists(os.path.join(path, "transformer")):
+        if (path / "transformer").is_dir():
             model_part_name = "transformer"
-        elif os.path.exists(os.path.join(path, "unet")):
+        elif (path / "unet").is_dir():
             model_part_name = "unet"
         dtype = None
         if model_part_name:
-            directory = os.path.join(path, model_part_name)
-            safetensors_files = [f for f in os.listdir(directory) if f.endswith(".safetensors")]
+            directory = path, / model_part_name
+            safetensors_files = [filename for filename in directory.glob("*.safetensors") if len(filename.suffixes) == 1 ] 
             safetensors_file = None
             if len(safetensors_files) > 0:
                 safetensors_file = safetensors_files.pop(0)
-                # filtering out fp16, fp8, etc variants to check the default variant first
-                while (len(safetensors_files) > 0
-                       and safetensors_file[:-len(".safetensors")].find(".") != -1):
-                    safetensors_file = safetensors_files.pop(0)
             if safetensors_file:
                 from safetensors import safe_open
-                safetensors_path = os.path.join(path, model_part_name, safetensors_file)
                 with safe_open(safetensors_path, framework="pt", device="cpu") as f:
                     if len(f.keys()) > 0:
                         dtype = f.get_tensor(f.keys()[0]).dtype
