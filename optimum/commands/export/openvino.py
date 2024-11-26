@@ -136,9 +136,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help=(
             "The dataset used for data-aware compression or quantization with NNCF. "
-            "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the"
+            "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the "
             "dataset will be collected from model's generations. "
-            "For diffusion models on of ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS',"
+            "For diffusion models -- on of ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS',"
             "'laion/filtered-wit']."
             "For visual language models the dataset must be set to 'contextual'."
         ),
@@ -159,7 +159,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
             "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
-            "argument. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such "
+            "argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such "
             "case it will be skipped."
         ),
     )
@@ -198,7 +198,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=str,
         default=None,
         help=(
-            "The sensitivity metric for assigning quantization precision to layers. Can be one of the following: "
+            "The sensitivity metric for assigning quantization precision to layers. It can be one of the following: "
             "['weight_quantization_error', 'hessian_input_activation', 'mean_activation_variance', "
             "'max_activation_variance', 'mean_activation_magnitude']."
         ),
@@ -217,7 +217,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "In stateful models all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. "
             "If --disable-stateful option is used, it may result in sub-optimal inference performance. "
             "Use it when you intentionally want to use a stateless model, for example, to be compatible with existing "
-            "OpenVINO native inference code that expects kv-cache inputs and outputs in the model."
+            "OpenVINO native inference code that expects KV-cache inputs and outputs in the model."
         ),
     )
     optional_group.add_argument(
