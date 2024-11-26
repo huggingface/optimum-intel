@@ -392,21 +392,16 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
-        with TemporaryDirectory() as temp_dir:
-            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(
-                model_id, safety_checker=None, cache_dir=temp_dir
-            )
-            diffusers_pipeline.load_textual_inversion(ti_id)
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion(ti_id)
 
-            ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-                model_id, compile=False, safety_checker=None, cache_dir=temp_dir
-            )
-            ov_pipeline.load_textual_inversion(ti_id)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline.load_textual_inversion(ti_id)
 
-            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
@@ -641,21 +636,16 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(model_type="stable-diffusion")
         inputs["prompt"] = "A <cat-toy> backpack"
 
-        with TemporaryDirectory() as temp_dir:
-            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(
-                model_id, safety_checker=None, cache_dir=temp_dir
-            )
-            diffusers_pipeline.load_textual_inversion(ti_id)
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion(ti_id)
 
-            ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-                model_id, compile=False, safety_checker=None, cache_dir=temp_dir
-            )
-            ov_pipeline.load_textual_inversion(ti_id)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline.load_textual_inversion(ti_id)
 
-            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -890,18 +880,13 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
-        with TemporaryDirectory() as temp_dir:
-            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(
-                model_id, safety_checker=None, cache_dir=temp_dir
-            )
-            diffusers_pipeline.load_textual_inversion(ti_id)
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
+        diffusers_pipeline.load_textual_inversion(ti_id)
 
-            ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-                model_id, compile=False, safety_checker=None, cache_dir=temp_dir
-            )
-            ov_pipeline.load_textual_inversion(ti_id)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline.load_textual_inversion(ti_id)
 
-            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
