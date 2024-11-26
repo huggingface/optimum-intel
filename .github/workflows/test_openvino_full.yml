@@ -82,7 +82,7 @@ jobs:
         run: pip freeze
 
       - name: OpenVINO tests
-        run: pytest tests/openvino -s --durations=0
+        run: pytest tests/openvino --durations=0
         env:
           RUN_SLOW: 1
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
