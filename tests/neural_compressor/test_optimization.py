@@ -467,12 +467,14 @@ class TrainingOptimizationTest(INCTestMixin):
 
 class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
-        ("rtn", 4),
-        ("gptq", 4),
+        ("rtn", 4, False),
+        ("rtn", 4, True),
+        ("gptq", 4, False),
+        ("gptq", 4, True),
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    def test_weight_only_quantization(self, methodology, bits):
+    def test_weight_only_quantization(self, methodology, bits, use_layer_wise):
         from neural_compressor.transformers import GPTQConfig, RtnConfig
 
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
@@ -489,10 +491,10 @@ class WeightOnlyQuantizationTest(INCTestMixin):
                 batch_size=5,
                 seq_len=32,
                 block_size=16,
-                use_layer_wise=True,
+                use_layer_wise=use_layer_wise,
             )
         else:
-            quantization_config = RtnConfig(bits=bits, group_size=8, use_layer_wise=True)
+            quantization_config = RtnConfig(bits=bits, group_size=8, use_layer_wise=use_layer_wise)
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
