@@ -346,14 +346,14 @@ def main_export(
             model_part_name = "unet"
         dtype = None
         if model_part_name:
-            directory = path, / model_part_name
+            directory = path / model_part_name
             safetensors_files = [filename for filename in directory.glob("*.safetensors") if len(filename.suffixes) == 1 ] 
             safetensors_file = None
             if len(safetensors_files) > 0:
                 safetensors_file = safetensors_files.pop(0)
             if safetensors_file:
                 from safetensors import safe_open
-                with safe_open(safetensors_path, framework="pt", device="cpu") as f:
+                with safe_open(safetensors_file, framework="pt", device="cpu") as f:
                     if len(f.keys()) > 0:
                         dtype = f.get_tensor(f.keys()[0]).dtype
         if dtype in [torch.float16, torch.bfloat16]:
