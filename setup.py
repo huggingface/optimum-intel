@@ -64,7 +64,7 @@ EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.11.0"],
     "openvino": ["nncf>=2.11.0", "openvino==2024.5.0", "openvino-tokenizers==2024.5.0"],
     "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
-    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39,<4.47"],
+    "ipex": ["intel-extension-for-pytorch>=2.4", "transformers>4.45,<4.47"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
