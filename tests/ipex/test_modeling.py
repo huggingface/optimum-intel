@@ -223,10 +223,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         dtype = torch.float32
         if IS_XPU:
             dtype = torch.float16
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype)
+        # Test model forward do not need cache.
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype, use_cache=False)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        self.assertTrue(ipex_model.use_cache)
+        self.assertFalse(ipex_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
             "This is a sample",
@@ -238,18 +239,20 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
         self.assertIsInstance(outputs.logits, torch.Tensor)
 
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, use_cache=False).to(
+            device
+        )
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
-            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, use_cache=False)
             loaded_model_outputs = loaded_model(**inputs)
 
         # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
+        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True, use_cache=False)
         init_model_outputs = init_model(**inputs)
 
         # Compare tensor outputs
