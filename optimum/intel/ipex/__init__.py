@@ -13,8 +13,6 @@
 #  limitations under the License.
 
 from ..utils.import_utils import is_sentence_transformers_available
-
-
 from .modeling_base import (
     IPEXModel,
     IPEXModelForAudioClassification,
