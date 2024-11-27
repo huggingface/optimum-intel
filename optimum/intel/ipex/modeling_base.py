@@ -15,6 +15,7 @@
 
 import inspect
 import logging
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -109,6 +110,10 @@ class IPEXModel(OptimizedModel):
             and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
             and config.model_dtype not in _COMPILE_NOT_READY_MODEL_TYPES
         ):
+            from torch._inductor import config
+
+            torch._inductor.config.cpp_wrapper = True
+            os.env["TORCHINDUCTOR_FREEZING"] = 1
             logger.info("Enable torch.compile optimization, start warm up")
             self.model.forward = torch.compile(self.model.forward)
             inputs = prepare_jit_inputs(model, self.export_feature, False)
