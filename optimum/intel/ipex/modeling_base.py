@@ -103,7 +103,7 @@ class IPEXModel(OptimizedModel):
             self.auto_model_class.register(AutoConfig, self.__class__)
 
         # Non-generation tasks can use torch.compile to get acceleration.
-        if self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS:
+        if model.device.type == "cpu" and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS:
             logger.info("Enable torch.compile optimization, please warm up by your real case inputs")
             self.model.forward = torch.compile(self.model.forward)
 
@@ -187,6 +187,7 @@ class IPEXModel(OptimizedModel):
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
 
+    @torch.no_grad()
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)
 
@@ -298,6 +299,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
+    @torch.no_grad()
     def forward(
         self,
         input_ids: torch.LongTensor = None,
