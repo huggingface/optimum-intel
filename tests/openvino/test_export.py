@@ -140,6 +140,18 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.vae_decoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
+                    if hasattr(ov_model, "text_encoder") and ov_model.text_encoder:
+                        self.assertTrue(
+                            ov_model.text_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "unet") and ov_model.unet:
+                        self.assertTrue(
+                            ov_model.unet.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "transformer") and ov_model.transformer:
+                        self.assertTrue(
+                            ov_model.transformer.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
