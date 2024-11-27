@@ -42,7 +42,6 @@ from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
-from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -102,6 +101,11 @@ class IPEXModel(OptimizedModel):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         if hasattr(self.auto_model_class, "register"):
             self.auto_model_class.register(AutoConfig, self.__class__)
+
+        # Non-generation tasks can use torch.compile to get acceleration.
+        if self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS:
+            logger.info("Enable torch.compile optimization, please warm up by your real case inputs")
+            self.model.forward = torch.compile(self.model.forward)
 
     @classmethod
     def _from_transformers(cls, *args, **kwargs):
@@ -165,8 +169,6 @@ class IPEXModel(OptimizedModel):
                 )
             token = use_auth_token
 
-        commit_hash = kwargs.pop("_commit_hash", None)
-
         model_kwargs = {
             "revision": revision,
             "token": token,
@@ -174,18 +176,11 @@ class IPEXModel(OptimizedModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "torch_dtype": torch_dtype,
+            "trust_remote_code": trust_remote_code,
         }
 
-        task = cls.export_feature
-        model = TasksManager.get_model_from_task(
-            task,
-            model_id,
-            library_name="transformers",
-            trust_remote_code=trust_remote_code,
-            torch_dtype=torch_dtype,
-            _commit_hash=commit_hash,
-            **model_kwargs,
-        )
+        model = cls.auto_model_class.from_pretrained(model_id, **model_kwargs)
         config = model.config
         return cls(model, config=config, export=True, **kwargs)
 
