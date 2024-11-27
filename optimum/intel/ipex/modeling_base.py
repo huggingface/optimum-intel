@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 
-import copy
 import inspect
 import logging
 import warnings
@@ -331,8 +330,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return self.model.prepare_inputs_for_generation(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
-        new_kwargs = copy.deepcopy(kwargs)
-        if is_ipex_version("<", "2.4.0") and self._add_patch and new_kwargs.get("assistant_model", None):
+        if is_ipex_version("<", "2.4.0") and self._add_patch and kwargs.get("assistant_model", None):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
@@ -343,24 +341,30 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             if is_transformers_version(">=", "4.45.0"):
                 if "ipex_paged" not in transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS:
                     transformers.generation.configuration_utils.ALL_CACHE_IMPLEMENTATIONS.append("ipex_paged")
-            if new_kwargs.get("generation_config", None):
-                new_kwargs["generation_config"].cache_implementation = "ipex_paged"
+            if kwargs.get("generation_config", None):
+                # Change cache implementation temporarily
+                orig_cache_implementation = kwargs["generation_config"].cache_implementation
+                kwargs["generation_config"].cache_implementation = "ipex_paged"
 
-        if self._add_patch and new_kwargs.get("assistant_model", None):
+        if self._add_patch and kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
         elif self._add_patch:
             transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
 
         try:
-            result = super().generate(*args, **new_kwargs)
+            result = super().generate(*args, **kwargs)
         except Exception as e:
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
             raise e
 
-        if self._add_patch and new_kwargs.get("assistant_model", None):
+        if self._add_patch and kwargs.get("assistant_model", None):
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
+
+        # change back cache_implementation
+        if self._add_patch and kwargs.get("generation_config", None):
+            kwargs["generation_config"].cache_implementation = orig_cache_implementation
 
         return result
 

@@ -34,6 +34,9 @@ from optimum.intel.ipex.modeling_base import (
 from optimum.intel.pipelines import pipeline as ipex_pipeline
 
 
+torch.use_deterministic_algorithms(True)
+
+
 class PipelinesIntegrationTest(unittest.TestCase):
     COMMON_SUPPORTED_ARCHITECTURES = (
         "albert",
