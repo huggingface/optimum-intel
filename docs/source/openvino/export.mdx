@@ -29,13 +29,14 @@ optimum-cli export openvino --model local_llama --task text-generation-with-past
 
 Check out the help for more options:
 
-```bash
+```text
 usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,tf}] [--trust-remote-code]
                                    [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4}]
                                    [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
                                    [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
-                                   [--group-size GROUP_SIZE] [--dataset DATASET] [--all-layers] [--awq]
-                                   [--scale-estimation] [--gptq] [--sensitivity-metric SENSITIVITY_METRIC]
+                                   [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
+                                   [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--gptq]
+                                   [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
                                    output
 
@@ -49,15 +50,15 @@ Required arguments:
 
 Optional arguments:
   --task TASK           The task to export the model for. If not specified, the task will be auto-inferred based on
-                        the model. Available tasks depend on the model, but are among: ['fill-mask', 'masked-im',
-                        'audio-classification', 'automatic-speech-recognition', 'text-to-audio', 'image-text-to-text',
-                        'depth-estimation', 'image-to-image', 'text-generation', 'text-to-image', 'mask-generation',
-                        'audio-frame-classification', 'sentence-similarity', 'image-classification', 'multiple-
-                        choice', 'text-classification', 'text2text-generation', 'token-classification', 'feature-
-                        extraction', 'zero-shot-image-classification', 'zero-shot-object-detection', 'object-
-                        detection', 'inpainting', 'question-answering', 'semantic-segmentation', 'image-segmentation',
-                        'audio-xvector', 'image-to-text']. For decoder models, use `xxx-with-past` to export the model
-                        using past key values in the decoder.
+                        the model. Available tasks depend on the model, but are among: ['image-to-image',
+                        'image-segmentation', 'inpainting', 'sentence-similarity', 'text-to-audio', 'image-to-text',
+                        'automatic-speech-recognition', 'token-classification', 'text-to-image', 'audio-classification',
+                        'feature-extraction', 'semantic-segmentation', 'masked-im', 'audio-xvector',
+                        'audio-frame-classification', 'text2text-generation', 'multiple-choice', 'depth-estimation',
+                        'image-classification', 'fill-mask', 'zero-shot-object-detection', 'object-detection',
+                        'question-answering', 'zero-shot-image-classification', 'mask-generation', 'text-generation',
+                        'text-classification']. For decoder models, use 'xxx-with-past' to export the model using past
+                        key values in the decoder.
   --framework {pt,tf}   The framework to use for the export. If not provided, will attempt to use the local
                         checkpoint's original framework or what is available in the environment.
   --trust-remote-code   Allows to use custom code for the modeling hosted in the model repository. This option should
@@ -82,10 +83,18 @@ Optional arguments:
   --group-size GROUP_SIZE
                         The group size to use for quantization. Recommended value is 128 and -1 uses per-column
                         quantization.
-  --dataset DATASET     The dataset used for data-aware compression or quantization with NNCF. You can use the one
-                        from the list ['wikitext2','c4','c4-new'] for language models or
-                        ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for
-                        diffusion models.
+  --backup-precision {none,int8_sym,int8_asym}
+                        Defines a backup precision for mixed-precision weight compression. Only valid for int4 weight
+                        format. If not provided, backup precision is int8_asym. 'none' stands for original floating-
+                        point precision of the model weights, in this case weights are retained in their original
+                        precision without any quantization. 'int8_sym' stands for 8-bit integer symmetric quantization
+                        without zero point. 'int8_asym' stands for 8-bit integer asymmetric quantization with zero
+                        points per each quantization group.
+  --dataset DATASET     The dataset used for data-aware compression or quantization with NNCF. For language models you
+                        can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the dataset will
+                        be collected from model's generations. For diffusion models it should be on of
+                        ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. For
+                        visual language models the dataset must be set to 'contextual'.
   --all-layers          Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an
                         weight compression is applied, they are compressed to INT8.
   --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but
@@ -98,6 +107,10 @@ Optional arguments:
   --gptq                Indicates whether to apply GPTQ algorithm that optimizes compressed weights in a layer-wise
                         fashion to minimize the difference between activations of a compressed and original layer.
                         Please note, that applying GPTQ takes additional memory and time.
+  --lora-correction     Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm introduces
+                        low-rank adaptation layers in the model that can recover accuracy after weight compression at
+                        some cost of inference latency. Please note, that applying LoRA Correction algorithm takes
+                        additional memory and time.
   --sensitivity-metric SENSITIVITY_METRIC
                         The sensitivity metric for assigning quantization precision to layers. It can be one of the
                         following: ['weight_quantization_error', 'hessian_input_activation',
