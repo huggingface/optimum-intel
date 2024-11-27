@@ -166,6 +166,28 @@ calibration_dataset = quantizer.get_calibration_dataset(
 The `quantize()` method applies post-training static quantization and export the resulting quantized model to the OpenVINO Intermediate Representation (IR). The resulting graph is represented with two files: an XML file describing the network topology and a binary file describing the weights. The resulting model can be run on any target Intel device.
 
 
+## Whisper Quantization
+
+
+Whisper model can be quantized without the need for preparing a custom calibration dataset. Please see example below.
+
+```python
+ov_model = OVModelForSpeechSeq2Seq.from_pretrained("openai/whisper-large-v3-turbo", load_in_8bit=False)
+ov_quantizer = OVQuantizer(ov_model)
+ov_quantizer.quantize(
+    ov_config=OVConfig(
+        quantization_config=OVQuantizationConfig(
+            num_samples=10,
+            dataset="librispeech",
+            processor=model_id,
+            matmul_sq_alpha=0.9,
+        )
+    )
+)
+```
+
+With this, encoder, decoder and decoder-with-past models of the Whisper pipeline will be fully quantized, including activations.
+
 ###  Hybrid quantization
 
 Traditional optimization methods like post-training 8-bit quantization do not work well for Stable Diffusion (SD) models and can lead to poor generation results. On the other hand, weight compression does not improve performance significantly when applied to Stable Diffusion models, as the size of activations is comparable to weights.
