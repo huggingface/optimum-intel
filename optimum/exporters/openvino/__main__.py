@@ -35,6 +35,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
+    is_safetensors_available,
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
@@ -332,7 +333,7 @@ def main_export(
                 return model
 
             GPTQQuantizer.post_init_model = post_init_model
-    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+    elif library_name == "diffusers" and is_safetensors_available() and is_openvino_version(">=", "2024.6"):
         if Path(model_name_or_path).is_dir():
             path = Path(model_name_or_path)
         else:
