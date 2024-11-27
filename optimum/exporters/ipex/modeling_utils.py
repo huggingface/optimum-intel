@@ -602,11 +602,11 @@ class _IPEXLlamaAttention(_IPEXAttention):
         self.q_slice = self.q_proj.out_features
         self.k_slice = self.q_slice + self.k_proj.out_features
         self.v_slice = self.k_slice + self.v_proj.out_features
-        if self.module_device == "cpu":
+        if self.module_device.type == "cpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = LinearAdd(module.o_proj)
 
-        elif self.module_device == "xpu":
+        elif self.module_device.type == "xpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = XPULinearAdd(module.o_proj)
 
