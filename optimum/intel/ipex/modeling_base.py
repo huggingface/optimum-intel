@@ -108,7 +108,7 @@ class IPEXModel(OptimizedModel):
         if (
             model.device.type == "cpu"
             and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
-            and config.model_dtype not in _COMPILE_NOT_READY_MODEL_TYPES
+            and config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
         ):
             from torch._inductor import config
 
