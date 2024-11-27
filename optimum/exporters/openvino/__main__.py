@@ -338,12 +338,12 @@ def main_export(
         else:
             from diffusers import DiffusionPipeline
             path = DiffusionPipeline.download(model_name_or_path,
-                                                                     revision=revision,
-                                                                     cache_dir=cache_dir,
-                                                                     token=token,
-                                                                     local_files_only=local_files_only,
-                                                                     force_download=force_download,
-                                                                     trust_remote_code=trust_remote_code)
+                                              revision=revision,
+                                              cache_dir=cache_dir,
+                                              token=token,
+                                              local_files_only=local_files_only,
+                                              force_download=force_download,
+                                              trust_remote_code=trust_remote_code)
         model_part_name = None
         if (path / "transformer").is_dir():
             model_part_name = "transformer"
