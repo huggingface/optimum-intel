@@ -144,6 +144,14 @@ class ExportModelTest(unittest.TestCase):
                         self.assertTrue(
                             ov_model.text_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                         )
+                    if hasattr(ov_model, "text_encoder_2") and ov_model.text_encoder_2:
+                        self.assertTrue(
+                            ov_model.text_encoder_2.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "text_encoder_3") and ov_model.text_encoder_3:
+                        self.assertTrue(
+                            ov_model.text_encoder_3.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
                     if hasattr(ov_model, "unet") and ov_model.unet:
                         self.assertTrue(
                             ov_model.unet.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
