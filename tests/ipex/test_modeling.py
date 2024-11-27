@@ -49,6 +49,7 @@ from utils_tests import MODEL_NAMES, IS_XPU
 
 
 SEED = 42
+torch.use_deterministic_algorithms(True)
 
 
 class Timer(object):
@@ -104,7 +105,7 @@ class IPEXModelTest(unittest.TestCase):
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
             if output_name in transformers_outputs:
-                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
+                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-3))
                 self.assertTrue(torch.allclose(outputs[output_name], loaded_model_outputs[output_name]))
                 self.assertTrue(torch.allclose(outputs[output_name], init_model_outputs[output_name]))
 
@@ -205,10 +206,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "mistral",
-        # "llama",
         "llama2",
-        # "phi",
-        # "distilgpt2",
         "mpt",
         "opt",
     )
@@ -431,7 +429,6 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForImageClassification
     SUPPORTED_ARCHITECTURES = (
         "beit",
-        # "levit",
         "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",

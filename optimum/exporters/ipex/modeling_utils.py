@@ -507,7 +507,7 @@ class _IPEXAttention(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = next(module.parameters()).device.type
+        self.module_device = next(module.parameters()).device
         self.num_groups = self.num_heads // self.num_key_value_heads
         self.kv_head_mapping = torch.arange(
             0, self.num_key_value_heads, dtype=torch.int32, device=self.module_device
