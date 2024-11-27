@@ -15,14 +15,12 @@
 
 import inspect
 import logging
-import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
 import torch
 import transformers
-from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -36,12 +34,14 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    PreTrainedModel,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
+from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -51,6 +51,7 @@ from ...exporters.ipex.model_patcher import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
+from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_ipex_version, is_transformers_version
 
 
@@ -67,6 +68,16 @@ def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if not use_cache and task in _IPEX_EXPORTED_GENERATION_TASKS:
         return False
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
+
+
+def prepare_compile_warm_up_inputs(model: PreTrainedModel, task: str):
+    task = _TASK_ALIASES.get(task, task)
+    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
+    onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+    onnx_config = onnx_config_class(model.config)
+    dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+
+    return {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
 
 
 class IPEXModel(OptimizedModel):
@@ -106,6 +117,10 @@ class IPEXModel(OptimizedModel):
         if model.device.type == "cpu" and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS:
             logger.info("Enable torch.compile optimization, please warm up by your real case inputs")
             self.model.forward = torch.compile(self.model.forward)
+            inputs = prepare_compile_warm_up_inputs(model, self.export_feature)
+            with torch.no_grad():
+                self.model(**inputs)
+                self.model(**inputs)
 
     @classmethod
     def _from_transformers(cls, *args, **kwargs):
@@ -116,15 +131,6 @@ class IPEXModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: Union[str, Path] = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
-        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -136,53 +142,9 @@ class IPEXModel(OptimizedModel):
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
-            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
-                Deprecated. Please use `token` instead.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`, *optional*):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id.
-            force_download (`bool`, defaults to `False`):
-                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
-                cached versions if they exist.
-            cache_dir (`Union[str, Path]`, *optional*):
-                The path to a directory in which a downloaded pretrained model configuration should be cached if the
-                standard cache should not be used.
-            subfolder (`str`, *optional*)
-                In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can specify the folder name here.
-            local_files_only (`bool`, *optional*, defaults to `False`):
-                Whether or not to only look at local files (i.e., do not try to download the model).
-            torch_dtype (`Optional[Union[str, "torch.dtype"]]`, *optional*)
-                float16 or bfloat16 or float32: load in a specified dtype, ignoring the model config.torch_dtype if one exists. If not specified, the model will get loaded in float32.
-            trust_remote_code (`bool`, *optional*)
-                Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the model repository.
         """
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError(
-                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
-                )
-            token = use_auth_token
-
-        model_kwargs = {
-            "revision": revision,
-            "token": token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "torch_dtype": torch_dtype,
-            "trust_remote_code": trust_remote_code,
-        }
-
-        model = cls.auto_model_class.from_pretrained(model_id, **model_kwargs)
-        config = model.config
-        return cls(model, config=config, export=True, **kwargs)
+        model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
+        return cls(model, config=model.config, export=True, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
