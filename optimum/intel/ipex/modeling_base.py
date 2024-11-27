@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
-# TODO: Try to fix these models compile issue in torch 2.6
+# TODO: Fix these models compile issue in torch 2.6
 _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "beit")
 
 
@@ -112,6 +112,7 @@ class IPEXModel(OptimizedModel):
         ):
             from torch._inductor import config
 
+            # System level optimization
             torch._inductor.config.cpp_wrapper = True
             os.environ["TORCHINDUCTOR_FREEZING"] = "1"
             logger.info("Enable torch.compile optimization, start warm up")
