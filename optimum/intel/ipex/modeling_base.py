@@ -15,14 +15,13 @@
 
 import inspect
 import logging
-import warnings
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
 import torch
 import transformers
-from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -42,7 +41,6 @@ from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
-from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -52,6 +50,7 @@ from ...exporters.ipex.model_patcher import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
+from ..generation.modeling import TSModelForCausalLM, prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_transformers_version
 
 
@@ -60,6 +59,9 @@ logger = logging.getLogger(__name__)
 
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
+_IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
+# TODO: Already fixed in torch 2.6, will enable when torch upgrading to 2.6
+_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "beit")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
@@ -103,6 +105,26 @@ class IPEXModel(OptimizedModel):
         if hasattr(self.auto_model_class, "register"):
             self.auto_model_class.register(AutoConfig, self.__class__)
 
+        # Non-generation tasks can use torch.compile to get acceleration.
+        if (
+            model.device.type == "cpu"
+            and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
+            and config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
+            and is_ipex_version(">=", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
+        ):
+            from torch._inductor import config
+
+            # System level optimization
+            torch._inductor.config.cpp_wrapper = True
+            os.environ["TORCHINDUCTOR_FREEZING"] = "1"
+            logger.info("Enable torch.compile optimization, start warm up")
+            self.model.forward = torch.compile(self.model.forward)
+            inputs = prepare_jit_inputs(model, self.export_feature, False)
+            with torch.no_grad():
+                self.model(**inputs)
+                self.model(**inputs)
+            logger.info("Warm up end")
+
     @classmethod
     def _from_transformers(cls, *args, **kwargs):
         return cls._from_pretrained(*args, **kwargs)
@@ -112,15 +134,6 @@ class IPEXModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: Union[str, Path] = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
-        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -132,66 +145,20 @@ class IPEXModel(OptimizedModel):
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
-            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
-                Deprecated. Please use `token` instead.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`, *optional*):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id.
-            force_download (`bool`, defaults to `False`):
-                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
-                cached versions if they exist.
-            cache_dir (`Union[str, Path]`, *optional*):
-                The path to a directory in which a downloaded pretrained model configuration should be cached if the
-                standard cache should not be used.
-            subfolder (`str`, *optional*)
-                In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can specify the folder name here.
-            local_files_only (`bool`, *optional*, defaults to `False`):
-                Whether or not to only look at local files (i.e., do not try to download the model).
-            torch_dtype (`Optional[Union[str, "torch.dtype"]]`, *optional*)
-                float16 or bfloat16 or float32: load in a specified dtype, ignoring the model config.torch_dtype if one exists. If not specified, the model will get loaded in float32.
-            trust_remote_code (`bool`, *optional*)
-                Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the model repository.
         """
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                FutureWarning,
+        if getattr(config, "torchscript", False):
+            logger.warning(
+                "IPEXModel will not support torch script model in the future, fallback to TSModelForCausalLM"
             )
-            if token is not None:
-                raise ValueError(
-                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
-                )
-            token = use_auth_token
+            return TSModelForCausalLM.from_pretrained(model_id, **kwargs)
 
-        commit_hash = kwargs.pop("_commit_hash", None)
-
-        model_kwargs = {
-            "revision": revision,
-            "token": token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-        }
-
-        task = cls.export_feature
-        model = TasksManager.get_model_from_task(
-            task,
-            model_id,
-            library_name="transformers",
-            trust_remote_code=trust_remote_code,
-            torch_dtype=torch_dtype,
-            _commit_hash=commit_hash,
-            **model_kwargs,
-        )
-        config = model.config
-        return cls(model, config=config, export=True, **kwargs)
+        model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
+        return cls(model, config=model.config, export=True, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
 
+    @torch.no_grad()
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)
 
@@ -303,6 +270,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
+    @torch.no_grad()
     def forward(
         self,
         input_ids: torch.LongTensor = None,

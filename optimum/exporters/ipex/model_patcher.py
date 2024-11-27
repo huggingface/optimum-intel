@@ -75,7 +75,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 def _patch_llama_model(model):
     """
     Patch llama model:
-        1. Use IPEX Rope and Paged cache
+        1. Use IPEX rope and paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
@@ -87,9 +87,8 @@ def _patch_llama_model(model):
 def _patch_falcon_model(model):
     """
     Patch falcon model:
-        1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IPEX Rope and paged cache
-        3. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
+        1. Use IPEX rope and paged cache
+        2. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
     """
     num_key_value_heads = (
         model.config.num_kv_heads if (model.config.new_decoder_architecture or not model.config.multi_query) else 1
@@ -104,8 +103,7 @@ def _patch_falcon_model(model):
 def _patch_gpt2_model(model):
     """
     Patch gpt2 model:
-        1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IAKV cache
+        1. Use IPEX paged attention
     """
     num_key_value_heads = model.config.num_attention_heads
     setattr(model.config, "num_key_value_heads", num_key_value_heads)
