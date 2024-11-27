@@ -815,17 +815,24 @@ class OVQuantizer(OptimumQuantizer):
         from datasets import load_dataset
 
         encoder_calibration_data = []
-        decoder_calibration_data = []
-
         encoder_model = self.model.encoder
         encoder_model._compile()
         encoder_model.request = InferRequestWrapper(
             encoder_model.request, encoder_calibration_data, apply_caching=True
         )
-        decoder_model = self.model.decoder_with_past
+
+        decoder_calibration_data = []
+        decoder_model = self.model.decoder
         decoder_model._compile()
         decoder_model.request = InferRequestWrapper(
             decoder_model.request, decoder_calibration_data, apply_caching=True
+        )
+
+        decoder_w_p_calibration_data = []
+        decoder_w_p_model = self.model.decoder_with_past
+        decoder_w_p_model._compile()
+        decoder_w_p_model.request = InferRequestWrapper(
+            decoder_w_p_model.request, decoder_w_p_calibration_data, apply_caching=True
         )
 
         dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
@@ -860,8 +867,13 @@ class OVQuantizer(OptimumQuantizer):
         finally:
             encoder_model.request = encoder_model.request.request
             decoder_model.request = decoder_model.request.request
+            decoder_w_p_model.request = decoder_w_p_model.request.request
 
-        return nncf.Dataset(encoder_calibration_data), nncf.Dataset(decoder_calibration_data)
+        return (
+            nncf.Dataset(encoder_calibration_data),
+            nncf.Dataset(decoder_calibration_data),
+            nncf.Dataset(decoder_w_p_calibration_data),
+        )
 
     def _prepare_text_generation_dataset(
         self, quantization_config: OVQuantizationConfigBase, calibration_dataloader: OVDataLoader
@@ -955,31 +967,34 @@ class OVQuantizer(OptimumQuantizer):
     def _quantize_whisper_model(self, quantization_config, calibration_dataset, **kwargs):
         # Quantize encoder model
         # quantization_config.num_samples of audio samples result in more actual model inputs
-        encoder_config = copy.deepcopy(quantization_config)
-        encoder_config.num_samples = calibration_dataset[0].get_length()
+        config = copy.deepcopy(quantization_config)
+        config.num_samples = calibration_dataset[0].get_length()
         quantized_encoder_model = _full_quantization(
-            self.model.encoder_model, encoder_config, calibration_dataset[0], **kwargs
+            self.model.encoder_model, config, calibration_dataset[0], **kwargs
         )
         self.model.encoder_model = quantized_encoder_model
         self.model.encoder.model = quantized_encoder_model
         self.model.encoder.request = None
 
-        # Quantize decoder with past model
-        decoder_config = copy.deepcopy(quantization_config)
-        decoder_config.num_samples = calibration_dataset[1].get_length()
+        # Quantize decoder model
+        config = copy.deepcopy(quantization_config)
+        config.num_samples = calibration_dataset[1].get_length()
         quantized_decoder_model = _full_quantization(
-            self.model.decoder_with_past_model, decoder_config, calibration_dataset[1], **kwargs
+            self.model.decoder_model, config, calibration_dataset[1], **kwargs
         )
-        self.model.decoder_with_past_model = quantized_decoder_model
-        self.model.decoder_with_past.model = quantized_decoder_model
-        self.model.decoder_with_past.request = None
+        self.model.decoder_model = quantized_decoder_model
+        self.model.decoder.model = quantized_decoder_model
+        self.model.decoder.request = None
 
-        # Compress decoder model
-        compressed_decoder_model = _weight_only_quantization(
-            self.model.decoder_model, OVWeightQuantizationConfig(bits=8, sym=False), **kwargs
+        # Quantize decoder with past model
+        config = copy.deepcopy(quantization_config)
+        config.num_samples = calibration_dataset[2].get_length()
+        quantized_decoder_w_p_model = _full_quantization(
+            self.model.decoder_with_past_model, config, calibration_dataset[2], **kwargs
         )
-        self.model.decoder.model = compressed_decoder_model
-        self.model.decoder_model = compressed_decoder_model
+        self.model.decoder_with_past_model = quantized_decoder_w_p_model
+        self.model.decoder_with_past.model = quantized_decoder_w_p_model
+        self.model.decoder_with_past.request = None
 
 
 def _weight_only_quantization(

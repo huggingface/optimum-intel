@@ -103,8 +103,8 @@ class OVQuantizerTest(unittest.TestCase):
                 processor=MODEL_NAMES["whisper"],
                 matmul_sq_alpha=0.5,
             ),
-            (26, 0, 49),
-            (26, 84, 34),
+            (26, 42, 49),
+            (26, 42, 34),
         ),
     ]
 
