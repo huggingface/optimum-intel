@@ -34,14 +34,12 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    PreTrainedModel,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
-from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -51,7 +49,7 @@ from ...exporters.ipex.model_patcher import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
-from ..utils.constant import _TASK_ALIASES
+from ..generation.modeling import TSModelForCausalLM, prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_transformers_version
 
 
@@ -60,6 +58,8 @@ logger = logging.getLogger(__name__)
 
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
+# TODO: Try to fix these models compile issue in torch 2.6
+_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "beit")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
@@ -68,16 +68,6 @@ def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if not use_cache and task in _IPEX_EXPORTED_GENERATION_TASKS:
         return False
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
-
-
-def prepare_compile_warm_up_inputs(model: PreTrainedModel, task: str):
-    task = _TASK_ALIASES.get(task, task)
-    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
-    onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-    onnx_config = onnx_config_class(model.config)
-    dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-
-    return {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
 
 
 class IPEXModel(OptimizedModel):
@@ -114,13 +104,18 @@ class IPEXModel(OptimizedModel):
             self.auto_model_class.register(AutoConfig, self.__class__)
 
         # Non-generation tasks can use torch.compile to get acceleration.
-        if model.device.type == "cpu" and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS:
-            logger.info("Enable torch.compile optimization, please warm up by your real case inputs")
+        if (
+            model.device.type == "cpu"
+            and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
+            and config.model_dtype not in _COMPILE_NOT_READY_MODEL_TYPES
+        ):
+            logger.info("Enable torch.compile optimization, start warm up")
             self.model.forward = torch.compile(self.model.forward)
-            inputs = prepare_compile_warm_up_inputs(model, self.export_feature)
+            inputs = prepare_jit_inputs(model, self.export_feature, False)
             with torch.no_grad():
                 self.model(**inputs)
                 self.model(**inputs)
+            logger.info("Warm up end")
 
     @classmethod
     def _from_transformers(cls, *args, **kwargs):
@@ -143,6 +138,10 @@ class IPEXModel(OptimizedModel):
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
         """
+        if getattr(config, "torchscript", False):
+            logger.warning("IPEXModel will not support torch script model in the future.")
+            return TSModelForCausalLM.from_pretrained(model_id, **kwargs)
+
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
         return cls(model, config=model.config, export=True, **kwargs)
 
