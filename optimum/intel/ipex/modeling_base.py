@@ -59,7 +59,8 @@ logger = logging.getLogger(__name__)
 
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
-# TODO: Fix these models compile issue in torch 2.6
+_IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
+# TODO: Already fixed in torch 2.6, will enable when torch upgrading to 2.6
 _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "beit")
 
 
@@ -109,6 +110,7 @@ class IPEXModel(OptimizedModel):
             model.device.type == "cpu"
             and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
             and config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
+            and is_ipex_version(">=", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
         ):
             from torch._inductor import config
 
@@ -145,7 +147,9 @@ class IPEXModel(OptimizedModel):
                     - The path to a directory containing the model weights.
         """
         if getattr(config, "torchscript", False):
-            logger.warning("IPEXModel will not support torch script model in the future.")
+            logger.warning(
+                "IPEXModel will not support torch script model in the future, fallback to TSModelForCausalLM"
+            )
             return TSModelForCausalLM.from_pretrained(model_id, **kwargs)
 
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
