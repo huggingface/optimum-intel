@@ -93,6 +93,20 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
     )
+    SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            dict(
+                dataset="librispeech",
+                num_samples=1,
+                processor=MODEL_NAMES["whisper"],
+                matmul_sq_alpha=0.5,
+            ),
+            (26, 0, 49),
+            (26, 84, 34),
+        ),
+    ]
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
     def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
@@ -175,6 +189,38 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
+    def test_ov_model_static_quantization_with_auto_dataset(
+        self, model_cls, model_name, quantization_config, expected_fake_quantize, expected_int8
+    ):
+        model_id = MODEL_NAMES[model_name]
+
+        with TemporaryDirectory() as tmp_dir:
+            ov_model = model_cls.from_pretrained(model_id, export=True)
+            quantizer = OVQuantizer.from_pretrained(ov_model)
+
+            ov_config = OVConfig(quantization_config=quantization_config)
+            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
+
+            ov_model = model_cls.from_pretrained(tmp_dir)
+
+            if model_cls == OVModelForSpeechSeq2Seq:
+                for model, expected_fq, expected_i8 in zip(
+                    (ov_model.encoder.model, ov_model.decoder.model, ov_model.decoder_with_past.model),
+                    expected_fake_quantize,
+                    expected_int8,
+                ):
+                    num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
+                    self.assertEqual(expected_fq, num_fake_quantize)
+                    self.assertEqual(expected_i8, num_weight_nodes["int8"])
+
+                input_features = torch.randn((1, 80, 3000), dtype=torch.float32)
+                ov_model.generate(input_features)
 
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
