@@ -88,8 +88,8 @@ Optional arguments:
                         format. If not provided, backup precision is int8_asym. 'none' stands for original floating-
                         point precision of the model weights, in this case weights are retained in their original
                         precision without any quantization. 'int8_sym' stands for 8-bit integer symmetric quantization
-                        without zero point. 'int8_asym' stands for 8-bit integer asymmetric quantization with a
-                        typical non-fixed zero point.
+                        without zero point. 'int8_asym' stands for 8-bit integer asymmetric quantization with zero
+                        points per each quantization group.
   --dataset DATASET     The dataset used for data-aware compression or quantization with NNCF. For language models you
                         can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the dataset will
                         be collected from model's generations. For diffusion models it should be on of
@@ -107,9 +107,10 @@ Optional arguments:
   --gptq                Indicates whether to apply GPTQ algorithm that optimizes compressed weights in a layer-wise
                         fashion to minimize the difference between activations of a compressed and original layer.
                         Please note, that applying GPTQ takes additional memory and time.
-  --lora-correction     Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm mitigates
-                        quantization noise introduced during weight compression by leveraging low-rank adaptation.
-                        Please note, that applying LoRA Correction algorithm takes additional memory and time.
+  --lora-correction     Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm introduces
+                        low-rank adaptation layers in the model that can recover accuracy after weight compression at
+                        some cost of inference latency. Please note, that applying LoRA Correction algorithm takes
+                        additional memory and time.
   --sensitivity-metric SENSITIVITY_METRIC
                         The sensitivity metric for assigning quantization precision to layers. It can be one of the
                         following: ['weight_quantization_error', 'hessian_input_activation',

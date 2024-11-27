@@ -127,7 +127,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "If not provided, backup precision is int8_asym. 'none' stands for original floating-point precision of "
             "the model weights, in this case weights are retained in their original precision without any "
             "quantization. 'int8_sym' stands for 8-bit integer symmetric quantization without zero point. 'int8_asym' "
-            "stands for 8-bit integer asymmetric quantization with a typical non-fixed zero point."
+            "stands for 8-bit integer asymmetric quantization with zero points per each quantization group."
         ),
     )
     optional_group.add_argument(
@@ -188,9 +188,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         default=None,
         help=(
-            "Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm mitigates quantization "
-            "noise introduced during weight compression by leveraging low-rank adaptation. Please note, that applying "
-            "LoRA Correction algorithm takes additional memory and time."
+            "Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank "
+            "adaptation layers in the model that can recover accuracy after weight compression at some cost of "
+            "inference latency. Please note, that applying LoRA Correction algorithm takes additional memory and time."
         ),
     )
     optional_group.add_argument(

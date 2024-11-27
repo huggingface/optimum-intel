@@ -360,16 +360,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing files required by the processor, for instance saved
                     using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
         lora_correction (`bool`, *optional*):
-            If True, apply LoRA Correction algorithm. When enabled, this algorithm mitigates quantization noise
-            introduced during weight compression by leveraging low-rank adaptation. It calculates low-rank matrices via
-            singular value decomposition (SVD) on the difference between the original and quantized weights. These
-            matrices are iteratively refined by solving a system of linear equations to improve accuracy.
+            If True, apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank adaptation
+            layers in the model that can recover accuracy after weight compression at some cost of inference latency.
+            It calculates low-rank matrices via singular value decomposition (SVD) on the difference between the
+            original and quantized weights. These matrices are iteratively refined by solving a system of linear
+            equations to improve accuracy.
         backup_precision (`str`, defaults to None):
             Defines a backup precision for mixed-precision weight compression.
             - "none" stands for original floating-point precision of the model weights, in this case weights are
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
-            - "int8_asym" stands for 8-bit integer asymmetric quantization with a typical non-fixed zero point.
+            - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
     """
 
     def __init__(
