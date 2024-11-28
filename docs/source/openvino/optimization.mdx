@@ -172,16 +172,14 @@ The `quantize()` method applies post-training static quantization and export the
 Whisper model can be quantized without the need for preparing a custom calibration dataset. Please see example below.
 
 ```python
-ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, load_in_8bit=False)
-ov_quantizer = OVQuantizer(ov_model)
-ov_quantizer.quantize(
-    ov_config=OVConfig(
-        quantization_config=OVQuantizationConfig(
-            num_samples=10,
-            dataset="librispeech",
-            processor=model_id,
-            matmul_sq_alpha=0.9,
-        )
+model_id = "openai/whisper-tiny"
+ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+    model_id,
+    quantization_config=OVQuantizationConfig(
+        num_samples=10,
+        dataset="librispeech",
+        processor=model_id,
+        matmul_sq_alpha=0.95,
     )
 )
 ```
