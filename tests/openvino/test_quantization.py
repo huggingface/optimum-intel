@@ -104,8 +104,8 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
                 weight_only=False,
             ),
-            (14, 22, 25),
-            (14, 22, 18),
+            (14, 21 if is_transformers_version("<=", "4.36.0") else 22, 25),
+            (14, 21 if is_transformers_version("<=", "4.36.0") else 22, 18),
         ),
     ]
 
