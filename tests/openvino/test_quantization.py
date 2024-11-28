@@ -102,6 +102,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
                 matmul_sq_alpha=0.5,
+                trust_remote_code=True,
             ),
             (26, 42, 49),
             (26, 42, 34),
@@ -1100,9 +1101,9 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
-            dict(bits=4, fast_bias_correction=True, dataset="wikitext2"),
-            OVWeightQuantizationConfig,
-            "Can't determine type of OV quantization config",
+            dict(bits=8, fast_bias_correction=True, dataset="librispeech"),
+            OVQuantizationConfig,
+            None,
         ),
         (dict(model_type="transformer"), OVQuantizationConfig, None),
         (
@@ -1122,7 +1123,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
         (
-            dict(bits=4, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
+            dict(bits=8, fast_bias_correction=True, dataset="librispeech", weight_only=True),
+            OVQuantizationConfig,
+            None,
+        ),
+        (
+            dict(bits=4, dataset="wikitext2", weight_only=True),
             OVWeightQuantizationConfig,
             None,
         ),
