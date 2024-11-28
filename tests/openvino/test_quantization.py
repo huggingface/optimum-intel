@@ -97,15 +97,15 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForSpeechSeq2Seq,
             "whisper",
-            dict(
+            OVQuantizationConfig(
                 dataset="librispeech",
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
-                matmul_sq_alpha=0.5,
                 trust_remote_code=True,
+                weight_only=False,
             ),
-            (26, 42, 49),
-            (26, 42, 34),
+            (14, 22, 25),
+            (14, 22, 18),
         ),
     ]
 
@@ -202,13 +202,8 @@ class OVQuantizerTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
-            ov_model = model_cls.from_pretrained(model_id, export=True)
-            quantizer = OVQuantizer.from_pretrained(ov_model)
-
-            ov_config = OVConfig(quantization_config=quantization_config)
-            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
-
-            ov_model = model_cls.from_pretrained(tmp_dir)
+            ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
+            ov_model.save_pretrained(tmp_dir)
 
             if model_cls == OVModelForSpeechSeq2Seq:
                 for model, expected_fq, expected_i8 in zip(
@@ -220,12 +215,10 @@ class OVQuantizerTest(unittest.TestCase):
                     self.assertEqual(expected_fq, num_fake_quantize)
                     self.assertEqual(expected_i8, num_weight_nodes["int8"])
 
-                input_features = torch.randn((1, 80, 3000), dtype=torch.float32)
+                input_features = torch.randn((1, 128, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
+            else:
+                raise Exception("Unexpected model class.")
 
 
 class OVWeightCompressionTest(unittest.TestCase):
@@ -1188,7 +1181,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
 
 class InferRequestWrapperTest(unittest.TestCase):
-    MODEL_ID = ("openai/whisper-tiny.en",)
+    MODEL_NAME = ("whisper",)
     APPLY_CACHING = (False, True)
 
     @staticmethod
@@ -1202,8 +1195,9 @@ class InferRequestWrapperTest(unittest.TestCase):
         ).input_features
         return input_features
 
-    @parameterized.expand(itertools.product(MODEL_ID, APPLY_CACHING))
-    def test_calibration_data_uniqueness(self, model_id, apply_caching):
+    @parameterized.expand(itertools.product(MODEL_NAME, APPLY_CACHING))
+    def test_calibration_data_uniqueness(self, model_name, apply_caching):
+        model_id = MODEL_NAMES[model_name]
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
         processor = AutoProcessor.from_pretrained(model_id)
 

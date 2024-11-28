@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 from pathlib import Path
@@ -35,7 +35,9 @@ from transformers.file_utils import add_start_docstrings, add_start_docstrings_t
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
+from .. import OVConfig, OVQuantizer
 from ..utils import is_transformers_version
+from .configuration import OVQuantizationConfig, OVQuantizationConfigBase
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
 
@@ -975,9 +977,25 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         cls,
         model_id: Union[str, Path],
         config: "PretrainedConfig",
+        load_in_8bit: bool = False,
+        quantization_config: Union[dict, OVQuantizationConfigBase] = None,
         **kwargs,
     ):
-        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+        compile_only = kwargs.get("compile_only", False)
+
+        if not compile_only and isinstance(quantization_config, OVQuantizationConfig):
+            model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
+                model_id, config, load_in_8bit=False, **kwargs
+            )
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.processor = quantization_config.processor or model_id
+            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        else:
+            model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
+                model_id, config, load_in_8bit=load_in_8bit, quantization_config=quantization_config, **kwargs
+            )
+
+        return model
 
     class DummyWhisperModel:
         def __init__(self):
