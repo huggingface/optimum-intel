@@ -375,12 +375,12 @@ def _weight_only_quantization(
 
     low_cpu_mem_usage = True
 
-    if use_xpu:
-        if getattr(quantization_config, "use_layer_wise", False):
-            from neural_compressor.torch import load_empty_model
+    if getattr(quantization_config, "use_layer_wise", False):
+        from neural_compressor.torch import load_empty_model
 
-            model = load_empty_model(model_id, cls=model_class, trust_remote_code=trust_remote_code)
-        else:
+        model = load_empty_model(model_id, cls=model_class, trust_remote_code=trust_remote_code)
+    else:
+        if use_xpu:
             try:
                 # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
                 model = model_class.from_pretrained(
@@ -394,14 +394,9 @@ def _weight_only_quantization(
                 model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
             quantization_config.update(**{"device": "xpu"})
             quantization_config.post_init_xpu()
-    else:
-        if hasattr(quantization_config, "use_layer_wise") and quantization_config.use_layer_wise:
-            from neural_compressor.torch import load_empty_model
-
-            model = load_empty_model(model_id, cls=model_class, trust_remote_code=trust_remote_code)
         else:
             model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
-        quantization_config.post_init_cpu()
+            quantization_config.post_init_cpu()
 
     model.config.update({"low_cpu_mem_usage": low_cpu_mem_usage})
     model.eval()
