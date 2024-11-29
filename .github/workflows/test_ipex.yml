@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        torch-version: ["2.2.0", "2.3.*", "2.4.*"]
+        torch-version: ["2.2.0", "2.3.*"]
         transformers-version: ["4.39.0", "4.44.*"]
 
     runs-on: ubuntu-22.04

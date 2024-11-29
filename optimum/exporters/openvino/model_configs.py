@@ -79,6 +79,7 @@ from .model_patcher import (
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    MiniCPM3Patcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
@@ -190,6 +191,60 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+class OVMiniCPM3DummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        self.v_head_dim = getattr(normalized_config, "v_head_dim", self.hidden_size // self.num_attention_heads)
+        self.k_head_dim = normalized_config.qk_nope_head_dim + normalized_config.qk_rope_head_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        v_shape = (
+            self.batch_size,
+            self.num_key_value_heads,
+            self.sequence_length,
+            self.v_head_dim,
+        )
+        k_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.k_head_dim)
+        return [
+            (
+                self.random_float_tensor(k_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(v_shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
+
+
+@register_in_tasks_manager("minicpm3", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return MiniCPM3Patcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")

@@ -314,9 +314,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression with NNCF. For language models you can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new']. For diffusion models it
-            must be one of ['conceptual_captions', 'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            The dataset used for data-aware compression with NNCF.
+            - For language models you can provide your own dataset in a list of strings or just use one from the list
+                ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
+            - For diffusion models the dataset must be one of ['conceptual_captions',
+                'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            - For visual language models the dataset must be set to 'contextual'.
             Alternatively, you can provide data objects via `calibration_dataset` argument of `OVQuantizer.quantize()`
             method.
         ratio (`float`, defaults to 1.0):
@@ -356,6 +359,18 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
                 - A path to a *directory* containing files required by the processor, for instance saved
                     using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
+        lora_correction (`bool`, *optional*):
+            If True, apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank adaptation
+            layers in the model that can recover accuracy after weight compression at some cost of inference latency.
+            It calculates low-rank matrices via singular value decomposition (SVD) on the difference between the
+            original and quantized weights. These matrices are iteratively refined by solving a system of linear
+            equations to improve accuracy.
+        backup_precision (`str`, defaults to None):
+            Defines a backup precision for mixed-precision weight compression.
+            - "none" stands for original floating-point precision of the model weights, in this case weights are
+                retained in their original precision without any quantization.
+            - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
+            - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
     """
 
     def __init__(
@@ -376,6 +391,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         weight_format: Optional[str] = None,
         gptq: bool = None,
         processor: Optional[str] = None,
+        lora_correction: bool = None,
+        backup_precision: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -391,6 +408,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.weight_format = weight_format
         self.gptq = gptq
         self.processor = processor
+        self.lora_correction = lora_correction
+        self.backup_precision = backup_precision
         self.post_init()
 
     def post_init(self):
@@ -408,7 +427,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            lm_datasets = ["wikitext2", "c4", "c4-new"]
+            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
             if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:
@@ -446,6 +465,20 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     "The GPTQ algorithm is not supported for 8-bit quantization and got `gptq=True`, please set `gptq=False`"
                 )
+            if self.lora_correction:
+                raise ValueError(
+                    "The LoRA Correction algorithm is not supported for 8-bit quantization and got `lora_correction=True`, please set `lora_correction=False`"
+                )
+            if self.backup_precision is not None:
+                raise ValueError(
+                    f"The `backup_precision` parameter is not supported for 8-bit quantization and got "
+                    f"`backup_precision={self.backup_precision}`, please set `backup_precision=None`"
+                )
+
+        if self.backup_precision is not None and self.backup_precision not in ["none", "int8_sym", "int8_asym"]:
+            raise ValueError(
+                f"`backup_precision` parameter must be on of the following: ['none', 'int8_sym', 'int8_asym'], but found{self.backup_precision}"
+            )
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
@@ -464,14 +497,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     f"When applying weight compression with '{self.weight_format}' weight format, the `bits` parameter must be set to 4, but found {self.bits}"
                 )
-            if self.quant_method == OVQuantizationMethod.AWQ:
-                raise ValueError(f"The AWQ algorithm is not supported for '{self.weight_format}' weight format")
-            if self.scale_estimation:
-                raise ValueError(
-                    f"The Scale Estimation algorithm is not supported for '{self.weight_format}' weight format"
-                )
-            if self.weight_format == "mxfp4" and self.gptq:
-                raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+            if self.weight_format == "mxfp4":
+                if self.quant_method == OVQuantizationMethod.AWQ:
+                    raise ValueError("The AWQ algorithm is not supported for 'mxpf4' weight format")
+                if self.scale_estimation:
+                    raise ValueError("The Scale Estimation algorithm is not supported for 'mxpf4' weight format")
+                if self.gptq:
+                    raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+                if self.lora_correction:
+                    raise ValueError("The LoRA Correction algorithm is not supported for 'mxfp4' weight format")
+        if self.gptq and self.lora_correction:
+            raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
 
 @dataclass

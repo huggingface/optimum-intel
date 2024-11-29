@@ -118,13 +118,29 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
+        "--backup-precision",
+        type=str,
+        choices=["none", "int8_sym", "int8_asym"],
+        default=None,
+        help=(
+            "Defines a backup precision for mixed-precision weight compression. Only valid for int4 weight format. "
+            "If not provided, backup precision is int8_asym. 'none' stands for original floating-point precision of "
+            "the model weights, in this case weights are retained in their original precision without any "
+            "quantization. 'int8_sym' stands for 8-bit integer symmetric quantization without zero point. 'int8_asym' "
+            "stands for 8-bit integer asymmetric quantization with zero points per each quantization group."
+        ),
+    )
+    optional_group.add_argument(
         "--dataset",
         type=str,
         default=None,
         help=(
             "The dataset used for data-aware compression or quantization with NNCF. "
-            "You can use the one from the list ['wikitext2','c4','c4-new'] for language models "
-            "or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models."
+            "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the "
+            "dataset will be collected from model's generations. "
+            "For diffusion models it should be on of ['conceptual_captions',"
+            "'laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. "
+            "For visual language models the dataset must be set to 'contextual'."
         ),
     )
     optional_group.add_argument(
@@ -143,7 +159,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
             "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
-            "argument. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such "
+            "argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such "
             "case it will be skipped."
         ),
     )
@@ -168,11 +184,21 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--lora-correction",
+        action="store_true",
+        default=None,
+        help=(
+            "Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank "
+            "adaptation layers in the model that can recover accuracy after weight compression at some cost of "
+            "inference latency. Please note, that applying LoRA Correction algorithm takes additional memory and time."
+        ),
+    )
+    optional_group.add_argument(
         "--sensitivity-metric",
         type=str,
         default=None,
         help=(
-            "The sensitivity metric for assigning quantization precision to layers. Can be one of the following: "
+            "The sensitivity metric for assigning quantization precision to layers. It can be one of the following: "
             "['weight_quantization_error', 'hessian_input_activation', 'mean_activation_variance', "
             "'max_activation_variance', 'mean_activation_magnitude']."
         ),
@@ -191,7 +217,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "In stateful models all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. "
             "If --disable-stateful option is used, it may result in sub-optimal inference performance. "
             "Use it when you intentionally want to use a stateless model, for example, to be compatible with existing "
-            "OpenVINO native inference code that expects kv-cache inputs and outputs in the model."
+            "OpenVINO native inference code that expects KV-cache inputs and outputs in the model."
         ),
     )
     optional_group.add_argument(
@@ -215,7 +241,9 @@ def no_compression_parameter_provided(args):
                 args.awq,
                 args.scale_estimation,
                 args.gptq,
+                args.lora_correction,
                 args.sensitivity_metric,
+                args.backup_precision,
             )
         )
     )
@@ -287,7 +315,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
                     "gptq": self.args.gptq,
+                    "lora_correction": self.args.lora_correction,
                     "weight_format": self.args.weight_format,
+                    "backup_precision": self.args.backup_precision,
                 }
 
             if quantization_config.get("dataset", None) is not None:
