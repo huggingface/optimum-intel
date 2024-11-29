@@ -99,7 +99,7 @@ def _set_runtime_options(
     ],
     task: str,
     library_name: str,
-    quantized_model: bool
+    quantized_model: bool,
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
@@ -759,8 +759,12 @@ def export_from_model(
 
         model.save_config(output)
 
-    _set_runtime_options(models_and_export_configs, task, library_name,
-                         hasattr(ov_config, "quantization_config") and ov_config.quantization_config)
+    _set_runtime_options(
+        models_and_export_configs,
+        task,
+        library_name,
+        hasattr(ov_config, "quantization_config") and ov_config.quantization_config,
+    )
 
     export_models(
         models_and_export_configs=models_and_export_configs,
