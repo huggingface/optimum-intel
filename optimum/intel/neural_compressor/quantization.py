@@ -392,11 +392,14 @@ def _weight_only_quantization(
                 )
                 low_cpu_mem_usage = False
                 model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
-            quantization_config.update(**{"device": "xpu"})
-            quantization_config.post_init_xpu()
         else:
             model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
-            quantization_config.post_init_cpu()
+
+    if use_xpu:
+        quantization_config.update(**{"device": "xpu"})
+        quantization_config.post_init_xpu()
+    else:
+        quantization_config.post_init_cpu()
 
     model.config.update({"low_cpu_mem_usage": low_cpu_mem_usage})
     model.eval()
