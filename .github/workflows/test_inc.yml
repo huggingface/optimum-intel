@@ -1,6 +1,4 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-name: Intel Neural Compressor - Test
+name: INC - Test
 
 on:
   push:
@@ -20,32 +18,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8, 3.9]
-        os: [ubuntu-latest]
+        torch-version: ["2.4.*", "2.5.0"]
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
+
     steps:
-    - uses: actions/checkout@v2
-    - name: Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install cmake
-        pip install py-cpuinfo
-        pip install torch==2.3.0 torchaudio==2.3.0 torchvision==0.18 --index-url https://download.pytorch.org/whl/cpu
-        pip install .[neural-compressor,diffusers,tests]
-        pip install intel-extension-for-transformers
-        pip install peft
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Test with Pytest
-      run: |
-        pytest tests/neural_compressor/ --ignore tests/neural_compressor/test_ipex.py --durations=0
-    - name: Test IPEX
-      run: |
-        pip uninstall -y intel-extension-for-transformers
-        pip install intel-extension-for-pytorch==2.3.0
-        pytest tests/neural_compressor/test_ipex.py
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.9
 
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install .[neural-compressor,diffusers,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
+
+      - name: Assert versions
+        run: |
+          python -c "import torch; print(torch.__version__); assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+          python -c "import intel_extension_for_pytorch; print(intel_extension_for_pytorch.__version__); assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
+
+      - name: Test with Pytest
+        run: |
+          pytest tests/neural_compressor

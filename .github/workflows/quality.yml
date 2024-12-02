@@ -1,0 +1,41 @@
+name: Quality Checks
+on:
+  push:
+    branches:
+      - main
+      - v*-release
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.9
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # .[quality] installs too many dependencies
+          # TODO: we should remove the the version pinning at some point
+          pip install "black~=23.1" "ruff==0.4.4"
+
+      - name: Check style with black
+        run: |
+          black --check .
+
+      - name: Check style with ruff
+        run: |
+          ruff check .

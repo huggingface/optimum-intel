@@ -26,6 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
+from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
 
 
 if is_nncf_available():
@@ -41,7 +42,14 @@ class OVQuantizationMethod(str, Enum):
 
 
 _DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
+    "databricks/dolly-v2-3b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
@@ -68,24 +76,29 @@ _DEFAULT_4BIT_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 128,
-        "ratio": 1.0,
+        "ratio": 0.9,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
-    "openlm-research/open_llama_3b_v2": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
-    "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "openlm-research/open_llama_3b_v2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": False, "group_size": 64},
     "psmathur/orca_mini_3b": {
         "bits": 4,
         "sym": True,
         "group_size": 64,
         "all_layers": True,
-        "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
     },
     "bigscience/bloomz-560m": {
         "bits": 4,
@@ -97,7 +110,14 @@ _DEFAULT_4BIT_CONFIGS = {
     },
     "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
-    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
+    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
     "stabilityai/stablelm-tuned-alpha-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
@@ -109,10 +129,75 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "lmsys/longchat-7b-16k": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
-    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
-    "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "microsoft/phi-2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "stabilityai/stablelm-tuned-alpha-7b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
+    "meta-llama/Meta-Llama-3.1-8B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
+    "meta-llama/Meta-Llama-3.1-8B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
+    "microsoft/Phi-3-mini-4k-instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
+    "microsoft/Phi-3.5-mini-instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_4BIT_CONFIG = {
@@ -128,13 +213,19 @@ def _check_default_4bit_configs(model_id_or_path: str):
     if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
         return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
 
-    config_path = Path(model_id_or_path) / "config.json"
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
     if config_path.exists():
         with config_path.open("r") as config_f:
             config = json.load(config_f)
             original_model_name = config.get("_name_or_path", "")
         if original_model_name in _DEFAULT_4BIT_CONFIGS:
             return _DEFAULT_4BIT_CONFIGS[original_model_name]
+
+    for model_id, config in _DEFAULT_4BIT_CONFIGS.items():
+        short_id = model_id.split("/")[-1]
+        if model_path.name == short_id:
+            return config
 
     return None
 
@@ -223,11 +314,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new'] for language models
-            or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
-            Alternatively, you can provide data objects via `calibration_dataset` argument
-            of `OVQuantizer.quantize()` method.
+            The dataset used for data-aware compression with NNCF.
+            - For language models you can provide your own dataset in a list of strings or just use one from the list
+                ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
+            - For diffusion models the dataset must be one of ['conceptual_captions',
+                'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            - For visual language models the dataset must be set to 'contextual'.
+            Alternatively, you can provide data objects via `calibration_dataset` argument of `OVQuantizer.quantize()`
+            method.
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
@@ -255,6 +349,28 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
+        weight_format (`str`, defaults to 'int'):
+            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
+        qptq (`bool`, *optional*):
+            Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
+            difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
+        processor (`str`, *optional*):
+            A transformers processor used to process inputs for multi-modal models. You can pass either:
+                - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
+                - A path to a *directory* containing files required by the processor, for instance saved
+                    using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
+        lora_correction (`bool`, *optional*):
+            If True, apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank adaptation
+            layers in the model that can recover accuracy after weight compression at some cost of inference latency.
+            It calculates low-rank matrices via singular value decomposition (SVD) on the difference between the
+            original and quantized weights. These matrices are iteratively refined by solving a system of linear
+            equations to improve accuracy.
+        backup_precision (`str`, defaults to None):
+            Defines a backup precision for mixed-precision weight compression.
+            - "none" stands for original floating-point precision of the model weights, in this case weights are
+                retained in their original precision without any quantization.
+            - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
+            - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
     """
 
     def __init__(
@@ -263,6 +379,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sym: bool = False,
         group_size: Optional[int] = None,
         tokenizer: Optional[str] = None,
+        trust_remote_code: bool = False,
         dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         all_layers: Optional[bool] = None,
@@ -271,10 +388,16 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         num_samples: Optional[int] = None,
         quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
+        weight_format: Optional[str] = None,
+        gptq: bool = None,
+        processor: Optional[str] = None,
+        lora_correction: bool = None,
+        backup_precision: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
         self.tokenizer = tokenizer
+        self.trust_remote_code = trust_remote_code
         self.dataset = dataset
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
@@ -282,6 +405,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
+        self.weight_format = weight_format
+        self.gptq = gptq
+        self.processor = processor
+        self.lora_correction = lora_correction
+        self.backup_precision = backup_precision
         self.post_init()
 
     def post_init(self):
@@ -299,16 +427,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            llm_datasets = ["wikitext2", "c4", "c4-new"]
-            stable_diffusion_datasets = [
-                "conceptual_captions",
-                "laion/220k-GPT4Vision-captions-from-LIVIS",
-                "laion/filtered-wit",
-            ]
-            if self.dataset not in llm_datasets + stable_diffusion_datasets:
+            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
+            visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
+            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
+            if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
+                    {lm_datasets} for LLMs, {visual_lm_datasets} for visual LLMs
+                    or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
 
         if self.bits not in [4, 8]:
@@ -323,9 +449,65 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
+            if self.all_layers:
+                raise ValueError("The `all_layers` parameter is not supported for 8-bit quantization")
+            if self.sensitivity_metric:
+                raise ValueError("The `sensitivity_metric` parameter is not supported for 8-bit quantization")
+            if self.quant_method == OVQuantizationMethod.AWQ:
+                raise ValueError(
+                    "The AWQ algorithm is not supported for 8-bit quantization and got `quant_method='awq'`, please update accordingly"
+                )
+            if self.scale_estimation:
+                raise ValueError(
+                    "The Scale Estimation algorithm is not supported for 8-bit quantization and got `scale_estimation=True`, please set `scale_estimation=False`"
+                )
+            if self.gptq:
+                raise ValueError(
+                    "The GPTQ algorithm is not supported for 8-bit quantization and got `gptq=True`, please set `gptq=False`"
+                )
+            if self.lora_correction:
+                raise ValueError(
+                    "The LoRA Correction algorithm is not supported for 8-bit quantization and got `lora_correction=True`, please set `lora_correction=False`"
+                )
+            if self.backup_precision is not None:
+                raise ValueError(
+                    f"The `backup_precision` parameter is not supported for 8-bit quantization and got "
+                    f"`backup_precision={self.backup_precision}`, please set `backup_precision=None`"
+                )
+
+        if self.backup_precision is not None and self.backup_precision not in ["none", "int8_sym", "int8_asym"]:
+            raise ValueError(
+                f"`backup_precision` parameter must be on of the following: ['none', 'int8_sym', 'int8_asym'], but found{self.backup_precision}"
+            )
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
+
+        if self.processor is not None and not isinstance(self.processor, str):
+            raise ValueError(f"Processor is expected to be a string, but found {self.processor}")
+
+        if self.weight_format is None:
+            self.weight_format = "int4" if self.bits == 4 else "int8"
+        if self.weight_format not in ["int4", "int8", "mxfp4", "nf4"]:
+            raise ValueError(
+                f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.weight_format}."
+            )
+        if self.weight_format in ["mxfp4", "nf4"]:
+            if self.bits != 4:
+                raise ValueError(
+                    f"When applying weight compression with '{self.weight_format}' weight format, the `bits` parameter must be set to 4, but found {self.bits}"
+                )
+            if self.weight_format == "mxfp4":
+                if self.quant_method == OVQuantizationMethod.AWQ:
+                    raise ValueError("The AWQ algorithm is not supported for 'mxpf4' weight format")
+                if self.scale_estimation:
+                    raise ValueError("The Scale Estimation algorithm is not supported for 'mxpf4' weight format")
+                if self.gptq:
+                    raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+                if self.lora_correction:
+                    raise ValueError("The LoRA Correction algorithm is not supported for 'mxfp4' weight format")
+        if self.gptq and self.lora_correction:
+            raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
 
 @dataclass
@@ -414,8 +596,13 @@ class OVConfig(BaseConfig):
         self.compression = kwargs.get(
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
-        bits = self.quantization_config.bits if self.quantization_config else None
-        self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
+        if self.quantization_config is not None:
+            if isinstance(self.quantization_config, OVWeightQuantizationConfig):
+                self.dtype = self.quantization_config.weight_format
+            else:
+                self.dtype = "int8"
+        else:
+            self.dtype = dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [

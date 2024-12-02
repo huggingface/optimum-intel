@@ -43,6 +43,13 @@ if _transformers_available:
     except importlib_metadata.PackageNotFoundError:
         _transformers_available = False
 
+_tokenizers_available = importlib.util.find_spec("tokenizers") is not None
+_tokenizers_version = "N/A"
+if _tokenizers_available:
+    try:
+        _tokenizers_version = importlib_metadata.version("tokenizers")
+    except importlib_metadata.PackageNotFoundError:
+        _tokenizers_available = False
 
 _torch_available = importlib.util.find_spec("torch") is not None
 _torch_version = "N/A"
@@ -60,16 +67,6 @@ if _neural_compressor_available:
         _neural_compressor_version = importlib_metadata.version("neural_compressor")
     except importlib_metadata.PackageNotFoundError:
         _neural_compressor_available = False
-
-
-_itrex_available = importlib.util.find_spec("intel_extension_for_transformers") is not None
-_itrex_version = "N/A"
-if _itrex_available:
-    try:
-        _itrex_version = importlib_metadata.version("intel_extension_for_transformers")
-        logging.warn("`transformers` version >= 4.31 is requirements by intel-extension-for-transformers.")
-    except importlib_metadata.PackageNotFoundError:
-        _itrex_available = False
 
 
 _ipex_available = importlib.util.find_spec("intel_extension_for_pytorch") is not None
@@ -113,6 +110,15 @@ if _diffusers_available:
         _diffusers_available = False
 
 
+_open_clip_available = importlib.util.find_spec("open_clip") is not None
+_open_clip_version = "N/A"
+if _open_clip_available:
+    try:
+        _open_clip_version = importlib_metadata.version("open_clip_torch")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -150,17 +156,44 @@ if _accelerate_available:
     except importlib_metadata.PackageNotFoundError:
         _accelerate_available = False
 
+_numa_available = importlib.util.find_spec("numa") is not None
+
+if _numa_available:
+    try:
+        importlib_metadata.version("py-libnuma")
+    except importlib_metadata.PackageNotFoundError:
+        _numa_available = False
+
+
+_psutil_available = importlib.util.find_spec("psutil") is not None
+
+if _psutil_available:
+    try:
+        importlib_metadata.version("psutil")
+    except importlib_metadata.PackageNotFoundError:
+        _psutil_available = False
+
+
+_sentence_transformers_available = importlib.util.find_spec("sentence_transformers") is not None
+_sentence_transformers_available = "N/A"
+
+if _sentence_transformers_available:
+    try:
+        _sentence_transformers_available = importlib_metadata.version("sentence_transformers")
+    except importlib_metadata.PackageNotFoundError:
+        _sentence_transformers_available = False
+
 
 def is_transformers_available():
     return _transformers_available
 
 
+def is_tokenizers_available():
+    return _tokenizers_available
+
+
 def is_neural_compressor_available():
     return _neural_compressor_available
-
-
-def is_itrex_available():
-    return _itrex_available
 
 
 def is_ipex_available():
@@ -256,6 +289,10 @@ def is_diffusers_available():
     return _diffusers_available
 
 
+def is_open_clip_available():
+    return _open_clip_available
+
+
 def is_safetensors_available():
     return _safetensors_available
 
@@ -270,6 +307,18 @@ def is_datasets_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_sentence_transformers_available():
+    return _sentence_transformers_available
+
+
+def is_numa_available():
+    return _numa_available
+
+
+def is_psutil_available():
+    return _psutil_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
@@ -302,6 +351,15 @@ def is_transformers_version(operation: str, version: str):
     return compare_versions(parse(_transformers_version), operation, version)
 
 
+def is_tokenizers_version(operation: str, version: str):
+    """
+    Compare the current Tokenizers version to a given reference with an operation.
+    """
+    if not _tokenizers_available:
+        return False
+    return compare_versions(parse(_tokenizers_version), operation, version)
+
+
 def is_optimum_version(operation: str, version: str):
     return compare_versions(parse(_optimum_version), operation, version)
 
@@ -315,15 +373,6 @@ def is_neural_compressor_version(operation: str, version: str):
     return compare_versions(parse(_neural_compressor_version), operation, version)
 
 
-def is_itrex_version(operation: str, version: str):
-    """
-    Compare the current intel_extension_for_transformers version to a given reference with an operation.
-    """
-    if not _itrex_available:
-        return False
-    return compare_versions(parse(_itrex_version), operation, version)
-
-
 def is_openvino_version(operation: str, version: str):
     """
     Compare the current OpenVINO version to a given reference with an operation.
@@ -331,6 +380,24 @@ def is_openvino_version(operation: str, version: str):
     if not _openvino_available:
         return False
     return compare_versions(parse(_openvino_version), operation, version)
+
+
+def is_openvino_tokenizers_version(operation: str, version: str):
+    if not is_openvino_available():
+        return False
+    if not is_openvino_tokenizers_available():
+        return False
+    import openvino_tokenizers
+
+    tokenizers_version = openvino_tokenizers.__version__
+
+    if tokenizers_version == "0.0.0.0":
+        try:
+            tokenizers_version = importlib_metadata.version("openvino_tokenizers") or tokenizers_version
+        except importlib_metadata.PackageNotFoundError:
+            pass
+
+    return compare_versions(parse(tokenizers_version), operation, version)
 
 
 def is_diffusers_version(operation: str, version: str):
@@ -406,11 +473,6 @@ NEURAL_COMPRESSOR_IMPORT_ERROR = """
 `pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
 """
 
-ITREX_IMPORT_ERROR = """
-{0} requires the intel-extension-for-transformers library but it was not found in your environment. You can install it with pip:
-`pip install intel-extension-for-transformers` and `pip install peft`. Please note that you may need to restart your runtime after installation.
-"""
-
 DATASETS_IMPORT_ERROR = """
 {0} requires the datasets library but it was not found in your environment. You can install it with pip:
 `pip install datasets`. Please note that you may need to restart your runtime after installation.
@@ -428,7 +490,6 @@ BACKENDS_MAPPING = OrderedDict(
         ("nncf", (is_nncf_available, NNCF_IMPORT_ERROR)),
         ("openvino", (is_openvino_available, OPENVINO_IMPORT_ERROR)),
         ("neural_compressor", (is_neural_compressor_available, NEURAL_COMPRESSOR_IMPORT_ERROR)),
-        ("itrex", (is_itrex_available, ITREX_IMPORT_ERROR)),
         ("accelerate", (is_accelerate_available, ACCELERATE_IMPORT_ERROR)),
     ]
 )

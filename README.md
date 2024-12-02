@@ -157,57 +157,6 @@ quantizer.quantize(ov_config=ov_config, calibration_dataset=calibration_dataset,
 optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
-#### Quantization-aware training:
-
-Quantization aware training (QAT) is applied in order to simulate the effects of quantization during training, to alleviate its effects on the model’s accuracy. Here is an example on how to fine-tune a DistilBERT model on the sst-2 task while applying quantization aware training (QAT).
-
-```diff
-  import evaluate
-  import numpy as np
-  from datasets import load_dataset
-  from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
-- from transformers import Trainer
-+ from optimum.intel import OVConfig, OVModelForSequenceClassification, OVTrainer
-
-  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-  model = AutoModelForSequenceClassification.from_pretrained(model_id)
-  tokenizer = AutoTokenizer.from_pretrained(model_id)
-  dataset = load_dataset("glue", "sst2")
-  dataset = dataset.map(
-      lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
-  )
-  metric = evaluate.load("glue", "sst2")
-  compute_metrics = lambda p: metric.compute(
-      predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-  )
-
-  # The directory where the quantized model will be saved
-  save_dir = "nncf_results"
-
-  # Load the default quantization configuration detailing the quantization we wish to apply
-+ ov_config = OVConfig()
-
-- trainer = Trainer(
-+ trainer = OVTrainer(
-      model=model,
-      args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
-      train_dataset=dataset["train"].select(range(300)),
-      eval_dataset=dataset["validation"],
-      compute_metrics=compute_metrics,
-      tokenizer=tokenizer,
-      data_collator=default_data_collator,
-+     ov_config=ov_config,
-+     task="text-classification",
-  )
-  train_result = trainer.train()
-  metrics = trainer.evaluate()
-  trainer.save_model()
-
-+ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
-```
-
-You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
-
 
 ## IPEX
 To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. You can set `export=True` to load a PyTorch checkpoint, export your model via TorchScript and apply IPEX optimizations : both operators optimization (replaced with customized IPEX operators) and graph-level optimization (like operators fusion) will be applied on your model.
@@ -223,7 +172,6 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
   tokenizer = AutoTokenizer.from_pretrained(model_id)
   pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
   results = pipe("He's a dreadful magician and")
-
 ```
 
 For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
@@ -231,7 +179,7 @@ For more details, please refer to the [documentation](https://intel.github.io/in
 
 ## Running the examples
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) and [`notebooks`](https://github.com/huggingface/optimum-intel/tree/main/notebooks) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
 
 Do not forget to install requirements for every example:
 

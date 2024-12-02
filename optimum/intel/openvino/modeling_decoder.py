@@ -14,10 +14,8 @@
 import copy
 import logging
 import os
-import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -32,13 +30,13 @@ from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
-from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ..utils.import_utils import is_nncf_available, is_transformers_version
+from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     OVConfig,
@@ -47,12 +45,19 @@ from .configuration import (
     get_default_int4_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .utils import (
+    ONNX_WEIGHTS_NAME,
+    OV_XML_FILE_NAME,
+    STR_TO_OV_TYPE,
+    TemporaryDirectory,
+    get_export_transformers_version,
+    model_has_dynamic_inputs,
+)
 
 
 if TYPE_CHECKING:
+    from transformers.generation.streamers import BaseStreamer
     from transformers.modeling_utils import PreTrainedModel
-    from transformers.streamers import BaseStreamer
 
 
 logger = logging.getLogger(__name__)
@@ -108,14 +113,20 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
+        compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
-        kwargs["compile"] = False  # avoid extra compilation in the base class
-
+        kwargs["compile"] = False or compile_only  # avoid extra compilation in the base class
+        if compile_only and not enable_compilation:
+            raise ValueError(
+                "`compile_only` mode does not support disabling compilation."
+                "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
+            )
+        config.is_encoder_decoder = False
         super().__init__(
             model,
             config,
             device=device,
-            dynamic_shapes=False,
+            dynamic_shapes=False if not compile_only else model_has_dynamic_inputs(model),
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -131,14 +142,15 @@ class OVBaseDecoderModel(OVModel):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self._original_model = self.model.clone()  # keep original model for serialization
+        # Keeping the original model for serialization
+        self._original_model = self.model.clone() if not compile_only else None
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
         self._past_length = 0
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
-        if self.is_dynamic:
+        if self.is_dynamic and not self._compile_only:
             self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
@@ -175,11 +187,14 @@ class OVBaseDecoderModel(OVModel):
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
 
-        if enable_compilation:
+        if self._compile_only:
+            self.request = self.model.create_infer_request()
+
+        if not self._compile_only and enable_compilation:
             self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
-        if not self.use_cache or self.stateful:
+        if not self.use_cache or self.stateful or self._compile_only:
             return
 
         pkv_precision = Type.f32
@@ -224,6 +239,11 @@ class OVBaseDecoderModel(OVModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
+
+        if self._compile_only:
+            raise ValueError(
+                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
@@ -243,7 +263,6 @@ class OVBaseDecoderModel(OVModel):
         cls,
         model_id: str,
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -257,20 +276,19 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
+
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
 
         if task is None:
             task = cls.export_feature
@@ -281,9 +299,16 @@ class OVBaseDecoderModel(OVModel):
         if load_in_8bit is None and not quantization_config:
             ov_export_config = None
         else:
-            ov_export_config = OVConfig(dtype="fp32")
+            ov_export_config = OVConfig(dtype="auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+
+        torch_dtype = kwargs.pop("torch_dtype", None)
+
+        model_loading_kwargs = {}
+
+        if torch_dtype is not None:
+            model_loading_kwargs["torch_dtype"] = torch_dtype
 
         main_export(
             model_name_or_path=model_id,
@@ -298,11 +323,15 @@ class OVBaseDecoderModel(OVModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_export_config,
             stateful=stateful,
+            model_loading_kwargs=model_loading_kwargs,
+            library_name=cls._library_name,
         )
 
-        config.is_decoder = True
-        config.is_encoder_decoder = False
-        config.save_pretrained(save_dir_path)
+        if config.model_type == "phi3" and config.max_position_embeddings != getattr(
+            config, "original_max_position_embeddings", config.max_position_embeddings
+        ):
+            config.max_position_embeddings = config.original_max_position_embeddings
+
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -310,6 +339,8 @@ class OVBaseDecoderModel(OVModel):
             stateful=None,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
+            compile_only=compile_only,
             **kwargs,
         )
 
@@ -321,6 +352,11 @@ class OVBaseDecoderModel(OVModel):
         height: int = None,
         width: int = None,
     ):
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         if height is not None:
             logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
 
@@ -359,6 +395,8 @@ class OVBaseDecoderModel(OVModel):
 
     def compile(self):
         if self.request is None:
+            if self._compile_only:
+                self.request = self.model.create_infer_request()
             super().compile()
             self.request = self.request.create_infer_request()
 
@@ -395,7 +433,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
-        if self.config.model_type == "bloom":
+        model_transformers_version = get_export_transformers_version(self.model, self.config)
+        if self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
             batch_size *= self.config.num_attention_heads
 
         inputs = {}
@@ -424,7 +463,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif self.use_cache:
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
-                    dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
                     if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
                         shape[0] = 0
@@ -435,7 +473,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[2] = 0
                         else:
                             shape[1] = 0
-                    inputs[input_name] = np.empty([dim.get_length() for dim in shape], dtype=dtype)
+                    inputs[input_name] = Tensor(model_inputs.get_element_type(), [dim.get_length() for dim in shape])
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
@@ -466,8 +504,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
-                if past_key_values:
-                    position_ids = position_ids[:, -input_ids.shape[1] :]
+            if past_key_values:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
 
             inputs["position_ids"] = position_ids
 
@@ -484,9 +522,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
+        # added as model.generate validates model inputs based on forward signature
+        kwargs["token_type_ids"] = token_type_ids
 
         inputs = self.prepare_inputs(
             input_ids=input_ids,
@@ -566,6 +607,24 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         return model_inputs
 
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs: ModelOutput,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs, model_kwargs=model_kwargs, is_encoder_decoder=is_encoder_decoder, **kwargs
+        )
+
+        if "position_ids" in model_kwargs:
+            position_ids = model_kwargs["position_ids"]
+            new_position_id = position_ids[..., -1:].clone()
+            new_position_id += 1
+            model_kwargs["position_ids"] = torch.cat([position_ids, new_position_id], dim=-1)
+        return model_kwargs
+
     def _expand_outputs_for_generation(self, indicies, logits: torch.Tensor, past_key_values: Tuple):
         batch_size = logits.shape[0]
         if indicies.shape[0] != 1:
@@ -602,6 +661,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         unique_input_ids, indicies, reverse_indicies = np.unique(
             input_ids, axis=0, return_index=True, return_inverse=True
         )
+        export_transformers_version = get_export_transformers_version(self.model, self.config)
         for input_name, input_tensor in model_inputs.items():
             if input_name not in ["input_ids", "beam_idx"]:
                 if input_name not in self.key_value_input_names:
@@ -610,7 +670,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
                     dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
-                    if self.config.model_type == "bloom":
+                    if self.config.model_type == "bloom" and compare_versions(
+                        export_transformers_version, "<", "4.44"
+                    ):
                         upd_batch_size *= self.config.num_attention_heads
                     shape[
                         (
@@ -623,9 +685,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
             beam_range = (
-                unique_input_ids.shape[0]
-                if self.config.model_type != "bloom"
-                else unique_input_ids.shape[0] * self.config.num_attention_heads
+                unique_input_ids.shape[0] * self.config.num_attention_heads
+                if (self.config.model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"))
+                else unique_input_ids.shape[0]
             )
             beam_idx = np.arange(beam_range, dtype=int)
             upd_model_inputs["beam_idx"] = beam_idx
@@ -723,16 +785,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
-    def can_generate(self):
-        """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
-        return True
-
     @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
@@ -742,18 +799,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        compile_only: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
+        generation_config = kwargs.pop("generation_config", None)
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -769,10 +819,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        model = cls.load_model(model_cache_path)
+        if not compile_only:
+            model = cls.load_model(model_cache_path)
+        else:
+            model = cls._compile_model(
+                model_cache_path, kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_cache_path.parent
+            )
 
         model_type = config.model_type.replace("_", "-")
-        if model_type == "bloom":
+        export_transformers_version = get_export_transformers_version(model, config)
+        if model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
@@ -781,29 +837,39 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
             quantization_config = get_default_int4_config(config.name_or_path)
+            if quantization_config.get("dataset", None) is not None:
+                quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
+
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
 
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                if getattr(generation_config, "cache_implementation", None) is not None:
+                    generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
 
         causal_model = init_cls(
             model=model,
             config=config,
             model_save_dir=model_cache_path.parent,
             compile=enable_compilation,
+            compile_only=compile_only,
             quantization_config=quantization_config,
+            generation_config=generation_config,
             **kwargs,
         )
 
@@ -811,6 +877,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if not is_nncf_available():
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
+                )
+
+            if compile_only:
+                raise ValueError(
+                    "quantization is not supported with `compile_only` mode, please intialize model without this option"
                 )
 
             from optimum.intel.openvino.quantization import OVQuantizer

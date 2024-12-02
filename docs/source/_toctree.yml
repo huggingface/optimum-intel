@@ -30,5 +30,16 @@
       title: Tutorials
       isExpanded: false
     title: OpenVINO
+  - sections:
+    - local: ipex/inference
+      title: Inference
+    - local: ipex/models
+      title: Supported Models
+    - sections:
+      - local: ipex/tutorials/notebooks
+        title: Notebooks
+      title: Tutorials
+      isExpanded: false
+    title: IPEX
   title: Optimum Intel
   isExpanded: false

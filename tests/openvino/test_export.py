@@ -15,8 +15,6 @@
 
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Optional
 
 import torch
 from parameterized import parameterized
@@ -29,6 +27,7 @@ from optimum.exporters.onnx.model_configs import BertOnnxConfig
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -42,12 +41,16 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
+    OVModelForVisualCausalLM,
+    OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
-from optimum.intel.utils.import_utils import _transformers_version
+from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
+from optimum.intel.openvino.utils import TemporaryDirectory
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -69,15 +72,19 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
+        "llava": OVModelForVisualCausalLM,
     }
 
-    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper")
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_ARCHITECTURES.update({"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline})
+
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava")
 
     def _openvino_export(
         self,
         model_type: str,
-        compression_option: Optional[str] = None,
         stateful: bool = True,
+        patch_16bit_model: bool = False,
     ):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
@@ -89,6 +96,10 @@ class ExportModelTest(unittest.TestCase):
             model_class = TasksManager.get_model_class_for_task(task, library=library_name)
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
+        elif model_type == "llava":
+            model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
+                model_name, **loading_kwargs
+            )
         else:
             model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
@@ -105,7 +116,6 @@ class ExportModelTest(unittest.TestCase):
                     output=Path(tmpdirname),
                     task=supported_task,
                     preprocessors=preprocessors,
-                    compression_option=compression_option,
                     stateful=stateful,
                 )
 
@@ -121,6 +131,35 @@ class ExportModelTest(unittest.TestCase):
                     self.assertEqual(
                         ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                     )
+                    self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+
+                if library_name == "diffusers":
+                    self.assertTrue(
+                        ov_model.vae_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                    )
+                    self.assertTrue(
+                        ov_model.vae_decoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                    )
+                    if hasattr(ov_model, "text_encoder") and ov_model.text_encoder:
+                        self.assertTrue(
+                            ov_model.text_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "text_encoder_2") and ov_model.text_encoder_2:
+                        self.assertTrue(
+                            ov_model.text_encoder_2.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "text_encoder_3") and ov_model.text_encoder_3:
+                        self.assertTrue(
+                            ov_model.text_encoder_3.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "unet") and ov_model.unet:
+                        self.assertTrue(
+                            ov_model.unet.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
+                    if hasattr(ov_model, "transformer") and ov_model.transformer:
+                        self.assertTrue(
+                            ov_model.transformer.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
@@ -132,8 +171,12 @@ class ExportModelTest(unittest.TestCase):
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
         loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
-
-        model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
+        if model_type == "llava":
+            model = MODEL_TYPE_TO_CLS_MAPPING[model_type].auto_model_class.from_pretrained(
+                model_name, **loading_kwargs
+            )
+        else:
+            model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
         model.generation_config.top_k = 42
         model.generation_config.do_sample = True
@@ -170,6 +213,32 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(ov_model.generation_config is not None)
                     self.assertIsInstance(ov_model.generation_config, GenerationConfig)
                     self.assertTrue(ov_model.generation_config.top_k == 42)
+
+    def test_export_fp16_model(self):
+        auto_model = self.SUPPORTED_ARCHITECTURES["gpt2"]
+        task = auto_model.export_feature
+        model_name = MODEL_NAMES["gpt2"]
+        model = auto_model.auto_model_class.from_pretrained(model_name, torch_dtype=torch.float16)
+        stateful = True
+
+        for supported_task in [task, task + "with-past"]:
+            with TemporaryDirectory() as tmpdirname:
+                export_from_model(
+                    model=model,
+                    output=Path(tmpdirname),
+                    task=task,
+                    preprocessors=None,
+                    patch_16bit_model=True,
+                    stateful=stateful,
+                )
+                use_cache = supported_task.endswith("-with-past")
+                ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
+                self.assertIsInstance(ov_model, OVBaseModel)
+                self.assertEqual(ov_model.use_cache, use_cache)
+                self.assertEqual(ov_model.stateful, stateful and use_cache)
+                self.assertEqual(
+                    ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
+                )
 
 
 class CustomExportModelTest(unittest.TestCase):

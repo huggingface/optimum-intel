@@ -14,37 +14,51 @@
 
 import gc
 import logging
+import operator
 import warnings
+from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
+from transformers.utils import is_torch_available
 
+from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_nncf_available,
+    is_openvino_tokenizers_available,
+    is_openvino_version,
+    is_transformers_version,
+)
+from optimum.intel.utils.modeling_utils import (
+    _infer_library_from_model_name_or_path,
+    _OpenClipForZeroShotImageClassification,
+)
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import clear_class_registry
+from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
 
+
+FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager"}
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
-_COMPRESSION_OPTIONS = {
-    "int8": {"bits": 8},
-    "int4_sym_g128": {"bits": 4, "sym": True, "group_size": 128},
-    "int4_asym_g128": {"bits": 4, "sym": False, "group_size": 128},
-    "int4_sym_g64": {"bits": 4, "sym": True, "group_size": 64},
-    "int4_asym_g64": {"bits": 4, "sym": False, "group_size": 64},
-}
+
+if is_torch_available():
+    import torch
 
 
 logger = logging.getLogger(__name__)
+
+# init core before import openvino tokenizers to prevent failed attempt loading extension
+core = Core()
 
 
 def infer_task(
@@ -54,25 +68,29 @@ def infer_task(
     revision: Optional[str] = None,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
+    library_name: Optional[str] = None,
 ):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
-        try:
-            task = TasksManager._infer_task_from_model_name_or_path(
-                model_name_or_path=model_name_or_path,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-            )
-        except KeyError as e:
-            raise KeyError(
-                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-        except RequestsConnectionError as e:
-            raise RequestsConnectionError(
-                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
+        if library_name == "open_clip":
+            task = "zero-shot-image-classification"
+        else:
+            try:
+                task = TasksManager._infer_task_from_model_name_or_path(
+                    model_name_or_path=model_name_or_path,
+                    subfolder=subfolder,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    token=token,
+                )
+            except KeyError as e:
+                raise KeyError(
+                    f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                )
+            except RequestsConnectionError as e:
+                raise RequestsConnectionError(
+                    f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                )
     return task
 
 
@@ -94,12 +112,11 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
     ov_config: "OVConfig" = None,
     stateful: bool = True,
     convert_tokenizer: bool = False,
     library_name: Optional[str] = None,
+    model_loading_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs_shapes,
 ):
     """
@@ -156,11 +173,6 @@ def main_export(
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
-        compression_ratio (`Optional[float]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
@@ -183,38 +195,13 @@ def main_export(
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
 
-    if compression_option is not None:
-        logger.warning(
-            "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass an `ov_config` argument instead `OVConfig(..., quantization_config=quantization_config)`."
+    if framework is None:
+        framework = TasksManager.determine_framework(
+            model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
         )
-
-    if compression_ratio is not None:
-        logger.warning(
-            "The `compression_ratio` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
-        )
-
-    if ov_config is None and compression_option is not None:
-        from ...intel.openvino.configuration import OVConfig
-
-        if compression_option == "fp16":
-            ov_config = OVConfig(dtype="fp16")
-        elif compression_option != "fp32":
-            q_config = _COMPRESSION_OPTIONS[compression_option] if compression_option in _COMPRESSION_OPTIONS else {}
-            q_config["ratio"] = compression_ratio or 1.0
-            ov_config = OVConfig(quantization_config=q_config)
-
-    original_task = task
-    task = infer_task(
-        task, model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-    )
-    framework = TasksManager.determine_framework(
-        model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-    )
 
     if library_name is None:
-        library_name = TasksManager._infer_library_from_model_name_or_path(
+        library_name = _infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path,
             subfolder=subfolder,
             revision=revision,
@@ -228,9 +215,21 @@ def main_export(
             )
             library_name = "transformers"
 
+    original_task = task
+    task = infer_task(
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+        library_name=library_name,
+    )
+
     do_gptq_patching = False
     custom_architecture = False
-    loading_kwargs = {}
+    patch_16bit = False
+    loading_kwargs = model_loading_kwargs or {}
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -267,6 +266,10 @@ def main_export(
 
         if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
             loading_kwargs["attn_implementation"] = "eager"
+
+        # some models force flash_attn attention by default that does not support load model on cpu
+        if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
+            loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
         if (
@@ -281,48 +284,73 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
+        dtype = loading_kwargs.get("torch_dtype")
+        if isinstance(dtype, str):
+            dtype = getattr(config, "torch_dtype") if dtype == "auto" else getattr(torch, dtype)
 
-    # Patch the modules to export of GPTQ models w/o GPU
-    if do_gptq_patching:
-        import torch
+        if (
+            dtype is None
+            and framework == "pt"
+            and not do_gptq_patching
+            and (
+                task.startswith("text-generation")
+                or getattr(config, "model_type", None) in MULTI_MODAL_TEXT_GENERATION_MODELS
+            )
+            and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
+        ):
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
+            elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+                dtype = torch.float16
+            elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+                dtype = torch.bfloat16
 
-        torch.set_default_dtype(torch.float32)
-        orig_cuda_check = torch.cuda.is_available
-        torch.cuda.is_available = lambda: True
+        if dtype is not None:
+            if dtype in [torch.float16, torch.bfloat16]:
+                patch_16bit = True
+            loading_kwargs["torch_dtype"] = dtype
+        # Patch the modules to export of GPTQ models w/o GPU
+        if do_gptq_patching:
+            torch.set_default_dtype(torch.float32)
+            orig_cuda_check = torch.cuda.is_available
+            torch.cuda.is_available = lambda: True
 
-        from optimum.gptq import GPTQQuantizer
+            from optimum.gptq import GPTQQuantizer
 
-        orig_post_init_model = GPTQQuantizer.post_init_model
+            orig_post_init_model = GPTQQuantizer.post_init_model
 
-        def post_init_model(self, model):
-            from auto_gptq import exllama_set_max_input_length
+            def post_init_model(self, model):
+                from auto_gptq import exllama_set_max_input_length
 
-            class StoreAttr(object):
-                pass
+                class StoreAttr(object):
+                    pass
 
-            model.quantize_config = StoreAttr()
-            model.quantize_config.desc_act = self.desc_act
-            if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                model = exllama_set_max_input_length(model, self.max_input_length)
-            return model
+                model.quantize_config = StoreAttr()
+                model.quantize_config.desc_act = self.desc_act
+                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                    model = exllama_set_max_input_length(model, self.max_input_length)
+                return model
 
-        GPTQQuantizer.post_init_model = post_init_model
+            GPTQQuantizer.post_init_model = post_init_model
 
-    model = TasksManager.get_model_from_task(
-        task,
-        model_name_or_path,
-        subfolder=subfolder,
-        revision=revision,
-        cache_dir=cache_dir,
-        token=token,
-        local_files_only=local_files_only,
-        force_download=force_download,
-        trust_remote_code=trust_remote_code,
-        framework=framework,
-        device=device,
-        library_name=library_name,
-        **loading_kwargs,
-    )
+    if library_name == "open_clip":
+        model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+    else:
+        model = TasksManager.get_model_from_task(
+            task,
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            framework=framework,
+            device=device,
+            library_name=library_name,
+            **loading_kwargs,
+        )
 
     needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
@@ -371,7 +399,7 @@ def main_export(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
 
-    export_from_model(
+    submodel_paths = export_from_model(
         model=model,
         output=output,
         task=task,
@@ -383,15 +411,61 @@ def main_export(
         preprocessors=preprocessors,
         device=device,
         trust_remote_code=trust_remote_code,
+        patch_16bit_model=patch_16bit,
         **kwargs_shapes,
     )
 
     if convert_tokenizer:
-        maybe_convert_tokenizers(library_name, output, model, preprocessors)
+        maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
     clear_class_registry()
     del model
     gc.collect()
+
+    for submodel_path in submodel_paths:
+        submodel_path = Path(output) / submodel_path
+        submodel = core.read_model(submodel_path)
+
+        quantization_config = None
+        if ov_config is None:
+            num_parameters = 0
+            for op in submodel.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+                del op
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                if is_nncf_available():
+                    quantization_config = {"bits": 8, "sym": False}
+                    logger.info("The model weights will be quantized to int8_asym.")
+                else:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        else:
+            quantization_config = ov_config.quantization_config
+        if quantization_config is None:
+            del submodel
+            gc.collect()
+            continue
+
+        if not is_nncf_available():
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+
+        from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        _weight_only_quantization(submodel, quantization_config)
+
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        del submodel
+        gc.collect()
+
+        submodel_path.unlink()
+        submodel_path.with_suffix(".bin").unlink()
+        compressed_submodel_path.rename(submodel_path)
+        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:
@@ -399,7 +473,7 @@ def main_export(
         GPTQQuantizer.post_init_model = orig_post_init_model
 
 
-def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None):
+def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
     """
     Tries to convert tokenizers to OV format and export them to disk.
 
@@ -412,6 +486,8 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             Model instance.
         preprocessors (`Iterable`, *optional*, defaults to None):
             Iterable possibly containing tokenizers to be converted.
+        task (`str`, *optional*, defaults to None):
+            The task to export the model for. Affects tokenizer conversion parameters.
     """
     from optimum.exporters.openvino.convert import export_tokenizer
 
@@ -420,16 +496,16 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output)
+                    export_tokenizer(tokenizer, output, task=task)
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
                         f"models won't be generated. Exception: {exception}"
                     )
         elif model:
-            for tokenizer_name in ("tokenizer", "tokenizer_2"):
+            for tokenizer_name in ("tokenizer", "tokenizer_2", "tokenizer_3"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
-                    export_tokenizer(tokenizer, output / tokenizer_name)
+                    export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")

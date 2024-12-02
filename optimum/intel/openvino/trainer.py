@@ -87,7 +87,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_transformers_version
+from ..utils.import_utils import _transformers_version, is_transformers_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
@@ -148,7 +148,12 @@ DEFAULT_QUANTIZATION_CONFIG = {
         "range": {"num_init_samples": 300, "type": "mean_min_max"},
         "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
     },
-    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "scope_overrides": {
+        "activations": {
+            "{re}.*matmul_0": {"mode": "symmetric"},
+            "{re}.*scaled_dot_product_attention_0": {"mode": "symmetric"},
+        }
+    },
     "ignored_scopes": [
         "{re}.*Embedding.*",
         "{re}.*add___.*",
@@ -213,6 +218,18 @@ class OVTrainer(Trainer):
         ov_config: Optional[OVConfig] = None,
         task: Optional[str] = None,
     ):
+        logger.warning("OVTrainer is deprecated and will be removed in optimum-intel v1.22.0.")
+
+        if is_transformers_version(">=", "4.45.0"):
+            if is_transformers_version(">=", "4.46.0"):
+                raise ImportError(
+                    f"Unsupported transformers version found is {_transformers_version} which is not supported by the OVTrainer. Please downgrade to v4.44"
+                )
+
+            logger.warning(
+                f"The transformers version found is {_transformers_version} which is not officially supported by the OVTrainer, use at your own risk"
+            )
+
         self.neftune_noise_alpha = None
 
         super().__init__(
@@ -378,7 +395,18 @@ class OVTrainer(Trainer):
         if not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
-        self.state = TrainerState()
+        if is_transformers_version(">=", "4.44.99"):
+            from transformers.trainer_callback import ExportableState
+
+            self.state = TrainerState(
+                stateful_callbacks=[
+                    cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+                ]
+            )
+
+        else:
+            self.state = TrainerState()
+
         self.state.is_hyper_param_search = trial is not None
         self.state.train_batch_size = self._train_batch_size
 

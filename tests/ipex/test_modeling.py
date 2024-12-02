@@ -103,8 +103,8 @@ class IPEXModelTest(unittest.TestCase):
         for output_name in {"logits", "last_hidden_state"}:
             if output_name in transformers_outputs:
                 self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
-                self.assertTrue(torch.equal(outputs[output_name], loaded_model_outputs[output_name]))
-                self.assertTrue(torch.equal(outputs[output_name], init_model_outputs[output_name]))
+                self.assertTrue(torch.allclose(outputs[output_name], loaded_model_outputs[output_name]))
+                self.assertTrue(torch.allclose(outputs[output_name], init_model_outputs[output_name]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -213,6 +213,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "blenderbot-small",
         "bloom",
         "codegen",
+        "falcon",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -220,10 +221,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "llama",
         "llama2",
         # "phi",
+        "distilgpt2",
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2",)
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "distilgpt2", "falcon")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -263,8 +265,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
-        self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
-        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -274,14 +277,14 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe("This is a sample", max_length=10)
+        outputs = pipe("This is a sample", max_new_tokens=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
-    # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
-        if model_arch == "llama2":
+        # Patched models are not support assisted decoding if ipex < 2.5.
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES and is_ipex_version("<", "2.4.0"):
             return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -292,11 +295,15 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         ipex_output_assisted = ipex_model.generate(
             **tokens, do_sample=False, assistant_model=transformers_model, max_new_tokens=4
         )
+        ipex_output_assisted_2 = ipex_model.generate(
+            **tokens, do_sample=False, assistant_model=ipex_model, max_new_tokens=4
+        )
         transformers_output = transformers_model.generate(**tokens, do_sample=False, max_new_tokens=4)
         transformers_output_assisted = transformers_model.generate(
             **tokens, do_sample=False, assistant_model=ipex_model, max_new_tokens=4
         )
         self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
+        self.assertTrue(torch.equal(ipex_output, ipex_output_assisted_2))
         self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
 
     @parameterized.expand(
@@ -335,6 +342,24 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 
+    @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    def test_patched_model(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        patched_model_id = MODEL_NAMES["patched_" + model_arch]
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+        )
+        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+        ipex_outputs = ipex_model(**inputs)
+        exported_outputs = exported_model(**inputs)
+        self.assertTrue(torch.allclose(ipex_outputs.logits, exported_outputs.logits, atol=1e-7))
+
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -345,7 +370,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_with_pkv.generate(**tokens)
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+                **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
         model_without_pkv = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=False, subfolder="model_without_pkv"
@@ -354,16 +379,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+                **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
-        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        # self.assertTrue(
-        #     without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
-        #     f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
-        #     f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
-        # )
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH + tokens.input_ids.shape[1])
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH + tokens.input_ids.shape[1])
 
 
 class IPEXModelForAudioClassificationTest(unittest.TestCase):

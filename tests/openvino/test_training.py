@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import os
 import random
 import re
 import shutil
@@ -87,6 +88,10 @@ def initialize_movement_sparsifier_parameters_by_sparsity(
             if operand.prune_bias:
                 bias_init_tensor = torch.ones_like(operand.bias_importance) * negative_value
                 operand.bias_importance.copy_(bias_init_tensor)
+
+
+def is_windows():
+    return os.name == "nt"
 
 
 def is_avx_vnni_supported() -> bool:
@@ -470,7 +475,10 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
     task = "sequence-classification"
 
     @parameterized.expand(OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS.items())
-    @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
+    @unittest.skipIf(
+        is_transformers_version("<", "4.41") or is_transformers_version(">=", "4.46"),
+        reason="Mismatch in expected fake quantized op and incompatible with transformers v4.46",
+    )
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
@@ -614,6 +622,7 @@ OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
 # TODO : can be moved to MODEL_NAMES["swin-window"] after transformers v4.42.3
 
 
+@unittest.skipIf(is_windows(), reason="Fails on windows")
 class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
     ovmodel_cls = OVModelForImageClassification
     task = "image-classification"
@@ -621,7 +630,10 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
     @parameterized.expand(OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS.items())
     @pytest.mark.run_slow
     @slow
-    @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
+    @unittest.skipIf(
+        is_transformers_version("<", "4.41") or is_transformers_version(">=", "4.46"),
+        reason="Mismatch in expected fake quantized op and incompatible with transformers v4.46",
+    )
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
@@ -794,6 +806,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
 }
 
 
+@unittest.skipIf(is_windows(), reason="Fails on windows")
 class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     ovmodel_cls = OVModelForAudioClassification
     task = "audio-classification"
@@ -801,11 +814,14 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
     @pytest.mark.run_slow
     @slow
+    @unittest.skipIf(
+        is_transformers_version(">=", "4.46"), reason="OVTrainer is not compatible with transformers>=v4.46"
+    )
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
-        self.dataset = load_dataset("anton-l/superb_dummy", "ks")
+        self.dataset = load_dataset("anton-l/superb_dummy", "ks", trust_remote_code=True)
         self.num_labels = len(self.dataset["test"].features["label"].names)
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)

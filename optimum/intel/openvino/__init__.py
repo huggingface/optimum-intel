@@ -15,7 +15,12 @@
 import logging
 import warnings
 
-from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
+from ..utils.import_utils import (
+    is_accelerate_available,
+    is_diffusers_available,
+    is_nncf_available,
+    is_sentence_transformers_available,
+)
 from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
@@ -65,15 +70,37 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
+from .modeling_open_clip import (
+    OVModelOpenCLIPForZeroShotImageClassification,
+    OVModelOpenCLIPText,
+    OVModelOpenCLIPVisual,
+)
 from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
+from .modeling_visual_language import OVModelForVisualCausalLM
 
 
 if is_diffusers_available():
     from .modeling_diffusion import (
+        OVDiffusionPipeline,
+        OVFluxImg2ImgPipeline,
+        OVFluxInpaintPipeline,
+        OVFluxPipeline,
+        OVLatentConsistencyModelImg2ImgPipeline,
         OVLatentConsistencyModelPipeline,
+        OVPipelineForImage2Image,
+        OVPipelineForInpainting,
+        OVPipelineForText2Image,
+        OVStableDiffusion3Img2ImgPipeline,
+        OVStableDiffusion3InpaintPipeline,
+        OVStableDiffusion3Pipeline,
         OVStableDiffusionImg2ImgPipeline,
         OVStableDiffusionInpaintPipeline,
         OVStableDiffusionPipeline,
         OVStableDiffusionXLImg2ImgPipeline,
+        OVStableDiffusionXLInpaintPipeline,
         OVStableDiffusionXLPipeline,
     )
+
+
+if is_sentence_transformers_available():
+    from .modeling_sentence_transformers import OVSentenceTransformer
