@@ -194,7 +194,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_pipeline_load_from_ipex_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        model = IPEXModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ipex_generator = ipex_pipeline("text-classification", model, tokenizer=tokenizer, accelerator="ipex")
         inputs = "This restaurant is awesome"
@@ -206,7 +206,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_pipeline_load_from_jit_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        model = IPEXModelForSequenceClassification.from_pretrained(model_id)
         save_dir = TemporaryDirectory().name
         model.save_pretrained(save_dir)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
