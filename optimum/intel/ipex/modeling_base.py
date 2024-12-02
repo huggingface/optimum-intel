@@ -50,7 +50,7 @@ from ...exporters.ipex.model_patcher import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
-from ..generation.modeling import TSModelForCausalLM, prepare_jit_inputs
+from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_transformers_version
 
 
@@ -83,7 +83,6 @@ class IPEXModel(OptimizedModel):
         self,
         model,
         config: PretrainedConfig = None,
-        export: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs,
     ):
@@ -147,16 +146,17 @@ class IPEXModel(OptimizedModel):
                     - The path to a directory containing the model weights.
         """
         if getattr(config, "torchscript", False):
-            logger.warning(
-                "IPEXModel will not support torch script model in the future, fallback to TSModelForCausalLM"
-            )
-            return TSModelForCausalLM.from_pretrained(model_id, **kwargs)
+            raise ValueError("IPEXModel is no longer support torchscript models.")
 
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
-        return cls(model, config=model.config, export=True, **kwargs)
+        return cls(model, config=model.config, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
+
+    def push_to_hub(self, *args, **kwargs):
+        kwargs["safe_serialization"] = False
+        return self.model.push_to_hub(*args, **kwargs)
 
     @torch.no_grad()
     def forward(self, *args, **kwargs):
@@ -234,12 +234,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self,
         model,
         config: PretrainedConfig = None,
-        export: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         **kwargs,
     ):
-        super().__init__(model, config, export=export, model_save_dir=model_save_dir, use_cache=use_cache)
+        super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
 
         self._supports_cache_class = getattr(model, "_supports_cache_class", None)
         self._supports_sdpa = getattr(model, "_supports_sdpa", None)

@@ -346,7 +346,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = "Intel/tiny_random_llama2"
+        model_id = "Intel/tiny_random_llama2_ipex_model"
         dtype = torch.float32
         if IS_XPU:
             dtype = torch.float16
