@@ -35,7 +35,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install .[neural-compressor,ipex,diffusers,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
+          pip install .[neural-compressor,diffusers,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
 
       - name: Assert versions
         run: |

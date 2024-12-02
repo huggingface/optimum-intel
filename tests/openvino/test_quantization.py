@@ -306,6 +306,26 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             {"int4": 12, "int8": 8},
         ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                num_samples=16,
+                dataset="auto",
+                lora_correction=True,
+            ),
+            {"int4": 28, "int8": 60},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(bits=4, backup_precision="none", group_size=16),
+            {"int4": 28},
+        ),
     ]
 
     if is_transformers_version(">=", "4.40.0"):
@@ -685,6 +705,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
             )
             self.assertEqual(quantization_config.gptq or False, wc_rt_info["gptq"].value == "True")
+            self.assertEqual(
+                quantization_config.lora_correction or False, wc_rt_info["lora_correction"].value == "True"
+            )
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
@@ -749,6 +772,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "subset_size": 128,
                     "scale_estimation": None,
                     "gptq": None,
+                    "lora_correction": None,
+                    "backup_mode": None,
                 }
                 compress_weights_patch.assert_called_with(
                     unittest.mock.ANY,
@@ -797,6 +822,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "subset_size": 128,
                     "scale_estimation": None,
                     "gptq": None,
+                    "lora_correction": None,
+                    "backup_mode": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
