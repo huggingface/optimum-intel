@@ -35,7 +35,6 @@ from optimum.intel.utils.import_utils import (
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
-    is_safetensors_available,
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
@@ -43,7 +42,12 @@ from optimum.intel.utils.modeling_utils import (
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
+from .utils import (
+    _MAX_UNCOMPRESSED_SIZE,
+    MULTI_MODAL_TEXT_GENERATION_MODELS,
+    clear_class_registry,
+    deduce_diffusers_dtype,
+)
 
 
 FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager"}
@@ -333,45 +337,16 @@ def main_export(
                 return model
 
             GPTQQuantizer.post_init_model = post_init_model
-    elif library_name == "diffusers" and is_safetensors_available() and is_openvino_version(">=", "2024.6"):
-        if Path(model_name_or_path).is_dir():
-            path = Path(model_name_or_path)
-        else:
-            from diffusers import DiffusionPipeline
-
-            path = DiffusionPipeline.download(
-                model_name_or_path,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-                local_files_only=local_files_only,
-                force_download=force_download,
-                trust_remote_code=trust_remote_code,
-            )
-        model_part_name = None
-        if (path / "transformer").is_dir():
-            model_part_name = "transformer"
-        elif (path / "unet").is_dir():
-            model_part_name = "unet"
-        dtype = None
-        if model_part_name:
-            directory = path / model_part_name
-            safetensors_files = [
-                filename for filename in directory.glob("*.safetensors") if len(filename.suffixes) == 1
-            ]
-            safetensors_file = None
-            if len(safetensors_files) > 0:
-                safetensors_file = safetensors_files.pop(0)
-            if safetensors_file:
-                from safetensors import safe_open
-
-                with safe_open(safetensors_file, framework="pt", device="cpu") as f:
-                    if len(f.keys()) > 0:
-                        for key in f.keys():
-                            tensor = f.get_tensor(key)
-                            if tensor.dtype.is_floating_point:
-                                dtype = tensor.dtype
-                                break
+    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+        dtype = deduce_diffusers_dtype(
+            model_name_or_path,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+        )
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
