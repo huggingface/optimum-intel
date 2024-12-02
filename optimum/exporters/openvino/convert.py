@@ -98,10 +98,11 @@ def _set_runtime_options(
         Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
     ],
     task: str,
+    library_name: str,
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
-        if "vae_" in model_name or "text-generation" in task:
+        if "diffusers" in library_name or "text-generation" in task:
             sub_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
 
 
@@ -118,6 +119,8 @@ def _save_model(
     if hasattr(config, "runtime_options"):
         model = _add_runtime_options_to_rt_info(model, config.runtime_options)
     save_model(model, path, compress_to_fp16)
+    del model
+    gc.collect()
 
 
 def export(
@@ -239,6 +242,7 @@ def export_tensorflow(
         config=config,
     )
     del ov_model
+    gc.collect()
     return input_names, output_names, True
 
 
@@ -303,6 +307,7 @@ def export_pytorch_via_onnx(
         config=config,
     )
     del ov_model
+    gc.collect()
     return input_names, output_names, True
 
 
@@ -688,7 +693,7 @@ def export_from_model(
             # some model configs may have issues with loading without parameters initialization
             try:
                 misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
-            except KeyError:
+            except (KeyError, TypeError):
                 misplaced_generation_parameters = {}
             if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
                 logger.warning(
@@ -750,7 +755,7 @@ def export_from_model(
 
         model.save_config(output)
 
-    _set_runtime_options(models_and_export_configs, task)
+    _set_runtime_options(models_and_export_configs, task, library_name)
 
     export_models(
         models_and_export_configs=models_and_export_configs,
