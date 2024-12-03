@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from transformers import AutoTokenizer
 from transformers.pipelines import pipeline as transformers_pipeline
-from utils_tests import IS_XPU, MODEL_NAMES
+from utils_tests import IS_XPU_AVAILABLE, MODEL_NAMES
 
 from optimum.intel.ipex.modeling_base import (
     IPEXModelForAudioClassification,
@@ -59,6 +59,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
+        "llama",
         "llama2",
         "mistral",
         "mpt",
@@ -132,16 +133,14 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
     def test_text_generation_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        dtype = torch.float32
-        if IS_XPU:
-            dtype = torch.float16
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         transformers_generator = transformers_pipeline("text-generation", model_id, torch_dtype=dtype)
         ipex_generator = ipex_pipeline("text-generation", model_id, accelerator="ipex", torch_dtype=dtype)
         inputs = "Describe a real-world application of AI."
         with torch.inference_mode():
-            transformers_output = transformers_generator(inputs, max_new_tokens=10)
+            transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=10)
         with torch.inference_mode():
-            ipex_output = ipex_generator(inputs, max_new_tokens=10)
+            ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=10)
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
         self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
 
