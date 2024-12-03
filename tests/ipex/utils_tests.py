@@ -14,7 +14,7 @@
 from transformers import is_torch_xpu_available
 
 
-IS_XPU = is_torch_xpu_available(check_device=True)
+IS_XPU_AVAILABLE = is_torch_xpu_available(check_device=True)
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",

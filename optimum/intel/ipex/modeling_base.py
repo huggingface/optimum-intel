@@ -107,6 +107,7 @@ class IPEXModel(OptimizedModel):
         # Non-generation tasks can use torch.compile to get acceleration.
         if (
             model.device.type == "cpu"
+            and False
             and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
             and config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
             and is_ipex_version(">=", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
