@@ -58,10 +58,6 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[tests]
 
-      - name: Install lowest compatible transformers version
-        if: ${{ matrix.transformers-version != 'latest' }}
-        run: pip install transformers==${{ matrix.transformers-version }}
-
       - name: Install openvino-nightly
         if: ${{ matrix.openvino == 'ov-nightly' }}
         run: pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
@@ -77,6 +73,10 @@ jobs:
       - name: Install nncf release
         if: ${{ matrix.nncf == 'nncf-stable' }}
         run: pip install .[nncf]
+
+      - name: Install the lowest compatible transformers version
+        if: ${{ matrix.transformers-version != 'latest' }}
+        run: pip install transformers==${{ matrix.transformers-version }}
 
       - name: Pip freeze
         run: pip freeze
