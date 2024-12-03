@@ -59,4 +59,7 @@ MODEL_NAMES = {
     "vit": "hf-internal-testing/tiny-random-vit",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "xlm": "hf-internal-testing/tiny-random-xlm",
+    "patched_falcon": "Intel/tiny-random-falcon_ipex_model",
+    "patched_gpt2": "Intel/tiny-random-gpt2_ipex_model",
+    "patched_llama2": "Intel/tiny-random-llama2_ipex_model",
 }
