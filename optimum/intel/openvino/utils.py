@@ -201,6 +201,8 @@ def _is_timm_ov_dir(model_dir):
 
 
 def _print_compiled_model_properties(compiled_model):
+    cur_log_level = logger.getEffectiveLevel()
+    logger.setLevel(logging.INFO)
     supported_properties = properties.supported_properties()
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
@@ -223,6 +225,7 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+    logger.setLevel(cur_log_level)
 
 
 def np_to_pt_generators(np_object, device):
