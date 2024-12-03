@@ -138,9 +138,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
         ipex_generator = ipex_pipeline("text-generation", model_id, accelerator="ipex", torch_dtype=dtype)
         inputs = "Describe a real-world application of AI."
         with torch.inference_mode():
-            transformers_output = transformers_generator(inputs, max_new_tokens=10)
+            transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=10)
         with torch.inference_mode():
-            ipex_output = ipex_generator(inputs, max_new_tokens=10)
+            ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=10)
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
         self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
 
