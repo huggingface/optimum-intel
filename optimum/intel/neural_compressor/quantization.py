@@ -375,25 +375,11 @@ def _weight_only_quantization(
 
     low_cpu_mem_usage = True
 
-    if getattr(quantization_config, "use_layer_wise", False):
+    if getattr(quantization_config, "use_layer_wise", False) and token is None and subfolder == "":
         from neural_compressor.torch import load_empty_model
-
         model = load_empty_model(model_id, cls=model_class, trust_remote_code=trust_remote_code)
     else:
-        if use_xpu:
-            try:
-                # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
-                model = model_class.from_pretrained(
-                    model_id, low_cpu_mem_usage=low_cpu_mem_usage, device_map="cpu", **loading_kwargs
-                )
-            except NotImplementedError:
-                logger.info(
-                    "Failed to load models with `low_cpu_mem_usage=True`, will fall to traditional load method resulting in higher memory consumption."
-                )
-                low_cpu_mem_usage = False
-                model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
-        else:
-            model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
+        model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
 
     if use_xpu:
         quantization_config.update(**{"device": "xpu"})
