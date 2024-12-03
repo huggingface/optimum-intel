@@ -103,10 +103,9 @@ class OVQuantizerTest(unittest.TestCase):
                 processor=MODEL_NAMES["whisper"],
                 trust_remote_code=True,
                 weight_only=False,
-                smooth_quant_alpha=0.95,
             ),
-            (14, 22, 25),
-            (14, 22, 18),
+            (14, 21 if is_transformers_version("<=", "4.36.0") else 22, 25),
+            (14, 21 if is_transformers_version("<=", "4.36.0") else 22, 18),
         ),
     ]
 
