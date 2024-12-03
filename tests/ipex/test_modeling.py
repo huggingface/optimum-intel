@@ -244,30 +244,35 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             return_tensors="pt",
             return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
         ).to(device)
-        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
-        outputs = ipex_model(**inputs)
+        outputs = ipex_model.generate(**tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True)
 
-        self.assertIsInstance(outputs.logits, torch.Tensor)
+        self.assertIsInstance(outputs.logits[0], torch.Tensor)
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
         with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            transformers_outputs = transformers_model.generate(
+                **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
+            )
 
         # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype)
-            loaded_model_outputs = loaded_model(**inputs)
+            loaded_model_outputs = loaded_model.generate(
+                **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
+            )
 
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
-        init_model_outputs = init_model(**inputs)
+        init_model_outputs = init_model.generate(
+            **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
+        )
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits[0], transformers_outputs.logits[0], atol=1e-4))
         # To avoid float pointing error
-        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
-        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits[0], loaded_model_outputs.logits[0], atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits[0], init_model_outputs.logits[0], atol=1e-7))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -381,10 +386,13 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt")
-        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
-        ipex_outputs = ipex_model(**inputs)
-        exported_outputs = exported_model(**inputs)
-        self.assertTrue(torch.allclose(ipex_outputs.logits, exported_outputs.logits, atol=1e-7))
+        ipex_outputs = ipex_model.generate(
+            **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
+        )
+        exported_outputs = exported_model.generate(
+            **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
+        )
+        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-7))
 
 
 class IPEXModelForAudioClassificationTest(unittest.TestCase):
