@@ -352,7 +352,7 @@ class OVQuantizer(OptimumQuantizer):
                     data_collator=data_collator,
                 )
                 if self.model.export_feature == "text-generation" and self.model.use_cache:
-                    calibration_dataset = self._prepare_text_generation_dataset(
+                    calibration_dataset = self._prepare_text_generation_calibration_data(
                         quantization_config, calibration_dataloader
                     )
                 else:
@@ -375,11 +375,11 @@ class OVQuantizer(OptimumQuantizer):
             from optimum.intel import OVModelForCausalLM
 
             if isinstance(self.model, OVModelForCausalLM):
-                calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
+                calibration_dataset = self._prepare_causal_lm_calibration_data(quantization_config)
             elif isinstance(self.model, OVModelForVisualCausalLM):
-                calibration_dataset = self._prepare_visual_causal_lm_dataset(quantization_config)
+                calibration_dataset = self._prepare_visual_causal_lm_calibration_data(quantization_config)
             elif isinstance(self.model, _OVModelForWhisper):
-                calibration_dataset = self._prepare_whisper_dataset(quantization_config)
+                calibration_dataset = self._prepare_speech_to_text_calibration_data(quantization_config)
             elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 if not isinstance(quantization_config.dataset, str):
                     raise ValueError("Please provide dataset as one of the accepted dataset labels.")
@@ -724,7 +724,7 @@ class OVQuantizer(OptimumQuantizer):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
 
-    def _prepare_causal_lm_dataset(self, quantization_config: OVQuantizationConfigBase):
+    def _prepare_causal_lm_calibration_data(self, quantization_config: OVQuantizationConfigBase):
         from optimum.gptq.data import get_dataset, prepare_dataset
 
         tokenizer = AutoTokenizer.from_pretrained(
@@ -747,7 +747,7 @@ class OVQuantizer(OptimumQuantizer):
 
         return calibration_dataset
 
-    def _prepare_visual_causal_lm_dataset(self, config: OVQuantizationConfigBase):
+    def _prepare_visual_causal_lm_calibration_data(self, config: OVQuantizationConfigBase):
         dataset_name = config.dataset
         if dataset_name not in PREDEFINED_VISUAL_LM_DATASETS:
             raise ValueError(
@@ -808,9 +808,9 @@ class OVQuantizer(OptimumQuantizer):
         calibration_dataset = nncf.Dataset(calibration_dataset)
         return calibration_dataset
 
-    def _prepare_whisper_dataset(self, config: OVQuantizationConfigBase):
+    def _prepare_speech_to_text_calibration_data(self, config: OVQuantizationConfigBase):
         if not is_datasets_available():
-            raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer._prepare_whisper_dataset"))
+            raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer._prepare_whisper_calibration_data"))
 
         from datasets import load_dataset
 
@@ -875,7 +875,7 @@ class OVQuantizer(OptimumQuantizer):
             nncf.Dataset(decoder_w_p_calibration_data),
         )
 
-    def _prepare_text_generation_dataset(
+    def _prepare_text_generation_calibration_data(
         self, quantization_config: OVQuantizationConfigBase, calibration_dataloader: OVDataLoader
     ) -> nncf.Dataset:
         # Prefetch past_key_values
@@ -1060,13 +1060,10 @@ def _full_quantization(
     **kwargs,
 ):
     advanced_parameters_kwargs = {}
-    if quantization_config.matmul_sq_alpha is not None or quantization_config.convolution_sq_alpha is not None:
-        sq_params_kwargs = {}
-        if quantization_config.matmul_sq_alpha is not None:
-            sq_params_kwargs["matmul"] = quantization_config.matmul_sq_alpha
-        if quantization_config.convolution_sq_alpha is not None:
-            sq_params_kwargs["convolution"] = quantization_config.convolution_sq_alpha
-        advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(**sq_params_kwargs)
+    if quantization_config.smooth_quant_alpha is not None:
+        advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(
+            matmul=quantization_config.smooth_quant_alpha
+        )
 
     quantized_model = nncf.quantize(
         model,

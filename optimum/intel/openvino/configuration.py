@@ -556,8 +556,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
         trust_remote_code: bool = False,
-        matmul_sq_alpha: Optional[float] = None,
-        convolution_sq_alpha: Optional[float] = None,
+        smooth_quant_alpha: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -598,10 +597,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Allows to use custom code for the modeling hosted in the model repository. This option should only be set
                 for repositories you trust and in which you have read the code, as it will execute on your local machine
                 arbitrary code present in the model repository.
-            matmul_sq_alpha (`float`, *optional*):
-                SmoothQuant alpha parameter for MatMul layers.
-            convolution_sq_alpha (`float`, *optional*):
-                SmoothQuant alpha parameter for Convolution layers.
+            smooth_quant_alpha (`float`, *optional*):
+                SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
+                reduces quantization error.
         """
         super().__init__(
             bits=bits,
@@ -616,8 +614,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
-        self.matmul_sq_alpha = matmul_sq_alpha
-        self.convolution_sq_alpha = convolution_sq_alpha
+        self.smooth_quant_alpha = smooth_quant_alpha
         self.post_init()
 
     def post_init(self):
@@ -636,13 +633,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                     f" Currently you can only choose {list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())}."
                 )
 
-        if self.matmul_sq_alpha is not None and not (0 <= self.matmul_sq_alpha <= 1):
+        if self.smooth_quant_alpha is not None and not (0 <= self.smooth_quant_alpha <= 1):
             raise ValueError(
-                f"MatMul SmoothQuant alpha parameter must be in range [0, 1], but found {self.matmul_sq_alpha}"
-            )
-        if self.convolution_sq_alpha is not None and not (0 <= self.convolution_sq_alpha <= 1):
-            raise ValueError(
-                f"Convolution SmoothQuant alpha parameter must be in range [0, 1], but found {self.convolution_sq_alpha}"
+                f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
 
 
