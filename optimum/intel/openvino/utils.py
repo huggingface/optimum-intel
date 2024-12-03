@@ -20,7 +20,6 @@ import stat
 import warnings
 import weakref
 from glob import glob
-import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory as OrigTemporaryDirectory
 from tempfile import mkdtemp
