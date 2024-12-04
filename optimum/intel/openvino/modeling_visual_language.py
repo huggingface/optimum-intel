@@ -165,6 +165,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
+            if self.config.model_type == "qwen2_vl" and position_ids.ndim != 3:
+                position_ids = np.expand_dims(position_ids, 0)
+                position_ids = np.concatenate([position_ids, position_ids, position_ids], axis=0)
+
             inputs["position_ids"] = position_ids
 
         if "beam_idx" in self.input_names:
