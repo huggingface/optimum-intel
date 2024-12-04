@@ -247,7 +247,7 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
+        do_gptq_patching = quantization_config and quantization_config["quant_method"] in ["gptq", "awq"]
         model_type = config.model_type.replace("_", "-")
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
@@ -296,7 +296,6 @@ def main_export(
         if (
             dtype is None
             and framework == "pt"
-            and not do_gptq_patching
             and (
                 task.startswith("text-generation")
                 or getattr(config, "model_type", None) in MULTI_MODAL_TEXT_GENERATION_MODELS
@@ -316,7 +315,6 @@ def main_export(
             loading_kwargs["torch_dtype"] = dtype
         # Patch the modules to export of GPTQ models w/o GPU
         if do_gptq_patching:
-            torch.set_default_dtype(torch.float32)
             orig_cuda_check = torch.cuda.is_available
             torch.cuda.is_available = lambda: True
 
