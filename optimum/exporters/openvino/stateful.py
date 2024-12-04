@@ -20,7 +20,6 @@ from transformers import PretrainedConfig
 
 import openvino as ov
 from openvino.runtime import opset13
-from optimum.exporters import TasksManager
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
 from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS
@@ -192,6 +191,8 @@ def ensure_stateful_is_available(warn=True):
 
 
 def ensure_export_task_support_stateful(task: str):
+    from optimum.exporters import TasksManager
+
     task = TasksManager.map_from_synonym(task)
     return task in ["text-generation-with-past"]
 
