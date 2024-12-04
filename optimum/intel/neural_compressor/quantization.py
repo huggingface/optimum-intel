@@ -375,9 +375,10 @@ def _weight_only_quantization(
 
     low_cpu_mem_usage = True
 
-    if getattr(quantization_config, "use_layer_wise", False) and token is None and subfolder == "":
+    if getattr(quantization_config, "use_layer_wise", False):
         from neural_compressor.torch import load_empty_model
-        model = load_empty_model(model_id, cls=model_class, trust_remote_code=trust_remote_code)
+
+        model = load_empty_model(model_id, cls=model_class, **loading_kwargs)
     else:
         model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
 
