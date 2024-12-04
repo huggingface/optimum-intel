@@ -60,6 +60,10 @@ jobs:
         run: |
           pip install .[nncf]
 
+      - if: ${{ matrix.transformers-version != 'latest' }}
+        name: Downgrade Transformers and Accelerate
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
+
       - name: Test with Pytest (slow)
         run: |
           pytest tests/openvino -m "run_slow" --durations=0
