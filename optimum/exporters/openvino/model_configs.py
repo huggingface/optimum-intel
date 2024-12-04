@@ -88,9 +88,9 @@ from .model_patcher import (
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
-    QwenModelPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    QwenModelPatcher,
     RotaryEmbPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
@@ -112,9 +112,9 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = (
-        TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
-    )
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
+        "image-text-to-text"
+    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",

@@ -1,11 +1,11 @@
 import copy
-from dataclasses import dataclass
 import logging
 import os
 import warnings
 from abc import abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino as ov
@@ -2354,7 +2354,6 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         video_grid_thw=None,
         **kwargs,
     ):
-
         inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
         if pixel_values is not None and input_ids.shape[1] != 1:
             image_embeds = torch.from_numpy(self.get_vision_embeddings(pixel_values, image_grid_thw))

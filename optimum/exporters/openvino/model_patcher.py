@@ -18,7 +18,6 @@ import logging as log
 import math
 import types
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-from optimum.exporters.onnx.base import OnnxConfig
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +25,7 @@ from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
+from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
 from optimum.intel.utils.import_utils import (
     _openvino_version,
@@ -423,9 +423,9 @@ def _llama_gemma_update_causal_mask_legacy(self, attention_mask, input_tensor, c
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
-                mask_slice
-            )
+            causal_mask[
+                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
+            ] = mask_slice
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -2060,9 +2060,9 @@ def _dbrx_update_causal_mask_legacy(
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
-                mask_slice
-            )
+            causal_mask[
+                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
+            ] = mask_slice
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -3386,10 +3386,9 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
         config: OnnxConfig,
-        model: PreTrainedModel | TFPreTrainedModel,
-        model_kwargs: Dict[str, Any] | None = None,
+        model: Union[PreTrainedModel, TFPreTrainedModel],
+        model_kwargs: Dict[str, Any] = None,
     ):
-
         model.__orig_forward = model.forward
 
         def forward_wrap(
@@ -3426,8 +3425,8 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
         config: OnnxConfig,
-        model: PreTrainedModel | TFPreTrainedModel,
-        model_kwargs: Dict[str, Any] | None = None,
+        model: Union[PreTrainedModel, TFPreTrainedModel],
+        model_kwargs: Dict[str, Any] = None,
     ):
         model.__orig_forward = model.forward
 
