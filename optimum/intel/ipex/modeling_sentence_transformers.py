@@ -14,7 +14,7 @@
 
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
 import torch
 from sentence_transformers import SentenceTransformer
@@ -74,8 +74,8 @@ class IPEXSentenceTransformer(SentenceTransformer):
         class_ref: str,
         model_name_or_path: str,
         trust_remote_code: bool,
-        revision: str | None,
-        model_kwargs: dict[str, Any] | None,
+        revision: Optional[str] = None,
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ) -> torch.nn.Module:
         if class_ref.startswith("sentence_transformers."):
             if class_ref == "sentence_transformers.models.Transformer":
