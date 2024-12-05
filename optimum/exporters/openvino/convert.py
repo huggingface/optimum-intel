@@ -98,11 +98,16 @@ def _set_runtime_options(
         Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
     ],
     task: str,
+    library_name: str,
+    quantized_model: bool,
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
-        if "vae_" in model_name or "text-generation" in task:
-            sub_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        sub_export_config.runtime_options = {}
+        if "diffusers" in library_name or "text-generation" in task:
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        if not quantized_model and "text-generation" in task:
+            sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
 def _save_model(
@@ -115,8 +120,8 @@ def _save_model(
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
 
-    if hasattr(config, "runtime_options"):
-        model = _add_runtime_options_to_rt_info(model, config.runtime_options)
+    runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
+    model = _add_runtime_options_to_rt_info(model, runtime_options)
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
@@ -754,7 +759,12 @@ def export_from_model(
 
         model.save_config(output)
 
-    _set_runtime_options(models_and_export_configs, task)
+    _set_runtime_options(
+        models_and_export_configs,
+        task,
+        library_name,
+        hasattr(ov_config, "quantization_config") and ov_config.quantization_config,
+    )
 
     export_models(
         models_and_export_configs=models_and_export_configs,
