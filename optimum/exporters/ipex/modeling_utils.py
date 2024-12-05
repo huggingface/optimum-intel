@@ -501,8 +501,8 @@ def _gpt2_model_forward(
     )
 
 
-# To pass input_lens
-def gpt2_block_forward(
+# To pass input_lens, adapted from https://github.com/huggingface/transformers/blob/v4.46.3/src/transformers/models/gpt2/modeling_gpt2.py#L602
+def _gpt2_block_forward(
     self,
     hidden_states: Optional[Tuple[torch.FloatTensor]],
     layer_past: Optional[Tuple[torch.Tensor]] = None,
