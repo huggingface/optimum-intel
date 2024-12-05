@@ -376,9 +376,12 @@ def _weight_only_quantization(
     low_cpu_mem_usage = True
 
     if getattr(quantization_config, "use_layer_wise", False):
-        from neural_compressor.torch import load_empty_model
+        if is_neural_compressor_version(">=", "3.2"):
+            from neural_compressor.torch import load_empty_model
 
-        model = load_empty_model(model_id, cls=model_class, **loading_kwargs)
+            model = load_empty_model(model_id, cls=model_class, **loading_kwargs)
+        else:
+            raise ValueError("INC version must be >= 3.2 when use_layer_wise is set to True in quantization_config.")
     else:
         model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
 

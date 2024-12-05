@@ -45,7 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_torch_version
+from optimum.intel.utils.import_utils import is_neural_compressor_version
 
 from optimum.intel import (
     INCConfig,
@@ -475,6 +475,8 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
     def test_weight_only_quantization(self, methodology, bits, use_layer_wise):
+        if use_layer_wise and is_neural_compressor_version("<", "3.2"):
+            self.skipTest("INC version < 3.2 doesn't support layer-wise feature.")
         from neural_compressor.transformers import GPTQConfig, RtnConfig
 
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
