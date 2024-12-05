@@ -26,7 +26,6 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
-from .. import OVQuantizer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -549,6 +548,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if to_quantize:
+            from optimum.intel.openvino.quantization import OVQuantizer
+
             quantization_config_copy = copy.deepcopy(quantization_config)
             quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id

@@ -29,7 +29,6 @@ from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -185,6 +184,7 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_ov/")
     ```
     """
+    from optimum.exporters.openvino.convert import export_from_model
 
     if use_auth_token is not None:
         warnings.warn(

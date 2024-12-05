@@ -20,7 +20,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-import onnx
 from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
@@ -28,10 +27,6 @@ from openvino.runtime import Model, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
-from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
-from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.utils import (
     _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
 )
@@ -89,6 +84,7 @@ if is_tf_available():
 
 
 if TYPE_CHECKING:
+    from optimum.exporters.onnx.base import OnnxConfig
     from optimum.intel.openvino.configuration import OVConfig
 
 
@@ -115,7 +111,7 @@ def _save_model(
     path: str,
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
-    config: OnnxConfig = None,
+    config: "OnnxConfig" = None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
@@ -129,7 +125,7 @@ def _save_model(
 
 def export(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     output: Path,
     opset: Optional[int] = None,
     device: str = "cpu",
@@ -212,7 +208,7 @@ def export(
 
 def export_tensorflow(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     opset: int,
     output: Path,
     ov_config: Optional["OVConfig"] = None,
@@ -232,6 +228,8 @@ def export_tensorflow(
         output_names: list of output names from ONNX configuration
         bool:  True if the model was exported successfully.
     """
+    from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
+
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
@@ -252,7 +250,7 @@ def export_tensorflow(
 
 def export_pytorch_via_onnx(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     opset: int,
     output: Path,
     device: str = "cpu",
@@ -289,6 +287,8 @@ def export_pytorch_via_onnx(
     """
     import torch
 
+    from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
+
     output = Path(output)
     orig_torch_onnx_export = torch.onnx.export
     torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
@@ -317,7 +317,7 @@ def export_pytorch_via_onnx(
 
 def export_pytorch(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     opset: int,
     output: Path,
     device: str = "cpu",
@@ -358,6 +358,8 @@ def export_pytorch(
     """
     import torch
     from torch.utils._pytree import tree_map
+
+    from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
@@ -878,6 +880,8 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
             model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
         input_model = rt_info["conversion_parameters"].get("input_model", None)
         if input_model is not None and "onnx" in input_model.value:
+            import onnx
+
             model.set_rt_info(onnx.__version__, ["optimum", "onnx_version"])
 
     except Exception:

@@ -30,7 +30,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
 from transformers.utils import is_offline_mode
 
-from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
@@ -623,7 +623,7 @@ class OVBaseModel(OptimizedModel):
         cls,
         model,
         config: PretrainedConfig,
-        onnx_config: OnnxConfig,
+        onnx_config: ExportConfig,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
