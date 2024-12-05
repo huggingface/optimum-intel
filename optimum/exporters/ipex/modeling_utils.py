@@ -208,7 +208,6 @@ def _llama_model_forward(
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
 
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
-    setattr(past_key_values, "input_lens", input_lens)
 
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
@@ -222,6 +221,7 @@ def _llama_model_forward(
             output_attentions=output_attentions,
             use_cache=use_cache,
             position_embeddings=position_embeddings,
+            input_lens=input_lens,
         )
 
         hidden_states = layer_outputs[0]
@@ -322,7 +322,6 @@ def _falcon_model_forward(
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
-    setattr(past_key_values, "input_lens", input_lens)
 
     next_decoder_cache = None
     all_self_attentions = () if output_attentions else None
@@ -343,6 +342,7 @@ def _falcon_model_forward(
             alibi=None,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            input_lens=input_lens,
         )
 
         hidden_states = outputs[0]
@@ -445,8 +445,6 @@ def _gpt2_model_forward(
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
 
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
-    if past_key_values is not None:
-        setattr(past_key_values, "input_lens", input_lens)
 
     presents = None
     all_self_attentions = () if output_attentions else None
@@ -465,6 +463,7 @@ def _gpt2_model_forward(
             encoder_attention_mask=encoder_attention_mask,
             use_cache=use_cache,
             output_attentions=output_attentions,
+            input_lens=input_lens,
         )
 
         hidden_states = outputs[0]
@@ -502,6 +501,72 @@ def _gpt2_model_forward(
     )
 
 
+# To pass input_lens, adapted from https://github.com/huggingface/transformers/blob/v4.46.3/src/transformers/models/gpt2/modeling_gpt2.py#L602
+def _gpt2_block_forward(
+    self,
+    hidden_states: Optional[Tuple[torch.FloatTensor]],
+    layer_past: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = False,
+    output_attentions: Optional[bool] = False,
+    **kwargs,
+) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
+    residual = hidden_states
+    hidden_states = self.ln_1(hidden_states)
+    attn_outputs = self.attn(
+        hidden_states,
+        layer_past=layer_past,
+        attention_mask=attention_mask,
+        head_mask=head_mask,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        **kwargs,
+    )
+    attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
+    outputs = attn_outputs[1:]
+    # residual connection
+    hidden_states = attn_output + residual
+
+    if encoder_hidden_states is not None:
+        # add one self-attention block for cross-attention
+        if not hasattr(self, "crossattention"):
+            raise ValueError(
+                f"If `encoder_hidden_states` are passed, {self} has to be instantiated with "
+                "cross-attention layers by setting `config.add_cross_attention=True`"
+            )
+        residual = hidden_states
+        hidden_states = self.ln_cross_attn(hidden_states)
+        cross_attn_outputs = self.crossattention(
+            hidden_states,
+            attention_mask=attention_mask,
+            head_mask=head_mask,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            output_attentions=output_attentions,
+            **kwargs,
+        )
+        attn_output = cross_attn_outputs[0]
+        # residual connection
+        hidden_states = residual + attn_output
+        outputs = outputs + cross_attn_outputs[2:]  # add cross attentions if we output attention weights
+
+    residual = hidden_states
+    hidden_states = self.ln_2(hidden_states)
+    feed_forward_hidden_states = self.mlp(hidden_states)
+    # residual connection
+    hidden_states = residual + feed_forward_hidden_states
+
+    if use_cache:
+        outputs = (hidden_states,) + outputs
+    else:
+        outputs = (hidden_states,) + outputs[1:]
+
+    return outputs  # hidden_states, present, (attentions, cross_attentions)
+
+
 class _IPEXAttention(nn.Module):
     def __init__(self, module, config) -> None:
         super().__init__()
@@ -535,7 +600,7 @@ class _IPEXAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if past_key_value is None and kwargs.get("layer_past", None) is not None:
             past_key_value = kwargs.pop("layer_past", None)
-        input_lens = getattr(past_key_value, "input_lens", None)
+        input_lens = kwargs.pop("input_lens", None)
         past_len = 0
         if past_key_value is not None:
             past_len = past_key_value.get_seq_length()
