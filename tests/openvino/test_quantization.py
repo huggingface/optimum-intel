@@ -418,7 +418,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 (
                     OVModelForVisualCausalLM,
                     "qwen2_vl",
-                    True,
+                    False,
                     dict(
                         bits=4,
                         group_size=16,
@@ -426,7 +426,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                         ratio=0.8,
                         sensitivity_metric="mean_activation_magnitude",
                         num_samples=1,
-                        trust_remote_code=True,
                     ),
                     {"int4": 20, "int8": 10},
                 ),
