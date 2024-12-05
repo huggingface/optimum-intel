@@ -44,12 +44,8 @@ from optimum.intel import (
     IPEXModelForTokenClassification,
     IPEXSentenceTransformer,
 )
-from optimum.utils.testing_utils import grid_parameters
-from utils_tests import MODEL_NAMES
 from optimum.utils.testing_utils import grid_parameters, require_sentence_transformers
 from optimum.intel.utils.import_utils import is_sentence_transformers_available
-from utils_tests import MODEL_NAMES, IS_XPU
-
 
 if is_sentence_transformers_available():
     from sentence_transformers import SentenceTransformer
