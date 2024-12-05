@@ -13,11 +13,10 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
-from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2LMHeadModel
+from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
-    LlamaForCausalLM,
     LlamaModel,
     LlamaRMSNorm,
 )
@@ -28,7 +27,9 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _falcon_model_forward,
     _gpt2_block_forward,
+    _gpt2_model_forward,
     _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
     _IPEXGPT2Attention,
@@ -39,8 +40,8 @@ from .modeling_utils import (
 
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
-_TRANSFORMERS_MIN_VERSION = "4.39.0"
-_TRANSFORMERS_MAX_VERSION = "4.44.99"
+_TRANSFORMERS_MIN_VERSION = "4.46.0"
+_TRANSFORMERS_MAX_VERSION = "4.46.99"
 
 _IPEX_EXPORTED_GENERATION_TASKS = ("text-generation",)
 
@@ -75,7 +76,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 def _patch_llama_model(model):
     """
     Patch llama model:
-        1. Use IPEX Rope and IAKV cache
+        1. Use IPEX rope and paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
@@ -87,11 +88,14 @@ def _patch_llama_model(model):
 def _patch_falcon_model(model):
     """
     Patch falcon model:
-        1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IPEX Rope and IAKV cache
-        3. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
+        1. Use IPEX rope and paged cache
+        2. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
     """
-    model.transformer._use_sdpa = False
+    num_key_value_heads = (
+        model.config.num_kv_heads if (model.config.new_decoder_architecture or not model.config.multi_query) else 1
+    )
+    setattr(model.config, "num_key_value_heads", num_key_value_heads)
+    convert_functions(model, FalconModel, "forward", _falcon_model_forward)
     replace_customized_linear_with_linear(model)
     convert_class(model, FalconDecoderLayer, _IPEXFalconDecoderLayer, model.config)
     return model
@@ -100,12 +104,13 @@ def _patch_falcon_model(model):
 def _patch_gpt2_model(model):
     """
     Patch gpt2 model:
-        1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IAKV cache
+        1. Use IPEX paged attention
     """
-    model.transformer._attn_implementation = "eager"
-    convert_class(model, GPT2Attention, _IPEXGPT2Attention, model.config)
+    num_key_value_heads = model.config.num_attention_heads
+    setattr(model.config, "num_key_value_heads", num_key_value_heads)
+    convert_functions(model, GPT2Model, "forward", _gpt2_model_forward)
     convert_functions(model, GPT2Block, "forward", _gpt2_block_forward)
+    convert_class(model, GPT2Attention, _IPEXGPT2Attention, model.config)
     return model
 
 
@@ -136,11 +141,11 @@ def _patch_model(model):
         raise ImportError(
             f"Only transformers versions {_TRANSFORMERS_MIN_VERSION} ~ {_TRANSFORMERS_MAX_VERSION} are verified."
         )
-    if isinstance(model, LlamaForCausalLM):
+    if model.config.model_type == "llama":
         model = _patch_llama_model(model)
-    elif isinstance(model, FalconForCausalLM):
+    elif model.config.model_type == "falcon":
         model = _patch_falcon_model(model)
-    elif isinstance(model, GPT2LMHeadModel):
+    elif model.config.model_type == "gpt2":
         model = _patch_gpt2_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
