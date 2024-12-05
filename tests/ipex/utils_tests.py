@@ -11,7 +11,10 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+from transformers import is_torch_xpu_available
 
+
+IS_XPU_AVAILABLE = is_torch_xpu_available(check_device=True)
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
@@ -25,18 +28,18 @@ MODEL_NAMES = {
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "convnext": "hf-internal-testing/tiny-random-convnext",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
-    "distilgpt2": "Jiqing/tiny_random_distilgpt2",
+    "distilgpt2": "Intel/tiny-random-distilgpt2",
     "electra": "hf-internal-testing/tiny-random-electra",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
-    "falcon": "Jiqing/tiny_random_falcon",
+    "falcon": "Intel/tiny-random-falcon",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "gpt2": "Intel/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
-    "llama2": "Jiqing/tiny_random_llama2",
+    "llama2": "Intel/tiny-random-llama2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
@@ -58,7 +61,7 @@ MODEL_NAMES = {
     "vit": "hf-internal-testing/tiny-random-vit",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "xlm": "hf-internal-testing/tiny-random-xlm",
-    "patched_falcon": "Jiqing/patched_tiny_random_falcon_for_causal_lm",
-    "patched_distilgpt2": "Jiqing/patched_tiny_random_distilgpt2_for_causal_lm",
-    "patched_llama2": "Jiqing/patched_tiny_random_llama2_for_causal_lm",
+    "patched_falcon": "Intel/tiny-random-falcon_ipex_model",
+    "patched_gpt2": "Intel/tiny-random-gpt2_ipex_model",
+    "patched_llama2": "Intel/tiny-random-llama2_ipex_model",
 }

@@ -373,6 +373,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
         use_cache: bool = True,
+        subfolder: str = None,
         **kwargs,
     ):
         if use_auth_token is not None:
@@ -402,6 +403,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
                 cache_dir=cache_dir,
                 force_download=force_download,
                 local_files_only=local_files_only,
+                subfolder=subfolder,
             )
             model_save_dir = Path(model_cache_path).parent
             model = cls.load_model(model_cache_path)

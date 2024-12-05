@@ -432,6 +432,7 @@ def main_export(
             for op in submodel.get_ops():
                 if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
                     num_parameters += reduce(operator.mul, op.shape, 1)
+                del op
             if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
                 if is_nncf_available():
                     quantization_config = {"bits": 8, "sym": False}
@@ -445,6 +446,8 @@ def main_export(
         else:
             quantization_config = ov_config.quantization_config
         if quantization_config is None:
+            del submodel
+            gc.collect()
             continue
 
         if not is_nncf_available():
@@ -453,10 +456,13 @@ def main_export(
         from optimum.intel.openvino.quantization import _weight_only_quantization
 
         _weight_only_quantization(submodel, quantization_config)
+        if "text-generation" in task:
+            submodel.set_rt_info("u8", ["runtime_options", "KV_CACHE_PRECISION"])
 
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
         save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
         del submodel
+        gc.collect()
 
         submodel_path.unlink()
         submodel_path.with_suffix(".bin").unlink()

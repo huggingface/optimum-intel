@@ -914,6 +914,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "arctic",
             "exaone",
             "mistral-nemo",
+            "minicpm3",
         )
 
     GENERATION_LENGTH = 100
@@ -935,6 +936,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4",
         "exaone",
         "decilm",
+        "minicpm3",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
