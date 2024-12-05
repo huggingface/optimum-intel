@@ -64,7 +64,7 @@ EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.14.0"],
     "openvino": ["nncf>=2.14.0", "openvino>=2024.5.0", "openvino-tokenizers>=2024.5.0"],
     "neural-compressor": [
-        "neural_compressor[pt]@git+https://github.com/intel/neural-compressor.git@3bc8e4d0035445c51b2bd5ff6196b9b19e92b3dd",
+        "neural-compressor[pt]>3.0",
         "accelerate",
         "transformers<4.46",
     ],
