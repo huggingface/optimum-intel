@@ -188,6 +188,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "llava_next": (30, 9, 1),
     "minicpmv": (30, 26, 1, 6),
     "nanollava": (30, 15, 1),
+    "qwen2_vl": (30, 1, 1, 10),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
