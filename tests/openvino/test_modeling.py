@@ -872,13 +872,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "llama_gptq",
         "marian",
         "minicpm",
         "mistral",
         "mixtral",
+        "mixtral_awq",
         "mpt",
         "opt",
+        "opt_gptq",
         "pegasus",
         "qwen",
         "phi",
@@ -949,9 +950,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_openvino_version("<", "2024.1"):
             not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
 
-        if "gptq" in model_arch:
-            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
-
         set_seed(SEED)
 
         model_kwargs = {}
@@ -978,6 +976,46 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
+        if "awq" in model_arch or "gptq" in model_arch:
+            orig_cuda_is_available = torch.cuda.is_available
+            torch.cuda.is_available = lambda: True
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
+        if "awq" in model_arch:
+            # patch GEMM module to allow inference without CUDA GPU
+            from awq.modules.linear.gemm import WQLinearMMFunction
+            from awq.utils.packing_utils import dequantize_gemm
+
+            def new_forward(
+                ctx,
+                x,
+                qweight,
+                qzeros,
+                scales,
+                w_bit=4,
+                group_size=128,
+                bias=None,
+                out_features=0,
+            ):
+                ctx.out_features = out_features
+
+                out_shape = x.shape[:-1] + (out_features,)
+                x = x.to(torch.float16)
+
+                out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
+                out = torch.matmul(x, out)
+
+                out = out + bias if bias is not None else out
+                out = out.reshape(out_shape)
+
+                if len(out.shape) == 2:
+                    out = out.unsqueeze(0)
+                return out
+
+            orig_gemm_forward = WQLinearMMFunction.forward
+            WQLinearMMFunction.forward = new_forward
+
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         if model_arch in ["qwen", "arctic", "glm4"]:
@@ -988,10 +1026,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # Compare tensor outputs
         atol = 1e-3 if model_arch == "minicpm" else 1e-4
+        # quantized models have higher tolerance
+        if "awq" in model_arch:
+            atol = 1e-2
+        elif "gptq" in model_arch:
+            atol = 0.6
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
-
         if model_arch in ["qwen"]:
             return
 
@@ -1026,10 +1068,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             additional_inputs = {"past_key_values": DynamicCache()}
         transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
+        print(f"ov_outputs: {ov_outputs}")
+        print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
             "OV output {ov_outputs}\nTransformers output  {transformers_output}",
         )
+
+        if "awq" in model_arch:
+            WQLinearMMFunction.forward = orig_gemm_forward
+
+        if "awq" in model_arch or "gptq" in model_arch:
+            torch.cuda.is_available = orig_cuda_is_available
 
         del transformers_model
         del ov_model
