@@ -26,6 +26,7 @@ from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -230,6 +231,41 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+
+def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
+    dtype = None
+    if is_safetensors_available():
+        if Path(model_name_or_path).is_dir():
+            path = Path(model_name_or_path)
+        else:
+            from diffusers import DiffusionPipeline
+
+            path = DiffusionPipeline.download(model_name_or_path, **loading_kwargs)
+        model_part_name = None
+        if (path / "transformer").is_dir():
+            model_part_name = "transformer"
+        elif (path / "unet").is_dir():
+            model_part_name = "unet"
+        if model_part_name:
+            directory = path / model_part_name
+            safetensors_files = [
+                filename for filename in directory.glob("*.safetensors") if len(filename.suffixes) == 1
+            ]
+            safetensors_file = None
+            if len(safetensors_files) > 0:
+                safetensors_file = safetensors_files.pop(0)
+            if safetensors_file:
+                from safetensors import safe_open
+
+                with safe_open(safetensors_file, framework="pt", device="cpu") as f:
+                    if len(f.keys()) > 0:
+                        for key in f.keys():
+                            tensor = f.get_tensor(key)
+                            if tensor.dtype.is_floating_point:
+                                dtype = tensor.dtype
+                                break
+    return dtype
 
 
 def save_preprocessors(
