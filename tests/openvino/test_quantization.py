@@ -93,6 +93,22 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
     )
+    SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            OVQuantizationConfig(
+                dataset="librispeech",
+                num_samples=1,
+                processor=MODEL_NAMES["whisper"],
+                trust_remote_code=True,
+                weight_only=False,
+                smooth_quant_alpha=0.95,
+            ),
+            (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
+            (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
+        ),
+    ]
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
     def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
@@ -179,6 +195,31 @@ class OVQuantizerTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
+    def test_ov_model_static_quantization_with_auto_dataset(
+        self, model_cls, model_name, quantization_config, expected_fake_quantize, expected_int8
+    ):
+        model_id = MODEL_NAMES[model_name]
+
+        with TemporaryDirectory() as tmp_dir:
+            ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
+            ov_model.save_pretrained(tmp_dir)
+
+            if model_cls == OVModelForSpeechSeq2Seq:
+                for model, expected_fq, expected_i8 in zip(
+                    (ov_model.encoder.model, ov_model.decoder.model, ov_model.decoder_with_past.model),
+                    expected_fake_quantize,
+                    expected_int8,
+                ):
+                    num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
+                    self.assertEqual(expected_fq, num_fake_quantize)
+                    self.assertEqual(expected_i8, num_weight_nodes["int8"])
+
+                input_features = torch.randn((1, 128, 3000), dtype=torch.float32)
+                ov_model.generate(input_features)
+            else:
+                raise Exception("Unexpected model class.")
 
 
 class OVWeightCompressionTest(unittest.TestCase):
@@ -1054,9 +1095,9 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
-            dict(bits=4, fast_bias_correction=True, dataset="wikitext2"),
-            OVWeightQuantizationConfig,
-            "Can't determine type of OV quantization config",
+            dict(bits=8, fast_bias_correction=True, dataset="librispeech"),
+            OVQuantizationConfig,
+            None,
         ),
         (dict(model_type="transformer"), OVQuantizationConfig, None),
         (
@@ -1076,7 +1117,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
         (
-            dict(bits=4, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
+            dict(bits=8, fast_bias_correction=True, dataset="librispeech", weight_only=True),
+            OVQuantizationConfig,
+            None,
+        ),
+        (
+            dict(bits=4, dataset="wikitext2", weight_only=True),
             OVWeightQuantizationConfig,
             None,
         ),
@@ -1136,7 +1182,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
 
 class InferRequestWrapperTest(unittest.TestCase):
-    MODEL_ID = ("openai/whisper-tiny.en",)
+    MODEL_NAME = ("whisper",)
     APPLY_CACHING = (False, True)
 
     @staticmethod
@@ -1150,8 +1196,9 @@ class InferRequestWrapperTest(unittest.TestCase):
         ).input_features
         return input_features
 
-    @parameterized.expand(itertools.product(MODEL_ID, APPLY_CACHING))
-    def test_calibration_data_uniqueness(self, model_id, apply_caching):
+    @parameterized.expand(itertools.product(MODEL_NAME, APPLY_CACHING))
+    def test_calibration_data_uniqueness(self, model_name, apply_caching):
+        model_id = MODEL_NAMES[model_name]
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
         processor = AutoProcessor.from_pretrained(model_id)
 
