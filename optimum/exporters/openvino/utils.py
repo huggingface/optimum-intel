@@ -241,7 +241,7 @@ def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
         else:
             from diffusers import DiffusionPipeline
 
-            path = DiffusionPipeline.download(model_name_or_path, **loading_kwargs)
+            path = Path(DiffusionPipeline.download(model_name_or_path, **loading_kwargs))
         model_part_name = None
         if (path / "transformer").is_dir():
             model_part_name = "transformer"
