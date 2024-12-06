@@ -101,3 +101,14 @@ class IPEXModelForAudioClassification(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["ipex"])
+
+
+class IPEXSentenceTransformer(metaclass=DummyObject):
+    _backends = ["ipex", "sentence_transformers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["ipex", "sentence_transformers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["ipex", "sentence_transformers"])
