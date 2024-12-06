@@ -166,8 +166,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
             if self.config.model_type == "qwen2_vl" and position_ids.ndim != 3:
-                position_ids = np.expand_dims(position_ids, 0)
-                position_ids = np.concatenate([position_ids, position_ids, position_ids], axis=0)
+                position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
 
@@ -2132,7 +2131,6 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             for i, input_ids in enumerate(total_input_ids):
                 if attention_mask is not None:
                     input_ids = input_ids[attention_mask[i] == 1]
-                image_nums, video_nums = 0, 0
                 vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(1)
                 vision_tokens = input_ids[vision_start_indices + 1]
                 image_nums = (vision_tokens == image_token_id).sum()
