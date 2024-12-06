@@ -518,7 +518,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
 
 class IPEXSTModel(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "sentence-transformers-bert",
+        "st-bert",
         "st-mpnet",
     )
 
