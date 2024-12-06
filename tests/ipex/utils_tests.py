@@ -53,7 +53,7 @@ MODEL_NAMES = {
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
-    "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
+    "st-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "t5": "hf-internal-testing/tiny-random-t5",
