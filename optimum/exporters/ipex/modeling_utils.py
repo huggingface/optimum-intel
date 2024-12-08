@@ -744,13 +744,13 @@ class _IPEXLlamaMLP(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = next(module.parameters()).device.type
-        if self.module_device == "cpu":
+        self.module_device = next(module.parameters()).device
+        if self.module_device.type == "cpu":
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
             self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
-        elif self.module_device == "xpu":
+        elif self.module_device.type == "xpu":
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = XPULinearAdd(module.down_proj)
@@ -777,15 +777,15 @@ class _IPEXFalconMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        self.module_device = next(module.parameters()).device.type
-        if self.module_device == "cpu":
+        self.module_device = next(module.parameters()).device
+        if self.module_device.type == "cpu":
             self.linear_gelu = LinearGelu(module.dense_h_to_4h)
-        elif self.module_device == "xpu":
+        elif self.module_device.type == "xpu":
             self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
         if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
-            if self.module_device == "cpu":
+            if self.module_device.type == "cpu":
                 self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
-            elif self.module_device == "xpu":
+            elif self.module_device.type == "xpu":
                 self.linear_add_add = XPUlinearAddAdd(module.dense_4h_to_h)
 
     def forward(
@@ -870,7 +870,11 @@ class _IPEXIntermediate(nn.Module):
     def __init__(self, module, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.linear_gelu = LinearGelu(module.dense)
+        self.module_device = next(module.parameters()).device
+        if self.module_device.type == "cpu":
+            self.linear_gelu = LinearGelu(module.dense)
+        elif self.module_device.type == "xpu":
+            self.linear_gelu = XPULinearGelu(module.dense)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.linear_gelu(hidden_states)
