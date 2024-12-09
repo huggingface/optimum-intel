@@ -126,8 +126,15 @@ _DEFAULT_4BIT_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 0.8,
+    },
+    "baichuan-inc/Baichuan2-13B-Chat": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "lmsys/longchat-7b-16k": {
         "bits": 4,
