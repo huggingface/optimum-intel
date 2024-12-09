@@ -50,7 +50,7 @@ from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE
 
 SEED = 42
 torch.use_deterministic_algorithms(True)
-DEVICE = "xpu:0" if IS_XPU_AVAILABLE else None
+DEVICE = "xpu:0" if IS_XPU_AVAILABLE else "cpu"
 
 
 class Timer(object):
