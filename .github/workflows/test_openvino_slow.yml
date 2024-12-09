@@ -50,7 +50,7 @@ jobs:
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
       - if: ${{ matrix.transformers-version == '4.36.0' }}
-        name: Downgrade Transformers and Accelerate
+        name: Install peft==0.13
         run: |
           pip install peft==0.13.*  
 
