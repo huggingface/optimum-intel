@@ -123,7 +123,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         choices=["none", "int8_sym", "int8_asym"],
         default=None,
         help=(
-            "Defines a backup precision for mixed-precision weight compression. Only valid for int4 weight format. "
+            "Defines a backup precision for mixed-precision weight compression. Only valid for 4-bit weight formats. "
             "If not provided, backup precision is int8_asym. 'none' stands for original floating-point precision of "
             "the model weights, in this case weights are retained in their original precision without any "
             "quantization. 'int8_sym' stands for 8-bit integer symmetric quantization without zero point. 'int8_asym' "
