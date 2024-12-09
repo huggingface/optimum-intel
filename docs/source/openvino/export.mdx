@@ -84,8 +84,8 @@ Optional arguments:
                         The group size to use for quantization. Recommended value is 128 and -1 uses per-column
                         quantization.
   --backup-precision {none,int8_sym,int8_asym}
-                        Defines a backup precision for mixed-precision weight compression. Only valid for int4 weight
-                        format. If not provided, backup precision is int8_asym. 'none' stands for original floating-
+                        Defines a backup precision for mixed-precision weight compression. Only valid for 4-bit weight
+                        formats. If not provided, backup precision is int8_asym. 'none' stands for original floating-
                         point precision of the model weights, in this case weights are retained in their original
                         precision without any quantization. 'int8_sym' stands for 8-bit integer symmetric quantization
                         without zero point. 'int8_asym' stands for 8-bit integer asymmetric quantization with zero
