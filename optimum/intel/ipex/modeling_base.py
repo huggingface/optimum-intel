@@ -383,17 +383,14 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         ):
             from torch._inductor import config
 
-            # Use static cache for torch.compile
-            self.model.config.cache_implementation = "static"
-            self.config.cache_implementation = "static"
             # System level optimization
             torch._inductor.config.cpp_wrapper = True
             os.environ["TORCHINDUCTOR_FREEZING"] = "1"
             logger.info("Enable torch.compile optimization, start warm up")
             self.model.forward = torch.compile(self.model.forward)
             inputs = prepare_jit_inputs(model, self.export_feature, False)
-            self.model.generate(**inputs, max_length=4)
-            self.model.generate(**inputs, max_length=4)
+            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_length=4)
+            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_length=4)
             logger.info("Warm up end")
 
     @torch.no_grad()
@@ -404,6 +401,15 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        # Use static cache for torch.compile
+        setattr(generation_config, "cache_implementation", "static")
+
+        return generation_config, model_kwargs
 
     def _reorder_cache(self, *args, **kwargs):
         return self.model._reorder_cache(*args, **kwargs)

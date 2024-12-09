@@ -70,10 +70,22 @@ if is_ipex_available():
             "default": "gpt2",
             "type": "text",
         },
-        "text2text-generation": {
-            "impl": TextGenerationPipeline,
+        "summarization": {
+            "impl": SummarizationPipeline,
             "class": (IPEXModelForSeq2SeqLM,),
-            "default": "google-t5/t5-small",
+            "default": "t5-base",
+            "type": "text",
+        },
+        "translation": {
+            "impl": TranslationPipeline,
+            "class": (IPEXModelForSeq2SeqLM,),
+            "default": "t5-small",
+            "type": "text",
+        },
+        "text2text-generation": {
+            "impl": Text2TextGenerationPipeline,
+            "class": (IPEXModelForSeq2SeqLM,),
+            "default": "t5-small",
             "type": "text",
         },
         "fill-mask": {
