@@ -35,7 +35,7 @@ from optimum.intel.pipelines import pipeline as ipex_pipeline
 
 
 torch.use_deterministic_algorithms(True)
-device_map = "xpu:0" if IS_XPU_AVAILABLE else None
+DEVICE = "xpu:0" if IS_XPU_AVAILABLE else None
 
 
 class PipelinesIntegrationTest(unittest.TestCase):
@@ -87,8 +87,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_token_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        transformers_generator = transformers_pipeline("token-classification", model_id, device_map=device_map)
-        ipex_generator = ipex_pipeline("token-classification", model_id, accelerator="ipex", device_map=device_map)
+        transformers_generator = transformers_pipeline("token-classification", model_id, device_map=DEVICE)
+        ipex_generator = ipex_pipeline("token-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "Hello I'm Omar and I live in Zürich."
         with torch.inference_mode():
             transformers_output = transformers_generator(inputs)
@@ -102,8 +102,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_sequence_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        transformers_generator = transformers_pipeline("text-classification", model_id, device_map=device_map)
-        ipex_generator = ipex_pipeline("text-classification", model_id, accelerator="ipex", device_map=device_map)
+        transformers_generator = transformers_pipeline("text-classification", model_id, device_map=DEVICE)
+        ipex_generator = ipex_pipeline("text-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "This restaurant is awesome"
         with torch.inference_mode():
             transformers_output = transformers_generator(inputs)
@@ -117,8 +117,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     def test_fill_mask_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         inputs = "The Milky Way is a <mask> galaxy."
-        transformers_generator = transformers_pipeline("fill-mask", model_id, device_map=device_map)
-        ipex_generator = ipex_pipeline("fill-mask", model_id, accelerator="ipex", device_map=device_map)
+        transformers_generator = transformers_pipeline("fill-mask", model_id, device_map=DEVICE)
+        ipex_generator = ipex_pipeline("fill-mask", model_id, accelerator="ipex", device_map=DEVICE)
         mask_token = transformers_generator.tokenizer.mask_token
         inputs = inputs.replace("<mask>", mask_token)
         with torch.inference_mode():
@@ -136,10 +136,10 @@ class PipelinesIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         transformers_generator = transformers_pipeline(
-            "text-generation", model_id, torch_dtype=dtype, device_map=device_map
+            "text-generation", model_id, torch_dtype=dtype, device_map=DEVICE
         )
         ipex_generator = ipex_pipeline(
-            "text-generation", model_id, accelerator="ipex", torch_dtype=dtype, device_map=device_map
+            "text-generation", model_id, accelerator="ipex", torch_dtype=dtype, device_map=DEVICE
         )
         inputs = "Describe a real-world application of AI."
         with torch.inference_mode():
@@ -152,8 +152,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        transformers_generator = transformers_pipeline("question-answering", model_id, device_map=device_map)
-        ipex_generator = ipex_pipeline("question-answering", model_id, accelerator="ipex", device_map=device_map)
+        transformers_generator = transformers_pipeline("question-answering", model_id, device_map=DEVICE)
+        ipex_generator = ipex_pipeline("question-answering", model_id, accelerator="ipex", device_map=DEVICE)
         question = "How many programming languages does BLOOM support?"
         context = "BLOOM has 176 billion parameters and can generate text in 46 languages natural languages and 13 programming languages."
         with torch.inference_mode():
@@ -168,8 +168,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(AUDIO_CLASSIFICATION_SUPPORTED_ARCHITECTURES)
     def test_audio_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        transformers_generator = transformers_pipeline("audio-classification", model_id, device_map=device_map)
-        ipex_generator = ipex_pipeline("audio-classification", model_id, accelerator="ipex", device_map=device_map)
+        transformers_generator = transformers_pipeline("audio-classification", model_id, device_map=DEVICE)
+        ipex_generator = ipex_pipeline("audio-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = [np.random.random(16000)]
         with torch.inference_mode():
             transformers_output = transformers_generator(inputs)
@@ -182,8 +182,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(IMAGE_CLASSIFICATION_SUPPORTED_ARCHITECTURES)
     def test_image_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        transformers_generator = transformers_pipeline("image-classification", model_id, device_map=device_map)
-        ipex_generator = ipex_pipeline("image-classification", model_id, accelerator="ipex", device_map=device_map)
+        transformers_generator = transformers_pipeline("image-classification", model_id, device_map=DEVICE)
+        ipex_generator = ipex_pipeline("image-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
         with torch.inference_mode():
             transformers_output = transformers_generator(inputs)
@@ -198,10 +198,10 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_pipeline_load_from_ipex_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForSequenceClassification.from_pretrained(model_id, device_map=device_map)
+        model = IPEXModelForSequenceClassification.from_pretrained(model_id, device_map=DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ipex_generator = ipex_pipeline(
-            "text-classification", model, tokenizer=tokenizer, accelerator="ipex", device_map=device_map
+            "text-classification", model, tokenizer=tokenizer, accelerator="ipex", device_map=DEVICE
         )
         inputs = "This restaurant is awesome"
         with torch.inference_mode():
@@ -212,12 +212,12 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_pipeline_load_from_jit_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForSequenceClassification.from_pretrained(model_id, device_map=device_map)
+        model = IPEXModelForSequenceClassification.from_pretrained(model_id, device_map=DEVICE)
         save_dir = TemporaryDirectory().name
         model.save_pretrained(save_dir)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ipex_generator = ipex_pipeline(
-            "text-classification", save_dir, tokenizer=tokenizer, accelerator="ipex", device_map=device_map
+            "text-classification", save_dir, tokenizer=tokenizer, accelerator="ipex", device_map=DEVICE
         )
         inputs = "This restaurant is awesome"
         with torch.inference_mode():
