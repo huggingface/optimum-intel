@@ -28,6 +28,7 @@ from optimum.intel.ipex.modeling_base import (
     IPEXModelForImageClassification,
     IPEXModelForMaskedLM,
     IPEXModelForQuestionAnswering,
+    IPEXModelForSeq2SeqLM,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
 )
@@ -82,6 +83,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "resnet",
         "vit",
     )
+    TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
 
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_token_classification_pipeline_inference(self, model_arch):
@@ -215,3 +217,45 @@ class PipelinesIntegrationTest(unittest.TestCase):
             ipex_output = ipex_generator(inputs)
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForSequenceClassification))
         self.assertGreaterEqual(ipex_output[0]["score"], 0.0)
+
+    @parameterized.expand(TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_text2text_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        transformers_generator = transformers_pipeline("text2text-generation", model_id, torch_dtype=dtype)
+        ipex_generator = ipex_pipeline("text2text-generation", model_id, accelerator="ipex", torch_dtype=dtype)
+        inputs = "Describe a real-world application of AI."
+        with torch.inference_mode():
+            transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=10)
+        with torch.inference_mode():
+            ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=10)
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModelForSeq2SeqLM))
+        self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
+
+    @parameterized.expand(TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_summarization_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        transformers_generator = transformers_pipeline("summarization", model_id, torch_dtype=dtype)
+        ipex_generator = ipex_pipeline("summarization", model_id, accelerator="ipex", torch_dtype=dtype)
+        inputs = "Describe a real-world application of AI."
+        with torch.inference_mode():
+            transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=10)
+        with torch.inference_mode():
+            ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=10)
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModelForSeq2SeqLM))
+        self.assertEqual(transformers_output[0]["summary_text"], ipex_output[0]["summary_text"])
+
+    @parameterized.expand(TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_translation_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        transformers_generator = transformers_pipeline("translation", model_id, torch_dtype=dtype)
+        ipex_generator = ipex_pipeline("translation", model_id, accelerator="ipex", torch_dtype=dtype)
+        inputs = "Describe a real-world application of AI."
+        with torch.inference_mode():
+            transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=10)
+        with torch.inference_mode():
+            ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=10)
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModelForSeq2SeqLM))
+        self.assertEqual(transformers_output[0]["translation_text"], ipex_output[0]["translation_text"])
