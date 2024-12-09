@@ -104,3 +104,5 @@ if is_diffusers_available():
 
 if is_sentence_transformers_available():
     from .modeling_sentence_transformers import OVSentenceTransformer
+
+# trigger test
