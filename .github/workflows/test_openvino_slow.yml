@@ -47,12 +47,7 @@ jobs:
 
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Downgrade Transformers and Accelerate
-        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
-
-      - if: ${{ matrix.transformers-version == '4.36.0' }}
-        name: Install peft==0.13
-        run: |
-          pip install peft==0.13.*  
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*
 
       - name: Pip freeze
         run: pip freeze
