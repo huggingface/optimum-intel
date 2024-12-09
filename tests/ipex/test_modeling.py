@@ -86,7 +86,7 @@ class IPEXModelTest(unittest.TestCase):
             self.assertTrue(ipex_model.add_patch)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id, device_map=device_map)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
         tokens = tokenizer(inputs, return_tensors="pt").to(device)
@@ -151,7 +151,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         ipex_model = IPEXModelForQuestionAnswering.from_pretrained(model_id, device_map=device_map)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id).to(device)
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id, device_map=device_map)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
         tokens = tokenizer(inputs, return_tensors="pt").to(device)
@@ -197,8 +197,8 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
             "Intel/tiny-random-bert_ipex_model", device_map=device_map
         )
         device = ipex_model.device
-        transformers_model = AutoModelForQuestionAnswering.from_pretrained("hf-internal-testing/tiny-random-bert").to(
-            device
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained(
+            "hf-internal-testing/tiny-random-bert", device_map=device_map
         )
         tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-bert")
         inputs = "This is a sample input"
@@ -298,7 +298,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device_map)
         device = ipex_model.device
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype).to(device)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device_map)
         tokens = tokenizer("This is a sample input", return_tensors="pt").to(device)
         ipex_output = ipex_model.generate(**tokens, do_sample=False, max_new_tokens=4)
         ipex_output_assisted = ipex_model.generate(
@@ -422,7 +422,7 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
         ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, device_map=device_map)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id, device_map=device_map)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt").to(device)
         with torch.no_grad():
@@ -476,7 +476,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
             self.assertTrue(ipex_model.add_patch)
         device = ipex_model.device
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id).to(device)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id, device_map=device_map)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
