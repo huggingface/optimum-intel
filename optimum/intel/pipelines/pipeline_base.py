@@ -461,5 +461,4 @@ def pipeline(
         tokenizer=tokenizer,
         feature_extractor=feature_extractor,
         torch_dtype=torch_dtype,
-        **kwargs,
     )
