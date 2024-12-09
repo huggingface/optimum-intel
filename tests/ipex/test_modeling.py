@@ -17,7 +17,7 @@
 import tempfile
 import time
 import unittest
-
+import os
 import numpy as np
 import requests
 import torch
@@ -33,7 +33,6 @@ from transformers import (
     pipeline,
     set_seed,
 )
-
 from optimum.intel import (
     IPEXModel,
     IPEXModelForAudioClassification,
@@ -43,8 +42,13 @@ from optimum.intel import (
     IPEXModelForQuestionAnswering,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
+    IPEXSentenceTransformer,
 )
-from optimum.utils.testing_utils import grid_parameters
+from optimum.utils.testing_utils import grid_parameters, require_sentence_transformers
+from optimum.intel.utils.import_utils import is_sentence_transformers_available
+
+if is_sentence_transformers_available():
+    from sentence_transformers import SentenceTransformer
 from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE
 
 
@@ -510,3 +514,33 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs)
         outputs = ipex_model(**inputs)
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+
+class IPEXSTModel(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (
+        "st-bert",
+        "st-mpnet",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_sentence_transformers
+    def test_compare_to_original_model(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ipex_model = IPEXSentenceTransformer(model_id)
+        st_model = SentenceTransformer(model_id)
+        sentences = ["This is an example sentence", "Each sentence is converted"]
+        st_embeddings = st_model.encode(sentences)
+        ov_embeddings = ipex_model.encode(sentences)
+        self.assertTrue(np.allclose(ov_embeddings, st_embeddings, atol=1e-4))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_sentence_transformers
+    def test_sentence_transformers_save_and_infer(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ipex_model = IPEXSentenceTransformer(model_id)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            model = IPEXSentenceTransformer(tmpdirname, model_kwargs={"subfolder": "ipex"})
+            sentences = ["This is an example sentence", "Each sentence is converted"]
+            model.encode(sentences)
