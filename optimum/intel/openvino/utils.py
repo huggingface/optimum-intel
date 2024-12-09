@@ -142,9 +142,18 @@ PREDEFINED_SD_DATASETS = {
 
 PREDEFINED_VISUAL_LM_DATASETS = {
     "contextual": {
-        "name": "ucla-contextual/contextual_test",
+        "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
+    }
+}
+
+PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
+    "librispeech": {
+        "id": "openslr/librispeech_asr",
+        "name": "clean",
+        "split": "validation",
+        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
     }
 }
 
