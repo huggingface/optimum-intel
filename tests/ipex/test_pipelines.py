@@ -35,7 +35,7 @@ from optimum.intel.pipelines import pipeline as ipex_pipeline
 
 
 torch.use_deterministic_algorithms(True)
-DEVICE = "xpu:0" if IS_XPU_AVAILABLE else None
+DEVICE = "xpu:0" if IS_XPU_AVAILABLE else "cpu"
 
 
 class PipelinesIntegrationTest(unittest.TestCase):
