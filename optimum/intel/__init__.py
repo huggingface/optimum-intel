@@ -46,6 +46,7 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["ipex"] = [
         "IPEXModelForCausalLM",
+        "IPEXModelForSeq2SeqLM",
         "IPEXModelForSequenceClassification",
         "IPEXModelForMaskedLM",
         "IPEXModelForTokenClassification",
@@ -237,6 +238,7 @@ if TYPE_CHECKING:
             IPEXModelForImageClassification,
             IPEXModelForMaskedLM,
             IPEXModelForQuestionAnswering,
+            IPEXModelForSeq2SeqLM,
             IPEXModelForSequenceClassification,
             IPEXModelForTokenClassification,
         )

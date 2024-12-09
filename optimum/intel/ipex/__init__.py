@@ -19,6 +19,7 @@ from optimum.intel.ipex.modeling_base import (
     IPEXModelForImageClassification,
     IPEXModelForMaskedLM,
     IPEXModelForQuestionAnswering,
+    IPEXModelForSeq2SeqLM,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
 )

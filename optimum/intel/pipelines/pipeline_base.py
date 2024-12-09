@@ -58,6 +58,7 @@ if is_ipex_available():
         IPEXModelForImageClassification,
         IPEXModelForMaskedLM,
         IPEXModelForQuestionAnswering,
+        IPEXModelForSeq2SeqLM,
         IPEXModelForSequenceClassification,
         IPEXModelForTokenClassification,
     )
@@ -67,6 +68,12 @@ if is_ipex_available():
             "impl": TextGenerationPipeline,
             "class": (IPEXModelForCausalLM,),
             "default": "gpt2",
+            "type": "text",
+        },
+        "text2text-generation": {
+            "impl": TextGenerationPipeline,
+            "class": (IPEXModelForSeq2SeqLM,),
+            "default": "google-t5/t5-small",
             "type": "text",
         },
         "fill-mask": {

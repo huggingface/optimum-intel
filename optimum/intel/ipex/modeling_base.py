@@ -30,6 +30,7 @@ from transformers import (
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
+    AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     GenerationConfig,
@@ -57,6 +58,7 @@ from ..utils.import_utils import is_ipex_version, is_transformers_version
 logger = logging.getLogger(__name__)
 
 
+_IPEX_SUPPORTED_GENERATION_TASKS = ("text-generation", "text2text-generation")
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
@@ -106,9 +108,9 @@ class IPEXModel(OptimizedModel):
 
         # Non-generation tasks can use torch.compile to get acceleration.
         if (
-            model.device.type == "cpu"
-            and self.export_feature not in _IPEX_EXPORTED_GENERATION_TASKS
-            and config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
+            self.model.device.type == "cpu"
+            and self.export_feature not in _IPEX_SUPPORTED_GENERATION_TASKS
+            and self.config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
             and is_ipex_version(">=", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
         ):
             from torch._inductor import config
@@ -334,6 +336,83 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             kwargs["generation_config"].cache_implementation = orig_cache_implementation
 
         return result
+
+
+class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
+    auto_model_class = AutoModelForSeq2SeqLM
+    export_feature = "text2text-generation"
+
+    def __init__(
+        self,
+        model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
+
+        self._supports_cache_class = getattr(model, "_supports_cache_class", None)
+        self._supports_sdpa = getattr(model, "_supports_sdpa", None)
+        self._supports_quantized_cache = getattr(model, "_supports_quantized_cache", None)
+        self._supports_static_cache = getattr(model, "_supports_static_cache", None)
+
+        GenerationMixin.__init__(self)
+
+        model_type = self.config.model_type.replace("_", "-")
+        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
+
+        self.config.is_decoder = False
+        self.config.is_encoder_decoder = True
+
+        self.generation_config = GenerationConfig.from_model_config(self.config)
+        try:
+            self.model_cls = get_class_from_dynamic_module(
+                self.config.auto_map["AutoModelForSeq2SeqLM"], model_save_dir
+            )
+        except AttributeError:
+            self.model_cls = get_model_class(self.config, AutoModelForSeq2SeqLM._model_mapping)
+
+        if hasattr(self.model_cls, "_convert_to_standard_cache"):
+            self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
+        if (
+            self._supports_static_cache
+            and self.model.device.type == "cpu"
+            and self.config.model_type not in _COMPILE_NOT_READY_MODEL_TYPES
+            and is_ipex_version(">=", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
+        ):
+            from torch._inductor import config
+
+            # Use static cache for torch.compile
+            self.model.config.cache_implementation = "static"
+            self.config.cache_implementation = "static"
+            # System level optimization
+            torch._inductor.config.cpp_wrapper = True
+            os.environ["TORCHINDUCTOR_FREEZING"] = "1"
+            logger.info("Enable torch.compile optimization, start warm up")
+            self.model.forward = torch.compile(self.model.forward)
+            inputs = prepare_jit_inputs(model, self.export_feature, False)
+            self.model.generate(**inputs, max_length=4)
+            self.model.generate(**inputs, max_length=4)
+            logger.info("Warm up end")
+
+    @torch.no_grad()
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+    def _reorder_cache(self, *args, **kwargs):
+        return self.model._reorder_cache(*args, **kwargs)
+
+    def prepare_inputs_for_generation(self, *args, **kwargs):
+        return self.model.prepare_inputs_for_generation(*args, **kwargs)
+
+    def get_encoder(self, *args, **kwargs):
+        return self.model.get_encoder(*args, **kwargs)
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
