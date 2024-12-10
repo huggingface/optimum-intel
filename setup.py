@@ -56,6 +56,7 @@ TESTS_REQUIRE = [
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
     "peft",
+    "datasets[audio]>=1.4.0",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
@@ -68,7 +69,6 @@ EXTRAS_REQUIRE = {
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
-    "tests-openvino": ["datasets[audio]>=1.4.0"],
 }
 
 setup(
