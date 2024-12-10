@@ -68,6 +68,7 @@ EXTRAS_REQUIRE = {
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
+    "tests-openvino": ["datasets[audio]>=1.4.0"],
 }
 
 setup(
