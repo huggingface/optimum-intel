@@ -363,7 +363,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
-        weight_format (`str`, defaults to 'int'):
+        weight_format (`str`, *optional*):
             Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
@@ -559,8 +559,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         trust_remote_code: bool = False,
         smooth_quant_alpha: Optional[float] = None,
-        weight_format: Optional[str] = None,
-        activation_format: Optional[str] = None,
+        weight_format: Optional[str] = "int8",
+        activation_format: Optional[str] = "int8",
         **kwargs,
     ):
         """
@@ -604,9 +604,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             smooth_quant_alpha (`float`, *optional*):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
-            weight_format (`str`, *optional*):
+            weight_format (`str`, defaults to "int8"):
                 Data format weights are quantized to. Possible values: ['int8'].
-            activation_format (`str`, *optional*):
+            activation_format (`str`, defaults to "int8"):
                 Data format activations are compressed to. Possible values: ['int8'].
         """
         super().__init__(
@@ -648,11 +648,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
 
-        self.weight_format = self.weight_format or "int8"
         if self.weight_format != "int8":
             raise ValueError("Only 'int8' weight format is currently supported.")
 
-        self.activation_format = self.activation_format or "int8"
         if self.activation_format != "int8":
             raise ValueError("Only 'int8' activation format is currently supported.")
 

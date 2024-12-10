@@ -458,7 +458,7 @@ class OVQuantizer(OptimumQuantizer):
 
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
-            
+
             if quantization_config.weight_format != "int8":
                 raise ValueError("Only 'int8' weight format is currently supported.")
             if quantization_config.activation_format != "int8":
