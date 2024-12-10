@@ -14,12 +14,14 @@
 import subprocess
 import unittest
 from pathlib import Path
+from typing import Dict, List
 
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    compare_num_quantized_nodes_per_model,
     get_num_quantized_nodes,
 )
 
@@ -107,37 +109,47 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
 
     TEST_4BIT_CONFIGURATIONS = [
-        ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
-        ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
-        ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
-        ("text-generation-with-past", "opt125m", "nf4", {"int8": 4, "nf4": 72}),
-        ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 8 --all-layers", {"int4": 16}),
+        ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", [{"int8": 4, "int4": 72}]),
+        ("text-generation-with-past", "opt125m", "int4 --group-size 64", [{"int8": 4, "int4": 144}]),
+        ("text-generation-with-past", "opt125m", "mxfp4", [{"int8": 4, "f4e2m1": 72, "f8e8m0": 72}]),
+        ("text-generation-with-past", "opt125m", "nf4", [{"int8": 4, "nf4": 72}]),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
+            [{"int4": 16}],
+        ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
-            {"int8": 4, "int4": 14},
+            [{"int8": 4, "int4": 14}],
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
-            {"int8": 4, "int4": 14},
+            [{"int8": 4, "int4": 14}],
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
-            {"int8": 4, "int4": 14},
+            [{"int8": 4, "int4": 14}],
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --lora-correction --dataset auto --num-samples 16",
-            {"int8": 60, "int4": 14},
+            [{"int8": 60, "int4": 14}],
         ),
-        ("text-generation-with-past", "llama_awq", "int4 --group-size 16 --backup-precision none", {"int4": 28}),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --group-size 16 --backup-precision none --ratio 0.5",
+            [{"int4": 12}],
+        ),
     ]
 
     if is_transformers_version(">=", "4.40.0"):
@@ -146,16 +158,28 @@ class OVCLIExportTestCase(unittest.TestCase):
                 (
                     "image-text-to-text",
                     "llava_next",
-                    'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "int4 --group-size 16 --ratio 0.8",
+                    [{"int8": 14, "int4": 16}, {"int8": 9}, {"int8": 1}],
+                ),
+                (
+                    "image-text-to-text",
+                    "llava_next",
+                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
                     "--dataset contextual --num-samples 1",
-                    {"int8": 8, "int4": 22},
+                    [{"int8": 6, "int4": 24}, {"int8": 9}, {"int8": 1}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
-                    'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" '
+                    "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
+                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                ),
+                (
+                    "image-text-to-text",
+                    "nanollava",
+                    'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {"int8": 12, "int4": 18},
+                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
                 ),
             ]
         )
@@ -165,17 +189,42 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 (
                     "image-text-to-text",
-                    "internvl2",
-                    'int4 --group-size 4 --ratio 0.9 --sensitivity-metric "hessian_input_activation" '
+                    "minicpmv",
+                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+                    [{"int8": 10, "int4": 20}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                ),
+                (
+                    "image-text-to-text",
+                    "minicpmv",
+                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {"int8": 6, "int4": 24},
+                    [{"int8": 8, "int4": 22}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                ),
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                ),
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
-                    'int4 --group-size 4 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+                    [{"int8": 8, "int4": 10}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                ),
+                (
+                    "image-text-to-text",
+                    "phi3_v",
+                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {"int8": 4, "int4": 14},
+                    [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
                 ),
             ]
         )
@@ -299,7 +348,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(exp_num_fq, num_fq)
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
-    def test_exporters_cli_4bit(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
+    def test_exporters_cli_4bit(
+        self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: List[Dict]
+    ):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -316,11 +367,15 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            ov_model = model.lm_model if task == "image-text-to-text" else model.model
+            submodels = []
+            if task == "text-generation-with-past":
+                submodels = [model]
+            elif task == "image-text-to-text":
+                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
+                submodels += [getattr(model, part) for part in model.additional_parts]
 
-            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
-            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
-            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
+            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
+
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
