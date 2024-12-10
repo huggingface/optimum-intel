@@ -14,6 +14,7 @@
 import subprocess
 import unittest
 from pathlib import Path
+from typing import Tuple
 
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM
@@ -35,6 +36,7 @@ from optimum.intel import (  # noqa
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
+    OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
@@ -105,6 +107,16 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
+
+    SUPPORTED_QUANTIZATION_ARCHITECTURES = [
+        (
+            "automatic-speech-recognition",
+            "whisper",
+            "--quant-mode int8/int8 --dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9",
+            (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
+            (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
+        ),
+    ]
 
     TEST_4BIT_CONFIGURATIONS = [
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
@@ -327,6 +339,32 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue(
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
+
+    @parameterized.expand(SUPPORTED_QUANTIZATION_ARCHITECTURES)
+    def test_exporters_cli_full_quantization(
+        self,
+        task: str,
+        model_type: str,
+        option: str,
+        expected_num_fq_nodes_per_model: Tuple[int],
+        expected_num_weight_nodes_per_model: Tuple[int],
+    ):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} {option} {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
+
+            submodels = []
+            if task == "automatic-speech-recognition":
+                submodels = [model.encoder, model.decoder, model.decoder_with_past]
+            self.assertEqual(len(expected_num_fq_nodes_per_model), len(submodels))
+            for i, model in enumerate(submodels):
+                actual_num_fq_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
+                self.assertEqual(expected_num_fq_nodes_per_model[i], actual_num_fq_nodes)
+                self.assertEqual(expected_num_weight_nodes_per_model[i], actual_num_weight_nodes["int8"])
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
