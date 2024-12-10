@@ -37,10 +37,6 @@ jobs:
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install .[neural-compressor,diffusers,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
 
-      - name: Set LD_LIBRARY_PATH
-        run : |
-          export LD_LIBRARY_PATH=/usr/local/lib/:$LD_LIBRARY_PATH
-
       - name: Assert versions
         run: |
           python -c "import torch; print(torch.__version__); assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"

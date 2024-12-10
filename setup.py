@@ -57,6 +57,7 @@ TESTS_REQUIRE = [
     "open_clip_torch>=2.26.1",
     "peft",
     "datasets[audio]>=1.4.0",
+    "tbb",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
