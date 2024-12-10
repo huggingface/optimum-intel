@@ -265,6 +265,7 @@ def load_ipex_model(
     SUPPORTED_TASKS,
     hub_kwargs: Optional[Dict[str, Any]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    device_map: Optional[torch.device] = None,
 ):
     hub_kwargs = hub_kwargs or {}
     model_kwargs = model_kwargs or {}
@@ -272,7 +273,9 @@ def load_ipex_model(
 
     if model is None:
         model_id = SUPPORTED_TASKS[targeted_task]["default"]
-        model = ipex_model_class.from_pretrained(model_id, export=True, **hub_kwargs, **model_kwargs)
+        model = ipex_model_class.from_pretrained(
+            model_id, export=True, **hub_kwargs, **model_kwargs, device_map=device_map
+        )
     elif isinstance(model, str):
         model_id = model
         try:
@@ -281,7 +284,9 @@ def load_ipex_model(
         except RuntimeError:
             logger.warning("We will use IPEXModel with export=True to export the model")
             export = True
-        model = ipex_model_class.from_pretrained(model, export=export, **hub_kwargs, **model_kwargs)
+        model = ipex_model_class.from_pretrained(
+            model, export=export, **hub_kwargs, **model_kwargs, device_map=device_map
+        )
     elif isinstance(model, IPEXModel):
         model_id = getattr(model.config, "name_or_path", None)
     else:
