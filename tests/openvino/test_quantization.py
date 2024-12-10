@@ -382,21 +382,21 @@ class OVWeightCompressionTest(unittest.TestCase):
             "llama_awq",
             False,
             dict(bits=4, backup_precision="none", group_size=16, ratio=0.5),
-            [{"int4": 12}],
+            [{"int4": 6}],
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="int8_sym", group_size=16, ratio=0.5),
-            [{"int4": 12, "int8": 10}],
+            [{"int4": 6, "int8": 13}],
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="int8_asym", group_size=16, ratio=0.5),
-            [{"int4": 12, "int8": 20}],
+            [{"int4": 6, "int8": 26}],
         ),
     ]
 

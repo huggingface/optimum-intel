@@ -148,7 +148,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation-with-past",
             "llama_awq",
             "int4 --group-size 16 --backup-precision none --ratio 0.5",
-            [{"int4": 12}],
+            [{"int4": 6}],
         ),
     ]
 
