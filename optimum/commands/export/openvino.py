@@ -80,7 +80,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=str,
         choices=["int8/int8"],
         default=None,
-        help="Quantization mode.",
+        help=(
+            "Quantization mode in a format '<weights precision/activations precision>'. This is used for applying "
+            "full model quantization including activations. The only currently supported choice is 'int8/int8' for "
+            "int8 quantization of both weights and activations."
+        ),
     )
     optional_group.add_argument(
         "--library",
@@ -237,7 +241,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=float,
         default=None,
         help=(
-            "SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and reduces quantization error."
+            "SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and "
+            "reduces quantization error. Valid only when activations quantization is enabled."
         ),
     )
 
