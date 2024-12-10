@@ -56,7 +56,7 @@ jobs:
           python -m pip install --upgrade pip
           # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[tests,tests-openvino]
+          pip install .[tests]
 
       - name: Install openvino-nightly
         if: ${{ matrix.openvino == 'ov-nightly' }}
