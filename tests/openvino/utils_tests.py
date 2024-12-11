@@ -11,10 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import unittest
+from typing import Dict, List, Union
 
 import numpy as np
 import openvino as ov
 import torch
+
+from optimum.intel.openvino.modeling_base import OVBaseModel
 
 
 MODEL_NAMES = {
@@ -218,3 +222,17 @@ def get_num_quantized_nodes(model):
             if type_name == "nf4":
                 num_weight_nodes["nf4"] += 1
     return num_fake_quantize, num_weight_nodes
+
+
+def compare_num_quantized_nodes_per_model(
+    test_case: unittest.TestCase,
+    models: List[Union[ov.Model, OVBaseModel]],
+    expected_num_weight_nodes_per_model: List[Dict],
+):
+    test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
+    actual_num_weights_per_model = []
+    for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
+        _, num_weight_nodes = get_num_quantized_nodes(submodel)
+        expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+        actual_num_weights_per_model.append(num_weight_nodes)
+    test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
