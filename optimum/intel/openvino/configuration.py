@@ -273,6 +273,18 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
+            dataset (`str or List[str]`, *optional*):
+                The dataset used for data-aware optimization with NNCF.
+            tokenizer (`str`, *optional*):
+                The tokenizer used to process the dataset.
+            processor (`str`, *optional*):
+                A transformers processor used to process the dataset inputs.
+            trust_remote_code (`bool`, defaults to `False`):
+                Allows to use custom code for the modeling hosted in the model repository. This option should only be
+                set for repositories you trust and in which you have read the code, as it will execute on your local
+                machine arbitrary code present in the model repository.
+            weight_format (`str`, *optional*):
+                Data format weights are compressed to.
         """
         self.bits = bits
         self.sym = sym
