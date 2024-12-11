@@ -62,7 +62,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
+from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
@@ -977,52 +977,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
         if "awq" in model_arch or "gptq" in model_arch:
-            orig_cuda_is_available = torch.cuda.is_available
-            torch.cuda.is_available = lambda: True
             # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
 
-        if "awq" in model_arch:
-            # patch GEMM module to allow inference without CUDA GPU
-            from awq.modules.linear.gemm import WQLinearMMFunction
-            from awq.utils.packing_utils import dequantize_gemm
-
-            def new_forward(
-                ctx,
-                x,
-                qweight,
-                qzeros,
-                scales,
-                w_bit=4,
-                group_size=128,
-                bias=None,
-                out_features=0,
-            ):
-                ctx.out_features = out_features
-
-                out_shape = x.shape[:-1] + (out_features,)
-                x = x.to(torch.float16)
-
-                out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
-                out = torch.matmul(x, out)
-
-                out = out + bias if bias is not None else out
-                out = out.reshape(out_shape)
-
-                if len(out.shape) == 2:
-                    out = out.unsqueeze(0)
-                return out
-
-            orig_gemm_forward = WQLinearMMFunction.forward
-            WQLinearMMFunction.forward = new_forward
-
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         if model_arch in ["qwen", "arctic", "glm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         atol = 1e-3 if model_arch == "minicpm" else 1e-4
@@ -1067,19 +1033,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
+        with patch_awq_for_inference("awq" in model_arch):
+            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
         print(f"ov_outputs: {ov_outputs}")
         print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
             "OV output {ov_outputs}\nTransformers output  {transformers_output}",
         )
-
-        if "awq" in model_arch:
-            WQLinearMMFunction.forward = orig_gemm_forward
-
-        if "awq" in model_arch or "gptq" in model_arch:
-            torch.cuda.is_available = orig_cuda_is_available
 
         del transformers_model
         del ov_model
@@ -1311,8 +1272,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
@@ -1338,9 +1304,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             if model_arch == "gemma2":
                 additional_inputs = {"past_key_values": DynamicCache()}
-            transformers_outputs = transformers_model.generate(
-                **tokens, generation_config=gen_config, **additional_inputs
-            )
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model.generate(
+                    **tokens, generation_config=gen_config, **additional_inputs
+                )
             set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(

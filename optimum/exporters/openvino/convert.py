@@ -447,10 +447,11 @@ def export_pytorch(
             if patch_16bit_model:
                 from openvino.frontend.pytorch.patch_model import unpatch_model
 
-                unpatch_model(model, "_openvino_module_extension_patch_orig_forward")                
+                unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
                 for m in model.modules():
-                    if (any(p.dtype in [torch.float16, torch.bfloat16] for p in m.parameters())
-                        or any(b.dtype in [torch.float16, torch.bfloat16] for b in m.buffers())):
+                    if any(p.dtype in [torch.float16, torch.bfloat16] for p in m.parameters(False)) or any(
+                        b.dtype in [torch.float16, torch.bfloat16] for b in m.buffers(False)
+                    ):
                         m.float()
 
             return export_pytorch_via_onnx(
