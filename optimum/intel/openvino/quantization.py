@@ -1150,7 +1150,9 @@ def _hybrid_quantization(
 
     wc_config = copy.deepcopy(quantization_config)
     wc_config.ignored_scope = wc_config.ignored_scope or {}
-    wc_config.ignored_scope["types"] = wc_config.ignored_scope.get("types", []) + ["Convolution"]
+
+    wc_ignored_types = ["Convolution"] if any(op.get_type_name() == "Convolution" for op in model.get_ops()) else []
+    wc_config.ignored_scope["types"] = wc_config.ignored_scope.get("types", []) + wc_ignored_types
     compressed_model = _weight_only_quantization(model, wc_config, **kwargs)
 
     ptq_ignored_scope = quantization_config.get_ignored_scope_instance()

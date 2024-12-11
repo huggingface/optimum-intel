@@ -43,6 +43,7 @@ from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.intel import (
     OVConfig,
+    OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -491,6 +492,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION.extend(
             [
                 (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
+                (OVFluxPipeline, "flux", 7, 56),
             ]
         )
 

@@ -354,6 +354,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVStableDiffusion3Pipeline
 
                 model_cls = OVStableDiffusion3Pipeline
+            elif class_name == "FluxPipeline":
+                from optimum.intel import OVFluxPipeline
+
+                model_cls = OVFluxPipeline
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
