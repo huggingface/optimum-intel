@@ -123,11 +123,18 @@ _DEFAULT_4BIT_CONFIGS = {
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
     "baichuan-inc/Baichuan2-7B-Chat": {
         "bits": 4,
-        "sym": True,
+        "sym": False,
         "group_size": 128,
         "ratio": 0.8,
+    },
+    "baichuan-inc/Baichuan2-13B-Chat": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "lmsys/longchat-7b-16k": {
         "bits": 4,
