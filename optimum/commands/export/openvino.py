@@ -78,12 +78,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8/int8"],
+        choices=["int8"],
         default=None,
         help=(
-            "Quantization mode in a format '<weights precision/activations precision>'. This is used for applying "
-            "full model quantization including activations. The only currently supported choice is 'int8/int8' for "
-            "int8 quantization of both weights and activations."
+            "Quantization precision mode. This is used for applying full model quantization including activations. "
+            "The only currently supported choice is 'int8' for int8 quantization of both weights and activations."
         ),
     )
     optional_group.add_argument(
@@ -363,13 +362,12 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
         else:
-            if self.args.quant_mode != "int8/int8":
-                raise ValueError("Only 'int8/int8' quantization mode is currently supported.")
+            if self.args.quant_mode != "int8":
+                raise ValueError("Only 'int8' quantization mode is currently supported.")
 
-            weight_format, activation_format = self.args.quant_mode.split("/")
             quantization_config = {
-                "weight_format": weight_format,
-                "activation_format": activation_format,
+                "weight_format": self.args.quant_mode,
+                "activation_format": self.args.quant_mode,
                 "bits": 8,
                 "sym": self.args.sym or False,
                 "dataset": self.args.dataset,
