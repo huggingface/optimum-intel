@@ -26,7 +26,7 @@ jobs:
             "*training*",
             "*export*",
           ]
-        transformers-version: ["4.36.0", "latest"]
+        transformers-version: ["latest"]
 
     runs-on: ubuntu-22.04
 
