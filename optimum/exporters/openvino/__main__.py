@@ -16,7 +16,7 @@ import gc
 import logging
 import operator
 import warnings
-from functools import reduce
+from functools import reduce, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
@@ -234,6 +234,7 @@ def main_export(
     do_gptq_patching = False
     custom_architecture = False
     patch_16bit = False
+    orig_trace = None
     loading_kwargs = model_loading_kwargs or {}
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
@@ -350,6 +351,8 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+        orig_trace = torch.jit.trace
+        torch.jit.trace = partial(torch.jit.trace, check_trace=False)
 
     if library_name == "open_clip":
         model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
@@ -491,6 +494,8 @@ def main_export(
     if do_gptq_patching:
         torch.cuda.is_available = orig_cuda_check
         GPTQQuantizer.post_init_model = orig_post_init_model
+    if orig_trace is not None:
+        torch.jit.trace = orig_trace
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
