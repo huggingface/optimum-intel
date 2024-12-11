@@ -297,7 +297,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     ) -> Tuple[GenerationConfig, Dict]:
         generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
         generation_method = generation_config.get_generation_mode().value
-        if self.compiled:
+        if self.compiled and generation_config.cache_implementation != "ipex_paged":
             # Use static cache for torch compile
             generation_config.cache_implementation = "static"
         if generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
