@@ -131,6 +131,7 @@ _HEAD_TO_AUTOMODELS = {
     "open_clip_text": "OVModelOpenCLIPText",
     "open_clip_vision": "OVModelOpenCLIPVisual",
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
 }
 
 

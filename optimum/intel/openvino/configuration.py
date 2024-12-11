@@ -266,6 +266,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
         trust_remote_code: bool = False,
+        weight_format: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -287,6 +288,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self.tokenizer = tokenizer
         self.processor = processor
         self.trust_remote_code = trust_remote_code
+        self.weight_format = weight_format
 
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
@@ -368,7 +370,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
-        weight_format (`str`, defaults to 'int'):
+        weight_format (`str`, *optional*):
             Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
@@ -423,6 +425,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
+            weight_format=weight_format,
         )
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
@@ -430,7 +433,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
-        self.weight_format = weight_format
         self.gptq = gptq
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
@@ -564,6 +566,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         trust_remote_code: bool = False,
         smooth_quant_alpha: Optional[float] = None,
+        weight_format: Optional[str] = "int8",
+        activation_format: Optional[str] = "int8",
         **kwargs,
     ):
         """
@@ -607,6 +611,10 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             smooth_quant_alpha (`float`, *optional*):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
+            weight_format (`str`, defaults to "int8"):
+                Data format weights are quantized to. Possible values: ['int8'].
+            activation_format (`str`, defaults to "int8"):
+                Data format activations are compressed to. Possible values: ['int8'].
         """
         super().__init__(
             bits=bits,
@@ -617,11 +625,13 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
+            weight_format=weight_format,
         )
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
         self.smooth_quant_alpha = smooth_quant_alpha
+        self.activation_format = activation_format
         self.post_init()
 
     def post_init(self):
@@ -644,6 +654,12 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(
                 f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
+
+        if self.weight_format != "int8":
+            raise ValueError("Only 'int8' weight format is currently supported.")
+
+        if self.activation_format != "int8":
+            raise ValueError("Only 'int8' activation format is currently supported.")
 
 
 class OVConfig(BaseConfig):
