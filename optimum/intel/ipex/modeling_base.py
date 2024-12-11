@@ -193,10 +193,10 @@ class IPEXModel(OptimizedModel):
             return
         if self.use_cache and not self._supports_static_cache:
             return
-        from torch._inductor import config
+        from torch._inductor import config as inductor_config
 
         # System level optimization
-        torch._inductor.config.cpp_wrapper = True
+        inductor_config.cpp_wrapper = True
         os.environ["TORCHINDUCTOR_FREEZING"] = "1"
         logger.info("Enable torch.compile optimization")
         self.model.forward = torch.compile(self.model.forward)
