@@ -614,20 +614,34 @@ class _IPEXAttention(nn.Module):
         if past_len == 0:
             # prefill, remove padding
             seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-            varlen_attention(
-                query.contiguous() if query.device.type == "xpu" else query,
-                key.contiguous() if key.device.type == "xpu" else key,
-                value.contiguous() if value.device.type == "xpu" else value,
+            # varlen_attention(
+            #     query.contiguous() if query.device.type == "xpu" else query,
+            #     key.contiguous() if key.device.type == "xpu" else key,
+            #     value.contiguous() if value.device.type == "xpu" else value,
+            #     attn_output,
+            #     seq_len_tensor,
+            #     seq_len_tensor,
+            #     input_lens.max(),
+            #     input_lens.max(),
+            #     0.0,
+            #     1.0 / math.sqrt(self.head_dim),
+            #     False,
+            #     True,
+            #     False,
+            #     None,
+            # )
+            PagedAttention.flash_attn_varlen_func(
                 attn_output,
+                query,
+                key_cache,
+                value_cache,
                 seq_len_tensor,
                 seq_len_tensor,
                 input_lens.max(),
                 input_lens.max(),
-                0.0,
                 1.0 / math.sqrt(self.head_dim),
-                False,
                 True,
-                False,
+                past_key_value.block_tables,
                 None,
             )
         else:
