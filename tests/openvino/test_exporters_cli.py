@@ -112,7 +112,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "automatic-speech-recognition",
             "whisper",
-            "--quant-mode int8 --dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9",
+            "--quant-mode int8 --dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
             (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
         ),
