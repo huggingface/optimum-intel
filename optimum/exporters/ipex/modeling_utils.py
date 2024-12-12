@@ -591,31 +591,23 @@ class _IPEXAttention(nn.Module):
 
     def varlen_attn(self, query, key, value, past_key_value, input_lens):
         # prefill, remove padding
-        if past_key_value and is_ipex_version(">=", _IPEX_MINIMUM_VERSION_FOR_FLASH_VARLEN_ATTN):
-            attn_output = torch.empty_like(query)
-            seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-            PagedAttention.flash_attn_varlen_func(
-                attn_output,
-                query,
-                key,
-                value,
-                seq_len_tensor,
-                seq_len_tensor,
-                input_lens.max(),
-                input_lens.max(),
-                1.0 / math.sqrt(self.head_dim),
-                True,
-                past_key_value.block_tables,
-                None,
-            )
-        else:
-            attn_output = torch.nn.functional.scaled_dot_product_attention(
-                query,
-                key,
-                value,
-                attn_mask=None,
-                is_causal=True,
-            )
+        attn_output = torch.empty_like(query)
+        seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
+        PagedAttention.flash_attn_varlen_func(
+            attn_output,
+            query,
+            key,
+            value,
+            seq_len_tensor,
+            seq_len_tensor,
+            input_lens.max(),
+            input_lens.max(),
+            1.0 / math.sqrt(self.head_dim),
+            True,
+            past_key_value.block_tables,
+            None,
+        )
+
         return attn_output
 
     def forward(
@@ -639,12 +631,19 @@ class _IPEXAttention(nn.Module):
 
         if past_key_value is not None:
             key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask, input_lens)
-        else:
-            key_cache, value_cache = key, value
 
         if past_len == 0:
             # prefill
-            attn_output = self.varlen_attn(query, key_cache, value_cache, past_key_value, input_lens)
+            if past_key_value is None or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_FLASH_VARLEN_ATTN):
+                attn_output = torch.nn.functional.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    attn_mask=None,
+                    is_causal=True,
+                )
+            else:
+                attn_output = self.varlen_attn(query, key_cache, value_cache, past_key_value, input_lens)
         else:
             # decode
             attn_output = torch.empty_like(query)
