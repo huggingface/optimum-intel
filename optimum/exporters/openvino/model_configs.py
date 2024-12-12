@@ -1808,7 +1808,8 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
         height: int = DEFAULT_DUMMY_SHAPES["height"],
         **kwargs,
     ):
-        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
+        super().__init__(task, normalized_config, batch_size, num_channels, width // 4, height // 4, **kwargs)
         if getattr(normalized_config, "in_channels", None):
             self.num_channels = normalized_config.in_channels // 4
 
