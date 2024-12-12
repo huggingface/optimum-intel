@@ -578,6 +578,7 @@ class _IPEXAttention(nn.Module):
         self.kv_head_mapping = torch.arange(
             0, self.num_key_value_heads, dtype=torch.int32, device=self.module_device
         ).repeat_interleave(self.num_groups)
+        self.use_sdpa = False
 
     def qkv_gemm(self, hidden_states):
         raise NotImplementedError("Need to implement in specific model class")
@@ -586,7 +587,10 @@ class _IPEXAttention(nn.Module):
         raise NotImplementedError("Need to implement in specific model class")
 
     def postprocess_attention_output(self, attn_output):
-        attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
+        if self.use_sdpa:
+            attn_output = attn_output.reshape(-1, self.embed_dim)
+        else:
+            attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
         return attn_output
 
     def varlen_attn(self, query, key, value, past_key_value, input_lens):
@@ -642,6 +646,7 @@ class _IPEXAttention(nn.Module):
                     attn_mask=None,
                     is_causal=True,
                 )
+                self.use_sdpa = True
             else:
                 attn_output = self.varlen_attn(query, key_cache, value_cache, past_key_value, input_lens)
         else:
@@ -754,7 +759,10 @@ class _IPEXGPT2Attention(_IPEXAttention):
         return query, key
 
     def postprocess_attention_output(self, attn_output):
-        attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
+        if self.use_sdpa:
+            attn_output = attn_output.reshape(-1, self.embed_dim)
+        else:
+            attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
         attn_output = self.c_proj(attn_output)
         return attn_output
 
