@@ -361,10 +361,8 @@ class OVExportCommand(BaseOptimumCLICommand):
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
-        elif (
-            task.startswith("text-generation")
-            and quantize_with_dataset
-            or (task == "image-text-to-text" and quantization_config is not None)
+        elif (task.startswith("text-generation") and quantize_with_dataset) or (
+            task == "image-text-to-text" and quantization_config is not None
         ):
             if task.startswith("text-generation"):
                 from optimum.intel import OVModelForCausalLM
