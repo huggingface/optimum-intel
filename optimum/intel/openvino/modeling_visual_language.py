@@ -598,7 +598,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         if load_in_8bit is None and not quantization_config:
             ov_config = None
         else:
-            ov_config = OVConfig(dtype="auto")
+            # Export in fp32 if compression won't be applied later
+            ov_config = OVConfig(dtype="fp32" if load_in_8bit is False else "auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
