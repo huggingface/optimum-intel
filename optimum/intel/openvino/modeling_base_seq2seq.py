@@ -364,7 +364,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         if load_in_8bit is None and not quantization_config:
             ov_config = None
         else:
-            ov_config = OVConfig(dtype="fp32")
+            ov_config = OVConfig(dtype="auto")
 
         main_export(
             model_name_or_path=model_id,
