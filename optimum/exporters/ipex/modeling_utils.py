@@ -38,7 +38,7 @@ if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
     )
 else:
-    from intel_extension_for_pytorch.llm.functional import rms_norm, rotary_embedding, varlen_attention
+    from intel_extension_for_pytorch.llm.functional import rms_norm, rotary_embedding
     from intel_extension_for_pytorch.llm.modules import (
         Linear2SiluMul,
         LinearAdd,
