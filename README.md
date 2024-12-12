@@ -159,7 +159,7 @@ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 
 
 ## IPEX
-To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. You can set `export=True` to load a PyTorch checkpoint, export your model via TorchScript and apply IPEX optimizations : both operators optimization (replaced with customized IPEX operators) and graph-level optimization (like operators fusion) will be applied on your model.
+To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. It loads a PyTorch checkpoint, and apply IPEX optimizations : both operators optimization (replaced with customized IPEX operators) and graph-level optimization (like operators fusion) will be applied on your model.
 ```diff
   from transformers import AutoTokenizer, pipeline
 - from transformers import AutoModelForCausalLM
