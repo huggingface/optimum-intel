@@ -19,6 +19,9 @@ from typing import List, Optional, Tuple, Union
 import torch
 from torch import nn
 from transformers.cache_utils import Cache
+from transformers.modeling_attn_mask_utils import (
+    _prepare_4d_causal_attention_mask_for_sdpa,
+)
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPastAndCrossAttentions
 
 from optimum.intel.utils.import_utils import is_ipex_version
@@ -195,6 +198,9 @@ def _llama_model_forward(
     next_decoder_cache = () if use_cache else None
 
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
@@ -207,8 +213,12 @@ def _llama_model_forward(
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-
-    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask=attention_mask,
+            input_shape=(input_ids.shape[0], input_ids.shape[-1]),
+            inputs_embeds=inputs_embeds,
+            past_key_values_length=past_key_values_length,
+        )
 
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
@@ -310,6 +320,8 @@ def _falcon_model_forward(
     # create position embeddings to be shared across the decoder layers
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
@@ -322,7 +334,12 @@ def _falcon_model_forward(
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask=attention_mask,
+            input_shape=(input_ids.shape[0], input_ids.shape[-1]),
+            inputs_embeds=inputs_embeds,
+            past_key_values_length=past_key_values_length,
+        )
 
     next_decoder_cache = None
     all_self_attentions = () if output_attentions else None
@@ -437,6 +454,8 @@ def _gpt2_model_forward(
 
     hidden_states = self.drop(hidden_states)
 
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+
     if past_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
@@ -444,8 +463,12 @@ def _gpt2_model_forward(
         hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-
-    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask=attention_mask,
+            input_shape=(input_ids.shape[0], input_ids.shape[-1]),
+            inputs_embeds=inputs_embeds,
+            past_key_values_length=past_length,
+        )
 
     presents = None
     all_self_attentions = () if output_attentions else None
@@ -588,9 +611,8 @@ class _IPEXAttention(nn.Module):
 
     def postprocess_attention_output(self, attn_output):
         if self.use_sdpa:
-            attn_output = attn_output.reshape(-1, self.embed_dim)
-        else:
-            attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
+            attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
         return attn_output
 
     def varlen_attn(self, query, key, value, past_key_value, input_lens):
@@ -640,10 +662,11 @@ class _IPEXAttention(nn.Module):
             # prefill
             if past_key_value is None or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_FLASH_VARLEN_ATTN):
                 attn_output = torch.nn.functional.scaled_dot_product_attention(
-                    query.reshape(input_lens.shape[0], -1, query.shape[-1]),
-                    key.reshape(input_lens.shape[0], -1, key.shape[-1]),
-                    value.reshape(input_lens.shape[0], -1, value.shape[-1]),
-                    attn_mask=None,
+                    query.reshape(input_lens.shape[0], input_lens.max().item(), -1, query.shape[-1]).transpose(1, 2),
+                    key.reshape(input_lens.shape[0], input_lens.max().item(), -1, key.shape[-1]).transpose(1, 2),
+                    value.reshape(input_lens.shape[0], input_lens.max().item(), -1, value.shape[-1]).transpose(1, 2),
+                    attn_mask=attention_mask,
+                    dropout_p=0.0,
                     is_causal=True,
                 )
                 self.use_sdpa = True
@@ -760,9 +783,8 @@ class _IPEXGPT2Attention(_IPEXAttention):
 
     def postprocess_attention_output(self, attn_output):
         if self.use_sdpa:
-            attn_output = attn_output.reshape(-1, self.embed_dim)
-        else:
-            attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
+            attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
         attn_output = self.c_proj(attn_output)
         return attn_output
 
