@@ -23,7 +23,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
+from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
@@ -71,7 +71,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4"],
         default=None,
         help="The weight format of the exported model.",
     )
@@ -118,13 +118,29 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
+        "--backup-precision",
+        type=str,
+        choices=["none", "int8_sym", "int8_asym"],
+        default=None,
+        help=(
+            "Defines a backup precision for mixed-precision weight compression. Only valid for 4-bit weight formats. "
+            "If not provided, backup precision is int8_asym. 'none' stands for original floating-point precision of "
+            "the model weights, in this case weights are retained in their original precision without any "
+            "quantization. 'int8_sym' stands for 8-bit integer symmetric quantization without zero point. 'int8_asym' "
+            "stands for 8-bit integer asymmetric quantization with zero points per each quantization group."
+        ),
+    )
+    optional_group.add_argument(
         "--dataset",
         type=str,
         default=None,
         help=(
             "The dataset used for data-aware compression or quantization with NNCF. "
-            "You can use the one from the list ['wikitext2','c4','c4-new'] for language models "
-            "or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models."
+            "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the "
+            "dataset will be collected from model's generations. "
+            "For diffusion models it should be on of ['conceptual_captions',"
+            "'laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. "
+            "For visual language models the dataset must be set to 'contextual'."
         ),
     )
     optional_group.add_argument(
@@ -143,7 +159,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
             "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
-            "argument. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such "
+            "argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such "
             "case it will be skipped."
         ),
     )
@@ -168,11 +184,21 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--lora-correction",
+        action="store_true",
+        default=None,
+        help=(
+            "Indicates whether to apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank "
+            "adaptation layers in the model that can recover accuracy after weight compression at some cost of "
+            "inference latency. Please note, that applying LoRA Correction algorithm takes additional memory and time."
+        ),
+    )
+    optional_group.add_argument(
         "--sensitivity-metric",
         type=str,
         default=None,
         help=(
-            "The sensitivity metric for assigning quantization precision to layers. Can be one of the following: "
+            "The sensitivity metric for assigning quantization precision to layers. It can be one of the following: "
             "['weight_quantization_error', 'hessian_input_activation', 'mean_activation_variance', "
             "'max_activation_variance', 'mean_activation_magnitude']."
         ),
@@ -191,7 +217,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "In stateful models all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. "
             "If --disable-stateful option is used, it may result in sub-optimal inference performance. "
             "Use it when you intentionally want to use a stateless model, for example, to be compatible with existing "
-            "OpenVINO native inference code that expects kv-cache inputs and outputs in the model."
+            "OpenVINO native inference code that expects KV-cache inputs and outputs in the model."
         ),
     )
     optional_group.add_argument(
@@ -215,7 +241,9 @@ def no_compression_parameter_provided(args):
                 args.awq,
                 args.scale_estimation,
                 args.gptq,
+                args.lora_correction,
                 args.sensitivity_metric,
+                args.backup_precision,
             )
         )
     )
@@ -243,6 +271,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
+        from ...exporters.openvino.utils import save_preprocessors
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
 
         if self.args.library is None:
@@ -262,8 +291,9 @@ class OVExportCommand(BaseOptimumCLICommand):
         if self.args.weight_format is None:
             ov_config = None
             if not no_compression_parameter_provided(self.args):
-                logger.warning(
-                    "The provided compression parameters will not affect conversion because of the missing --weight-format argument."
+                raise ValueError(
+                    "Some compression parameters are provided, but the weight format is not specified. "
+                    "Please provide it with --weight-format argument."
                 )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
@@ -285,7 +315,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
                     "gptq": self.args.gptq,
+                    "lora_correction": self.args.lora_correction,
                     "weight_format": self.args.weight_format,
+                    "backup_precision": self.args.backup_precision,
                 }
 
             if quantization_config.get("dataset", None) is not None:
@@ -322,6 +354,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVStableDiffusion3Pipeline
 
                 model_cls = OVStableDiffusion3Pipeline
+            elif class_name == "FluxPipeline":
+                from optimum.intel import OVFluxPipeline
+
+                model_cls = OVFluxPipeline
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
@@ -329,11 +365,18 @@ class OVExportCommand(BaseOptimumCLICommand):
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
-        elif task.startswith("text-generation") and quantize_with_dataset:
-            from optimum.intel import OVModelForCausalLM
+        elif (task.startswith("text-generation") or task == "image-text-to-text") and quantize_with_dataset:
+            if task.startswith("text-generation"):
+                from optimum.intel import OVModelForCausalLM
 
-            # To quantize a text-generation model with a dataset, an instantiated OVModelForCausalLM is required
-            model = OVModelForCausalLM.from_pretrained(
+                model_cls = OVModelForCausalLM
+            else:
+                from optimum.intel import OVModelForVisualCausalLM
+
+                model_cls = OVModelForVisualCausalLM
+
+            # To quantize a model with a dataset, an instance of a model class is required
+            model = model_cls.from_pretrained(
                 self.args.model,
                 export=True,
                 quantization_config=quantization_config,
@@ -342,11 +385,9 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
-            maybe_save_preprocessors(self.args.model, self.args.output, trust_remote_code=self.args.trust_remote_code)
+            preprocessors = maybe_load_preprocessors(self.args.model, trust_remote_code=self.args.trust_remote_code)
+            save_preprocessors(preprocessors, model.config, self.args.output, self.args.trust_remote_code)
             if not self.args.disable_convert_tokenizer:
-                preprocessors = maybe_load_preprocessors(
-                    self.args.model, trust_remote_code=self.args.trust_remote_code
-                )
                 maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors, task=task)
         else:
             # TODO : add input shapes

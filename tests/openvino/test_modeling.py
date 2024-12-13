@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import gc
 import os
 import tempfile
@@ -32,6 +33,7 @@ from evaluate import evaluator
 from huggingface_hub import HfApi
 from parameterized import parameterized
 from PIL import Image
+from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
@@ -50,6 +52,7 @@ from transformers import (
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
@@ -59,7 +62,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
@@ -91,10 +94,14 @@ from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
-    OVModelWithEmbedForCausalLM,
-    OVVisionEmbedding,
 )
-from optimum.intel.openvino.utils import TemporaryDirectory, _print_compiled_model_properties
+from optimum.intel.openvino.utils import (
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_EMBEDDINGS_MODEL_NAME,
+    TemporaryDirectory,
+    _print_compiled_model_properties,
+)
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
@@ -133,6 +140,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -216,6 +224,76 @@ class OVModelIntegrationTest(unittest.TestCase):
             del compile_only_model
 
         outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        del loaded_model
+        del model
+        gc.collect()
+
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45"),
+        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
+    )
+    def test_load_from_hub_and_save_visual_language_model(self):
+        model_id = self.OV_VLM_MODEL_ID
+        processor = get_preprocessor(model_id)
+        prompt = "<image>\n What is shown in this image?"
+        image = Image.open(
+            requests.get(
+                TEST_IMAGE_URL,
+                stream=True,
+            ).raw
+        )
+        loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id)
+        self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
+        for component_name, component in loaded_model.components.items():
+            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+
+        for component_name, component in loaded_model.components.items():
+            self.assertIsInstance(component.model, ov.Model)
+            if component_name == "language_model":
+                self.assertEqual(component.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
+                self.assertIsInstance(component.text_emb_model, ov.Model)
+                self.assertEqual(component.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
+            else:
+                self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+        set_seed(SEED)
+        loaded_model_outputs = loaded_model(**inputs)
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            model_files = [
+                OV_LANGUAGE_MODEL_NAME,
+                OV_TEXT_EMBEDDINGS_MODEL_NAME,
+                OV_VISION_EMBEDDINGS_MODEL_NAME,
+            ]
+            model_files += ["openvino_{part}_model.xml" for part in loaded_model.additional_parts]
+            for xml_file_name in model_files:
+                self.assertTrue(xml_file_name in folder_contents)
+                self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
+            compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
+            for _, submodel in compile_only_model.submodels.items():
+                self.assertIsInstance(submodel, ov.runtime.CompiledModel)
+            for component_name, component in compile_only_model.components.items():
+                self.assertIsInstance(component.model, ov.runtime.CompiledModel)
+                if component_name == "language_model":
+                    self.assertIsInstance(component.request, ov.runtime.InferRequest)
+                    self.assertIsInstance(component.text_emb_model, ov.runtime.CompiledModel)
+                    self.assertIsInstance(component.text_emb_request, ov.runtime.CompiledModel)
+                else:
+                    self.assertIsInstance(component.request, ov.runtime.CompiledModel)
+
+            outputs = compile_only_model(**inputs)
+            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+            del compile_only_model
+
+        outputs = model(**inputs)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
         del loaded_model
         del model
@@ -353,7 +431,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
-        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
         # hub model
         for revision in ("main", "ov", "itrex"):
             ov_files = _find_files_matching_pattern(
@@ -374,7 +452,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
     def test_find_files_matching_pattern_sd(self, model_arch):
-        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
         model_id = MODEL_NAMES[model_arch]
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
@@ -392,7 +470,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_find_files_matching_pattern_with_config_in_root(self, subfolder):
         # Notably, the model has a config.json file in the root directory and not in the subfolder
         model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino"
-        pattern = r"(.*)?openvino(.*)?\_model.xml$"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
         self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
@@ -404,6 +482,24 @@ class OVModelIntegrationTest(unittest.TestCase):
             api.snapshot_download(repo_id=model_id, local_dir=local_dir)
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
             self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
+
+    def test_find_files_matching_pattern_with_quantized_ov_model(self):
+        # This model only has "openvino/openvino_model_qint8_quantized.xml" and "openvino/openvino_model_qint8_quantized.bin"
+        # We want to ensure that this model is found, so the `export` isn't forced to True
+        model_id = "sentence-transformers-testing/stsb-bert-tiny-openvino-quantized-only"
+        subfolder = "openvino"
+        pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
+        # hub model
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
+        self.assertTrue(len(ov_files) == 1)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
+            self.assertTrue(len(ov_files) == 1)
 
 
 class PipelineTest(unittest.TestCase):
@@ -771,6 +867,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bloom",
         "chatglm",
         "codegen",
+        "codegen2",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -817,11 +914,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "arctic",
             "exaone",
             "mistral-nemo",
+            "minicpm3",
         )
-
-    # custom modeling defined in https://huggingface.co/katuni4ka/tiny-random-codegen2 differs from transformers after v4.45 resulting in unadapted patching
-    if is_transformers_version("<", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ("codegen2",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -842,6 +936,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4",
         "exaone",
         "decilm",
+        "minicpm3",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -872,7 +967,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
-        tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -909,7 +1003,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -933,7 +1026,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             additional_inputs = {"past_key_values": DynamicCache()}
         transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
-        self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
+        self.assertTrue(
+            torch.allclose(ov_outputs, transformers_outputs),
+            "OV output {ov_outputs}\nTransformers output  {transformers_output}",
+        )
 
         del transformers_model
         del ov_model
@@ -1102,6 +1198,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
             model_kwargs["attn_implementation"] = "sdpa"
+
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "glm4"]:
             return
@@ -1177,7 +1274,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1332,7 +1428,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
@@ -1358,7 +1454,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
-        inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        inputs = TEST_IMAGE_URL
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
@@ -1379,7 +1475,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         timm_model = timm.create_model(model_id, pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
@@ -1875,17 +1971,18 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = [
-        "llava",
-    ]
+    SUPPORTED_ARCHITECTURES = ["llava"]
 
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next"]
+        SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v"]
     TASK = "image-text-to-text"
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
 
     IMAGE = Image.open(
         requests.get(
-            "http://images.cocodataset.org/val2017/000000039769.jpg",
+            TEST_IMAGE_URL,
             stream=True,
         ).raw
     )
@@ -1899,29 +1996,130 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaNextForConditionalGeneration
 
             return LlavaNextForConditionalGeneration
-        return None
+        return AutoModelForCausalLM
+
+    def _check_device_and_request(self, ov_model, expected_device, has_request):
+        request_check_fn = self.assertFalse if has_request else self.assertTrue
+        self.assertEqual(ov_model._device, expected_device)
+        for component_name, component in ov_model.components.items():
+            if component_name == "language_model":
+                request_check_fn(component.text_emb_request is None)
+            self.assertEqual(component._device, expected_device)
+            request_check_fn(component.request is None)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        prompt = "What is shown in this image?"
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
+            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+        transformers_model.eval()
+        if "internvl2" in model_arch:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+            transformers_model.img_context_token_id = img_context_token_id
+        if "nanollava" in model_arch:
+            transformers_model.get_vision_tower().load_model()
+        preprocessors = self.get_preprocessors(model_arch)
+        set_seed(SEED)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
+        )
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
+        for component_name, component in ov_model.components.items():
+            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        transformers_inputs = copy.deepcopy(inputs)
+        test_device = "AUTO"
+        ov_model.to(test_device)
+        self._check_device_and_request(ov_model, test_device, False)
+        test_device = "CPU"
+        ov_model.to(test_device)
+        ov_model.compile()
+        self._check_device_and_request(ov_model, test_device, True)
+        ov_model.clear_requests()
+        self._check_device_and_request(ov_model, test_device, False)
+
+        # nanollava pixel_values input named as images
+        if model_arch == "nanollava":
+            pixel_values = transformers_inputs.pop("pixel_values", None)
+            transformers_inputs["images"] = pixel_values
+        # pytorch minicpmv is not designed to be used via forward
+        if model_arch not in ["minicpmv", "internvl2"]:
+            set_seed(SEED)
+            ov_outputs = ov_model(**inputs)
+            set_seed(SEED)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**transformers_inputs)
+            self.assertTrue(
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4),
+                f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
+            )
+
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
+
+        # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+        if model_arch in ["minicpmv", "internvl2"]:
+            ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+        )
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(["llava", "llava_next"])
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
+    )
+    def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
-        processor = get_preprocessor(model_id)
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            patch_size=config.vision_config.patch_size,
+            vision_feature_select_strategy=config.vision_feature_select_strategy,
+            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+        )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+        self.assertTrue(ov_model._support_new_processing)
+        self.assertTrue(processor.patch_size is not None)
+        self.assertTrue(processor.vision_feature_select_strategy is not None)
         inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
+        self.assertTrue(
+            (inputs.input_ids == ov_model.config.image_token_index).sum(1).max() >= ov_model.config.image_seq_length
+        )
         set_seed(SEED)
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
-        ov_model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
-        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
-        self.assertIsInstance(ov_model.vision_embeddings, OVVisionEmbedding)
-        self.assertIsInstance(ov_model.language_model, OVModelWithEmbedForCausalLM)
-        for additional_part in ov_model.additional_parts:
-            self.assertTrue(hasattr(ov_model, additional_part))
-            self.assertIsInstance(getattr(ov_model, additional_part), MODEL_PARTS_CLS_MAPPING[additional_part])
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         ov_outputs = ov_model(**inputs)
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -1936,38 +2134,81 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
-        transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
         )
 
-        del transformers_model
         del ov_model
-
+        del transformers_model
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVisualCausalLM.from_pretrained(model_id, export=True)
-        preprocessor = get_preprocessor(model_id)
-        question = "<image>\nDescribe image"
-        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
+        model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
 
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        question = "Describe image"
+        preprocessors = self.get_preprocessors(model_arch)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
         # General case
         outputs = model.generate(**inputs, max_new_tokens=10)
-        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
+        # No input image case
         question = "Hi, how are you?"
-        inputs = preprocessor(images=None, text=question, return_tensors="pt")
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
         outputs = model.generate(**inputs, max_new_tokens=10)
-        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+        outputs = outputs[:, inputs["input_ids"].shape[1] :]
+        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
         del model
 
         gc.collect()
+
+    def get_preprocessors(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        if model_arch == "nanollava":
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+            processor = AutoProcessor.from_pretrained(
+                config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": tokenizer}
+        elif model_arch == "internvl2":
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        else:
+            processor = AutoProcessor.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": None}
+        return preprocessors
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_model_can_be_loaded_after_saving(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        with TemporaryDirectory() as save_dir:
+            ov_model = OVModelForVisualCausalLM.from_pretrained(
+                model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            ov_model.save_pretrained(save_dir)
+            ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
+                save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            self.assertIsInstance(ov_restored_model, type(ov_model))
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
@@ -2046,7 +2287,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     SPEEDUP_CACHE = 1.1
 
     def _get_sample_image(self):
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
@@ -2153,7 +2394,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES = ["vit-with-hidden-states"]
 
     def _get_sample_image(self):
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
@@ -2237,7 +2478,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
     OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
 
     def _get_sample_image(self):
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
@@ -2367,4 +2608,37 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         res = model(reshaped_tokens, processed_image)
 
         del model
+        gc.collect()
+
+
+class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("st-bert", "st-mpnet")
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(hasattr(ov_model, "encode"))
+        st_model = SentenceTransformer(model_id)
+        sentences = ["This is an example sentence", "Each sentence is converted"]
+        st_embeddings = st_model.encode(sentences)
+        ov_embeddings = ov_model.encode(sentences)
+        # Compare tensor outputs
+        self.assertTrue(np.allclose(ov_embeddings, st_embeddings, atol=1e-4))
+        del st_embeddings
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_sentence_transformers_save_and_infer(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        with TemporaryDirectory() as tmpdirname:
+            model_save_path = os.path.join(tmpdirname, "sentence_transformers_ov_model")
+            ov_model.save_pretrained(model_save_path)
+            model = OVSentenceTransformer.from_pretrained(model_save_path)
+            sentences = ["This is an example sentence", "Each sentence is converted"]
+            model.encode(sentences)
         gc.collect()

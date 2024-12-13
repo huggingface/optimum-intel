@@ -2,7 +2,8 @@ name: Build PR documentation
 
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -10,7 +11,8 @@ concurrency:
 
 jobs:
   build_documentation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     env:
       COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.number }}
@@ -18,20 +20,24 @@ jobs:
       PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
-          repository: 'huggingface/doc-builder'
+          repository: "huggingface/doc-builder"
           path: doc-builder
 
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
-          repository: 'huggingface/optimum-intel'
+          repository: "huggingface/optimum-intel"
           path: optimum-intel
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.9
 
       - name: Setup environment
         run: |
-          python -m venv venv-doc
-          source venv-doc/bin/activate
+          pip install --upgrade pip
           pip uninstall -y doc-builder
           cd doc-builder
           git pull origin main

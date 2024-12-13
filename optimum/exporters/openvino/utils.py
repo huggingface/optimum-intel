@@ -13,16 +13,25 @@
 #  limitations under the License.
 
 import inspect
+import logging
 from collections import namedtuple
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from transformers import PretrainedConfig
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Dimension, PartialShape, Symbol
 from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
+from optimum.intel.utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
+from optimum.utils.save_utils import maybe_save_preprocessors
+
+
+logger = logging.getLogger(__name__)
 
 
 InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
@@ -208,4 +217,74 @@ def _get_open_clip_submodels_fn_and_export_configs(
     return custom_export, fn_get_submodels
 
 
-MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "internvl-chat"]
+MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "llava-qwen2", "internvl-chat", "minicpmv", "phi3-v"]
+
+
+def save_config(config, save_dir):
+    try:
+        config.save_pretrained(save_dir)
+    except Exception as exp:
+        logger.warning(
+            f"Attempt to save config using standard API has failed with {exp}. There may be an issue with model config, please check its correctness before usage."
+        )
+        save_dir = Path(save_dir)
+        save_dir.mkdir(exist_ok=True, parents=True)
+        output_config_file = Path(save_dir / "config.json")
+        config.to_json_file(output_config_file, use_diff=True)
+
+
+def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
+    dtype = None
+    if is_safetensors_available():
+        if Path(model_name_or_path).is_dir():
+            path = Path(model_name_or_path)
+        else:
+            from diffusers import DiffusionPipeline
+
+            path = Path(DiffusionPipeline.download(model_name_or_path, **loading_kwargs))
+        model_part_name = None
+        if (path / "transformer").is_dir():
+            model_part_name = "transformer"
+        elif (path / "unet").is_dir():
+            model_part_name = "unet"
+        if model_part_name:
+            directory = path / model_part_name
+            safetensors_files = [
+                filename for filename in directory.glob("*.safetensors") if len(filename.suffixes) == 1
+            ]
+            safetensors_file = None
+            if len(safetensors_files) > 0:
+                safetensors_file = safetensors_files.pop(0)
+            if safetensors_file:
+                from safetensors import safe_open
+
+                with safe_open(safetensors_file, framework="pt", device="cpu") as f:
+                    if len(f.keys()) > 0:
+                        for key in f.keys():
+                            tensor = f.get_tensor(key)
+                            if tensor.dtype.is_floating_point:
+                                dtype = tensor.dtype
+                                break
+    return dtype
+
+
+def save_preprocessors(
+    preprocessors: List, config: PretrainedConfig, output: Union[str, Path], trust_remote_code: bool
+):
+    model_name_or_path = config._name_or_path
+    if hasattr(config, "export_model_type"):
+        model_type = config.export_model_type.replace("_", "-")
+    else:
+        model_type = config.model_type.replace("_", "-")
+    if preprocessors is not None:
+        # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
+        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
+            if not hasattr(preprocessors[1], "chat_template"):
+                preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
+        for processor in preprocessors:
+            try:
+                processor.save_pretrained(output)
+            except Exception as ex:
+                logger.error(f"Saving {type(processor)} failed with {ex}")
+    else:
+        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)

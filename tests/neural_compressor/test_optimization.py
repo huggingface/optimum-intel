@@ -45,7 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_torch_version
+from optimum.intel.utils.import_utils import is_neural_compressor_version
 
 from optimum.intel import (
     INCConfig,
@@ -467,12 +467,16 @@ class TrainingOptimizationTest(INCTestMixin):
 
 class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
-        ("rtn", 4),
-        ("gptq", 4),
+        ("rtn", 4, False),
+        ("rtn", 4, True),
+        ("gptq", 4, False),
+        ("gptq", 4, True),
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    def test_weight_only_quantization(self, methodology, bits):
+    def test_weight_only_quantization(self, methodology, bits, use_layer_wise):
+        if use_layer_wise and is_neural_compressor_version("<", "3.2"):
+            self.skipTest("INC version < 3.2 doesn't support layer-wise feature.")
         from neural_compressor.transformers import GPTQConfig, RtnConfig
 
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
@@ -489,9 +493,10 @@ class WeightOnlyQuantizationTest(INCTestMixin):
                 batch_size=5,
                 seq_len=32,
                 block_size=16,
+                use_layer_wise=use_layer_wise,
             )
         else:
-            quantization_config = RtnConfig(bits=bits, group_size=8)
+            quantization_config = RtnConfig(bits=bits, group_size=8, use_layer_wise=use_layer_wise)
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
@@ -503,6 +508,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
         with torch.no_grad():
             quantizer_outputs = quantized_model(**tokens)
         quantized_model.save_pretrained(tmp_dir)
+
         loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
         with torch.no_grad():
             loaded_outputs = loaded_model(**tokens)

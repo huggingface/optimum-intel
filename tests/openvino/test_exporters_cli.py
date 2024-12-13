@@ -36,6 +36,7 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
@@ -49,6 +50,7 @@ from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
+    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -79,19 +81,20 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend([("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux")])
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
-        "gpt2": 2 if is_tokenizers_version("<", "0.20") else 0,
+        "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
         "distilbert": 1,  # no detokenizer
-        "roberta": 2 if is_tokenizers_version("<", "0.20") else 0,
+        "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
         "bert": 1,  # no detokenizer
-        "blenderbot": 2 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") else 0,
-        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") else 2,
-        "flux": 4 if is_tokenizers_version("<", "0.20") else 0,
+        "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
+        "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -102,11 +105,13 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
 
-    TEST_4BIT_CONFIGURATONS = [
+    TEST_4BIT_CONFIGURATIONS = [
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
         ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
         ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
+        ("text-generation-with-past", "opt125m", "nf4", {"int8": 4, "nf4": 72}),
         ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 8 --all-layers", {"int4": 16}),
         (
             "text-generation-with-past",
@@ -127,7 +132,54 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
             {"int8": 4, "int4": 14},
         ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --lora-correction --dataset auto --num-samples 16",
+            {"int8": 60, "int4": 14},
+        ),
+        ("text-generation-with-past", "llama_awq", "int4 --group-size 16 --backup-precision none", {"int4": 28}),
     ]
+
+    if is_transformers_version(">=", "4.40.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "llava_next",
+                    'int4 --group-size 16 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1",
+                    {"int8": 8, "int4": 22},
+                ),
+                (
+                    "image-text-to-text",
+                    "nanollava",
+                    'int4 --group-size 8 --ratio 0.9 --sensitivity-metric "mean_activation_variance" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {"int8": 12, "int4": 18},
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.45.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    'int4 --group-size 4 --ratio 0.9 --sensitivity-metric "hessian_input_activation" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {"int8": 6, "int4": 24},
+                ),
+                (
+                    "image-text-to-text",
+                    "phi3_v",
+                    'int4 --group-size 4 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {"int8": 4, "int4": 14},
+                ),
+            ]
+        )
 
     def _openvino_export(self, model_name: str, task: str):
         with TemporaryDirectory() as tmpdir:
@@ -222,6 +274,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
                 models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+            elif task.startswith("image-text-to-text"):
+                models = [model.language_model, model.vision_embeddings]
             else:
                 models = [model]
 
@@ -245,8 +299,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(exp_num_int8, num_weight_nodes["int8"])
             self.assertEqual(exp_num_fq, num_fq)
 
-    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
-    def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
+    @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
+    def test_exporters_cli_4bit(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -255,18 +309,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            if "--trust-remote-code" in option:
+                model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
                 if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
+            ov_model = model.lm_model if task == "image-text-to-text" else model.model
+
+            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
             self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
+            self.assertTrue(
+                "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
+            )
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
@@ -359,3 +420,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["open_clip"]).from_pretrained(tmpdir, compile=False)
             self.assertTrue("text_features" in model.text_model.output_names)
             self.assertTrue("image_features" in model.visual_model.output_names)
+
+    def test_export_openvino_with_missed_weight_format(self):
+        # Test that exception is raised when some compression parameter is given, but weight format is not.
+        with TemporaryDirectory() as tmpdir:
+            with self.assertRaises(subprocess.CalledProcessError) as exc_info:
+                subprocess.run(
+                    f"optimum-cli export openvino --model {MODEL_NAMES['gpt2']} --task text-generation --sym {tmpdir}",
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            self.assertIn(
+                "Some compression parameters are provided, but the weight format is not specified.",
+                str(exc_info.exception.stderr),
+            )

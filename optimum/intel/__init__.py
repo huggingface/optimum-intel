@@ -41,7 +41,14 @@ except OptionalDependencyNotAvailable:
     from .utils import dummy_ipex_objects
 
     _import_structure["utils.dummy_ipex_objects"] = [
-        name for name in dir(dummy_ipex_objects) if not name.startswith("_")
+        "IPEXModelForCausalLM",
+        "IPEXModelForSequenceClassification",
+        "IPEXModelForMaskedLM",
+        "IPEXModelForTokenClassification",
+        "IPEXModelForQuestionAnswering",
+        "IPEXModelForImageClassification",
+        "IPEXModelForAudioClassification",
+        "IPEXModel",
     ]
 else:
     _import_structure["ipex"] = [
@@ -54,6 +61,15 @@ else:
         "IPEXModelForAudioClassification",
         "IPEXModel",
     ]
+
+try:
+    if not (is_ipex_available() and is_sentence_transformers_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_ipex_objects"].extend(["IPEXSentenceTransformer"])
+else:
+    _import_structure["ipex"].extend(["IPEXSentenceTransformer"])
+
 
 try:
     if not (is_openvino_available() and is_nncf_available()):
@@ -106,6 +122,8 @@ except OptionalDependencyNotAvailable:
         "OVLatentConsistencyModelPipeline",
         "OVLatentConsistencyModelImg2ImgPipeline",
         "OVFluxPipeline",
+        "OVFluxImg2ImgPipeline",
+        "OVFluxInpaintPipeline",
         "OVPipelineForImage2Image",
         "OVPipelineForText2Image",
         "OVPipelineForInpainting",
@@ -126,6 +144,8 @@ else:
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
             "OVFluxPipeline",
+            "OVFluxImg2ImgPipeline",
+            "OVFluxInpaintPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
@@ -208,15 +228,9 @@ try:
     if not (is_openvino_available() and is_sentence_transformers_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"] = [
-        "OVSentenceTransformer",
-    ]
+    _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"] = ["OVSentenceTransformer"]
 else:
-    _import_structure["openvino"].extend(
-        [
-            "OVSentenceTransformer",
-        ]
-    )
+    _import_structure["openvino"].extend(["OVSentenceTransformer"])
 
 
 if TYPE_CHECKING:
@@ -236,6 +250,14 @@ if TYPE_CHECKING:
             IPEXModelForSequenceClassification,
             IPEXModelForTokenClassification,
         )
+
+    try:
+        if not (is_ipex_available() and is_sentence_transformers_available()):
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        from .utils.dummy_ipex_objects import IPEXSentenceTransformer
+    else:
+        from .ipex import IPEXSentenceTransformer
 
     try:
         if not (is_openvino_available() and is_nncf_available()):
@@ -368,13 +390,9 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_sentence_transformers_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_sentence_transformers_objects import (
-            OVSentenceTransformer,
-        )
+        from .utils.dummy_openvino_and_sentence_transformers_objects import OVSentenceTransformer
     else:
-        from .openvino import (
-            OVSentenceTransformer,
-        )
+        from .openvino import OVSentenceTransformer
 
 else:
     import sys

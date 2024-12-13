@@ -22,6 +22,7 @@ import weakref
 from glob import glob
 from pathlib import Path
 from tempfile import TemporaryDirectory as OrigTemporaryDirectory
+from tempfile import mkdtemp
 from typing import Tuple, Type, Union
 
 import numpy as np
@@ -42,6 +43,9 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
+OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
+OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
 
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
 OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
@@ -116,6 +120,7 @@ _HEAD_TO_AUTOMODELS = {
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",
+    "image-text-to-text": "OVModelForVisualCausalLM",
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
@@ -133,6 +138,23 @@ PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+PREDEFINED_VISUAL_LM_DATASETS = {
+    "contextual": {
+        "id": "ucla-contextual/contextual_test",
+        "split": "test",
+        "inputs": {"image_url": "image_url", "instruction": "instruction"},
+    }
+}
+
+PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
+    "librispeech": {
+        "id": "openslr/librispeech_asr",
+        "name": "clean",
+        "split": "validation",
+        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
+    }
 }
 
 
@@ -187,6 +209,8 @@ def _is_timm_ov_dir(model_dir):
 
 
 def _print_compiled_model_properties(compiled_model):
+    cur_log_level = logger.getEffectiveLevel()
+    logger.setLevel(logging.INFO)
     supported_properties = properties.supported_properties()
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
@@ -209,6 +233,7 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+    logger.setLevel(cur_log_level)
 
 
 def np_to_pt_generators(np_object, device):
@@ -460,7 +485,7 @@ def _rmtree(path, ignore_errors=False, onerror=None, *, onexc=None, dir_fd=None)
 # to add behaviour that available only for python3.10+ for older python version
 class TemporaryDirectory(OrigTemporaryDirectory):
     def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=True, *, delete=True):
-        super().__init__(suffix=suffix, prefix=prefix, dir=dir)
+        self.name = mkdtemp(suffix, prefix, dir)
         self._ignore_cleanup_errors = ignore_cleanup_errors
         self._delete = delete
         self._finalizer = weakref.finalize(
@@ -473,13 +498,13 @@ class TemporaryDirectory(OrigTemporaryDirectory):
         )
 
     @classmethod
-    def _cleanup(cls, name, warn_message, ignore_errors=False, delete=True):
+    def _cleanup(cls, name, warn_message, ignore_errors=True, delete=True):
         if delete:
             cls._rmtree(name, ignore_errors=ignore_errors)
             warnings.warn(warn_message, ResourceWarning)
 
     @classmethod
-    def _rmtree(cls, name, ignore_errors=False, repeated=False):
+    def _rmtree(cls, name, ignore_errors=True, repeated=False):
         def _dont_follow_symlinks(func, path, *args):
             # Pass follow_symlinks=False, unless not supported on this platform.
             if func in os.supports_follow_symlinks:
@@ -533,7 +558,7 @@ class TemporaryDirectory(OrigTemporaryDirectory):
                 if not ignore_errors:
                     raise
 
-        _rmtree(name, onexc=onexc)
+        _rmtree(name, onexc=onexc, ignore_errors=ignore_errors)
 
     def cleanup(self):
         if self._finalizer.detach() or os.path.exists(self.name):

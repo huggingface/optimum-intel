@@ -16,7 +16,7 @@ limitations under the License.
 
 # Optical Character Recognition
 
-The script [`run_ocr.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_ocr.py)
+The script [`run_ocr_post_training.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_ocr_post_training.py)
 allows us to apply different quantization approaches (such as dynamic and static quantization) 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for optical character recognition tasks and [IAM](https://fki.tic.heia-fr.ch/databases/iam-handwriting-database) datasets.
 

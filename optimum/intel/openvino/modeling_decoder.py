@@ -522,9 +522,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
+        # added as model.generate validates model inputs based on forward signature
+        kwargs["token_type_ids"] = token_type_ids
 
         inputs = self.prepare_inputs(
             input_ids=input_ids,

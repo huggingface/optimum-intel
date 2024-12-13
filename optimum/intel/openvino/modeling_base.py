@@ -30,7 +30,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
 from transformers.utils import is_offline_mode
 
-from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
@@ -136,7 +136,11 @@ class OVBaseModel(OptimizedModel):
             self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
             if is_transformers_version(">=", "4.44.99"):
-                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                # some model configs may have issues with loading without parameters initialization
+                try:
+                    misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+                except (KeyError, TypeError):
+                    misplaced_generation_parameters = {}
                 if len(misplaced_generation_parameters) > 0:
                     logger.warning(
                         "Moving the following attributes in the config to the generation config: "
@@ -275,7 +279,6 @@ class OVBaseModel(OptimizedModel):
 
         compiled_model = core.compile_model(model, device.upper() if device is not None else device, config=ov_config)
         if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-            logger.info(f"{device if device is not None else 'AUTO'} SUPPORTED_PROPERTIES:")
             _print_compiled_model_properties(compiled_model)
         return compiled_model
 
@@ -440,7 +443,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model.xml$",
+                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -620,7 +623,7 @@ class OVBaseModel(OptimizedModel):
         cls,
         model,
         config: PretrainedConfig,
-        onnx_config: OnnxConfig,
+        onnx_config: ExportConfig,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -778,7 +781,7 @@ class OVModelPart:
             for inputs in self.model.inputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
+        self.request = None if not self.parent_model._compile_only else self.model
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
@@ -798,7 +801,6 @@ class OVModelPart:
             self.request = core.compile_model(self.model, self._device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.request)
 
     @property
@@ -828,3 +830,6 @@ class OVModelPart:
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    def clear_requests(self):
+        self.request = None
