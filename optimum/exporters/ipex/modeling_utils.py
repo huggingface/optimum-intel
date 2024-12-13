@@ -32,8 +32,7 @@ from .cache_utils import IPEXPagedCache
 
 logger = logging.getLogger(__name__)
 
-_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.4.0"
-_IPEX_MINIMUM_VERSION_FOR_FLASH_VARLEN_ATTN = "2.5.0"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.5.0"
 
 
 if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
@@ -213,6 +212,8 @@ def _llama_model_forward(
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+
+    if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
             attention_mask=attention_mask,
             input_shape=(input_ids.shape[0], input_ids.shape[-1]),
@@ -334,6 +335,8 @@ def _falcon_model_forward(
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+
+    if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
             attention_mask=attention_mask,
             input_shape=(input_ids.shape[0], input_ids.shape[-1]),
@@ -463,6 +466,8 @@ def _gpt2_model_forward(
         hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+
+    if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
             attention_mask=attention_mask,
             input_shape=(input_ids.shape[0], input_ids.shape[-1]),
@@ -660,11 +665,16 @@ class _IPEXAttention(nn.Module):
 
         if past_len == 0:
             # prefill
-            if past_key_value is None or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_FLASH_VARLEN_ATTN):
+            if past_key_value is None:
+                n_rep = query.shape[1] // key.shape[1]
                 attn_output = torch.nn.functional.scaled_dot_product_attention(
                     query.reshape(input_lens.shape[0], input_lens.max().item(), -1, query.shape[-1]).transpose(1, 2),
-                    key.reshape(input_lens.shape[0], input_lens.max().item(), -1, key.shape[-1]).transpose(1, 2),
-                    value.reshape(input_lens.shape[0], input_lens.max().item(), -1, value.shape[-1]).transpose(1, 2),
+                    key.reshape(input_lens.shape[0], input_lens.max().item(), -1, key.shape[-1])
+                    .transpose(1, 2)
+                    .repeat_interleave(n_rep, 1),
+                    value.reshape(input_lens.shape[0], input_lens.max().item(), -1, value.shape[-1])
+                    .transpose(1, 2)
+                    .repeat_interleave(n_rep, 1),
                     attn_mask=attention_mask,
                     dropout_p=0.0,
                     is_causal=True,
