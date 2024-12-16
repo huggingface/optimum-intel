@@ -186,7 +186,7 @@ class IPEXModel(OptimizedModel):
 
     def maybe_apply_torch_compile(self):
         if (
-            not self.model.device.type != "cpu"
+            self.model.device.type != "cpu"
             or self.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
             or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
         ):
