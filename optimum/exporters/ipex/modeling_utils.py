@@ -753,6 +753,8 @@ class _IPEXGPT2Attention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         self.num_key_value_heads = config.num_key_value_heads
         super().__init__(module, config)
+        if getattr(config, "quantization_config", None):
+            _remove_hooks_for_ipex(self, True)
 
     def qkv_gemm(self, hidden_states):
         query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=-1)
