@@ -5,13 +5,13 @@ on:
     branches:
       - main
     paths:
-      - 'Dockerfile.intel'
+      - 'Dockerfile.ipex'
  
   pull_request:
     branches:
       - main
     paths:
-      - 'Dockerfile.intel'
+      - 'Dockerfile.ipex'
 
 jobs:
   build_and_run:
@@ -27,7 +27,7 @@ jobs:
       - name: Build and Run Docker Image
         run: |
           IMAGE_NAME="intel_image:latest"
-          docker build -f Dockerfile.intel -t $IMAGE_NAME .
+          docker build -f Dockerfile.ipex -t $IMAGE_NAME .
           if [ $? -ne 0 ]; then
             echo "Docker image build failed."
             exit 1
