@@ -34,8 +34,8 @@ from transformers import (
     PretrainedConfig,
     pipeline,
     set_seed,
+    is_bitsandbytes_available,
 )
-from transformers.testing_utils import is_bitsandbytes_available, require_bitsandbytes
 from optimum.intel import (
     IPEXModel,
     IPEXModelForAudioClassification,
@@ -130,8 +130,8 @@ class IPEXModelTest(unittest.TestCase):
         _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
 
-    @require_bitsandbytes
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         quantization_config = BitsAndBytesConfig(load_in_8bit=True)
@@ -248,8 +248,8 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
         self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
 
-    @require_bitsandbytes
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -475,8 +475,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-7))
 
-    @require_bitsandbytes
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -765,8 +765,8 @@ class IPEXModelForSeq2SeqLMTest(unittest.TestCase):
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 
-    @require_bitsandbytes
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)

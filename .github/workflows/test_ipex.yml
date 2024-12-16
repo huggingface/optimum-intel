@@ -44,11 +44,11 @@ jobs:
           python -c "import intel_extension_for_pytorch; print(intel_extension_for_pytorch.__version__); assert intel_extension_for_pytorch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
           python -c "import transformers; print(transformers.__version__); assert transformers.__version__.startswith('${{ matrix.transformers-version }}'.replace('.*', ''))"
 
-      - name: Test with Pytest
-        run: |
-          pytest tests/ipex
-
       - if: ${{ matrix.torch-version != '2.4.0' }}
         name: Install bitsandbytes
         run: |
           pip install https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_multi-backend-refactor/bitsandbytes-0.45.0.dev0-py3-none-manylinux_2_24_x86_64.whl
+  
+      - name: Test with Pytest
+        run: |
+          pytest tests/ipex
