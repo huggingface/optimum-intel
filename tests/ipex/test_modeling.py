@@ -29,11 +29,13 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForQuestionAnswering,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PretrainedConfig,
     pipeline,
     set_seed,
 )
+from transformers.testing_utils import is_bitsandbytes_available, require_bitsandbytes
 from optimum.intel import (
     IPEXModel,
     IPEXModelForAudioClassification,
@@ -128,6 +130,40 @@ class IPEXModelTest(unittest.TestCase):
         _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
 
+    @require_bitsandbytes
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_bnb(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(
+            model_id, device_map=DEVICE, quantization_config=quantization_config
+        )
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(
+            model_id, device_map=DEVICE, quantization_config=quantization_config
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt").to(DEVICE)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        outputs = ipex_model(**tokens)
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, device_map=DEVICE)
+            loaded_model_outputs = loaded_model(**tokens)
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**tokens)
+
+        # Compare tensor outputs
+        for output_name in {"logits", "last_hidden_state"}:
+            if output_name in transformers_outputs:
+                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-3))
+                self.assertTrue(torch.allclose(outputs[output_name], loaded_model_outputs[output_name]))
+                self.assertTrue(torch.allclose(outputs[output_name], init_model_outputs[output_name]))
+
 
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
     IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
@@ -211,6 +247,46 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         outputs = ipex_model(**tokens)
         self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
         self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
+
+    @require_bitsandbytes
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_bnb(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
+            model_id, device_map=DEVICE, quantization_config=quantization_config
+        )
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained(
+            model_id, device_map=DEVICE, quantization_config=quantization_config
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt").to(DEVICE)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        outputs = ipex_model(**tokens)
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, device_map=DEVICE)
+            loaded_model_outputs = loaded_model(**tokens)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**tokens)
+
+        self.assertIn("start_logits", outputs)
+        self.assertIn("end_logits", outputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
+        self.assertTrue(torch.equal(outputs.start_logits, loaded_model_outputs.start_logits))
+        self.assertTrue(torch.equal(outputs.end_logits, loaded_model_outputs.end_logits))
+        self.assertTrue(torch.equal(outputs.start_logits, init_model_outputs.start_logits))
+        self.assertTrue(torch.equal(outputs.end_logits, init_model_outputs.end_logits))
 
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
@@ -398,6 +474,51 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
         )
         self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-7))
+
+    @require_bitsandbytes
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_bnb(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        # Test model forward do not need cache.
+        ipex_model = IPEXModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=dtype, device_map=DEVICE, quantization_config=quantization_config
+        )
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+        ).to(DEVICE)
+        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+        outputs = ipex_model(**inputs)
+
+        self.assertIsInstance(outputs.logits, torch.Tensor)
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=dtype, device_map=DEVICE, quantization_config=quantization_config
+        )
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
+            loaded_model_outputs = loaded_model(**inputs)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**inputs)
+
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
 
 class IPEXModelForAudioClassificationTest(unittest.TestCase):
@@ -643,6 +764,52 @@ class IPEXModelForSeq2SeqLMTest(unittest.TestCase):
                 transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
+
+    @require_bitsandbytes
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_bnb(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        # Test model forward do not need cache.
+        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(
+            model_id, torch_dtype=dtype, quantization_config=quantization_config
+        )
+        transformers_model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_id, torch_dtype=dtype, quantization_config=quantization_config
+        )
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+        )
+        decoder_start_token_id = transformers_model.config.decoder_start_token_id if model_arch != "mbart" else 2
+        decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+        outputs = ipex_model(**tokens, **decoder_inputs)
+
+        self.assertIsInstance(outputs.logits, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens, **decoder_inputs)
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype)
+            loaded_model_outputs = loaded_model(**tokens, **decoder_inputs)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**tokens, **decoder_inputs)
+
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
 
 class IPEXSTModel(unittest.TestCase):
