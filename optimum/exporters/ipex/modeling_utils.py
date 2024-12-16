@@ -30,6 +30,7 @@ from .cache_utils import IPEXPagedCache
 logger = logging.getLogger(__name__)
 
 _IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.4.0"
+_accelerate_added_attributes = ["to", "cuda", "npu", "xpu", "mlu", "musa"]
 
 
 if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
@@ -131,6 +132,32 @@ class XPUlinearAddAdd(torch.nn.Module):
         else:
             x = torch.ops.torch_ipex.mm_bias_resadd(x, self.weight, z, 1.0, y, 1.0)
         return x
+
+
+# Adapted from https://github.com/huggingface/accelerate/blob/v1.2.1/src/accelerate/hooks.py#L183
+def _remove_hooks_for_ipex(module, recurse):
+    if hasattr(module, "_hf_hook"):
+        module._hf_hook.detach_hook(module)
+        delattr(module, "_hf_hook")
+
+    if hasattr(module, "_old_forward"):
+        # Overriding a GraphModuleImpl forward freezes the forward call and later modifications on the graph will fail.
+        # Reference: https://pytorch.slack.com/archives/C3PDTEV8E/p1705929610405409
+        if "GraphModuleImpl" in str(type(module)):
+            module.__class__.forward = module.__class__.forward.__get__(module)
+        else:
+            module.forward = module.__class__.forward.__get__(module)
+        delattr(module, "_old_forward")
+
+    # Remove accelerate added warning hooks from dispatch_model
+    for attr in _accelerate_added_attributes:
+        module.__dict__.pop(attr, None)
+
+    if recurse:
+        for child in module.children():
+            _remove_hooks_for_ipex(child, recurse)
+
+    return module
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
@@ -656,30 +683,36 @@ class _IPEXAttention(nn.Module):
 class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         super().__init__(module, config)
-        concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
-        bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias]
-        use_bias = bias_list != []
-        self.concat_qkv = nn.Linear(concat_weight.shape[1], concat_weight.shape[0], bias=use_bias)
-        self.concat_qkv.weight = nn.Parameter(concat_weight)
-        if use_bias:
-            concat_bias = torch.concat(bias_list, 0).contiguous()
-            self.concat_linear.bias = nn.Parameter(concat_bias)
-        self.q_slice = self.q_proj.weight.shape[0]
-        self.k_slice = self.q_slice + self.k_proj.weight.shape[0]
-        self.v_slice = self.k_slice + self.v_proj.weight.shape[0]
-        if self.module_device.type == "cpu":
-            if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                self.mha_linear_add = LinearAdd(module.o_proj)
+        if getattr(config, "quantization_config", None) is None:
+            concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
+            bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias]
+            use_bias = bias_list != []
+            self.concat_qkv = nn.Linear(concat_weight.shape[1], concat_weight.shape[0], bias=use_bias)
+            self.concat_qkv.weight = nn.Parameter(concat_weight)
+            if use_bias:
+                concat_bias = torch.concat(bias_list, 0).contiguous()
+                self.concat_linear.bias = nn.Parameter(concat_bias)
+            self.q_slice = self.q_proj.weight.shape[0]
+            self.k_slice = self.q_slice + self.k_proj.weight.shape[0]
+            self.v_slice = self.k_slice + self.v_proj.weight.shape[0]
+            if self.module_device.type == "cpu":
+                if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                    self.mha_linear_add = LinearAdd(module.o_proj)
 
-        elif self.module_device.type == "xpu":
-            if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                self.mha_linear_add = XPULinearAdd(module.o_proj)
+            elif self.module_device.type == "xpu":
+                if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                    self.mha_linear_add = XPULinearAdd(module.o_proj)
 
     def qkv_gemm(self, hidden_states):
-        qkv_out = self.concat_qkv(hidden_states)
-        query = qkv_out[:, : self.q_slice].view(-1, self.num_heads, self.head_dim)
-        key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
-        value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
+        if hasattr(self, "concat_qkv"):
+            qkv_out = self.concat_qkv(hidden_states)
+            query = qkv_out[:, : self.q_slice].view(-1, self.num_heads, self.head_dim)
+            key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
+            value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
+        else:
+            query = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
+            key = self.k_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
+            value = self.v_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
 
         return query, key, value
 
@@ -745,16 +778,17 @@ class _IPEXLlamaMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         self.module_device = next(module.parameters()).device
-        if self.module_device.type == "cpu":
-            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-            if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                self.mlp_linear_add = LinearAdd(module.down_proj)
-            self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
-        elif self.module_device.type == "xpu":
-            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-            if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                self.mlp_linear_add = XPULinearAdd(module.down_proj)
-            self.linear_silu_mul = XPULinear2SiluMul(module.gate_proj, module.up_proj)
+        if getattr(config, "quantization_config", None) is None:
+            if self.module_device.type == "cpu":
+                # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+                if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                    self.mlp_linear_add = LinearAdd(module.down_proj)
+                self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+            elif self.module_device.type == "xpu":
+                # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+                if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                    self.mlp_linear_add = XPULinearAdd(module.down_proj)
+                self.linear_silu_mul = XPULinear2SiluMul(module.gate_proj, module.up_proj)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
@@ -776,17 +810,18 @@ class _IPEXFalconMLP(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
         self.module_device = next(module.parameters()).device
-        if self.module_device.type == "cpu":
-            self.linear_gelu = LinearGelu(module.dense_h_to_4h)
-        elif self.module_device.type == "xpu":
-            self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
-        if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
+        if getattr(config, "quantization_config", None) is None:
+            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if self.module_device.type == "cpu":
-                self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
+                self.linear_gelu = LinearGelu(module.dense_h_to_4h)
             elif self.module_device.type == "xpu":
-                self.linear_add_add = XPUlinearAddAdd(module.dense_4h_to_h)
+                self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
+            if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
+                if self.module_device.type == "cpu":
+                    self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
+                elif self.module_device.type == "xpu":
+                    self.linear_add_add = XPUlinearAddAdd(module.dense_4h_to_h)
 
     def forward(
         self,
@@ -812,6 +847,8 @@ class _IPEXLlamaDecoderLayer(nn.Module):
         _setattr_from_module(self, module)
         self.self_attn = _IPEXLlamaAttention(module.self_attn, config)
         self.mlp = _IPEXLlamaMLP(module.mlp, config)
+        if getattr(config, "quantization_config", None):
+            _remove_hooks_for_ipex(self, True)
 
     def forward(self, hidden_states: torch.Tensor, **kwargs):
         # Please see the original model's forward to check the parameter
@@ -845,6 +882,8 @@ class _IPEXFalconDecoderLayer(nn.Module):
         _setattr_from_module(self, module)
         self.self_attention = _IPEXFalconAttention(module.self_attention, config)
         self.mlp = _IPEXFalconMLP(module.mlp, config)
+        if getattr(config, "quantization_config", None):
+            _remove_hooks_for_ipex(self, True)
 
     def forward(self, hidden_states: torch.Tensor, **kwargs):
         # Please see the original model's forward to check the parameter
@@ -871,11 +910,16 @@ class _IPEXIntermediate(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.module_device = next(module.parameters()).device
-        if self.module_device.type == "cpu":
-            self.linear_gelu = LinearGelu(module.dense)
-        elif self.module_device.type == "xpu":
-            self.linear_gelu = XPULinearGelu(module.dense)
+        if getattr(config, "quantization_config", None) is None:
+            if self.module_device.type == "cpu":
+                self.linear_gelu = LinearGelu(module.dense)
+            elif self.module_device.type == "xpu":
+                self.linear_gelu = XPULinearGelu(module.dense)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.linear_gelu(hidden_states)
+        if hasattr(self, "linear_gelu"):
+            hidden_states = self.linear_gelu(hidden_states)
+        else:
+            hidden_states = self.dense(hidden_states)
+            hidden_states = self.intermediate_act_fn(hidden_states)
         return hidden_states

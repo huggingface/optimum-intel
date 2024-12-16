@@ -189,6 +189,7 @@ class IPEXModel(OptimizedModel):
             not self.model.device.type != "cpu"
             or self.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
             or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
+            or getattr(self.config, "quantization_config", None)
         ):
             return
         if self.use_cache and not self._supports_static_cache:
