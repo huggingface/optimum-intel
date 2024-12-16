@@ -62,7 +62,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
 # TODO: Some models are already fixed in torch 2.6, will enable them when torch upgrading to 2.6
-_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "beit", "llama", "falcon", "gpt2")
+_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
@@ -297,7 +297,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     ) -> Tuple[GenerationConfig, Dict]:
         generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
         generation_method = generation_config.get_generation_mode().value
-        if self.compiled and generation_config.cache_implementation != "ipex_paged":
+        if self.compiled and generation_config.cache_implementation != "ipex_paged" and self._supports_static_cache:
             # Use static cache for torch compile
             generation_config.cache_implementation = "static"
         if generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
