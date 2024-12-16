@@ -26,7 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
-from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
+from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_SPEECH_TO_TEXT_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
 
 
 if is_nncf_available():
@@ -123,11 +123,18 @@ _DEFAULT_4BIT_CONFIGS = {
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
     "baichuan-inc/Baichuan2-7B-Chat": {
         "bits": 4,
-        "sym": True,
+        "sym": False,
         "group_size": 128,
         "ratio": 0.8,
+    },
+    "baichuan-inc/Baichuan2-13B-Chat": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "lmsys/longchat-7b-16k": {
         "bits": 4,
@@ -255,6 +262,10 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         sym: bool = False,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
+        dataset: Optional[Optional[Union[str, List[str]]]] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -272,6 +283,10 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self.bits = bits
         self.sym = sym
         self.num_samples = num_samples
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.processor = processor
+        self.trust_remote_code = trust_remote_code
 
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
@@ -313,6 +328,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     user or organization name, like `dbmdz/bert-base-german-cased`.
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
+        trust_remote_code (`bool`, defaults to `False`):
+            Allows to use custom code for the modeling hosted in the model repository. This option should only be set
+            for repositories you trust and in which you have read the code, as it will execute on your local machine
+            arbitrary code present in the model repository.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression with NNCF.
             - For language models you can provide your own dataset in a list of strings or just use one from the list
@@ -395,10 +414,16 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         backup_precision: Optional[str] = None,
         **kwargs,
     ):
-        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
-        self.tokenizer = tokenizer
-        self.trust_remote_code = trust_remote_code
-        self.dataset = dataset
+        super().__init__(
+            bits=bits,
+            sym=sym,
+            ignored_scope=ignored_scope,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+        )
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
         self.all_layers = all_layers
@@ -407,7 +432,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.scale_estimation = scale_estimation
         self.weight_format = weight_format
         self.gptq = gptq
-        self.processor = processor
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
         self.post_init()
@@ -535,6 +559,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
+        dataset: Optional[str] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: bool = False,
+        smooth_quant_alpha: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -557,11 +586,42 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Whether to apply fast or full bias correction algorithm.
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
+            dataset (`str`, *optional*):
+                The dataset used for quantization. For text-to-speech model quantization the allowed value is 'librispeech'.
+            tokenizer (`str`, *optional*):
+                The tokenizer used to process the dataset. You can pass either:
+                    - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
+                        Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
+                        user or organization name, like `dbmdz/bert-base-german-cased`.
+                    - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
+                        using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
+            processor (`str`, *optional*):
+                A transformers processor used to process inputs for multi-modal models. You can pass either:
+                    - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
+                    - A path to a *directory* containing files required by the processor, for instance saved
+                        using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
+            trust_remote_code (`bool`, defaults to `False`):
+                Allows to use custom code for the modeling hosted in the model repository. This option should only be set
+                for repositories you trust and in which you have read the code, as it will execute on your local machine
+                arbitrary code present in the model repository.
+            smooth_quant_alpha (`float`, *optional*):
+                SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
+                reduces quantization error.
         """
-        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
+        super().__init__(
+            bits=bits,
+            sym=sym,
+            ignored_scope=ignored_scope,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+        )
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
+        self.smooth_quant_alpha = smooth_quant_alpha
         self.post_init()
 
     def post_init(self):
@@ -572,6 +632,18 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
+
+        if self.dataset is not None:
+            if self.dataset not in PREDEFINED_SPEECH_TO_TEXT_DATASETS:
+                raise ValueError(
+                    f"You have entered the following string value for dataset: {self.dataset}. But it is not supported."
+                    f" Currently you can only choose {list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())}."
+                )
+
+        if self.smooth_quant_alpha is not None and not (0 <= self.smooth_quant_alpha <= 1):
+            raise ValueError(
+                f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
+            )
 
 
 class OVConfig(BaseConfig):

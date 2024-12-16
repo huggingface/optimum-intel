@@ -168,7 +168,7 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
 
   model_id = "gpt2"
 - model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-+ model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, export=True)
++ model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
   tokenizer = AutoTokenizer.from_pretrained(model_id)
   pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
   results = pipe("He's a dreadful magician and")
