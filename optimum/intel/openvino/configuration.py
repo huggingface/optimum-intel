@@ -344,6 +344,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
+            Note: If dataset is provided, and the ratio is less than 1.0, then data-aware mixed precision assignment
+            will be applied.
         all_layers (`bool`, *optional*):
             Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit precision.
         sensitivity_metric (`str`, *optional*):
