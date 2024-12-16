@@ -22,19 +22,19 @@ RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
 RUN /usr/sbin/update-ccache-symlinks
 RUN mkdir /opt/ccache && ccache --set-config=cache_dir=/opt/ccache
 
-ARG IPEX_VERSION=2.3.100
-ARG PYTORCH_VERSION=2.3.1
-ARG TORCHVISION_VERSION=0.18.1+cpu
-ARG TORCHAUDIO_VERSION=2.3.1+cpu
+ARG IPEX_VERSION=2.5.0
+ARG PYTORCH_VERSION=2.5.1
+ARG TORCHVISION_VERSION=0.20.1+cpu
+ARG TORCHAUDIO_VERSION=2.5.1+cpu
 
 RUN python3 -m pip install --no-cache-dir \
-    intel-openmp \
     torch==${PYTORCH_VERSION}+cpu \
     torchvision==${TORCHVISION_VERSION} \
     torchaudio==${TORCHAUDIO_VERSION} \
-    -f https://download.pytorch.org/whl/torch_stable.html && \
+    --index-url https://download.pytorch.org/whl/cpu && \
+    python3 -m pip install intel-openmp -f https://download.pytorch.org/whl/torch_stable.html && \
     python3 -m pip install intel-extension-for-pytorch==$IPEX_VERSION && \
-    python3 -m pip install oneccl_bind_pt --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/cpu/us/ && \
+    python3 -m pip install oneccl_bind_pt --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/cpu/cn/ && \
     python3 -m pip install --no-cache-dir  py-libnuma
 
 ARG KMP_BLOCKTIME=1
