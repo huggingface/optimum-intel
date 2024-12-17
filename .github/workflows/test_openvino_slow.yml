@@ -56,6 +56,11 @@ jobs:
         name: Downgrade Transformers and Accelerate
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
 
+      - if: ${{ matrix.transformers-version == 'latest' }}
+        name: Install auto-gptq, autoawq
+        run: |
+          pip install auto-gptq autoawq --extra-index-url https://download.pytorch.org/whl/cpu
+
       - name: Pip freeze
         run: pip freeze
 
