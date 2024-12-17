@@ -105,6 +105,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
 
     TEST_4BIT_CONFIGURATIONS = [
         ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),

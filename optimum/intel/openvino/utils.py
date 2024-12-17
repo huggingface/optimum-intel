@@ -142,9 +142,18 @@ PREDEFINED_SD_DATASETS = {
 
 PREDEFINED_VISUAL_LM_DATASETS = {
     "contextual": {
-        "name": "ucla-contextual/contextual_test",
+        "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
+    }
+}
+
+PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
+    "librispeech": {
+        "id": "openslr/librispeech_asr",
+        "name": "clean",
+        "split": "validation",
+        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
     }
 }
 
@@ -200,6 +209,8 @@ def _is_timm_ov_dir(model_dir):
 
 
 def _print_compiled_model_properties(compiled_model):
+    cur_log_level = logger.getEffectiveLevel()
+    logger.setLevel(logging.INFO)
     supported_properties = properties.supported_properties()
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
@@ -222,6 +233,7 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+    logger.setLevel(cur_log_level)
 
 
 def np_to_pt_generators(np_object, device):
