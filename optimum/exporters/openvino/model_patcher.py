@@ -3430,6 +3430,9 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
 
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
         def image_embed_forward(
             self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
         ) -> torch.Tensor:
@@ -3441,6 +3444,8 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
         super().__init__(config, model, model_kwargs)
 
     def __enter__(self):
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
+        # added attention_mask input instead of internal calculation (unsupported by tracing due to cycle with dynamic len)
         def sdpa_attn_forward(
             self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor = None
         ) -> torch.Tensor:
@@ -3460,6 +3465,8 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
             attn_output = self.proj(attn_output)
             return attn_output
 
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L430
+        # added attention_mask input propagation to self.attn
         def block_forward(self, hidden_states, attention_mask, rotary_pos_emb) -> torch.Tensor:
             hidden_states = hidden_states + self.attn(
                 self.norm1(hidden_states), attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb
