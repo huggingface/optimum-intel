@@ -344,6 +344,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
+            Note: If dataset is provided, and the ratio is less than 1.0, then data-aware mixed precision assignment
+            will be applied.
         all_layers (`bool`, *optional*):
             Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit precision.
         sensitivity_metric (`str`, *optional*):
@@ -441,7 +443,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         Safety checker that arguments are correct
         """
         super().post_init()
-        if self.ratio is not None and not (0 <= self.ratio <= 1):
+        if not (0 <= self.ratio <= 1):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
@@ -460,6 +462,18 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     {lm_datasets} for LLMs, {visual_lm_datasets} for visual LLMs
                     or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
+
+        if self.dataset is not None and not (
+            self.quant_method == OVQuantizationMethod.AWQ
+            or self.scale_estimation
+            or self.gptq
+            or self.lora_correction
+            or (self.ratio < 1.0 and self.sensitivity_metric != nncf.SensitivityMetric.WEIGHT_QUANTIZATION_ERROR)
+        ):
+            logger.warning(
+                "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
+                "quantization algorithm is selected and compression ratio is 1.0."
+            )
 
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
