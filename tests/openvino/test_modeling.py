@@ -878,7 +878,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral",
         "mpt",
         "opt",
-        "opt_gptq",
         "pegasus",
         "qwen",
         "phi",
@@ -915,6 +914,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "exaone",
             "mistral-nemo",
             "minicpm3",
+            "opt_gptq",
         )
 
     if is_openvino_version(">=", "2024.6.0"):
