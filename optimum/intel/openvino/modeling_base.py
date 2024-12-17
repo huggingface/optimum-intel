@@ -30,7 +30,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
 from transformers.utils import is_offline_mode
 
-from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
@@ -279,7 +279,6 @@ class OVBaseModel(OptimizedModel):
 
         compiled_model = core.compile_model(model, device.upper() if device is not None else device, config=ov_config)
         if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-            logger.info(f"{device if device is not None else 'AUTO'} SUPPORTED_PROPERTIES:")
             _print_compiled_model_properties(compiled_model)
         return compiled_model
 
@@ -624,7 +623,7 @@ class OVBaseModel(OptimizedModel):
         cls,
         model,
         config: PretrainedConfig,
-        onnx_config: OnnxConfig,
+        onnx_config: ExportConfig,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -802,7 +801,6 @@ class OVModelPart:
             self.request = core.compile_model(self.model, self._device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.request)
 
     @property

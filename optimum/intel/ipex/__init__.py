@@ -12,13 +12,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from optimum.intel.ipex.modeling_base import (
+from ..utils.import_utils import is_sentence_transformers_available
+from .modeling_base import (
     IPEXModel,
     IPEXModelForAudioClassification,
     IPEXModelForCausalLM,
     IPEXModelForImageClassification,
     IPEXModelForMaskedLM,
     IPEXModelForQuestionAnswering,
+    IPEXModelForSeq2SeqLM,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
 )
+
+
+if is_sentence_transformers_available():
+    from .modeling_sentence_transformers import IPEXSentenceTransformer

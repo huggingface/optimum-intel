@@ -56,6 +56,8 @@ TESTS_REQUIRE = [
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
     "peft",
+    "datasets[audio]>=1.4.0",
+    "tbb",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
@@ -64,7 +66,7 @@ EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.14.0"],
     "openvino": ["nncf>=2.14.0", "openvino>=2024.5.0", "openvino-tokenizers>=2024.5.0"],
     "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
-    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39,<4.45"],
+    "ipex": ["intel-extension-for-pytorch>=2.4", "transformers>4.45,<4.47", "accelerate"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

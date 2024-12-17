@@ -132,6 +132,7 @@ class ExportModelTest(unittest.TestCase):
                         ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                     )
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                    self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
                 if library_name == "diffusers":
                     self.assertTrue(
