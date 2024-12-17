@@ -12,10 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from contextlib import contextmanager
+
 import numpy as np
 import openvino as ov
 import torch
-from contextlib import contextmanager
 
 
 MODEL_NAMES = {
