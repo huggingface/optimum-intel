@@ -876,7 +876,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm",
         "mistral",
         "mixtral",
-        "mixtral_awq",
         "mpt",
         "opt",
         "opt_gptq",
@@ -917,6 +916,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "mistral-nemo",
             "minicpm3",
         )
+
+    if is_openvino_version(">=", "2024.6.0"):
+        SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -1034,7 +1036,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             additional_inputs = {"past_key_values": DynamicCache()}
         with patch_awq_for_inference("awq" in model_arch):
-            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
+            transformers_outputs = transformers_model.generate(
+                **tokens, generation_config=gen_config, **additional_inputs
+            )
         print(f"ov_outputs: {ov_outputs}")
         print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(

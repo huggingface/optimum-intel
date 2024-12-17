@@ -242,7 +242,10 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] in ["gptq", "awq"]
+        supported_quant_methods = ["gptq"]
+        if is_openvino_version(">=", "2024.6.0"):
+            supported_quant_methods.append("awq")
+        do_gptq_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
         model_type = config.model_type.replace("_", "-")
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
