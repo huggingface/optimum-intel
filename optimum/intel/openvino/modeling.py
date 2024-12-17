@@ -50,8 +50,6 @@ from transformers.modeling_outputs import (
     XVectorOutput,
 )
 
-from optimum.exporters import TasksManager
-
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
@@ -695,7 +693,7 @@ class OVModelForCTC(OVModel):
     """
 
     auto_model_class = AutoModelForCTC
-    export_feature = TasksManager.infer_task_from_model(auto_model_class)
+    export_feature = "automatic-speech-recognition"
 
     @add_start_docstrings_to_model_forward(
         AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -775,7 +773,7 @@ class OVModelForAudioXVector(OVModel):
     """
 
     auto_model_class = AutoModelForAudioXVector
-    export_feature = TasksManager.infer_task_from_model(auto_model_class)
+    export_feature = "audio-xvector"
 
     @add_start_docstrings_to_model_forward(
         AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -851,7 +849,7 @@ class OVModelForAudioFrameClassification(OVModel):
     """
 
     auto_model_class = AutoModelForAudioFrameClassification
-    export_feature = TasksManager.infer_task_from_model(auto_model_class)
+    export_feature = "audio-frame-classification"
 
     @add_start_docstrings_to_model_forward(
         AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")

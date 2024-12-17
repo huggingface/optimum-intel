@@ -29,7 +29,6 @@ from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -42,7 +41,12 @@ from optimum.intel.utils.modeling_utils import (
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
+from .utils import (
+    _MAX_UNCOMPRESSED_SIZE,
+    MULTI_MODAL_TEXT_GENERATION_MODELS,
+    clear_class_registry,
+    deduce_diffusers_dtype,
+)
 
 
 FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager"}
@@ -185,6 +189,7 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_ov/")
     ```
     """
+    from optimum.exporters.openvino.convert import export_from_model
 
     if use_auth_token is not None:
         warnings.warn(
@@ -333,6 +338,19 @@ def main_export(
                 return model
 
             GPTQQuantizer.post_init_model = post_init_model
+    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+        dtype = deduce_diffusers_dtype(
+            model_name_or_path,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+        )
+        if dtype in [torch.float16, torch.bfloat16]:
+            loading_kwargs["torch_dtype"] = dtype
+            patch_16bit = True
 
     if library_name == "open_clip":
         model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
@@ -457,9 +475,6 @@ def main_export(
         from optimum.intel.openvino.quantization import _weight_only_quantization
 
         _weight_only_quantization(submodel, quantization_config)
-        if "text-generation" in task:
-            submodel.set_rt_info("u8", ["runtime_options", "KV_CACHE_PRECISION"])
-
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
         save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
         del submodel
