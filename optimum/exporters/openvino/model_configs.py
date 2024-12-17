@@ -2300,37 +2300,7 @@ class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
         return generated_input
 
 
-class DummyQwen2VLVisionEMbedInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("hidden_states",)
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedVisionConfig,
-        batch_size: int = 1,
-        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
-        width: int = 420,
-        height: int = 420,
-        **kwargs,
-    ):
-        self.batch_size = batch_size
-        self.height = height
-        self.width = width
-        self.num_channels = num_channels
-        self.temporal_patch_size = normalized_config.config.temporal_patch_size
-        self.patch_size = normalized_config.config.patch_size
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
-        grid_t = self.batch_size
-        shape = [
-            grid_t * grid_h * grid_w,
-            self.num_channels * self.temporal_patch_size * self.patch_size * self.patch_size,
-        ]
-        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-
-
-class DummyQwen2VLVisionEmbedMergerInputGenerator(DummyVisionInputGenerator):
+class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("hidden_states", "attention_mask", "rotary_pos_emb")
 
     def __init__(
@@ -2349,7 +2319,10 @@ class DummyQwen2VLVisionEmbedMergerInputGenerator(DummyVisionInputGenerator):
         self.num_channels = num_channels
         self.temporal_patch_size = normalized_config.config.temporal_patch_size
         self.patch_size = normalized_config.config.patch_size
-        self.embed_dim = normalized_config.config.embed_dim
+        if normalized_config.use_embed_dim:
+            self.embed_dim = normalized_config.config.embed_dim
+        else:
+            self.embed_dim = self.num_channels * self.temporal_patch_size * self.patch_size * self.patch_size
         self.num_heads = normalized_config.config.num_heads
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -2382,7 +2355,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
 class Qwen2VLOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEMbedInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
     MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
 
     def __init__(
@@ -2405,12 +2378,13 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         self._orig_config = config
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
+            self._config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEMbedInputGenerator,)
+            self._normalized_config.use_embed_dim = False
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedMergerInputGenerator,)
+            self._normalized_config.use_embed_dim = True
 
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, Qwen2VLConfigBehavior]):

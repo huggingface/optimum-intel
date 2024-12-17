@@ -29,6 +29,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from .. import OVQuantizer
+from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -2096,13 +2097,13 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
-        try:
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 
             self._rotary_pos_emb = VisionRotaryEmbedding(
                 self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
             )
-        except ImportError:
+        else:
             raise ValueError(
                 f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
             )
