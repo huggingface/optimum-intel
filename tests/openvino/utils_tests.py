@@ -14,10 +14,11 @@
 import unittest
 from typing import Dict, List, Union
 
+from contextlib import contextmanager
+
 import numpy as np
 import openvino as ov
 import torch
-from contextlib import contextmanager
 
 from optimum.intel.openvino.modeling_base import OVBaseModel
 
