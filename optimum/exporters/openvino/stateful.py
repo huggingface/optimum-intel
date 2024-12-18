@@ -242,7 +242,7 @@ def get_shape_of_ops(model: ov.Model):
 
 def get_consumer_nodes(node):
     consumer_inputs = set().union(*[output.get_target_inputs() for output in node.outputs()])
-    return set(input.get_node() for input in consumer_inputs)
+    return {input.get_node() for input in consumer_inputs}
 
 
 def find_output_nodes_of_dependent_subgraph(model: ov.Model, sources: list):

@@ -27,8 +27,8 @@ from transformers.utils import is_tf_available
 from optimum.exporters.onnx.model_patcher import (
     DecoderModelPatcher,
     ModelPatcher,
-    override_arguments,
     Seq2SeqModelPatcher,
+    override_arguments,
 )
 from optimum.intel.utils.import_utils import (
     _openvino_version,

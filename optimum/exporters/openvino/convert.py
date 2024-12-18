@@ -28,14 +28,14 @@ from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.utils import (
-    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
-)
-from optimum.exporters.utils import (
-    get_diffusion_models_for_export,
     DECODER_NAME,
     DECODER_WITH_PAST_NAME,
     ENCODER_NAME,
     _get_submodels_for_export_encoder_decoder,
+    get_diffusion_models_for_export,
+)
+from optimum.exporters.utils import (
+    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
 )
 from optimum.intel.utils.import_utils import (
     _diffusers_version,

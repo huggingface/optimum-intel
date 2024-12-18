@@ -2636,6 +2636,13 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
             return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "seq_length"}
+        return common_inputs
+
 
 @register_in_tasks_manager(
     "t5",
@@ -2649,6 +2656,13 @@ class T5OpenVINOConfig(T5OnnxConfig):
         if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
             return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "seq_length"}
+        return common_inputs
 
 
 @register_in_tasks_manager(
