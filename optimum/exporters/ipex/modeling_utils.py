@@ -681,7 +681,7 @@ class _IPEXAttention(nn.Module):
 
 
 class _IPEXLlamaAttention(_IPEXAttention):
-    def __init__(self, module, config) -> None:
+    def __init__(self, module, device, config) -> None:
         super().__init__(module, config)
         if getattr(config, "quantization_config", None) is None:
             concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
@@ -723,7 +723,7 @@ class _IPEXLlamaAttention(_IPEXAttention):
 
 
 class _IPEXFalconAttention(_IPEXAttention):
-    def __init__(self, module, config):
+    def __init__(self, module, device, config):
         self.num_key_value_heads = config.num_key_value_heads
         super().__init__(module, config)
         self.q_slice = self.head_dim * config.num_kv_heads
@@ -750,7 +750,7 @@ class _IPEXFalconAttention(_IPEXAttention):
 
 
 class _IPEXGPT2Attention(_IPEXAttention):
-    def __init__(self, module, config) -> None:
+    def __init__(self, module, device, config) -> None:
         self.num_key_value_heads = config.num_key_value_heads
         super().__init__(module, config)
         if getattr(config, "quantization_config", None):
@@ -844,7 +844,7 @@ class _IPEXFalconMLP(nn.Module):
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayer(nn.Module):
-    def __init__(self, module, config):
+    def __init__(self, module, device, config):
         super().__init__()
         _setattr_from_module(self, module)
         self.self_attn = _IPEXLlamaAttention(module.self_attn, config)
@@ -879,7 +879,7 @@ class _IPEXLlamaDecoderLayer(nn.Module):
 
 
 class _IPEXFalconDecoderLayer(nn.Module):
-    def __init__(self, module, config):
+    def __init__(self, module, device, config):
         super().__init__()
         _setattr_from_module(self, module)
         self.self_attention = _IPEXFalconAttention(module.self_attention, config)
