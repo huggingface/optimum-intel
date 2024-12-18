@@ -847,8 +847,8 @@ class _IPEXLlamaDecoderLayer(nn.Module):
     def __init__(self, module, device, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.self_attn = _IPEXLlamaAttention(module.self_attn, config)
-        self.mlp = _IPEXLlamaMLP(module.mlp, config)
+        self.self_attn = _IPEXLlamaAttention(module.self_attn, device, config)
+        self.mlp = _IPEXLlamaMLP(module.mlp, device, config)
         if getattr(config, "quantization_config", None):
             _remove_hooks_for_ipex(self, True)
 
@@ -882,8 +882,8 @@ class _IPEXFalconDecoderLayer(nn.Module):
     def __init__(self, module, device, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.self_attention = _IPEXFalconAttention(module.self_attention, config)
-        self.mlp = _IPEXFalconMLP(module.mlp, config)
+        self.self_attention = _IPEXFalconAttention(module.self_attention, device, config)
+        self.mlp = _IPEXFalconMLP(module.mlp, device, config)
         if getattr(config, "quantization_config", None):
             _remove_hooks_for_ipex(self, True)
 
