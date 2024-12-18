@@ -232,6 +232,7 @@ def main_export(
     )
 
     do_gptq_patching = False
+    do_quant_patching = False
     custom_architecture = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
@@ -250,7 +251,8 @@ def main_export(
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
+        do_quant_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
+        do_gptq_patching = do_quant_patching and quantization_config["quant_method"] == "gptq"
         model_type = config.model_type.replace("_", "-")
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
@@ -317,27 +319,28 @@ def main_export(
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
         # Patch the modules to export of GPTQ models w/o GPU
-        if do_gptq_patching:
+        if do_quant_patching:
             orig_cuda_check = torch.cuda.is_available
             torch.cuda.is_available = lambda: True
 
-            from optimum.gptq import GPTQQuantizer
+            if do_gptq_patching:
+                from optimum.gptq import GPTQQuantizer
 
-            orig_post_init_model = GPTQQuantizer.post_init_model
+                orig_post_init_model = GPTQQuantizer.post_init_model
 
-            def post_init_model(self, model):
-                from auto_gptq import exllama_set_max_input_length
+                def post_init_model(self, model):
+                    from auto_gptq import exllama_set_max_input_length
 
-                class StoreAttr(object):
-                    pass
+                    class StoreAttr(object):
+                        pass
 
-                model.quantize_config = StoreAttr()
-                model.quantize_config.desc_act = self.desc_act
-                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                    model = exllama_set_max_input_length(model, self.max_input_length)
-                return model
+                    model.quantize_config = StoreAttr()
+                    model.quantize_config.desc_act = self.desc_act
+                    if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                        model = exllama_set_max_input_length(model, self.max_input_length)
+                    return model
 
-            GPTQQuantizer.post_init_model = post_init_model
+                GPTQQuantizer.post_init_model = post_init_model
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
         dtype = deduce_diffusers_dtype(
             model_name_or_path,
@@ -486,9 +489,10 @@ def main_export(
         compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
 
     # Unpatch modules after GPTQ export
-    if do_gptq_patching:
+    if do_quant_patching:
         torch.cuda.is_available = orig_cuda_check
-        GPTQQuantizer.post_init_model = orig_post_init_model
+        if do_gptq_patching:
+            GPTQQuantizer.post_init_model = orig_post_init_model
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
