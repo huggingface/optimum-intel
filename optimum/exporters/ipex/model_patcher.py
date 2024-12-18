@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import torch
 from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconModel
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2Model
