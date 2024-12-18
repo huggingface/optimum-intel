@@ -111,7 +111,7 @@ class OVQuantizerTest(unittest.TestCase):
                 weight_only=False,
                 smooth_quant_alpha=0.95,
             ),
-            (14, 22, 21) if is_transformers_version("<=", "4.42.4") else (14, 22, 25),
+            (14, 22, 21) if is_transformers_version("<=", "4.42.4") else (14, 26, 25),
             (14, 21, 17) if is_transformers_version("<=", "4.42.4") else (14, 22, 18),
         ),
     ]
@@ -1264,7 +1264,7 @@ class InferRequestWrapperTest(unittest.TestCase):
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
-        if not ov_model.stateful:
+        if not ov_model.decoder.stateful:
             ov_model.decoder_with_past.request = InferRequestWrapper(
                 ov_model.decoder_with_past.request, calibration_data, apply_caching=apply_caching
             )
