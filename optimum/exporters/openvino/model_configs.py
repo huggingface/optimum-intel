@@ -20,6 +20,7 @@ from packaging import version
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
+from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
     CLIPOnnxConfig,
@@ -38,8 +39,10 @@ from optimum.exporters.onnx.model_configs import (
     MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    T5OnnxConfig,
     UNetOnnxConfig,
     VisionOnnxConfig,
+    WhisperOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -102,6 +105,7 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     RotaryEmbPatcher,
+    StatefulSeq2SeqDecoderPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
 )
@@ -2611,3 +2615,55 @@ class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "whisper",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "audio-classification",
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class WhisperOpenVINOConfig(WhisperOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "t5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class T5OpenVINOConfig(T5OnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "mt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class MT5OpenVINOConfig(T5OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "longt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class LongT5OpenVINOConfig(T5OpenVINOConfig):
+    pass

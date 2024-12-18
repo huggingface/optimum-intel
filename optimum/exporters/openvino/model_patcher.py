@@ -24,7 +24,12 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
+from optimum.exporters.onnx.model_patcher import (
+    DecoderModelPatcher,
+    ModelPatcher,
+    override_arguments,
+    Seq2SeqModelPatcher,
+)
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -3740,3 +3745,49 @@ class GptBigCodeModelPatcher(DecoderModelPatcher):
         if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
             for layer in self._model.transformer.h:
                 layer.attn._attn = layer.attn._orig_attn
+
+
+class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        @functools.wraps(model.__orig_forward)
+        def patched_forward(*args, **kwargs):
+            from transformers.cache_utils import EncoderDecoderCache
+
+            signature = inspect.signature(self.orig_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            return_legacy_cache = False
+            pkv_in_args = False
+            legacy_pkv = None
+            if "past_key_values" in kwargs:
+                legacy_pkv = kwargs.pop("past_key_values", None)
+            sign_names = list(signature.parameters.keys())
+            pkv_argument_index = sign_names.index("past_key_values")
+            if legacy_pkv is None and len(args) > pkv_argument_index:
+                legacy_pkv = args[pkv_argument_index]
+                pkv_in_args = True
+            if legacy_pkv is not None:
+                only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
+                pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
+                return_legacy_cache = True
+                if not pkv_in_args:
+                    kwargs["past_key_values"] = pkv
+                else:
+                    args[pkv_argument_index] = pkv
+
+            outputs = model.__orig_forward(*args, **kwargs)
+            if return_legacy_cache:
+                outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+
+            return outputs
+
+        model.forward = patched_forward
+
+        super().__init__(config, model, model_kwargs)
