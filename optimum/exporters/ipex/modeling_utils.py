@@ -595,11 +595,11 @@ def _gpt2_block_forward(
 
 
 class _IPEXAttention(nn.Module):
-    def __init__(self, module, config) -> None:
+    def __init__(self, module, device, config) -> None:
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = config.device
+        self.module_device = device
         self.num_groups = self.num_heads // self.num_key_value_heads
         self.kv_head_mapping = torch.arange(
             0, self.num_key_value_heads, dtype=torch.int32, device=self.module_device
@@ -775,11 +775,11 @@ class _IPEXGPT2Attention(_IPEXAttention):
 
 # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L186
 class _IPEXLlamaMLP(nn.Module):
-    def __init__(self, module, config) -> None:
+    def __init__(self, module, device, config) -> None:
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = config.device
+        self.module_device = device
         if getattr(config, "quantization_config", None) is None:
             if self.module_device.type == "cpu":
                 # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
@@ -808,11 +808,11 @@ class _IPEXLlamaMLP(nn.Module):
 
 
 class _IPEXFalconMLP(nn.Module):
-    def __init__(self, module, config) -> None:
+    def __init__(self, module, device, config) -> None:
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = config.device
+        self.module_device = device
         if getattr(config, "quantization_config", None) is None:
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if self.module_device.type == "cpu":
@@ -908,10 +908,10 @@ class _IPEXFalconDecoderLayer(nn.Module):
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.41.2/src/transformers/models/bert/modeling_bert.py#L524
 class _IPEXIntermediate(nn.Module):
-    def __init__(self, module, config):
+    def __init__(self, module, device, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.module_device = config.device
+        self.module_device = device
         if getattr(config, "quantization_config", None) is None:
             if self.module_device.type == "cpu":
                 self.linear_gelu = LinearGelu(module.dense)
