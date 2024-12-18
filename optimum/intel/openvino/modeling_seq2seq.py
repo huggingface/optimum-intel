@@ -577,6 +577,7 @@ class OVDecoder:
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
         self.use_past = len(self.key_value_input_names) > 0 or self.stateful
         self.next_beam_idx = None
+        self._past_length = 0
 
         if len(self.key_value_input_names) > 0 and not is_legacy:
             self.use_past = True
@@ -625,7 +626,7 @@ class OVDecoder:
 
         if self.stateful and past_key_values is None:
             self.request.reset_state()
-            self._past_len = 0
+            self._past_length = 0
 
         if past_key_values is not None and not self.stateful:
             # Flatten the past_key_values
@@ -664,7 +665,7 @@ class OVDecoder:
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
-        self._past_len += input_ids.shape[1]
+        self._past_length += input_ids.shape[1]
 
         out_past_key_values = ()
 
@@ -688,6 +689,13 @@ class OVDecoder:
                 )
 
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
+
+    def _get_past_length(self, past_key_values=None):
+        if past_key_values is None:
+            return 0
+        if self.stateful:
+            return self._past_length
+        return past_key_values[0][0].shape[-2]
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
@@ -1074,10 +1082,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
 
         past_length = 0
         if past_key_values is not None:
-            if self.decoder.stateful:
-                past_length = getattr(self.decoder, "_past_len", 0)
-            else:
-                past_length = past_key_values[0][0].shape[2]
+            self.decoder._get_past_length(past_key_values)
 
             # Some generation methods already pass only the last input ID
             if decoder_input_ids.shape[1] > past_length:
