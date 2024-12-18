@@ -652,7 +652,8 @@ class OVDecoder:
 
         if "cache_position" in self.input_names:
             if cache_position is None:
-                cache_position = np.arange(self._past_len, self._past_len + input_ids.shape[1])
+                past_len = self._get_past_length(past_key_values)
+                cache_position = np.arange(past_len, past_len + input_ids.shape[1])
             inputs["cache_position"] = cache_position
 
         if "beam_idx" in self.input_names:
