@@ -46,8 +46,8 @@ jobs:
           pip uninstall -y nncf
 
       - if: ${{ matrix.transformers-version != 'latest' }}
-        name: Downgrade Transformers and Accelerate
-        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*
+        name: Install specific dependencies and versions required for older transformers
+        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
 
       - name: Pip freeze
         run: pip freeze

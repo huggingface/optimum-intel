@@ -49,7 +49,7 @@ from optimum.intel import (
     IPEXSentenceTransformer,
 )
 from optimum.utils.testing_utils import grid_parameters, require_sentence_transformers
-from optimum.intel.utils.import_utils import is_sentence_transformers_available
+from optimum.intel.utils.import_utils import is_sentence_transformers_available, is_torch_version
 
 if is_sentence_transformers_available():
     from sentence_transformers import SentenceTransformer
@@ -319,7 +319,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
-        # Test model forward do not need cache.
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -346,6 +345,38 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
         init_model_outputs = init_model(**inputs)
+
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_forward(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        input_ids = torch.Tensor([[1, 2, 3], [4, 5, 6]]).to(torch.long)
+        outputs = ipex_model(input_ids)
+
+        self.assertIsInstance(outputs.logits, torch.Tensor)
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(input_ids)
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
+            loaded_model_outputs = loaded_model(input_ids)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(input_ids)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
@@ -407,6 +438,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
         )
+        # It will be removed when torch 2.6 released
+        if model_arch == "opt" and not use_cache and model.compiled and is_torch_version("<", "2.6.0"):
+            return
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)

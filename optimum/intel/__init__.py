@@ -51,6 +51,7 @@ except OptionalDependencyNotAvailable:
         "IPEXModel",
     ]
 else:
+    _import_structure["utils.dummy_ipex_objects"] = []
     _import_structure["ipex"] = [
         "IPEXModelForCausalLM",
         "IPEXModelForSeq2SeqLM",

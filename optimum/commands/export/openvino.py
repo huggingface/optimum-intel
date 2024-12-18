@@ -102,7 +102,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help=(
             "A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization. If set to 0.8, 80%% of the layers will be quantized to int4 "
-            "while 20%% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 1.0."
+            "while 20%% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 1.0. "
+            "Note: If dataset is provided, and the ratio is less than 1.0, then data-aware mixed precision assignment will be applied."
         ),
     )
     optional_group.add_argument(
@@ -140,7 +141,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "dataset will be collected from model's generations. "
             "For diffusion models it should be on of ['conceptual_captions',"
             "'laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. "
-            "For visual language models the dataset must be set to 'contextual'."
+            "For visual language models the dataset must be set to 'contextual'. "
+            "Note: if none of the data-aware compression algorithms are selected and ratio parameter is omitted or "
+            "equals 1.0, the dataset argument will not have an effect on the resulting model."
         ),
     )
     optional_group.add_argument(
