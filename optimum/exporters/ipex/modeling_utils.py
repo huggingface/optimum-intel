@@ -682,7 +682,7 @@ class _IPEXAttention(nn.Module):
 
 class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, device, config) -> None:
-        super().__init__(module, config)
+        super().__init__(module, device, config)
         if getattr(config, "quantization_config", None) is None:
             concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
             bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias]
@@ -725,7 +725,7 @@ class _IPEXLlamaAttention(_IPEXAttention):
 class _IPEXFalconAttention(_IPEXAttention):
     def __init__(self, module, device, config):
         self.num_key_value_heads = config.num_key_value_heads
-        super().__init__(module, config)
+        super().__init__(module, device, config)
         self.q_slice = self.head_dim * config.num_kv_heads
         self.k_slice = self.q_slice + self.head_dim
         self.v_slice = self.k_slice + self.head_dim
@@ -752,7 +752,7 @@ class _IPEXFalconAttention(_IPEXAttention):
 class _IPEXGPT2Attention(_IPEXAttention):
     def __init__(self, module, device, config) -> None:
         self.num_key_value_heads = config.num_key_value_heads
-        super().__init__(module, config)
+        super().__init__(module, device, config)
         if getattr(config, "quantization_config", None):
             _remove_hooks_for_ipex(self, True)
 
