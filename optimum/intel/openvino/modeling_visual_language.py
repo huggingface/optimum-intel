@@ -2155,7 +2155,8 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             pixel_values=hidden_states, attention_mask=causal_mask, rotary_pos_emb=rotary_pos_emb
         )[0]
         return res
-
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1089
+    # Use config values instead of model attributes, replace self.rotary_pos_emb -> self._rotary_pos_emb
     def rot_pos_emb(self, grid_thw):
         pos_ids = []
         for t, h, w in grid_thw:
