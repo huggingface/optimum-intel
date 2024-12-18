@@ -1281,7 +1281,7 @@ class InferRequestWrapperTest(unittest.TestCase):
 
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
-                if k == "input_ids":
+                if k in ["input_ids", "beam_idx"]:
                     continue
 
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()

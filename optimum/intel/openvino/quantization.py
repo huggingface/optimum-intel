@@ -878,7 +878,10 @@ class OVQuantizer(OptimumQuantizer):
             if decoder_w_p_model is not None:
                 decoder_w_p_model.request = decoder_w_p_model.request.request
 
-        datasets = [nncf.Dataset(encoder_calibration_data), nncf.Dataset(decoder_calibration_data),]
+        datasets = [
+            nncf.Dataset(encoder_calibration_data),
+            nncf.Dataset(decoder_calibration_data),
+        ]
         if decoder_w_p_model is not None:
             datasets.append(nncf.Dataset(decoder_w_p_calibration_data))
         return datasets
