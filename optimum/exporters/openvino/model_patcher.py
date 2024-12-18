@@ -21,11 +21,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
 from optimum.intel.utils.import_utils import (
     _openvino_version,
@@ -3385,8 +3383,8 @@ class MiniCPM3Patcher(DecoderModelPatcher):
 class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
-        config: OnnxConfig,
-        model: Union[PreTrainedModel, TFPreTrainedModel],
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Dict[str, Any] = None,
     ):
         model.__orig_forward = model.forward
@@ -3424,8 +3422,8 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
 class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
-        config: OnnxConfig,
-        model: Union[PreTrainedModel, TFPreTrainedModel],
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Dict[str, Any] = None,
     ):
         model.__orig_forward = model.forward
