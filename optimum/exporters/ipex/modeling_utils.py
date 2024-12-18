@@ -599,7 +599,7 @@ class _IPEXAttention(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = next(module.parameters()).device
+        self.module_device = config.device
         self.num_groups = self.num_heads // self.num_key_value_heads
         self.kv_head_mapping = torch.arange(
             0, self.num_key_value_heads, dtype=torch.int32, device=self.module_device
@@ -779,7 +779,7 @@ class _IPEXLlamaMLP(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = next(module.parameters()).device
+        self.module_device = config.device
         if getattr(config, "quantization_config", None) is None:
             if self.module_device.type == "cpu":
                 # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
@@ -812,7 +812,7 @@ class _IPEXFalconMLP(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.module_device = next(module.parameters()).device
+        self.module_device = config.device
         if getattr(config, "quantization_config", None) is None:
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if self.module_device.type == "cpu":
@@ -911,7 +911,7 @@ class _IPEXIntermediate(nn.Module):
     def __init__(self, module, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.module_device = next(module.parameters()).device
+        self.module_device = config.device
         if getattr(config, "quantization_config", None) is None:
             if self.module_device.type == "cpu":
                 self.linear_gelu = LinearGelu(module.dense)

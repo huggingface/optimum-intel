@@ -133,6 +133,7 @@ def _patch_vit_model(model):
 
 
 def _patch_model(model):
+    setattr(model.config, "device", model.device)
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         raise ImportError(f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports llama model patching")
     if is_transformers_version("<", _TRANSFORMERS_MIN_VERSION) or is_transformers_version(
