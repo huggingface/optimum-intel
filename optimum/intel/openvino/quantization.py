@@ -44,7 +44,6 @@ from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedM
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
-from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
@@ -524,6 +523,8 @@ class OVQuantizer(OptimumQuantizer):
 
         quantization_config = ov_config.quantization_config
         if isinstance(quantization_config, OVWeightQuantizationConfig):
+            from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
+
             if stateful:
                 # patch model before weight compression
                 model = patch_model_with_bettertransformer(model)
