@@ -15,6 +15,7 @@
 import copy
 import gc
 import os
+import platform
 import tempfile
 import time
 import unittest
@@ -914,10 +915,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "exaone",
             "mistral-nemo",
             "minicpm3",
-            "opt_gptq",
         )
 
-    if is_openvino_version(">=", "2024.6.0"):
+        # gptq and awq install disabled for windows test environment
+        if platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
+
+    # autoawq install disabled for windows test environment
+    if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
         SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     GENERATION_LENGTH = 100
