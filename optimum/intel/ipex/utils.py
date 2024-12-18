@@ -16,6 +16,7 @@
 _HEAD_TO_AUTOMODELS = {
     "feature-extraction": "IPEXModel",
     "text-generation": "IPEXModelForCausalLM",
+    "text2text-generation": "IPEXModelForSeq2SeqLM",
     "text-classification": "IPEXModelForSequenceClassification",
     "token-classification": "IPEXModelForTokenClassification",
     "question-answering": "IPEXModelForQuestionAnswering",
