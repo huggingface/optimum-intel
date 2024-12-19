@@ -921,9 +921,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("opt_gptq",)
 
-    # autoawq install disabled for windows test environment
-    if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
-        SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+        # autoawq install disabled for windows test environment
+        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
