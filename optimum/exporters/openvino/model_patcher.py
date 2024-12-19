@@ -3378,3 +3378,109 @@ class MiniCPM3Patcher(DecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         for block in self._model.model.layers:
             block.self_attn.forward = block.self_attn._orig_forward
+
+
+class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+        ):
+            from transformers.cache_utils import DynamicCache
+
+            new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                inputs_embeds=inputs_embeds,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = result["past_key_values"].to_legacy_cache()
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        def image_embed_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
+        ) -> torch.Tensor:
+            for blk in self.blocks:
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+            return self.merger(hidden_states)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
+        # added attention_mask input instead of internal calculation (unsupported by tracing due to cycle with dynamic len)
+        def sdpa_attn_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor = None
+        ) -> torch.Tensor:
+            from transformers.models.qwen2_vl.modeling_qwen2_vl import apply_rotary_pos_emb_vision
+
+            seq_length = hidden_states.shape[0]
+            q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+            q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
+            k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+
+            q = q.transpose(0, 1)
+            k = k.transpose(0, 1)
+            v = v.transpose(0, 1)
+            attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attention_mask, dropout_p=0.0)
+            attn_output = attn_output.transpose(0, 1)
+            attn_output = attn_output.reshape(seq_length, -1)
+            attn_output = self.proj(attn_output)
+            return attn_output
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L430
+        # added attention_mask input propagation to self.attn
+        def block_forward(self, hidden_states, attention_mask, rotary_pos_emb) -> torch.Tensor:
+            hidden_states = hidden_states + self.attn(
+                self.norm1(hidden_states), attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb
+            )
+            hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+            return hidden_states
+
+        for block in self._model.blocks:
+            block._orig_forward = block.forward
+            block.forward = types.MethodType(block_forward, block)
+            block.attn._orig_forward = block.attn.forward
+            block.attn.forward = types.MethodType(sdpa_attn_forward, block.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
