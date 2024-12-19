@@ -657,7 +657,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
             if inputs.get_any_name() == "timestep":
-                shapes[inputs][0] = 1
+                if shapes[inputs].rank == 1:
+                    shapes[inputs][0] = 1
             elif inputs.get_any_name() == "sample":
                 in_channels = self.unet.config.get("in_channels", None)
                 if in_channels is None:
