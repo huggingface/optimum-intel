@@ -134,6 +134,14 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
+                if task == "image-text-to-text":
+                    self.assertTrue(
+                        ov_model.language_model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"])
+                    )
+                    self.assertTrue(
+                        ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                    )
+
                 if library_name == "diffusers":
                     self.assertTrue(
                         ov_model.vae_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
