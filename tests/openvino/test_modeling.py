@@ -535,8 +535,9 @@ class PipelineTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
+            if not ov_exported_pipe.model.decoder.stateful:
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
             ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
@@ -1527,8 +1528,9 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
-        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        if not ov_model.decoder.stateful:
+            self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1613,7 +1615,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["t5"]
+        model_id = MODEL_NAMES["bart"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
