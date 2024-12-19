@@ -12,9 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import unittest
-from typing import Dict, List, Union
-
 from contextlib import contextmanager
+from typing import Dict, List, Union
 
 import numpy as np
 import openvino as ov
