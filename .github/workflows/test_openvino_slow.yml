@@ -49,6 +49,11 @@ jobs:
         name: Install specific dependencies and versions required for older transformers
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
 
+      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2019' }}
+        name: Install auto-gptq, autoawq
+        run: |
+          pip install auto-gptq autoawq --extra-index-url https://download.pytorch.org/whl/cpu
+
       - name: Pip freeze
         run: pip freeze
 
