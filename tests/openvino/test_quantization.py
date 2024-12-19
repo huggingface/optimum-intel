@@ -500,7 +500,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         sensitivity_metric="mean_activation_magnitude",
                         num_samples=1,
                     ),
-                    {"int4": 20, "int8": 10},
+                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 1}, {"int8": 10}],
                 ),
             ]
         )
