@@ -227,6 +227,13 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "--dataset contextual --num-samples 1 --trust-remote-code",
                     [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
                 ),
+                (
+                    "image-text-to-text",
+                    "qwen2_vl",
+                    'int4 --group-size 4 --ratio 0.9 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1",
+                    {"int8": 8, "int4": 22},
+                ),
             ]
         )
 

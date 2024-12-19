@@ -119,6 +119,7 @@ MODEL_NAMES = {
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
+    "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -191,6 +192,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "llava_next": (30, 9, 1),
     "minicpmv": (30, 26, 1, 6),
     "nanollava": (30, 15, 1),
+    "qwen2_vl": (30, 1, 1, 10),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
