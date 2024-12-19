@@ -100,9 +100,15 @@ def _set_runtime_options(
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
         sub_export_config.runtime_options = {}
-        if "diffusers" in library_name or "text-generation" in task:
+        if (
+            "diffusers" in library_name
+            or "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+        ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and "text-generation" in task:
+        if not quantized_model and (
+            "text-generation" in task or ("image-text-to-text" in task and model_name == "language_model")
+        ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
