@@ -180,7 +180,7 @@ def _llama_model_forward(
         position_ids = torch.arange(
             past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
         )
-        position_ids = position_ids.unsqueeze(0)
+        position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
     if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
@@ -297,7 +297,7 @@ def _falcon_model_forward(
         )
 
     if position_ids is None:
-        position_ids = cache_position.unsqueeze(0)
+        position_ids = cache_position.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
     # Prepare head mask if needed
     # 1.0 in head_mask indicate we keep the head
@@ -419,7 +419,7 @@ def _gpt2_model_forward(
     past_length = past_key_values.get_seq_length() if past_key_values is not None else 0
     if position_ids is None:
         position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
-        position_ids = position_ids.unsqueeze(0)
+        position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
     if inputs_embeds is None:
         inputs_embeds = self.wte(input_ids)
@@ -664,9 +664,9 @@ class _IPEXLlamaAttention(_IPEXAttention):
         if use_bias:
             concat_bias = torch.concat(bias_list, 0).contiguous()
             self.concat_linear.bias = nn.Parameter(concat_bias)
-        self.q_slice = self.q_proj.out_features
-        self.k_slice = self.q_slice + self.k_proj.out_features
-        self.v_slice = self.k_slice + self.v_proj.out_features
+        self.q_slice = self.q_proj.weight.shape[0]
+        self.k_slice = self.q_slice + self.k_proj.weight.shape[0]
+        self.v_slice = self.k_slice + self.v_proj.weight.shape[0]
         if self.module_device.type == "cpu":
             if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mha_linear_add = LinearAdd(module.o_proj)

@@ -1,6 +1,7 @@
 name: OpenVINO - Test
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -43,12 +44,12 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,openvino-tokenizers,diffusers,tests,tests-openvino] transformers[testing]
+          pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
-        name: Downgrade Transformers and Accelerate
+        name: Install specific dependencies and versions required for older transformers
         run: |
-          pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*
+          pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Uninstall NNCF

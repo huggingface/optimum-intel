@@ -11,10 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import unittest
+from typing import Dict, List, Union
 
 import numpy as np
 import openvino as ov
 import torch
+
+from optimum.intel.openvino.modeling_base import OVBaseModel
 
 
 MODEL_NAMES = {
@@ -115,6 +119,7 @@ MODEL_NAMES = {
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
+    "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -187,6 +192,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "llava_next": (30, 9, 1),
     "minicpmv": (30, 26, 1, 6),
     "nanollava": (30, 15, 1),
+    "qwen2_vl": (30, 1, 1, 10),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -218,3 +224,17 @@ def get_num_quantized_nodes(model):
             if type_name == "nf4":
                 num_weight_nodes["nf4"] += 1
     return num_fake_quantize, num_weight_nodes
+
+
+def compare_num_quantized_nodes_per_model(
+    test_case: unittest.TestCase,
+    models: List[Union[ov.Model, OVBaseModel]],
+    expected_num_weight_nodes_per_model: List[Dict],
+):
+    test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
+    actual_num_weights_per_model = []
+    for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
+        _, num_weight_nodes = get_num_quantized_nodes(submodel)
+        expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+        actual_num_weights_per_model.append(num_weight_nodes)
+    test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
