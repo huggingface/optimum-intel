@@ -2497,3 +2497,18 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         if self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
             return {"last_hidden_state": {0: "seq_len"}}
         return {}
+
+
+@register_in_tasks_manager(
+    "glm",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GLMOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
