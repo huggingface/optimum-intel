@@ -365,7 +365,7 @@ def export_pytorch(
     import torch
     from torch.utils._pytree import tree_map
 
-    from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
+    from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)

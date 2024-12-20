@@ -523,7 +523,7 @@ class OVQuantizer(OptimumQuantizer):
 
         quantization_config = ov_config.quantization_config
         if isinstance(quantization_config, OVWeightQuantizationConfig):
-            from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
+            from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
             if stateful:
                 # patch model before weight compression
