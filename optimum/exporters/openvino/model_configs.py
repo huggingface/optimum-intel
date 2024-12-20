@@ -1783,6 +1783,23 @@ class DummyTransformerTimestpsInputGenerator(DummyTimestepInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class DummyUnetVisionInputGenerator(DummyVisionInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name not in ["sample", "latent_sample"]:
+            return super().generate(input_name, framework, int_dtype, float_dtype)
+        # add height and width discount for enable any resolution generation
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.num_channels, self.height - 1, self.width - 1],
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+@register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
+class UnetOpenVINOConfig(UNetOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyUnetVisionInputGenerator,) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:]
+
+
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
 class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
