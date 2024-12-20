@@ -144,6 +144,17 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
+        # test on inputs nondivisible on 64
+        height, width, batch_size = 96, 96, 1
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
     @parameterized.expand(CALLBACK_SUPPORT_ARCHITECTURES)
     @require_diffusers
     def test_callback(self, model_arch: str):
@@ -541,6 +552,20 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
+        # test generation when input resolution nondevisible on 64
+        height, width, batch_size = 96, 96, 1
+
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
+
+        for output_type in ["latent", "np", "pt"]:
+            print(output_type)
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
@@ -767,6 +792,18 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 64, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+        # test generation when input resolution nondevisible on 64
+        height, width, batch_size = 96, 96, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
         for output_type in ["latent", "np", "pt"]:
