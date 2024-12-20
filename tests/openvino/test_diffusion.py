@@ -143,7 +143,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
-        
+
         # test on inputs nondivisible on 64
         height, width, batch_size = 96, 96, 1
 
@@ -154,7 +154,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
-
 
     @parameterized.expand(CALLBACK_SUPPORT_ARCHITECTURES)
     @require_diffusers
@@ -802,7 +801,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
-        
+
         # test generation when input resolution nondevisible on 64
         height, width, batch_size = 96, 96, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
@@ -814,7 +813,6 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
-
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
