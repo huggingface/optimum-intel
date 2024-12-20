@@ -158,7 +158,7 @@ MODEL_NAMES = {
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
     "glm4": "katuni4ka/tiny-random-glm4",
-    "glm": "/home/ea/work/my_optimum_intel/optimum-intel/glm-edge-1.5",
+    "glm": "katuni4ka/tiny-random-glm-edge",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
