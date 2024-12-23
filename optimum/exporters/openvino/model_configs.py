@@ -1850,6 +1850,7 @@ class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
 
 
 @register_in_tasks_manager("t5-encoder-model", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("t5-encoder", *["feature-extraction"], library_name="diffusers")
 class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     pass
 
