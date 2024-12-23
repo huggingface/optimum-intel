@@ -1250,19 +1250,12 @@ class CLIPOpenVINOConfig(CLIPOnnxConfig):
 
 @register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
-
-    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
-        # TODO: fix should be by casting inputs during inference and not export
-        if framework == "pt":
-            import torch
-            dummy_inputs["input_ids"] = dummy_inputs["input_ids"].to(dtype=torch.int32)
-        return dummy_inputs
 
 
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="transformers")
@@ -1812,11 +1805,16 @@ class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
 
 
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
+@register_in_tasks_manager("unet-2d-condition", *["semantic-segmentation"], library_name="diffusers")
 class UnetOpenVINOConfig(UNetOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyUnetVisionInputGenerator, DummyUnetTimestepInputGenerator) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[2:]
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyUnetVisionInputGenerator,
+        DummyUnetTimestepInputGenerator,
+    ) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[2:]
 
 
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
+@register_in_tasks_manager("sd3-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
 class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         (DummyTransformerTimestpsInputGenerator,)
@@ -1921,6 +1919,7 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
 
 
 @register_in_tasks_manager("flux-transformer", *["semantic-segmentation"], library_name="diffusers")
+@register_in_tasks_manager("flux-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
 class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyTransformerTimestpsInputGenerator,
