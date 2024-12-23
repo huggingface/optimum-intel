@@ -63,7 +63,11 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
 
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
 
-    return {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
+    return {
+        key: dummy_inputs[key].to(model.device)
+        for key in signature.parameters
+        if dummy_inputs.get(key, None) is not None
+    }
 
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
