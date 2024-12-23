@@ -2681,32 +2681,6 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
         unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
 
 
-def _gpt_neo_sdpa_attn(self, query, key, value, attention_mask=None, head_mask=None):
-    # Keep the attention weights computation in fp32 to avoid overflow issues
-    query = query.to(torch.float32)
-    key = key.to(torch.float32)
-
-    # Apply sliding window masking for local attention layers
-    query_length, key_length = query.size(-2), key.size(-2)
-    causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
-    # different from original for prevent overflow, apply to mask instead of directly to weights
-    mask_value = torch.finfo(torch.float16).min
-    # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
-    # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
-    mask_value = torch.tensor(mask_value, dtype=query.dtype).to(query.device)
-    if attention_mask is None:
-        attention_mask = torch.ones_like(causal_mask)
-    attention_mask = torch.where(causal_mask, attention_mask[:, :, :, : key.shape[-2]], mask_value)
-
-    # Mask heads if we want to
-    if head_mask is not None:
-        attention_mask = attention_mask * head_mask
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
-
-    return attn_output, None
-
-
 def _gpt_neo_attn_forward(
     self,
     hidden_states,
@@ -2731,22 +2705,70 @@ def _gpt_neo_attn_forward(
     )
 
 
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/attention.py#L185
+def _gpt_neo_attn_sdpa(
+    self,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    head_mask: Optional[torch.Tensor] = None,
+):
+    batch_size = query.shape[0]
+
+    mask_value = torch.finfo(torch.float16).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    dropout_p = float(self.config.attention_dropout) if self.training else 0.0
+    if (batch_size == 1 or self.training) and self.attention_type == "global":
+        if query.shape[2] > 1:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False, scale=1.0
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
+
+        causal_mask = torch.where(causal_mask, 0, mask_value)
+        if batch_size > 1:
+            # torch.Tensor.expand does no memory copy
+            causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+
+        if attention_mask is not None:
+            attention_mask = causal_mask + attention_mask
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False, scale=1.0
+        )
+
+    return sdpa_result, None
+
+
 class GptNeoModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.45.0") and is_torch_version(">=", "2.1.0"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
             for layer in self._model.transformer.h:
                 self_attn = layer.attn.attention
                 self_attn._orig_attn = self_attn._attn
-                self_attn._attn = types.MethodType(_gpt_neo_sdpa_attn, self_attn)
+                self_attn._attn = types.MethodType(_gpt_neo_attn_sdpa, self_attn)
                 self_attn._orig_forward = types.MethodType(_gpt_neo_attn_forward, self_attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        for layer in self._model.transformer.h:
-            if hasattr(layer.attn.attention, "_orig_forward"):
-                layer.attn.attention.forward = layer.attn.attention._orig_forward
-                layer.attn.attention._attn = layer.attn.attention._orig_attn
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for layer in self._model.transformer.h:
+                for layer in self._model.transformer.h:
+                    layer.attn.attention.forward = layer.attn.attention._orig_forward
+                    layer.attn.attention._attn = layer.attn.attention._orig_attn
 
 
 class Gemma2ModelPatcher(LlamaModelPatcher):
