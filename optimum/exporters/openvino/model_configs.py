@@ -1256,6 +1256,14 @@ class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     ) -> ModelPatcher:
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
+        # TODO: fix should be by casting inputs during inference and not export
+        if framework == "pt":
+            import torch
+            dummy_inputs["input_ids"] = dummy_inputs["input_ids"].to(dtype=torch.int32)
+        return dummy_inputs
+
 
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
@@ -1795,9 +1803,17 @@ class DummyUnetVisionInputGenerator(DummyVisionInputGenerator):
         )
 
 
+class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name != "timestep":
+            return super().generate(input_name, framework, int_dtype, float_dtype)
+        shape = [self.batch_size]
+        return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
+
+
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
 class UnetOpenVINOConfig(UNetOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyUnetVisionInputGenerator,) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyUnetVisionInputGenerator, DummyUnetTimestepInputGenerator) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[2:]
 
 
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
