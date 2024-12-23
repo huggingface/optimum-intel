@@ -1812,6 +1812,12 @@ class UnetOpenVINOConfig(UNetOnnxConfig):
         DummyUnetTimestepInputGenerator,
     ) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[2:]
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["timestep"] = {0: "batch_size"}
+        return common_inputs
+
 
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("sd3-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
