@@ -46,6 +46,7 @@ from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    patch_not_check_trace,
 )
 
 
@@ -234,6 +235,7 @@ def main_export(
     do_gptq_patching = False
     custom_architecture = False
     patch_16bit = False
+    patch_trace = False
     loading_kwargs = model_loading_kwargs or {}
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
@@ -350,6 +352,7 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+        patch_trace = True
 
     if library_name == "open_clip":
         model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
@@ -417,21 +420,22 @@ def main_export(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
 
-    submodel_paths = export_from_model(
-        model=model,
-        output=output,
-        task=task,
-        ov_config=ov_config,
-        stateful=stateful,
-        model_kwargs=model_kwargs,
-        custom_export_configs=custom_export_configs,
-        fn_get_submodels=fn_get_submodels,
-        preprocessors=preprocessors,
-        device=device,
-        trust_remote_code=trust_remote_code,
-        patch_16bit_model=patch_16bit,
-        **kwargs_shapes,
-    )
+    with patch_not_check_trace(patch_trace):
+        submodel_paths = export_from_model(
+            model=model,
+            output=output,
+            task=task,
+            ov_config=ov_config,
+            stateful=stateful,
+            model_kwargs=model_kwargs,
+            custom_export_configs=custom_export_configs,
+            fn_get_submodels=fn_get_submodels,
+            preprocessors=preprocessors,
+            device=device,
+            trust_remote_code=trust_remote_code,
+            patch_16bit_model=patch_16bit,
+            **kwargs_shapes,
+        )
 
     if convert_tokenizer:
         maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)

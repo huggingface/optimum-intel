@@ -15,6 +15,8 @@
 import inspect
 import logging
 from collections import namedtuple
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -296,3 +298,15 @@ def save_preprocessors(
                 logger.error(f"Saving {type(processor)} failed with {ex}")
     else:
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
+
+
+@contextmanager
+def patch_not_check_trace(to_patch):
+    original_trace = torch.jit.trace
+    if to_patch:
+        torch.jit.trace = partial(torch.jit.trace, check_trace=False)
+    try:
+        yield
+    finally:
+        if to_patch:
+            torch.jit.trace = original_trace
