@@ -88,8 +88,9 @@ class IPEXPagedCache(Cache):
             all_slot_offsets = []
             num_blocks = (input_lens + self.block_size - 1) // self.block_size
             for i in range(batch_size):
-                block_table = self.free_blocks.nonzero().view(-1)[0 : num_blocks[i]]
-                self.block_tables[i][0 : num_blocks[i]] = block_table
+                nb = num_blocks[i]
+                block_table = self.free_blocks.nonzero().view(-1)[0:nb]
+                self.block_tables[i][0:nb] = block_table
                 self.free_blocks[block_table] = 0
                 slots_range = torch.arange(input_lens[i], device=key_states.device)
                 block_indices = slots_range // self.block_size
@@ -202,16 +203,18 @@ class IPEXPagedCache(Cache):
         updated_block_tables = self.block_tables.index_select(0, beam_idx.to(device))
         mask = self.block_tables.masked_fill(self.block_tables != -1, 1).masked_fill(self.block_tables == -1, 0)
         num_blocks = mask.cumsum(-1)[:, -1]
-        updated_table = []
+        updated_table = torch.zeros_like(beam_idx)
         for i in range(beam_idx.shape[0]):
-            self.block_tables[i, 0 : num_blocks[i] - 1] = updated_block_tables[i, 0 : num_blocks[i] - 1]
-            updated_table.append(self.block_tables[i : i + 1, num_blocks[i] - 1 : num_blocks[i]])
-        updated_table = torch.cat(tuple(updated_table), dim=0)
+            nb = num_blocks[i]
+            self.block_tables[i, 0 : nb - 1] = updated_block_tables[i, 0 : nb - 1]
+            updated_table[i] = self.block_tables[i][nb - 1]
         for layer_idx in range(self.num_hidden_layers):
             self.key_cache[layer_idx][updated_table] = self.key_cache[layer_idx][updated_table[beam_idx]]
             self.value_cache[layer_idx][updated_table] = self.value_cache[layer_idx][updated_table[beam_idx]]
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
-        self.free_blocks[free_table] = 1
+        for i in free_table:
+            if not (self.block_tables == i).any():
+                self.free_blocks[i] = 1
 
     def crop(self, maximum_length: int):
         """Crop the past key values up to a new `maximum_length` in terms of tokens. `maximum_length` can also be
@@ -231,4 +234,6 @@ class IPEXPagedCache(Cache):
             self._seen_tokens[bs] = new_tokens
         self.max_seq_len, _ = self._seen_tokens.max(dim=0)
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
-        self.free_blocks[free_table] = 1
+        for i in free_table:
+            if not (self.block_tables == i).any():
+                self.free_blocks[i] = 1
