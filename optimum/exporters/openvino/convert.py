@@ -100,9 +100,15 @@ def _set_runtime_options(
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
         sub_export_config.runtime_options = {}
-        if "diffusers" in library_name or "text-generation" in task:
+        if (
+            "diffusers" in library_name
+            or "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+        ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and "text-generation" in task:
+        if not quantized_model and (
+            "text-generation" in task or ("image-text-to-text" in task and model_name == "language_model")
+        ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
@@ -359,7 +365,7 @@ def export_pytorch(
     import torch
     from torch.utils._pytree import tree_map
 
-    from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
+    from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
@@ -450,7 +456,11 @@ def export_pytorch(
                 from openvino.frontend.pytorch.patch_model import unpatch_model
 
                 unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
-                model.to(torch.float32)
+                for m in model.modules():
+                    if any(p.dtype in [torch.float16, torch.bfloat16] for p in m.parameters(False)) or any(
+                        b.dtype in [torch.float16, torch.bfloat16] for b in m.buffers(False)
+                    ):
+                        m.float()
 
             return export_pytorch_via_onnx(
                 model,

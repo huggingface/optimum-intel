@@ -15,6 +15,7 @@
 import copy
 import gc
 import os
+import platform
 import tempfile
 import time
 import unittest
@@ -62,7 +63,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
+from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
@@ -395,7 +396,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_model_from_hub_private_with_token(self):
         model_id = "optimum-internal-testing/tiny-random-phi-private"
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
-        if token is None:
+        if not token:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
         model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
@@ -872,7 +873,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "llama_gptq",
         "marian",
         "minicpm",
         "mistral",
@@ -917,6 +917,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "minicpm3",
         )
 
+        # gptq and awq install disabled for windows test environment
+        if platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
+
+        # autoawq install disabled for windows test environment
+        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -949,9 +957,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_openvino_version("<", "2024.1"):
             not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
 
-        if "gptq" in model_arch:
-            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
-
         set_seed(SEED)
 
         model_kwargs = {}
@@ -978,20 +983,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         if model_arch in ["qwen", "arctic", "glm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         atol = 1e-3 if model_arch == "minicpm" else 1e-4
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
+        # quantized models have different logits value range
+        if "awq" not in model_arch and "gptq" not in model_arch:
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
-
         if model_arch in ["qwen"]:
             return
 
@@ -1025,7 +1037,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
+        with patch_awq_for_inference("awq" in model_arch):
+            transformers_outputs = transformers_model.generate(
+                **tokens, generation_config=gen_config, **additional_inputs
+            )
+        print(f"ov_outputs: {ov_outputs}")
+        print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
             "OV output {ov_outputs}\nTransformers output  {transformers_output}",
@@ -1261,8 +1278,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
@@ -1288,9 +1310,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             if model_arch == "gemma2":
                 additional_inputs = {"past_key_values": DynamicCache()}
-            transformers_outputs = transformers_model.generate(
-                **tokens, generation_config=gen_config, **additional_inputs
-            )
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model.generate(
+                    **tokens, generation_config=gen_config, **additional_inputs
+                )
             set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
@@ -1976,7 +1999,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
 
@@ -1996,6 +2019,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaNextForConditionalGeneration
 
             return LlavaNextForConditionalGeneration
+        if model_arch == "qwen2_vl":
+            from transformers import Qwen2VLForConditionalGeneration
+
+            return Qwen2VLForConditionalGeneration
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):

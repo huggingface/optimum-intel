@@ -44,7 +44,6 @@ from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedM
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
-from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
@@ -459,6 +458,11 @@ class OVQuantizer(OptimumQuantizer):
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
 
+            if quantization_config.weight_format != "int8":
+                raise ValueError("Only 'int8' weight format is currently supported.")
+            if quantization_config.activation_format != "int8":
+                raise ValueError("Only 'int8' activation format is currently supported.")
+
             # Quantize model(s)
             if isinstance(self.model, _OVModelForWhisper):
                 self._quantize_whisper_model(quantization_config, calibration_dataset, **kwargs)
@@ -524,6 +528,8 @@ class OVQuantizer(OptimumQuantizer):
 
         quantization_config = ov_config.quantization_config
         if isinstance(quantization_config, OVWeightQuantizationConfig):
+            from optimum.exporters.utils import check_dummy_inputs_are_allowed
+
             if stateful:
                 # patch model before weight compression
                 model = patch_model_with_bettertransformer(model)

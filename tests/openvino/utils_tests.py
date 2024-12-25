@@ -11,10 +11,15 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import unittest
+from contextlib import contextmanager
+from typing import Dict, List, Union
 
 import numpy as np
 import openvino as ov
 import torch
+
+from optimum.intel.openvino.modeling_base import OVBaseModel
 
 
 MODEL_NAMES = {
@@ -77,12 +82,12 @@ MODEL_NAMES = {
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
-    "llama_gptq": "hf-internal-testing/TinyLlama-1.1B-Chat-v0.3-GPTQ",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",
+    "opt_gptq": "ybelkada/opt-125m-gptq-4bit",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
@@ -91,6 +96,7 @@ MODEL_NAMES = {
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
+    "mixtral_awq": "TitanML/tiny-mixtral-AWQ-4bit",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
@@ -115,6 +121,7 @@ MODEL_NAMES = {
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
+    "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -187,6 +194,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "llava_next": (30, 9, 1),
     "minicpmv": (30, 26, 1, 6),
     "nanollava": (30, 15, 1),
+    "qwen2_vl": (30, 1, 1, 10),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -218,3 +226,72 @@ def get_num_quantized_nodes(model):
             if type_name == "nf4":
                 num_weight_nodes["nf4"] += 1
     return num_fake_quantize, num_weight_nodes
+
+
+@contextmanager
+def mock_torch_cuda_is_available(to_patch):
+    original_is_available = torch.cuda.is_available
+    if to_patch:
+        torch.cuda.is_available = lambda: True
+    try:
+        yield
+    finally:
+        if to_patch:
+            torch.cuda.is_available = original_is_available
+
+
+@contextmanager
+def patch_awq_for_inference(to_patch):
+    orig_gemm_forward = None
+    if to_patch:
+        # patch GEMM module to allow inference without CUDA GPU
+        from awq.modules.linear.gemm import WQLinearMMFunction
+        from awq.utils.packing_utils import dequantize_gemm
+
+        def new_forward(
+            ctx,
+            x,
+            qweight,
+            qzeros,
+            scales,
+            w_bit=4,
+            group_size=128,
+            bias=None,
+            out_features=0,
+        ):
+            ctx.out_features = out_features
+
+            out_shape = x.shape[:-1] + (out_features,)
+            x = x.to(torch.float16)
+
+            out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
+            out = torch.matmul(x, out)
+
+            out = out + bias if bias is not None else out
+            out = out.reshape(out_shape)
+
+            if len(out.shape) == 2:
+                out = out.unsqueeze(0)
+            return out
+
+        orig_gemm_forward = WQLinearMMFunction.forward
+        WQLinearMMFunction.forward = new_forward
+    try:
+        yield
+    finally:
+        if orig_gemm_forward is not None:
+            WQLinearMMFunction.forward = orig_gemm_forward
+
+
+def compare_num_quantized_nodes_per_model(
+    test_case: unittest.TestCase,
+    models: List[Union[ov.Model, OVBaseModel]],
+    expected_num_weight_nodes_per_model: List[Dict],
+):
+    test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
+    actual_num_weights_per_model = []
+    for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
+        _, num_weight_nodes = get_num_quantized_nodes(submodel)
+        expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+        actual_num_weights_per_model.append(num_weight_nodes)
+    test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
