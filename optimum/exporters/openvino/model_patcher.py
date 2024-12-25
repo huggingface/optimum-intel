@@ -2501,7 +2501,7 @@ class RotaryEmbPatcher(DecoderModelPatcher):
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/31f9a289a6207be6cae746e009d8e0db523be203/src/transformers/models/falcon/modeling_falcon.py#L1138
+# Adapted from https://github.com/huggingface/transformers/blob/31f9a289a6207be6cae746e009d8e0db523be203/src/transformers/models/falcon/modeling_falcon.py#L1138
 def _falcon_prepare_4d_causal_attention_mask_with_cache_position(
     attention_mask: torch.Tensor,
     sequence_length: int,
