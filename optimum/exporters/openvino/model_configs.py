@@ -1806,7 +1806,7 @@ class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
 
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("unet-2d-condition", *["semantic-segmentation"], library_name="diffusers")
-class UnetOpenVINOConfig(UNetOnnxConfig):
+class UNetOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyUnetVisionInputGenerator,
         DummyUnetTimestepInputGenerator,
@@ -1821,10 +1821,10 @@ class UnetOpenVINOConfig(UNetOnnxConfig):
 
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("sd3-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
-class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
+class SD3TransformerOpenVINOConfig(UNetOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         (DummyTransformerTimestpsInputGenerator,)
-        + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+        + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
         + (PooledProjectionsDummyInputGenerator,)
     )
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(

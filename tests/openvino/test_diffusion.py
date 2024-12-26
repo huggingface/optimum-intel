@@ -218,8 +218,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                         ),
                     )
                 else:
-                    packed_height = height // pipeline.vae_scale_factor
-                    packed_width = width // pipeline.vae_scale_factor
+                    packed_height = height // pipeline.vae_scale_factor // 2
+                    packed_width = width // pipeline.vae_scale_factor // 2
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
@@ -426,7 +426,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
             height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
         )
 
-        if "flux" == model_type:
+        if model_type in ["flux", "stable-diffusion-3"]:
             inputs["height"] = height
             inputs["width"] = width
 
@@ -529,8 +529,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                             ),
                         )
                     else:
-                        packed_height = height // pipeline.vae_scale_factor
-                        packed_width = width // pipeline.vae_scale_factor
+                        packed_height = height // pipeline.vae_scale_factor // 2
+                        packed_width = width // pipeline.vae_scale_factor // 2
                         channels = pipeline.transformer.config.in_channels
                         self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
@@ -780,8 +780,8 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                             ),
                         )
                     else:
-                        packed_height = height // pipeline.vae_scale_factor
-                        packed_width = width // pipeline.vae_scale_factor
+                        packed_height = height // pipeline.vae_scale_factor // 2
+                        packed_width = width // pipeline.vae_scale_factor // 2
                         channels = pipeline.transformer.config.in_channels
                         self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
