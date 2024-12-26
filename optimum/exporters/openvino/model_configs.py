@@ -55,7 +55,12 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
-from ...intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
+from ...intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_available,
+    is_diffusers_version,
+    is_transformers_version,
+)
 from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
@@ -115,6 +120,10 @@ def init_model_configs():
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+
+    if is_diffusers_available():
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
