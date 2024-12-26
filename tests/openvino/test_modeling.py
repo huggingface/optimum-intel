@@ -915,6 +915,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "exaone",
             "mistral-nemo",
             "minicpm3",
+            "glm",
         )
 
         # gptq and awq install disabled for windows test environment
