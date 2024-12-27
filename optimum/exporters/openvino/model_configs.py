@@ -57,6 +57,7 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
+    DummySeq2SeqDecoderTextInputGenerator
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
@@ -133,6 +134,8 @@ def init_model_configs():
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image", "SanaPipeline")
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -1889,6 +1892,52 @@ class SD3TransformerOpenVINOConfig(UNetOpenVINOConfig):
 @register_in_tasks_manager("t5-encoder", *["feature-extraction"], library_name="diffusers")
 class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     pass
+
+@register_in_tasks_manager("gemma2-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"}
+        }
+
+
+class DummySeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+        "encoder_attention_mask"
+    )
+
+
+class DummySanaTransformerVisionInputGenerator(DummyVisionInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name not in ["sample", "latent_sample"]:
+            return super().generate(input_name, framework, int_dtype, float_dtype)
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.num_channels, self.height, self.width],
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+@register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
+class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="cross_attention_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummySanaTransformerVisionInputGenerator, DummySeq2SeqDecoderTextWithEncMaskInputGenerator) + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:-1]
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        return common_inputs
 
 
 class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
