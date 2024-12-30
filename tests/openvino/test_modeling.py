@@ -1296,7 +1296,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model._supports_cache_class = True
             from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
-        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokenization_args = {}
+        if is_transformers_version(">=", "4.45") and model_arch == "gpt_neo":
+            tokenization_args["padding_side"] = "left"
+        tokens = tokenizer(
+            ["Today is a nice day and I am longer", "This is me"],
+            return_tensors="pt",
+            padding=True,
+            **tokenization_args,
+        )
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
