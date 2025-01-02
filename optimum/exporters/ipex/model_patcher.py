@@ -19,6 +19,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaModel,
     LlamaRMSNorm,
+    LlamaForCausalLM,
 )
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
@@ -36,6 +37,7 @@ from .modeling_utils import (
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
+    _LlamaForCausalLM_forward,
 )
 
 
@@ -79,6 +81,8 @@ def _patch_llama_model(model):
         1. Use IPEX rope and paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
+    if isinstance(model, LlamaForCausalLM):
+        convert_func(model, "forward", _LlamaForCausalLM_forward)
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
     convert_functions(model, LlamaRMSNorm, "forward", _ipex_rms_layer_norm_forward)
     convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
