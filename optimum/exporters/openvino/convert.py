@@ -43,6 +43,7 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_diffusers_version,
     is_openvino_tokenizers_version,
     is_tokenizers_version,
     is_transformers_version,
@@ -988,24 +989,36 @@ def _get_submodels_and_export_configs(
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
-    try:
-        from diffusers import (
-            StableDiffusion3Img2ImgPipeline,
-            StableDiffusion3InpaintPipeline,
-            StableDiffusion3Pipeline,
-        )
+    if is_diffusers_version(">=", "0.29.0"):
+        from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 
-        is_sd3 = isinstance(
-            pipeline, (StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline)
-        )
-    except ImportError:
+        sd3_pipes = [StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline]
+        if is_diffusers_version(">=", "0.30.0"):
+            from diffusers import StableDiffusion3InpaintPipeline
+
+            sd3_pipes.append(StableDiffusion3InpaintPipeline)
+
+        is_sd3 = isinstance(pipeline, tuple(sd3_pipes))
+    else:
         is_sd3 = False
 
-    try:
+    if is_diffusers_version(">=", "0.30.0"):
         from diffusers import FluxPipeline
 
-        is_flux = isinstance(pipeline, FluxPipeline)
-    except ImportError:
+        flux_pipes = [FluxPipeline]
+
+        if is_diffusers_version(">=", "0.31.0"):
+            from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
+
+            flux_pipes.extend([FluxPipeline, FluxImg2ImgPipeline, FluxInpaintPipeline])
+
+        if is_diffusers_version(">=", "0.32.0"):
+            from diffusers import FluxFillPipeline
+
+            flux_pipes.append(FluxFillPipeline)
+
+        is_flux = isinstance(pipeline, tuple(flux_pipes))
+    else:
         is_flux = False
 
     if not is_sd3 and not is_flux:
