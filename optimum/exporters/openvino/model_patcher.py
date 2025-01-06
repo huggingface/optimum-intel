@@ -3603,6 +3603,7 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
+# copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L321
 def _granite_moe_topk_gating_forward(self, hidden_states):
     # compute the top_k routing decision
     logits = self.layer(hidden_states).float()  # [batch_size x seq_len, num_experts]
@@ -3629,6 +3630,7 @@ def _granite_moe_topk_gating_forward(self, hidden_states):
     return index_sorted_experts, batch_index, batch_gates, expert_size, logits
 
 
+# copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L281
 def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
     output_list = []
     # difference with original
