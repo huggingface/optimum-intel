@@ -53,7 +53,7 @@ except ImportError:
 
 
 if TYPE_CHECKING:
-    from PIL import Image
+    from PIL.Image import Image
 
 
 logger = logging.getLogger(__name__)
@@ -2100,6 +2100,8 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
+        self.rope_deltas = None  # cache rope_deltas here
+
         if is_transformers_version(">=", "4.45.0"):
             from transformers.models.qwen2_vl.modeling_qwen2_vl import (
                 Qwen2VLForConditionalGeneration,
@@ -2197,6 +2199,7 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
+        cache_position=None,
         **kwargs,
     ):
         inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
@@ -2209,6 +2212,26 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             video_embeds = torch.from_numpy(self.get_vision_embeddings(pixel_values_videos, video_grid_thw))
             video_mask = input_ids == self.config.video_token_id
             inputs_embeds[video_mask] = video_embeds
+
+        # if we get 4D attention mask we cannot calculate rope deltas anymore.
+        if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
+            # calculate RoPE index once per generation in the pre-fill stage only
+            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                position_ids, rope_deltas = self.get_rope_index(
+                    input_ids, image_grid_thw, video_grid_thw, attention_mask
+                )
+                self.rope_deltas = rope_deltas
+            # then use the prev pre-calculated rope-deltas to get the correct position ids
+            else:
+                batch_size, seq_length, _ = inputs_embeds.shape
+                delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:  # otherwise `deltas` is an int `0`
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
         return inputs_embeds, attention_mask, position_ids
 
     def forward(
