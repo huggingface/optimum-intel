@@ -49,7 +49,7 @@ from .utils import (
 )
 
 
-FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager"}
+FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager", "gemma2": "sdpa"}
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
