@@ -192,6 +192,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "open-clip": (20, 28),
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
+    "flux-fill": (56, 24, 28, 64),
     "llava": (30, 9, 1),
     "llava_next": (30, 9, 1),
     "minicpmv": (30, 26, 1, 6),
