@@ -31,7 +31,7 @@ Check out the help for more options:
 
 ```text
 usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,tf}] [--trust-remote-code]
-                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4}] [--quant-mode {int8}]
+                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4}] [--quant-mode {int8,fp8_e4m3,fp8_e5m2}]
                                    [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
                                    [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
                                    [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
@@ -67,10 +67,9 @@ Optional arguments:
                         on your local machine arbitrary code present in the model repository.
   --weight-format {fp32,fp16,int8,int4,mxfp4,nf4}
                         The weight format of the exported model.
-  --quant-mode {int8}
+  --quant-mode {int8,fp8_e4m3,fp8_e5m2}
                         Quantization precision mode. This is used for applying full model quantization including
-                        activations. The only currently supported choice is 'int8' for int8 quantization of both
-                        weights and activations.
+                        activations.
   --library {transformers,diffusers,timm,sentence_transformers,open_clip}
                         The library used to load the model before export. If not provided, will attempt to infer the
                         local checkpoint's library
@@ -166,7 +165,7 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 </Tip>
 
 
-Besides weight-only quantization, you can also apply full model quantization including activations by setting `--quant-mode` to `int8`. This will quantize both weights and activations of Linear, Convolutional and some other layers to int8. Currently this is only supported for speech-to-text models. Please see example below.
+Besides weight-only quantization, you can also apply full model quantization including activations by setting `--quant-mode` to preffered precision. This will quantize both weights and activations of Linear, Convolutional and some other layers to selected mode. Currently this is only supported for speech-to-text models. Please see example below.
 
 ```bash
 optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 32 --smooth-quant-alpha 0.9 ./whisper-large-v3-turbo

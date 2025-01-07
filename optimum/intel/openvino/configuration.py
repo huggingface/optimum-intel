@@ -638,9 +638,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
             weight_format (`str`, defaults to "int8"):
-                Data format weights are quantized to. Possible values: ['int8'].
+                Data format weights are quantized to. Possible values: ['int8', 'fp8_e4m3', 'fp8_e5m2'].
             activation_format (`str`, defaults to "int8"):
-                Data format activations are compressed to. Possible values: ['int8'].
+                Data format activations are compressed to. Possible values: ['int8', 'fp8_e4m3', 'fp8_e5m2'].
         """
         super().__init__(
             bits=bits,
@@ -681,11 +681,15 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
 
-        if self.weight_format != "int8":
-            raise ValueError("Only 'int8' weight format is currently supported.")
-
-        if self.activation_format != "int8":
-            raise ValueError("Only 'int8' activation format is currently supported.")
+        if not self.sym:
+            if self.activation_format != "int8":
+                raise ValueError(
+                    f"Asymmetric quantization can not be performed in {self.activation_format} activation format."
+                )
+            if self.weight_format != "int8":
+                raise ValueError(
+                    f"Asymmetric quantization can not be performed in {self.weight_format} weight format."
+                )
 
 
 class OVConfig(BaseConfig):
@@ -713,8 +717,6 @@ class OVConfig(BaseConfig):
         if self.quantization_config is not None:
             if isinstance(self.quantization_config, OVWeightQuantizationConfig):
                 self.dtype = self.quantization_config.weight_format
-            else:
-                self.dtype = "int8"
         else:
             self.dtype = dtype
 
