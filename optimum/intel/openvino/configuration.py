@@ -669,13 +669,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
 
-        if self.dataset is not None:
-            if self.dataset not in PREDEFINED_SPEECH_TO_TEXT_DATASETS:
-                raise ValueError(
-                    f"You have entered the following string value for dataset: {self.dataset}. But it is not supported."
-                    f" Currently you can only choose {list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())}."
-                )
-
         if self.smooth_quant_alpha is not None and not (0 <= self.smooth_quant_alpha <= 1):
             raise ValueError(
                 f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
