@@ -2596,7 +2596,7 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-bigcode", 
+    "gpt-bigcode",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
