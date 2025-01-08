@@ -292,6 +292,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 if config_path.is_file():
                     config_save_path = save_path / CONFIG_NAME
                     shutil.copyfile(config_path, config_save_path)
+                else:
+                    if hasattr(model, "save_config"):
+                        model.save_config(save_path)
+                    elif hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
+                        model.config.save_pretrained(save_path)
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
 
