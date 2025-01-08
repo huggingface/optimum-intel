@@ -72,6 +72,7 @@ from .model_patcher import (
     GptNeoModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
+    GraniteMoEModelPatcher,
     IBertModelPatcher,
     InputEmbeddingPatcher,
     InternLM2Patcher,
@@ -2554,3 +2555,30 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
 )
 class GLMOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
+
+
+@register_in_tasks_manager(
+    "granite",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GraniteOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+
+
+@register_in_tasks_manager(
+    "granitemoe", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
