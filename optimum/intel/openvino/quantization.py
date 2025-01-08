@@ -1067,8 +1067,8 @@ def _full_quantization(
         )
 
     q_mode_map = {
-        "fp8_e4m3": nncf.QuantizationMode.FP8_E4M3,
-        "fp8_e5m2": nncf.QuantizationMode.FP8_E5M2,
+        "f8e4m3": nncf.QuantizationMode.FP8_E4M3,
+        "f8e5m2": nncf.QuantizationMode.FP8_E5M2,
     }
 
     if quantization_config.activation_format in q_mode_map:

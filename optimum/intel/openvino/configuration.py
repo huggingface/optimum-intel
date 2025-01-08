@@ -26,7 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
-from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_SPEECH_TO_TEXT_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
+from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
 
 
 if is_nncf_available():
@@ -638,9 +638,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
             weight_format (`str`, defaults to "int8"):
-                Data format weights are quantized to. Possible values: ['int8', 'fp8_e4m3', 'fp8_e5m2'].
+                Data format weights are quantized to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
             activation_format (`str`, defaults to "int8"):
-                Data format activations are compressed to. Possible values: ['int8', 'fp8_e4m3', 'fp8_e5m2'].
+                Data format activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
         """
         super().__init__(
             bits=bits,
