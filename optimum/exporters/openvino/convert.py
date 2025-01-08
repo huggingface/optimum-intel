@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
+from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
 from openvino.runtime import Model, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
@@ -46,6 +47,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_tokenizers_version,
     is_tokenizers_version,
     is_transformers_version,
+    is_openvino_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 
@@ -427,6 +429,10 @@ def export_pytorch(
 
             patcher.patched_forward = ts_patched_forward
 
+            decoder_kwargs = {}
+            if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
+                decoder_kwargs["trace_kwargs"] = {"check_trace": False}
+
             with patcher:
                 if patch_16bit_model:
                     from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
@@ -434,8 +440,9 @@ def export_pytorch(
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = _get_input_info(model, config, dummy_inputs)
+                decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **decoder_kwargs)
                 ov_model = convert_model(
-                    model,
+                    decoder,
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )
