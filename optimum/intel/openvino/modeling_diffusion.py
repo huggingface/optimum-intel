@@ -101,6 +101,11 @@ else:
     FluxImg2ImgPipeline = object
     FluxInpaintPipeline = object
 
+if is_diffusers_version(">=", "0.32.0"):
+    from diffusers import FluxFillPipeline
+else:
+    FluxFillPipeline = object
+
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -1458,15 +1463,21 @@ class OVFluxPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxPip
 
 
 class OVFluxImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxImg2ImgPipeline):
-    main_input_name = "prompt"
+    main_input_name = "image"
     export_feature = "image-to-image"
     auto_model_class = FluxImg2ImgPipeline
 
 
 class OVFluxInpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxInpaintPipeline):
-    main_input_name = "prompt"
+    main_input_name = "image"
     export_feature = "inpainting"
     auto_model_class = FluxInpaintPipeline
+
+
+class OVFluxFillPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxFillPipeline):
+    main_input_name = "image"
+    export_feature = "inpainting"
+    auto_model_class = FluxFillPipeline
 
 
 SUPPORTED_OV_PIPELINES = [
@@ -1536,6 +1547,10 @@ if is_diffusers_version(">=", "0.31.0"):
     SUPPORTED_OV_PIPELINES.extend([OVFluxImg2ImgPipeline, OVFluxInpaintPipeline])
     OV_INPAINT_PIPELINES_MAPPING["flux"] = OVFluxInpaintPipeline
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxImg2ImgPipeline
+
+if is_diffusers_version(">=", "0.32.0"):
+    OV_INPAINT_PIPELINES_MAPPING["flux-fill"] = OVFluxFillPipeline
+    SUPPORTED_OV_PIPELINES.append(OVFluxFillPipeline)
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

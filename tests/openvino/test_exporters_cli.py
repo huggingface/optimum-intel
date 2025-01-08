@@ -27,6 +27,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
+    OVFluxFillPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
@@ -82,7 +83,9 @@ class OVCLIExportTestCase(unittest.TestCase):
     ]
 
     if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.extend([("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux")])
+        SUPPORTED_ARCHITECTURES.extend(
+            [("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux"), ("inpainting", "flux-fill")]
+        )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0,  # no .model file in the repository
@@ -97,6 +100,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "flux-fill": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
     }
 
