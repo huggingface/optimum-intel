@@ -202,7 +202,7 @@ TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 
 def get_num_quantized_nodes(model):
-    num_fake_quantize = 0
+    num_fake_nodes = 0
     types_map = {
         "i8": "int8",
         "u8": "int8",
@@ -218,15 +218,15 @@ def get_num_quantized_nodes(model):
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
-            num_fake_quantize += 1
+            num_fake_nodes += 1
         elif "FakeConvert" in elem.name:
-            num_fake_quantize += 1
+            num_fake_nodes += 1
         for i in range(elem.get_output_size()):
             type_name = elem.get_output_element_type(i).get_type_name()
             if type_name in types_map:
                 name = types_map[type_name]
                 num_weight_nodes[name] += 1
-    return num_fake_quantize, num_weight_nodes
+    return num_fake_nodes, num_weight_nodes
 
 
 @contextmanager
