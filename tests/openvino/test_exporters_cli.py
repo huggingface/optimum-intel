@@ -120,12 +120,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
         ),
         (
-            "automatic-speech-recognition",
-            "whisper",
+            "text-generation",
+            "phi3",
             "f8e4m3",
-            "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code --sym",
-            (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
-            (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
+            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code --sym",
+            (13,),
+            (10,),
         ),
     ]
 
@@ -429,11 +429,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
 
-            submodels = []
+            models = [model]
             if task == "automatic-speech-recognition":
-                submodels = [model.encoder, model.decoder, model.decoder_with_past]
-            self.assertEqual(len(expected_num_fq_nodes_per_model), len(submodels))
-            for i, model in enumerate(submodels):
+                models = [model.encoder, model.decoder, model.decoder_with_past]
+            self.assertEqual(len(expected_num_fq_nodes_per_model), len(models))
+            for i, model in enumerate(models):
                 actual_num_f_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
                 self.assertEqual(expected_num_fq_nodes_per_model[i], actual_num_f_nodes)
                 self.assertEqual(expected_num_weight_nodes_per_model[i], actual_num_weight_nodes[quant_mode])
