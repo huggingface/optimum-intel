@@ -162,10 +162,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
                 )
 
-            if not isinstance(unet, openvino.runtime.CompiledModel):
+            main_model = unet if unet is not None else transformer
+            if not isinstance(main_model, openvino.runtime.CompiledModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
-            model_is_dynamic = model_has_dynamic_inputs(unet)
+            model_is_dynamic = model_has_dynamic_inputs(main_model)
             if dynamic_shapes ^ model_is_dynamic:
                 requested_shapes = "dynamic" if dynamic_shapes else "static"
                 compiled_shapes = "dynamic" if model_is_dynamic else "static"
@@ -291,6 +292,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 if config_path.is_file():
                     config_save_path = save_path / CONFIG_NAME
                     shutil.copyfile(config_path, config_save_path)
+                else:
+                    if hasattr(model, "save_config"):
+                        model.save_config(save_path)
+                    elif hasattr(model, "config") and hasattr(model.config, "save_pretrained"):
+                        model.config.save_pretrained(save_path)
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
 
