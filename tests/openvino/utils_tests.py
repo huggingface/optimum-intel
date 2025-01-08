@@ -219,7 +219,7 @@ def get_num_quantized_nodes(model):
     for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_nodes += 1
-        elif "FakeConvert" in elem.name:
+        if "FakeConvert" in elem.name:
             num_fake_nodes += 1
         for i in range(elem.get_output_size()):
             type_name = elem.get_output_element_type(i).get_type_name()
