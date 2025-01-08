@@ -162,10 +162,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
                 )
 
-            if not isinstance(unet, openvino.runtime.CompiledModel):
+            main_model = unet if unet is not None else transformer
+            if not isinstance(main_model, openvino.runtime.CompiledModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
-            model_is_dynamic = model_has_dynamic_inputs(unet)
+            model_is_dynamic = model_has_dynamic_inputs(main_model)
             if dynamic_shapes ^ model_is_dynamic:
                 requested_shapes = "dynamic" if dynamic_shapes else "static"
                 compiled_shapes = "dynamic" if model_is_dynamic else "static"
