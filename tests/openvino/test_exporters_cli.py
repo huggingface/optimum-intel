@@ -121,11 +121,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "text-generation",
-            "phi3",
+            "llama",
             "f8e4m3",
             "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code --sym",
             (13,),
-            (10,),
+            (16,),
         ),
     ]
 
