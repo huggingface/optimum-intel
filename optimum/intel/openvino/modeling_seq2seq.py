@@ -374,9 +374,9 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         # Decode
         if past_key_values is None or self.decoder_with_past is None:
             decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids[:, -1:]
-                if past_key_values is not None and self.use_cache
-                else decoder_input_ids,
+                input_ids=(
+                    decoder_input_ids[:, -1:] if past_key_values is not None and self.use_cache else decoder_input_ids
+                ),
                 past_key_values=past_key_values,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
