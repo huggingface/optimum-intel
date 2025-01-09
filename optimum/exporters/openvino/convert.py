@@ -664,6 +664,9 @@ def export_from_model(
     # Get the shapes to be used to generate dummy inputs
     input_shapes = {}
     for input_name in DEFAULT_DUMMY_SHAPES.keys():
+        if input_name in ["height", "width"]:
+            # use H and W from generator defaults
+            continue
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
