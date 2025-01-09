@@ -195,16 +195,18 @@ _ENCODER_DECODER_TASKS_WITH_PAST = (
     "text2text-generation",
 )
 
+_DECODER_TASKS_WITH_PAST = ("text-generation",)
 
-def ensure_export_task_support_stateful(task: str, is_encoder_decoder: bool = False):
+
+def ensure_export_task_support_stateful(task: str):
     from optimum.exporters import TasksManager
 
     task = TasksManager.map_from_synonym(task)
 
-    if not is_encoder_decoder:
-        return task in ["text-generation-with-past"]
-
-    is_stateful = task.endswith("-with-past") and task.replace("-with-past", "") in _ENCODER_DECODER_TASKS_WITH_PAST
+    is_stateful = (
+        task.endswith("-with-past")
+        and task.replace("-with-past", "") in _ENCODER_DECODER_TASKS_WITH_PAST + _DECODER_TASKS_WITH_PAST
+    )
     return is_stateful
 
 
