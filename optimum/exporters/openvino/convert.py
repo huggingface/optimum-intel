@@ -45,9 +45,9 @@ from optimum.intel.utils.import_utils import (
     _transformers_version,
     compare_versions,
     is_openvino_tokenizers_version,
+    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
-    is_openvino_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 
