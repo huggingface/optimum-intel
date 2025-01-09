@@ -29,6 +29,7 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
+    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -73,6 +74,7 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxJapaneseModelPatcher,
@@ -2591,3 +2593,21 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
         return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gpt-bigcode",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
