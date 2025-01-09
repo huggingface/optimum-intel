@@ -425,7 +425,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             submodels = []
             if task == "automatic-speech-recognition":
-                submodels = [model.encoder, model.decoder, model.decoder_with_past]
+                submodels = [model.encoder, model.decoder]
+                if model.decoder_with_past is not None:
+                    submodels.append(model.decoder_with_past)
+                else:
+                    expected_num_fq_nodes_per_model = expected_num_fq_nodes_per_model[:-1]
             self.assertEqual(len(expected_num_fq_nodes_per_model), len(submodels))
             for i, model in enumerate(submodels):
                 actual_num_fq_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
