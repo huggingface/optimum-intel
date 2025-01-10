@@ -87,6 +87,7 @@ from .model_patcher import (
     InputEmbeddingPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
+    InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
@@ -1642,7 +1643,11 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         if behavior == InternVLChatConfigBehavior.LANGUAGE:
             model_type = self._orig_config.llm_config.model_type
             return get_vlm_text_generation_config(
-                model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
+                model_type,
+                self._orig_config.llm_config,
+                self.int_dtype,
+                self.float_dtype,
+                InternVL2ChatLangModelPatcher,
             )
 
         if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
