@@ -429,9 +429,9 @@ def export_pytorch(
 
             patcher.patched_forward = ts_patched_forward
 
-            decoder_kwargs = {}
+            ts_decoder_kwargs = {}
             if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
-                decoder_kwargs["trace_kwargs"] = {"check_trace": False}
+                ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
             with patcher:
                 if patch_16bit_model:
@@ -440,9 +440,9 @@ def export_pytorch(
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = _get_input_info(model, config, dummy_inputs)
-                decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **decoder_kwargs)
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
                 ov_model = convert_model(
-                    decoder,
+                    ts_decoder,
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )
