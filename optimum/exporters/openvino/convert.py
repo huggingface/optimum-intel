@@ -1013,6 +1013,7 @@ def _get_submodels_and_export_configs(
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
+<<<<<<< HEAD
     is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
     is_flux = pipeline.__class__.__name__.startswith("Flux")
@@ -1035,6 +1036,52 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_flux:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+=======
+    if is_diffusers_version(">=", "0.29.0"):
+        from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
+
+        sd3_pipes = [StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline]
+        if is_diffusers_version(">=", "0.30.0"):
+            from diffusers import StableDiffusion3InpaintPipeline
+
+            sd3_pipes.append(StableDiffusion3InpaintPipeline)
+
+        is_sd3 = isinstance(pipeline, tuple(sd3_pipes))
+        logger.warn(f"IS SD3 {pipeline} {is_sd3}")
+    else:
+        is_sd3 = False
+
+    if is_diffusers_version(">=", "0.30.0"):
+        from diffusers import FluxPipeline
+
+        flux_pipes = [FluxPipeline]
+
+        if is_diffusers_version(">=", "0.31.0"):
+            from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
+
+            flux_pipes.extend([FluxPipeline, FluxImg2ImgPipeline, FluxInpaintPipeline])
+
+        if is_diffusers_version(">=", "0.32.0"):
+            from diffusers import FluxFillPipeline
+
+            flux_pipes.append(FluxFillPipeline)
+
+        is_flux = isinstance(pipeline, tuple(flux_pipes))
+    else:
+        is_flux = False
+
+    if is_diffusers_version(">=", "0.32.0"):
+        from diffusers import SanaPipeline
+
+        is_sana = isinstance(pipeline, SanaPipeline)
+    else:
+        is_sana = False
+
+    if not any([is_sana, is_flux, is_sd3]):
+        return None, get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+    if is_sd3:
+        models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+>>>>>>> add pipeline
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
@@ -1043,17 +1090,15 @@ def get_diffusion_models_for_export_ext(
 
 
 def get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype):
-    DEFAULT_DUMMY_SHAPES["heigh"] = DEFAULT_DUMMY_SHAPES["height"] // 4
-    DEFAULT_DUMMY_SHAPES["width"] = DEFAULT_DUMMY_SHAPES["width"] // 4
     models_for_export = {}
     text_encoder = pipeline.text_encoder
     text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=text_encoder,
-            exporter=exporter,
-            library_name="diffusers",
-            task="feature-extraction",
-            model_type="gemma2-text-encoder",
-        )
+        model=text_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        model_type="gemma2-text-encoder",
+    )
     text_encoder_export_config = text_encoder_config_constructor(
         pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
@@ -1076,13 +1121,13 @@ def get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export["transformer"] = (transformer, transformer_export_config)
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
     vae_encoder = copy.deepcopy(pipeline.vae)
-    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_encoder.forward = lambda sample: {"latent": vae_encoder.encode(x=sample)["latent"]}
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_encoder,
         exporter=exporter,
         library_name="diffusers",
         task="semantic-segmentation",
-        model_type="vae-encoder",
+        model_type="dcae-encoder",
     )
     vae_encoder_export_config = vae_config_constructor(
         vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
@@ -1140,6 +1185,7 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         task="semantic-segmentation",
         model_type="sd3-transformer",
     )
+    logger.warn(f"TRANSFORMER COFG {export_config_constructor}")
     transformer_export_config = export_config_constructor(
         pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )

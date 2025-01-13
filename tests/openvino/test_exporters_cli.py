@@ -84,7 +84,12 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
-            [("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux"), ("inpainting", "flux-fill")]
+            [
+                ("text-to-image", "stable-diffusion-3"),
+                ("text-to-image", "flux"),
+                ("inpainting", "flux-fill"),
+                ("text-to-image", "sana"),
+            ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
@@ -113,6 +118,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 7, 56))
 
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         (

@@ -41,6 +41,7 @@ from optimum.exporters.onnx.model_configs import (
     PhiOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
+    VaeEncoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
@@ -57,7 +58,6 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
-    DummySeq2SeqDecoderTextInputGenerator
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
@@ -1893,51 +1893,77 @@ class SD3TransformerOpenVINOConfig(UNetOpenVINOConfig):
 class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     pass
 
+
 @register_in_tasks_manager("gemma2-text-encoder", *["feature-extraction"], library_name="diffusers")
 class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
-            "attention_mask": {0: "batch_size", 1: "sequence_length"}
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
 
 
-class DummySeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "decoder_input_ids",
         "decoder_attention_mask",
         "encoder_outputs",
         "encoder_hidden_states",
-        "encoder_attention_mask"
+        "encoder_attention_mask",
     )
 
 
-class DummySanaTransformerVisionInputGenerator(DummyVisionInputGenerator):
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name not in ["sample", "latent_sample"]:
-            return super().generate(input_name, framework, int_dtype, float_dtype)
-        return self.random_float_tensor(
-            shape=[self.batch_size, self.num_channels, self.height, self.width],
-            framework=framework,
-            dtype=float_dtype,
-        )
+class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
 class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         image_size="sample_size",
         num_channels="in_channels",
-        hidden_size="cross_attention_dim",
+        hidden_size="caption_channels",
         vocab_size="attention_head_dim",
         allow_new=True,
     )
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummySanaTransformerVisionInputGenerator, DummySeq2SeqDecoderTextWithEncMaskInputGenerator) + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:-1]
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummySanaTransformerVisionInputGenerator,
+        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+    ) + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:-1]
+
     @property
     def inputs(self):
         common_inputs = super().inputs
         common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "sequence_length"}
         return common_inputs
+
+    def rename_ambiguous_inputs(self, inputs):
+        #  The input name in the model signature is `x, hence the export input name is updated.
+        hidden_states = inputs.pop("sample", None)
+        if hidden_states is not None:
+            inputs["hidden_states"] = hidden_states
+        return inputs
+
+
+@register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class DcaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
 
 
 class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):

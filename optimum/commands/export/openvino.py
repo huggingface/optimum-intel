@@ -106,6 +106,12 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--variant",
+        type=str,
+        default=None,
+        help=("Select a variant of the model to export."),
+    )
+    optional_group.add_argument(
         "--ratio",
         type=float,
         default=None,
@@ -463,5 +469,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 stateful=not self.args.disable_stateful,
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
+                model_variant=self.args.variant,
                 # **input_shapes,
             )

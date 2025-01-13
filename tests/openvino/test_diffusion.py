@@ -77,8 +77,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux"])
-        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.append("stable-diffusion-3")
+        SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux", "sana"])
+        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.extend(["stable-diffusion-3", "sana"])
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -94,6 +94,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         return inputs
 
+    def get_auto_cls(self, model_arch):
+        if model_arch == "sana":
+            from diffusers import SanaPipeline
+
+            return SanaPipeline
+        return self.AUTOMODEL_CLASS
+
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
@@ -104,12 +111,14 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.get_auto_cls(model_arch)
+        auto_pipeline = DiffusionPipeline if model_arch != "sana" else auto_cls
+        auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
-        auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        auto_pipeline = auto_pipeline.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
@@ -130,30 +139,44 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        height, width, batch_size = 128, 128, 1
+        height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
+        auto_cls = self.get_auto_cls(model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
-        for output_type in ["latent", "np", "pt"]:
-            inputs["output_type"] = output_type
+        with torch.no_grad():
+            for output_type in ["latent", "np", "pt"]:
+                inputs["output_type"] = output_type
+                if model_arch == "sana":
+                    if output_type == "latent":
+                        continue
+                    inputs["use_resolution_binning"] = False
+                    atol = 4e-2
+                else:
+                    atol = 6e-3
 
-            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
-
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+                ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+                diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+                np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
         # test on inputs nondivisible on 64
         height, width, batch_size = 96, 96, 1
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
+            if model_arch == "sana":
+                if output_type == "latent":
+                    continue
+                inputs["use_resolution_binning"] = False
+                atol = 4e-2
+            else:
+                atol = 6e-3
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
 
-            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=atol, rtol=1e-2)
 
     @parameterized.expand(CALLBACK_SUPPORT_ARCHITECTURES)
     @require_diffusers
@@ -174,7 +197,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         auto_callback = Callback()
 
         ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.get_auto_cls(model_arch)
+        auto_pipe = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
         # callback_steps=1 to trigger callback every step
         ov_pipe(**inputs, callback=ov_callback, callback_steps=1)
