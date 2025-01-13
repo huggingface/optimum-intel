@@ -29,7 +29,9 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
+    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
+    GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
     IBertOnnxConfig,
     LlamaOnnxConfig,
@@ -55,7 +57,12 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
-from ...intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
+from ...intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_available,
+    is_diffusers_version,
+    is_transformers_version,
+)
 from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
@@ -67,9 +74,12 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    GptBigCodeModelPatcher,
     GptJModelPatcher,
+    GptNeoModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
+    GraniteMoEModelPatcher,
     IBertModelPatcher,
     InputEmbeddingPatcher,
     InternLM2Patcher,
@@ -115,6 +125,10 @@ def init_model_configs():
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+
+    if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -788,6 +802,24 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptNeoxJapaneseModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gpt-neo",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GPTNeoOpenVINOConfig(GPTNeoOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptNeoModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -1806,7 +1838,7 @@ class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
 
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("unet-2d-condition", *["semantic-segmentation"], library_name="diffusers")
-class UnetOpenVINOConfig(UNetOnnxConfig):
+class UNetOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyUnetVisionInputGenerator,
         DummyUnetTimestepInputGenerator,
@@ -1821,10 +1853,10 @@ class UnetOpenVINOConfig(UNetOnnxConfig):
 
 @register_in_tasks_manager("sd3-transformer", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("sd3-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
-class SD3TransformerOpenVINOConfig(UNetOnnxConfig):
+class SD3TransformerOpenVINOConfig(UNetOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         (DummyTransformerTimestpsInputGenerator,)
-        + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+        + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
         + (PooledProjectionsDummyInputGenerator,)
     )
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
@@ -2519,3 +2551,63 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         if self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
             return {"last_hidden_state": {0: "seq_len"}}
         return {}
+
+
+@register_in_tasks_manager(
+    "glm",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GLMOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
+
+
+@register_in_tasks_manager(
+    "granite",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GraniteOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+
+
+@register_in_tasks_manager(
+    "granitemoe", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gpt-bigcode",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
