@@ -206,7 +206,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             if not compile_only:
                 encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
                 decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
-                if use_cache and os.path.exists(os.path.join(model_id, decoder_with_past_file_name)):
+                if (
+                    use_cache
+                    and not model_has_state(decoder)
+                    and os.path.exists(os.path.join(model_id, decoder_with_past_file_name))
+                ):
                     decoder_with_past = cls.load_model(
                         os.path.join(model_id, decoder_with_past_file_name), quantization_config
                     )
@@ -223,7 +227,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     kwargs.get("ov_config"),
                     model_save_dir,
                 )
-                if use_cache and os.path.exists(os.path.join(model_id, decoder_with_past_file_name)):
+                if (
+                    use_cache
+                    and not model_has_state(decoder)
+                    and os.path.exists(os.path.join(model_id, decoder_with_past_file_name))
+                ):
                     decoder_with_past = cls._compile_model(
                         os.path.join(model_id, decoder_with_past_file_name),
                         kwargs.get("device", "CPU"),
@@ -259,8 +267,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 decoder = cls.load_model(file_names["decoder"], quantization_config)
                 if use_cache and not model_has_state(decoder):
                     model_file_names["decoder_with_past"] = decoder_with_past_file_name
-                    model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
-                    for name in ["decoder_with_past", "decoder_with_past_bin"]:
+                    with_past_files = ["decoder_with_past"]
+                    if not from_onnx:
+                        with_past_files.append("decoder_with_past_bin")
+                        model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
+                    for name in with_past_files:
                         model_cache_path = hf_hub_download(
                             repo_id=model_id,
                             filename=model_file_names[name],
@@ -282,8 +293,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 )
                 if use_cache and not model_has_state(decoder):
                     model_file_names["decoder_with_past"] = decoder_with_past_file_name
-                    model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
-                    for name in ["decoder_with_past", "decoder_with_past_bin"]:
+                    with_past_files = ["decoder_with_past"]
+                    if not from_onnx:
+                        with_past_files.append("decoder_with_past_bin")
+                        model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
+                    for name in with_past_files:
                         model_cache_path = hf_hub_download(
                             repo_id=model_id,
                             filename=model_file_names[name],
