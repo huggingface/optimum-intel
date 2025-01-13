@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
 from openvino.runtime import Model, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
@@ -367,6 +366,7 @@ def export_pytorch(
     import torch
     from torch.utils._pytree import tree_map
 
+    from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
     from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
