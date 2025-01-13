@@ -844,17 +844,23 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
-                self.text_encoder.model, batch_size, self.tokenizer.model_max_length
+                self.text_encoder.model,
+                batch_size,
+                self.tokenizer.model_max_length if "Gemma" not in self.tokenizer.__class__.__name__ else -1,
             )
 
         if self.text_encoder_2 is not None:
             self.text_encoder_2.model = self._reshape_text_encoder(
-                self.text_encoder_2.model, batch_size, self.tokenizer_2.model_max_length
+                self.text_encoder_2.model,
+                batch_size,
+                self.tokenizer_2.model_max_length if "Gemma" not in self.tokenizer.__class__.__name__ else -1,
             )
 
         if self.text_encoder_3 is not None:
             self.text_encoder_3.model = self._reshape_text_encoder(
-                self.text_encoder_3.model, batch_size, self.tokenizer_3.model_max_length
+                self.text_encoder_3.model,
+                batch_size,
+                self.tokenizer_3.model_max_length if "Gemma" not in self.tokenizer.__class__.__name__ else -1,
             )
 
         self.clear_requests()

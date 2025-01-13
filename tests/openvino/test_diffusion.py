@@ -78,7 +78,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux", "sana"])
-        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.extend(["stable-diffusion-3", "sana"])
+        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.append(["stable-diffusion-3"])
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -215,6 +215,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         height, width, batch_size = 128, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        if model_arch == "sana":
+            inputs["use_resolution_binning"] = False
 
         for output_type in ["pil", "np", "pt", "latent"]:
             inputs["output_type"] = output_type

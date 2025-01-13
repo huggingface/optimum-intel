@@ -168,7 +168,7 @@ MODEL_NAMES = {
     "open-clip-ov": "zofinka/tiny-open-clip-model",
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
-    "sana": "/home/ea/work/my_optimum_intel/optimum-intel/tiny-random-sana",
+    "sana": "katuni4ka/tiny-random-sana",
 }
 
 
@@ -201,7 +201,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "minicpmv": (30, 26, 1, 6),
     "nanollava": (30, 15, 1),
     "qwen2_vl": (30, 1, 1, 10),
-    "sana": (242, 34, 42, 64),
+    "sana": (58, 28, 28, 18),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"

@@ -416,6 +416,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVFluxPipeline
 
                 model_cls = OVFluxPipeline
+            elif class_name == "SanaPipeline":
+                from optimum.intel import OVSanaPipeline
+
+                model_cls = OVSanaPipeline
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 

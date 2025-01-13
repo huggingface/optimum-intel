@@ -44,6 +44,7 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -107,6 +108,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -118,7 +120,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 7, 56))
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 19, 53))
 
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         (
@@ -357,9 +359,15 @@ class OVCLIExportTestCase(unittest.TestCase):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past") and not model.decoder.stateful:
                     models.append(model.decoder_with_past)
-            elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
+            elif (
+                model_type.startswith("stable-diffusion")
+                or model_type.startswith("flux")
+                or model_type.startswith("sana")
+            ):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
-                models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+                models.append(
+                    model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2
+                )
             elif task.startswith("image-text-to-text"):
                 models = [model.language_model, model.vision_embeddings]
             else:

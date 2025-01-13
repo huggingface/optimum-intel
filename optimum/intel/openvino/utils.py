@@ -125,6 +125,7 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
     "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",

@@ -1047,7 +1047,6 @@ def get_diffusion_models_for_export_ext(
             sd3_pipes.append(StableDiffusion3InpaintPipeline)
 
         is_sd3 = isinstance(pipeline, tuple(sd3_pipes))
-        logger.warn(f"IS SD3 {pipeline} {is_sd3}")
     else:
         is_sd3 = False
 
@@ -1185,7 +1184,6 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         task="semantic-segmentation",
         model_type="sd3-transformer",
     )
-    logger.warn(f"TRANSFORMER COFG {export_config_constructor}")
     transformer_export_config = export_config_constructor(
         pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
