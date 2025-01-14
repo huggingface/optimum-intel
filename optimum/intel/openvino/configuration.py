@@ -658,6 +658,13 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self.overflow_fix = overflow_fix
         self.smooth_quant_alpha = smooth_quant_alpha
         self.activation_format = activation_format
+
+        f8_formats = ["f8e4m3", "f8e5m2"]
+        if self.activation_format in f8_formats and self.weight_format in f8_formats:
+            logger.info(
+                f"{self.activation_format} for activations and {self.weight_format} weights were found. A symmetrical scheme will be used."
+            )
+            self.sym = True
         self.post_init()
 
     def post_init(self):
@@ -673,16 +680,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(
                 f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
-
-        if not self.sym:
-            if self.activation_format != "int8":
-                raise ValueError(
-                    f"Asymmetric quantization can not be performed in {self.activation_format} activation format."
-                )
-            if self.weight_format != "int8":
-                raise ValueError(
-                    f"Asymmetric quantization can not be performed in {self.weight_format} weight format."
-                )
 
 
 class OVConfig(BaseConfig):
@@ -708,8 +705,7 @@ class OVConfig(BaseConfig):
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, OVWeightQuantizationConfig):
-                self.dtype = self.quantization_config.weight_format
+            self.dtype = self.quantization_config.weight_format
         else:
             self.dtype = dtype
 

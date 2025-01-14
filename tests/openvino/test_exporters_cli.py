@@ -123,7 +123,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation",
             "llama",
             "f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code --sym",
+            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             (13,),
             (16,),
         ),
@@ -418,7 +418,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_type: str,
         quant_mode: str,
         option: str,
-        expected_num_fq_nodes_per_model: Tuple[int],
+        expected_num_f_nodes_per_model: Tuple[int],
         expected_num_weight_nodes_per_model: Tuple[int],
     ):
         with TemporaryDirectory() as tmpdir:
@@ -432,10 +432,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             models = [model]
             if task == "automatic-speech-recognition":
                 models = [model.encoder, model.decoder, model.decoder_with_past]
-            self.assertEqual(len(expected_num_fq_nodes_per_model), len(models))
+            self.assertEqual(len(expected_num_f_nodes_per_model), len(models))
             for i, model in enumerate(models):
                 actual_num_f_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_num_fq_nodes_per_model[i], actual_num_f_nodes)
+                self.assertEqual(expected_num_f_nodes_per_model[i], actual_num_f_nodes)
                 self.assertEqual(expected_num_weight_nodes_per_model[i], actual_num_weight_nodes[quant_mode])
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
