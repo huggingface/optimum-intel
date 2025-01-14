@@ -2640,7 +2640,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     def inputs(self):
         common_inputs = super().inputs
         if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "seq_length"}
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
         return common_inputs
 
 
@@ -2661,7 +2661,7 @@ class T5OpenVINOConfig(T5OnnxConfig):
     def inputs(self):
         common_inputs = super().inputs
         if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "seq_length"}
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
         return common_inputs
 
 
