@@ -316,9 +316,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return self.model.prepare_inputs_for_generation(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
-        if is_ipex_version("<", "2.4.0") and self._add_patch and kwargs.get("assistant_model", None):
+        if self._add_patch and kwargs.get("assistant_model", None):
             raise ValueError(
-                f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+                f"Assisted decoding is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
         # Patch functions to support ipex_paged cache
         if self._add_patch:
