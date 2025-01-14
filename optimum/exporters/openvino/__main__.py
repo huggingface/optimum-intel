@@ -49,7 +49,7 @@ from .utils import (
 )
 
 
-FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager"}
+FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager", "gemma2": "sdpa"}
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
@@ -232,6 +232,7 @@ def main_export(
     )
 
     do_gptq_patching = False
+    do_quant_patching = False
     custom_architecture = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
@@ -247,7 +248,11 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
+        supported_quant_methods = ["gptq"]
+        if is_openvino_version(">=", "2024.6.0"):
+            supported_quant_methods.append("awq")
+        do_quant_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
+        do_gptq_patching = do_quant_patching and quantization_config["quant_method"] == "gptq"
         model_type = config.model_type.replace("_", "-")
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
@@ -296,7 +301,6 @@ def main_export(
         if (
             dtype is None
             and framework == "pt"
-            and not do_gptq_patching
             and (
                 task.startswith("text-generation")
                 or getattr(config, "model_type", None) in MULTI_MODAL_TEXT_GENERATION_MODELS
@@ -315,28 +319,28 @@ def main_export(
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
         # Patch the modules to export of GPTQ models w/o GPU
-        if do_gptq_patching:
-            torch.set_default_dtype(torch.float32)
+        if do_quant_patching:
             orig_cuda_check = torch.cuda.is_available
             torch.cuda.is_available = lambda: True
 
-            from optimum.gptq import GPTQQuantizer
+            if do_gptq_patching:
+                from optimum.gptq import GPTQQuantizer
 
-            orig_post_init_model = GPTQQuantizer.post_init_model
+                orig_post_init_model = GPTQQuantizer.post_init_model
 
-            def post_init_model(self, model):
-                from auto_gptq import exllama_set_max_input_length
+                def post_init_model(self, model):
+                    from auto_gptq import exllama_set_max_input_length
 
-                class StoreAttr(object):
-                    pass
+                    class StoreAttr(object):
+                        pass
 
-                model.quantize_config = StoreAttr()
-                model.quantize_config.desc_act = self.desc_act
-                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                    model = exllama_set_max_input_length(model, self.max_input_length)
-                return model
+                    model.quantize_config = StoreAttr()
+                    model.quantize_config.desc_act = self.desc_act
+                    if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                        model = exllama_set_max_input_length(model, self.max_input_length)
+                    return model
 
-            GPTQQuantizer.post_init_model = post_init_model
+                GPTQQuantizer.post_init_model = post_init_model
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
         dtype = deduce_diffusers_dtype(
             model_name_or_path,
@@ -351,143 +355,150 @@ def main_export(
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
 
-    if library_name == "open_clip":
-        model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
-    else:
-        model = TasksManager.get_model_from_task(
-            task,
-            model_name_or_path,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            framework=framework,
-            device=device,
-            library_name=library_name,
-            **loading_kwargs,
-        )
-
-    needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
-
-    if needs_pad_token_id:
-        if pad_token_id is not None:
-            model.config.pad_token_id = pad_token_id
+    try:
+        if library_name == "open_clip":
+            model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         else:
-            tok = AutoTokenizer.from_pretrained(model_name_or_path)
-            pad_token_id = getattr(tok, "pad_token_id", None)
-            if pad_token_id is None:
-                raise ValueError(
-                    "Could not infer the pad token id, which is needed in this case, please provide it with the --pad_token_id argument"
-                )
-            model.config.pad_token_id = pad_token_id
-
-    if hasattr(model.config, "export_model_type"):
-        model_type = model.config.export_model_type.replace("_", "-")
-    else:
-        model_type = model.config.model_type.replace("_", "-")
-
-    if (
-        not custom_architecture
-        and library_name != "diffusers"
-        and task + "-with-past"
-        in TasksManager.get_supported_tasks_for_model_type(model_type, exporter="openvino", library_name=library_name)
-    ):
-        # Make -with-past the default if --task was not explicitely specified
-        if original_task == "auto":
-            task = task + "-with-past"
-        else:
-            logger.info(
-                f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
-                f" if needed, please pass `--task {task}-with-past` to export using the past key values."
+            model = TasksManager.get_model_from_task(
+                task,
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                trust_remote_code=trust_remote_code,
+                framework=framework,
+                device=device,
+                library_name=library_name,
+                **loading_kwargs,
             )
 
-    if original_task == "auto":
-        synonyms_for_task = sorted(TasksManager.synonyms_for_task(task))
-        if synonyms_for_task:
-            synonyms_for_task = ", ".join(synonyms_for_task)
-            possible_synonyms = f" (possible synonyms are: {synonyms_for_task})"
-        else:
-            possible_synonyms = ""
-        logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
+        needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
-    preprocessors = maybe_load_preprocessors(
-        model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
-    )
-
-    submodel_paths = export_from_model(
-        model=model,
-        output=output,
-        task=task,
-        ov_config=ov_config,
-        stateful=stateful,
-        model_kwargs=model_kwargs,
-        custom_export_configs=custom_export_configs,
-        fn_get_submodels=fn_get_submodels,
-        preprocessors=preprocessors,
-        device=device,
-        trust_remote_code=trust_remote_code,
-        patch_16bit_model=patch_16bit,
-        **kwargs_shapes,
-    )
-
-    if convert_tokenizer:
-        maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
-
-    clear_class_registry()
-    del model
-    gc.collect()
-
-    for submodel_path in submodel_paths:
-        submodel_path = Path(output) / submodel_path
-        submodel = core.read_model(submodel_path)
-
-        quantization_config = None
-        if ov_config is None:
-            num_parameters = 0
-            for op in submodel.get_ops():
-                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
-                    num_parameters += reduce(operator.mul, op.shape, 1)
-                del op
-            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-                if is_nncf_available():
-                    quantization_config = {"bits": 8, "sym": False}
-                    logger.info("The model weights will be quantized to int8_asym.")
-                else:
-                    logger.warning(
-                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
-                        "requires nncf. Please install it with `pip install nncf`"
+        if needs_pad_token_id:
+            if pad_token_id is not None:
+                model.config.pad_token_id = pad_token_id
+            else:
+                tok = AutoTokenizer.from_pretrained(model_name_or_path)
+                pad_token_id = getattr(tok, "pad_token_id", None)
+                if pad_token_id is None:
+                    raise ValueError(
+                        "Could not infer the pad token id, which is needed in this case, please provide it with the --pad_token_id argument"
                     )
-                    break
+                model.config.pad_token_id = pad_token_id
+
+        if hasattr(model.config, "export_model_type"):
+            model_type = model.config.export_model_type.replace("_", "-")
         else:
-            quantization_config = ov_config.quantization_config
-        if quantization_config is None:
-            del submodel
-            gc.collect()
-            continue
+            model_type = model.config.model_type.replace("_", "-")
 
-        if not is_nncf_available():
-            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+        if (
+            not custom_architecture
+            and library_name != "diffusers"
+            and task + "-with-past"
+            in TasksManager.get_supported_tasks_for_model_type(
+                model_type, exporter="openvino", library_name=library_name
+            )
+        ):
+            # Make -with-past the default if --task was not explicitely specified
+            if original_task == "auto":
+                task = task + "-with-past"
+            else:
+                logger.info(
+                    f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
+                    f" if needed, please pass `--task {task}-with-past` to export using the past key values."
+                )
 
-        from optimum.intel.openvino.quantization import _weight_only_quantization
+        if original_task == "auto":
+            synonyms_for_task = sorted(TasksManager.synonyms_for_task(task))
+            if synonyms_for_task:
+                synonyms_for_task = ", ".join(synonyms_for_task)
+                possible_synonyms = f" (possible synonyms are: {synonyms_for_task})"
+            else:
+                possible_synonyms = ""
+            logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
-        _weight_only_quantization(submodel, quantization_config)
-        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
-        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
-        del submodel
+        preprocessors = maybe_load_preprocessors(
+            model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+        )
+
+        submodel_paths = export_from_model(
+            model=model,
+            output=output,
+            task=task,
+            ov_config=ov_config,
+            stateful=stateful,
+            model_kwargs=model_kwargs,
+            custom_export_configs=custom_export_configs,
+            fn_get_submodels=fn_get_submodels,
+            preprocessors=preprocessors,
+            device=device,
+            trust_remote_code=trust_remote_code,
+            patch_16bit_model=patch_16bit,
+            **kwargs_shapes,
+        )
+
+        if convert_tokenizer:
+            maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
+
+        clear_class_registry()
+        del model
         gc.collect()
 
-        submodel_path.unlink()
-        submodel_path.with_suffix(".bin").unlink()
-        compressed_submodel_path.rename(submodel_path)
-        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
+        for submodel_path in submodel_paths:
+            submodel_path = Path(output) / submodel_path
+            submodel = core.read_model(submodel_path)
 
-    # Unpatch modules after GPTQ export
-    if do_gptq_patching:
-        torch.cuda.is_available = orig_cuda_check
-        GPTQQuantizer.post_init_model = orig_post_init_model
+            quantization_config = None
+            if ov_config is None:
+                num_parameters = 0
+                for op in submodel.get_ops():
+                    if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                        num_parameters += reduce(operator.mul, op.shape, 1)
+                    del op
+                if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                    if is_nncf_available():
+                        quantization_config = {"bits": 8, "sym": False}
+                        logger.info("The model weights will be quantized to int8_asym.")
+                    else:
+                        logger.warning(
+                            "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                            "requires nncf. Please install it with `pip install nncf`"
+                        )
+                        break
+            else:
+                quantization_config = ov_config.quantization_config
+            if quantization_config is None:
+                del submodel
+                gc.collect()
+                continue
+
+            if not is_nncf_available():
+                raise ImportError(
+                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
+                )
+
+            from optimum.intel.openvino.quantization import _weight_only_quantization
+
+            _weight_only_quantization(submodel, quantization_config)
+            compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+            save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+            del submodel
+            gc.collect()
+
+            submodel_path.unlink()
+            submodel_path.with_suffix(".bin").unlink()
+            compressed_submodel_path.rename(submodel_path)
+            compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
+
+    finally:
+        # Unpatch modules after quantized model export
+        if do_quant_patching:
+            torch.cuda.is_available = orig_cuda_check
+            if do_gptq_patching:
+                GPTQQuantizer.post_init_model = orig_post_init_model
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):

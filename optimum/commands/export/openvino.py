@@ -76,6 +76,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help="The weight format of the exported model.",
     )
     optional_group.add_argument(
+        "--quant-mode",
+        type=str,
+        choices=["int8"],
+        default=None,
+        help=(
+            "Quantization precision mode. This is used for applying full model quantization including activations. "
+            "The only currently supported choice is 'int8' for int8 quantization of both weights and activations."
+        ),
+    )
+    optional_group.add_argument(
         "--library",
         type=str,
         choices=["transformers", "diffusers", "timm", "sentence_transformers", "open_clip"],
@@ -228,6 +238,15 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         help="Do not add converted tokenizer and detokenizer OpenVINO models.",
     )
+    optional_group.add_argument(
+        "--smooth-quant-alpha",
+        type=float,
+        default=None,
+        help=(
+            "SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and "
+            "reduces quantization error. Valid only when activations quantization is enabled."
+        ),
+    )
 
 
 def no_compression_parameter_provided(args):
@@ -247,6 +266,20 @@ def no_compression_parameter_provided(args):
                 args.lora_correction,
                 args.sensitivity_metric,
                 args.backup_precision,
+            )
+        )
+    )
+
+
+def no_quantization_parameter_provided(args):
+    return all(
+        (
+            it is None
+            for it in (
+                args.sym,
+                args.dataset,
+                args.num_samples,
+                args.smooth_quant_alpha,
             )
         )
     )
@@ -291,16 +324,21 @@ class OVExportCommand(BaseOptimumCLICommand):
         else:
             library_name = self.args.library
 
-        if self.args.weight_format is None:
+        if self.args.weight_format is None and self.args.quant_mode is None:
             ov_config = None
             if not no_compression_parameter_provided(self.args):
                 raise ValueError(
                     "Some compression parameters are provided, but the weight format is not specified. "
                     "Please provide it with --weight-format argument."
                 )
+            if not no_quantization_parameter_provided(self.args):
+                raise ValueError(
+                    "Some quantization parameters are provided, but the quantization mode is not specified. "
+                    "Please provide it with --quant-mode argument."
+                )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
-        else:
+        elif self.args.weight_format is not None:
             # For int4 quantization if no parameter is provided, then use the default config if exists
             if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
                 quantization_config = get_default_int4_config(self.args.model)
@@ -325,6 +363,21 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             if quantization_config.get("dataset", None) is not None:
                 quantization_config["trust_remote_code"] = self.args.trust_remote_code
+            ov_config = OVConfig(quantization_config=quantization_config)
+        else:
+            if self.args.quant_mode != "int8":
+                raise ValueError("Only 'int8' quantization mode is currently supported.")
+
+            quantization_config = {
+                "weight_format": self.args.quant_mode,
+                "activation_format": self.args.quant_mode,
+                "bits": 8,
+                "sym": self.args.sym or False,
+                "dataset": self.args.dataset,
+                "num_samples": self.args.num_samples,
+                "smooth_quant_alpha": self.args.smooth_quant_alpha,
+                "trust_remote_code": self.args.trust_remote_code,
+            }
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
@@ -368,17 +421,25 @@ class OVExportCommand(BaseOptimumCLICommand):
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
-        elif (task.startswith("text-generation") or task == "image-text-to-text") and quantize_with_dataset:
+        elif (
+            quantize_with_dataset
+            and (task.startswith("text-generation") or task == "automatic-speech-recognition")
+            or (task == "image-text-to-text" and quantization_config is not None)
+        ):
             if task.startswith("text-generation"):
                 from optimum.intel import OVModelForCausalLM
 
                 model_cls = OVModelForCausalLM
-            else:
+            elif task == "image-text-to-text":
                 from optimum.intel import OVModelForVisualCausalLM
 
                 model_cls = OVModelForVisualCausalLM
+            else:
+                from optimum.intel import OVModelForSpeechSeq2Seq
 
-            # To quantize a model with a dataset, an instance of a model class is required
+                model_cls = OVModelForSpeechSeq2Seq
+
+            # In this case, to apply quantization an instance of a model class is required
             model = model_cls.from_pretrained(
                 self.args.model,
                 export=True,

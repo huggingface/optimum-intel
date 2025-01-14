@@ -31,13 +31,14 @@ Check out the help for more options:
 
 ```text
 usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,tf}] [--trust-remote-code]
-                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4}]
+                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4}] [--quant-mode {int8}]
                                    [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
                                    [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
                                    [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
                                    [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--gptq]
                                    [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
+                                   [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
                                    output
 
 optional arguments:
@@ -66,6 +67,10 @@ Optional arguments:
                         on your local machine arbitrary code present in the model repository.
   --weight-format {fp32,fp16,int8,int4,mxfp4,nf4}
                         The weight format of the exported model.
+  --quant-mode {int8}
+                        Quantization precision mode. This is used for applying full model quantization including
+                        activations. The only currently supported choice is 'int8' for int8 quantization of both
+                        weights and activations.
   --library {transformers,diffusers,timm,sentence_transformers,open_clip}
                         The library used to load the model before export. If not provided, will attempt to infer the
                         local checkpoint's library
@@ -102,8 +107,8 @@ Optional arguments:
                         weight compression is applied, they are compressed to INT8.
   --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but
                         requires additional time for tuning weights on a calibration dataset. To run AWQ, please also
-                        provide a dataset argument. Note: it is possible that there will be no matching patterns in the
-                        model to apply AWQ, in such case it will be skipped.
+                        provide a dataset argument. Note: it is possible that there will be no matching patterns in
+                        the model to apply AWQ, in such case it will be skipped.
   --scale-estimation    Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between
                         the original and compressed layers. Providing a dataset is required to run scale estimation.
                         Please note, that applying scale estimation takes additional memory and time.
@@ -128,6 +133,9 @@ Optional arguments:
                         OpenVINO native inference code that expects KV-cache inputs and outputs in the model.
   --disable-convert-tokenizer
                         Do not add converted tokenizer and detokenizer OpenVINO models.
+  --smooth-quant-alpha SMOOTH_QUANT_ALPHA
+                        SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers
+                        and reduces quantization error. Valid only when activations quantization is enabled.
 ```
 
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.
@@ -157,6 +165,12 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 </Tip>
 
+
+Besides weight-only quantization, you can also apply full model quantization including activations by setting `--quant-mode` to `int8`. This will quantize both weights and activations of Linear, Convolutional and some other layers to int8. Currently this is only supported for speech-to-text models. Please see example below.
+
+```bash
+optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 32 --smooth-quant-alpha 0.9 ./whisper-large-v3-turbo
+```
 
 ### Decoder models
 

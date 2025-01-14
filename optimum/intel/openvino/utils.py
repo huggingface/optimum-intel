@@ -126,11 +126,13 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
     "flux": "OVFluxPipeline",
+    "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
     "open_clip_text": "OVModelOpenCLIPText",
     "open_clip_vision": "OVModelOpenCLIPVisual",
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
 }
 
 

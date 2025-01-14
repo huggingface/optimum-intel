@@ -2501,6 +2501,40 @@ class RotaryEmbPatcher(DecoderModelPatcher):
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/31f9a289a6207be6cae746e009d8e0db523be203/src/transformers/models/falcon/modeling_falcon.py#L1138
+def _falcon_prepare_4d_causal_attention_mask_with_cache_position(
+    attention_mask: torch.Tensor,
+    sequence_length: int,
+    target_length: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    cache_position: torch.Tensor,
+    batch_size: int,
+    **kwargs,
+):
+    if attention_mask is not None and attention_mask.dim() == 4:
+        # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
+        causal_mask = attention_mask
+    else:
+        # different from original: allow to provide min_dtype as parameter
+        min_dtype = torch.finfo(dtype).min if "min_dtype" not in kwargs else kwargs["min_dtype"]
+        causal_mask = torch.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device)
+        if sequence_length != 1:
+            causal_mask = torch.triu(causal_mask, diagonal=1)
+        causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+        causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+        if attention_mask is not None:
+            causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+            mask_length = attention_mask.shape[-1]
+            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
+            padding_mask = padding_mask == 0
+            causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
+                padding_mask, min_dtype
+            )
+
+    return causal_mask
+
+
 def _falcon_update_causal_mask(
     self,
     attention_mask: torch.Tensor,
@@ -2519,13 +2553,6 @@ def _falcon_update_causal_mask(
     # KV cache is used. This is an issue for torch.compile which then recaptures cudagraphs at each decode steps due to the dynamic shapes.
     # (`recording cudagraph tree for symint key 13`, etc.), which is VERY slow. A workaround is `@torch.compiler.disable`, but this prevents using
     # `fullgraph=True`. See more context in https://github.com/huggingface/transformers/pull/29114
-
-    if hasattr(self, "_prepare_4d_causal_attention_mask_with_cache_position"):
-        _prepare_4d_causal_attention_mask_with_cache_position = (
-            self._prepare_4d_causal_attention_mask_with_cache_position
-        )
-    else:
-        from transformers.models.falcon.modeling_falcon import _prepare_4d_causal_attention_mask_with_cache_position
 
     if self.config._attn_implementation == "flash_attention_2":
         if attention_mask is not None and 0.0 in attention_mask:
@@ -2568,7 +2595,7 @@ def _falcon_update_causal_mask(
         )
 
     # In case the provided `attention` mask is 2D, we generate a causal mask here (4D).
-    causal_mask = _prepare_4d_causal_attention_mask_with_cache_position(
+    causal_mask = _falcon_prepare_4d_causal_attention_mask_with_cache_position(
         attention_mask,
         sequence_length=sequence_length,
         target_length=target_length,
@@ -2654,6 +2681,96 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
         unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
 
 
+def _gpt_neo_attn_forward(
+    self,
+    hidden_states,
+    attention_mask=None,
+    layer_past=None,
+    head_mask=None,
+    use_cache=False,
+    output_attentions=False,
+    cache_position=None,
+):
+    if output_attentions:
+        self._attn = self._orig_attn
+
+    return self._orig_forward(
+        hidden_states,
+        attention_mask=attention_mask,
+        layer_past=layer_past,
+        head_mask=head_mask,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        cache_position=cache_position,
+    )
+
+
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/attention.py#L185
+def _gpt_neo_attn_sdpa(
+    self,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    head_mask: Optional[torch.Tensor] = None,
+):
+    batch_size = query.shape[0]
+
+    mask_value = torch.finfo(torch.float16).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    dropout_p = float(self.config.attention_dropout) if self.training else 0.0
+    if (batch_size == 1 or self.training) and self.attention_type == "global":
+        if query.shape[2] > 1:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False, scale=1.0
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
+
+        causal_mask = torch.where(causal_mask, 0, mask_value)
+        if batch_size > 1:
+            # torch.Tensor.expand does no memory copy
+            causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+
+        if attention_mask is not None:
+            attention_mask = causal_mask + attention_mask
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False, scale=1.0
+        )
+
+    return sdpa_result, None
+
+
+class GptNeoModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.45.0") and is_torch_version(">=", "2.1.0"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            for layer in self._model.transformer.h:
+                self_attn = layer.attn.attention
+                self_attn._orig_attn = self_attn._attn
+                self_attn._attn = types.MethodType(_gpt_neo_attn_sdpa, self_attn)
+                self_attn._orig_forward = types.MethodType(_gpt_neo_attn_forward, self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for layer in self._model.transformer.h:
+                for layer in self._model.transformer.h:
+                    layer.attn.attention.forward = layer.attn.attention._orig_forward
+                    layer.attn.attention._attn = layer.attn.attention._orig_attn
+
+
 class Gemma2ModelPatcher(LlamaModelPatcher):
     def __init__(
         self,
@@ -2709,26 +2826,6 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
             return outputs
 
         self.patched_forward = patched_forward
-
-    def __enter__(self):
-        super().__enter__()
-        if is_transformers_version(">=", "4.45.0"):
-            from transformers.models.gemma2.modeling_gemma2 import GEMMA2_ATTENTION_CLASSES
-
-            sdpa_attn = GEMMA2_ATTENTION_CLASSES["sdpa"]
-            eager_attn = GEMMA2_ATTENTION_CLASSES["eager"]
-
-            for layer in self._model.model.layers:
-                if isinstance(layer.self_attn, eager_attn):
-                    layer.self_attn._orig_forward = layer.self_attn.forward
-                    layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.45.0"):
-            for layer in self._model.model.layers:
-                if hasattr(layer.self_attn, "_orig_forward"):
-                    layer.self_attn.forward = layer.self_attn._orig_forward
 
 
 def _decilm_attn_forward(
@@ -3378,3 +3475,268 @@ class MiniCPM3Patcher(DecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         for block in self._model.model.layers:
             block.self_attn.forward = block.self_attn._orig_forward
+
+
+class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward_wrap(
+            self,
+            attention_mask,
+            position_ids=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            input_ids=None,
+        ):
+            from transformers.cache_utils import DynamicCache
+
+            new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            result = self.__orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=new_past_key_values,
+                inputs_embeds=inputs_embeds,
+            )
+            if past_key_values is not None:
+                result["past_key_values"] = result["past_key_values"].to_legacy_cache()
+            return result
+
+        model.forward = types.MethodType(forward_wrap, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        def image_embed_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
+        ) -> torch.Tensor:
+            for blk in self.blocks:
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+            return self.merger(hidden_states)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
+        # added attention_mask input instead of internal calculation (unsupported by tracing due to cycle with dynamic len)
+        def sdpa_attn_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor = None
+        ) -> torch.Tensor:
+            from transformers.models.qwen2_vl.modeling_qwen2_vl import apply_rotary_pos_emb_vision
+
+            seq_length = hidden_states.shape[0]
+            q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+            q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
+            k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+
+            q = q.transpose(0, 1)
+            k = k.transpose(0, 1)
+            v = v.transpose(0, 1)
+            attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attention_mask, dropout_p=0.0)
+            attn_output = attn_output.transpose(0, 1)
+            attn_output = attn_output.reshape(seq_length, -1)
+            attn_output = self.proj(attn_output)
+            return attn_output
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L430
+        # added attention_mask input propagation to self.attn
+        def block_forward(self, hidden_states, attention_mask, rotary_pos_emb) -> torch.Tensor:
+            hidden_states = hidden_states + self.attn(
+                self.norm1(hidden_states), attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb
+            )
+            hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+            return hidden_states
+
+        for block in self._model.blocks:
+            block._orig_forward = block.forward
+            block.forward = types.MethodType(block_forward, block)
+            block.attn._orig_forward = block.attn.forward
+            block.attn.forward = types.MethodType(sdpa_attn_forward, block.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
+
+
+# copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L321
+def _granite_moe_topk_gating_forward(self, hidden_states):
+    # compute the top_k routing decision
+    logits = self.layer(hidden_states).float()  # [batch_size x seq_len, num_experts]
+    top_k_logits, top_k_indices = logits.topk(self.top_k, dim=1)  # [num_tokens, top_k]
+    top_k_gates = torch.softmax(top_k_logits, dim=1).type_as(hidden_states)  # [num_tokens, top_k]
+
+    # compute number of input given to each expert
+    zeros = torch.zeros(
+        [top_k_gates.size(0), self.num_experts], dtype=top_k_gates.dtype, device=top_k_gates.device
+    )  # [num_tokens, num_experts]
+    gates = zeros.scatter(1, top_k_indices, 1)  # [num_tokens, num_experts]
+    expert_size = gates.long().sum(0)  # [num_experts,]
+    # difference with original, removed expert_size = expert_size.tolist() due to incorrect tracing
+
+    # sort and group input tokens according to expert assignment
+    top_k_experts = top_k_indices.flatten()  # [num_tokens * top_k]
+    _, index_sorted_experts = top_k_experts.sort(0)  # [num_tokens * top_k]
+    batch_index = index_sorted_experts.div(self.top_k, rounding_mode="trunc")  # [num_tokens * top_k]
+
+    # gather the gate values for grouped input tokens
+    top_k_gates = top_k_gates.flatten()  # [num_tokens * top_k]
+    batch_gates = top_k_gates[index_sorted_experts]  # [num_tokens * top_k]
+
+    return index_sorted_experts, batch_index, batch_gates, expert_size, logits
+
+
+# copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L281
+def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
+    output_list = []
+    # difference with original
+    # 1) expert_size is tensor instead of list of ints after gating patching, that does not allow use original inputs.split(expert_size)
+    # 2) use index_start:next_index for obtaining expert inputs splits one by one instead of precomputed splits once before cycle
+    index_start = torch.tensor(0, dtype=torch.int64)
+    for i in range(self.num_experts):
+        next_index = index_start + expert_size[i]
+        output_list.append(F.linear(inputs[index_start:next_index], self.weight[i]))
+        index_start = next_index
+    results = torch.cat(output_list, dim=0)
+    return results
+
+
+class GraniteMoEModelPatcher(LlamaModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            block_sparse_moe = layer.block_sparse_moe
+            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+            block_sparse_moe.router.forward = types.MethodType(
+                _granite_moe_topk_gating_forward, block_sparse_moe.router
+            )
+            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+            block_sparse_moe.input_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+            )
+            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+            block_sparse_moe.output_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.model.layers:
+            block_sparse_moe = layer.block_sparse_moe
+            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+
+
+# copied from https://github.com/huggingface/transformers/blob/v4.46.3/src/transformers/models/gpt_bigcode/modeling_gpt_bigcode.py#L401
+def gpt_bigcode_attn(self, query, key, value, attention_mask=None, head_mask=None):
+    if head_mask is not None:
+        # The super dispatch is done in the forward.
+        raise ValueError("PyTorch SDPA does not support head_mask. Please open an issue in Transformers repository.")
+
+    scale = None
+    if not self.scale_attn_weights:
+        scale = 1
+
+    # MQA models: (batch_size, query_length, num_heads * head_dim)
+    # MHA models: (batch_size, num_heads, query_length, head_dim)
+    query_shape = query.shape
+    batch_size = query_shape[0]
+    key.shape[-2]
+
+    if self.multi_query:
+        query_length = query_shape[1]
+
+        # SDPA requires the dimension [..., sequence_length, head_dim].
+        query = query.view(batch_size, query_length, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Without these unsqueeze, SDPA complains as the query and key/value have a different number of dimensions.
+        key = key.unsqueeze(1)
+        value = value.unsqueeze(1)
+
+        # Although these expand are not numerically useful, PyTorch can not dispatch to memory-efficient backend
+        # and flash attention backend (No available kernel.  Aborting execution.) from the shapes
+        # query = [batch_size, num_heads, query_length, head_dim]
+        # key = [batch_size, 1, past_length, head_dim]
+        # value = [batch_size, 1, past_length, head_dim]
+        #
+        # torch==2.1.2 is bugged with non-contiguous inputs with custom attn_mask (https://github.com/pytorch/pytorch/issues/112577), hence the check.
+        if is_torch_version(">=", "2.2.0"):
+            key = key.expand(-1, self.num_heads, -1, -1)
+            value = value.expand(-1, self.num_heads, -1, -1)
+    else:
+        query_length = query_shape[-1]
+
+        # See the comment above.
+        if query.device.type == "cuda" and attention_mask is not None:
+            query = query.contiguous()
+            key = key.contiguous()
+            value = value.contiguous()
+
+    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+    # The query_length > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not
+    # create a causal mask in case query_length == 1.
+    is_causal = True if self.is_causal and attention_mask is None and query_length > 1 else False
+    # different from original, due to loading model weights in original format transformer.wte dtype may be different from query dtype
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(query.dtype)
+    sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=attention_mask,
+        dropout_p=self.attn_pdrop if self.training else 0.0,
+        is_causal=is_causal,
+        scale=scale,
+    )
+
+    if self.multi_query:
+        # (batch_size, num_heads, seq_len, head_dim) --> (batch_size, seq_len, num_heads, head_dim)
+        sdpa_result = sdpa_result.transpose(1, 2)
+
+        # Reshape is kind of expensive here, as it does a memory copy,
+        # but I did not manage to make away without it (logits do not match when using view)
+        # (batch_size, seq_len, num_heads, head_dim) --> (batch_size, seq_len, num_heads * head_dim)
+        sdpa_result = sdpa_result.reshape(query_shape)
+
+    return sdpa_result, None
+
+
+class GptBigCodeModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+            for layer in self._model.transformer.h:
+                layer.attn._orig_attn = layer.attn._attn
+                layer.attn._attn = types.MethodType(gpt_bigcode_attn, layer.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+            for layer in self._model.transformer.h:
+                layer.attn._attn = layer.attn._orig_attn

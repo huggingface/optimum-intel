@@ -15,6 +15,7 @@
 import copy
 import gc
 import os
+import platform
 import tempfile
 import time
 import unittest
@@ -62,10 +63,12 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
+from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
+    OVDiffusionPipeline,
+    OVFluxPipeline,
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
@@ -106,7 +109,9 @@ from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
+    DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+    DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
@@ -139,7 +144,8 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_SD_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
 
     def test_load_from_hub_and_save_model(self):
@@ -336,7 +342,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @require_diffusers
     def test_load_from_hub_and_save_stable_diffusion_model(self):
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_SD_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -390,12 +396,78 @@ class OVModelIntegrationTest(unittest.TestCase):
         del pipeline
         gc.collect()
 
+    @require_diffusers
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45"),
+        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
+    )
+    def test_load_from_hub_and_save_flux_model(self):
+        loaded_pipeline = OVDiffusionPipeline.from_pretrained(self.OV_FLUX_DIFFUSION_MODEL_ID, compile=False)
+        self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
+        self.assertIsInstance(loaded_pipeline.config, Dict)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        loaded_pipeline.compile()
+        self.assertIsNone(loaded_pipeline.unet)
+        self.assertEqual(loaded_pipeline.transformer.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+        batch_size, height, width = 2, 16, 16
+        inputs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "output_type": "np",
+        }
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        pipeline_outputs = loaded_pipeline(**inputs).images
+        self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_pipeline.save_pretrained(tmpdirname)
+            pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname)
+            self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertIn(loaded_pipeline.config_name, folder_contents)
+            for subfoler in {
+                DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            }:
+                folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
+                self.assertIn(OV_XML_FILE_NAME, folder_contents)
+                self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+
+            compile_only_pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_pipeline, OVFluxPipeline)
+            self.assertIsInstance(compile_only_pipeline.transformer.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder_2.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+
+            np.random.seed(0)
+            torch.manual_seed(0)
+            outputs = compile_only_pipeline(**inputs).images
+            np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+            del compile_only_pipeline
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        outputs = pipeline(**inputs).images
+        np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+        del pipeline
+        gc.collect()
+
     @pytest.mark.run_slow
     @slow
     def test_load_model_from_hub_private_with_token(self):
         model_id = "optimum-internal-testing/tiny-random-phi-private"
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
-        if token is None:
+        if not token:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
         model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
@@ -872,7 +944,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "llama_gptq",
         "marian",
         "minicpm",
         "mistral",
@@ -915,7 +986,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "exaone",
             "mistral-nemo",
             "minicpm3",
+            "glm",
+            "granite",
+            "granite-moe",
         )
+
+        # gptq and awq install disabled for windows test environment
+        if platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
+
+        # autoawq install disabled for windows test environment
+        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -949,9 +1031,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_openvino_version("<", "2024.1"):
             not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
 
-        if "gptq" in model_arch:
-            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
-
         set_seed(SEED)
 
         model_kwargs = {}
@@ -978,20 +1057,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         if model_arch in ["qwen", "arctic", "glm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         atol = 1e-3 if model_arch == "minicpm" else 1e-4
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
+        # quantized models have different logits value range
+        if "awq" not in model_arch and "gptq" not in model_arch:
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
-
         if model_arch in ["qwen"]:
             return
 
@@ -1025,7 +1111,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
+        with patch_awq_for_inference("awq" in model_arch):
+            transformers_outputs = transformers_model.generate(
+                **tokens, generation_config=gen_config, **additional_inputs
+            )
+        print(f"ov_outputs: {ov_outputs}")
+        print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
             "OV output {ov_outputs}\nTransformers output  {transformers_output}",
@@ -1261,8 +1352,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
@@ -1273,7 +1369,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model._supports_cache_class = True
             from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
-        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokenization_args = {}
+        if is_transformers_version(">=", "4.45") and model_arch == "gpt_neo":
+            tokenization_args["padding_side"] = "left"
+        tokens = tokenizer(
+            ["Today is a nice day and I am longer", "This is me"],
+            return_tensors="pt",
+            padding=True,
+            **tokenization_args,
+        )
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1288,9 +1392,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             if model_arch == "gemma2":
                 additional_inputs = {"past_key_values": DynamicCache()}
-            transformers_outputs = transformers_model.generate(
-                **tokens, generation_config=gen_config, **additional_inputs
-            )
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model.generate(
+                    **tokens, generation_config=gen_config, **additional_inputs
+                )
             set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
@@ -1976,7 +2081,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
 
@@ -1996,6 +2101,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaNextForConditionalGeneration
 
             return LlavaNextForConditionalGeneration
+        if model_arch == "qwen2_vl":
+            from transformers import Qwen2VLForConditionalGeneration
+
+            return Qwen2VLForConditionalGeneration
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):

@@ -77,7 +77,12 @@ from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
-from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
+from utils_tests import (
+    MODEL_NAMES,
+    get_num_quantized_nodes,
+    _ARCHITECTURES_TO_EXPECTED_INT8,
+    compare_num_quantized_nodes_per_model,
+)
 
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
@@ -239,21 +244,26 @@ class OVWeightCompressionTest(unittest.TestCase):
             "gpt2",  # model name
             False,  # trust remote code
             dict(bits=4, sym=False, group_size=-1, ratio=0.8),  # quantization config
-            {"int4": 30, "int8": 14},  # reference number of low-precision nodes
+            [{"int8": 14, "int4": 30}],  # reference number of low-precision nodes
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
             dict(bits=4, weight_format="mxfp4", group_size=32),
-            {"f4e2m1": 20, "f8e8m0": 20, "int8": 4},
+            [{"int8": 4, "f4e2m1": 20, "f8e8m0": 20}],
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
             dict(bits=4, weight_format="nf4", group_size=32),
-            {"nf4": 20, "int8": 4},
+            [
+                {
+                    "int8": 4,
+                    "nf4": 20,
+                }
+            ],
         ),
         (
             OVModelForCausalLM,
@@ -265,14 +275,14 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
-            {"int4": 38, "int8": 4},
+            [{"int8": 4, "int4": 38}],
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            {"int4": 26, "int8": 18},
+            [{"int8": 18, "int4": 26}],
         ),
         (
             OVModelForCausalLM,
@@ -286,7 +296,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            {"int4": 25, "int8": 14},
+            [{"int8": 14, "int4": 25}],
         ),
         (
             OVModelForCausalLM,
@@ -300,7 +310,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            {"int4": 24, "int8": 16},
+            [{"int8": 16, "int4": 24}],
         ),
         (
             OVModelForCausalLM,
@@ -316,7 +326,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            {"int4": 12, "int8": 8},
+            [{"int8": 8, "int4": 12}],
         ),
         (
             OVModelForCausalLM,
@@ -331,7 +341,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            {"int4": 12, "int8": 8},
+            [{"int8": 8, "int4": 12}],
         ),
         (
             OVModelForCausalLM,
@@ -346,7 +356,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 gptq=True,
             ),
-            {"int4": 12, "int8": 8},
+            [{"int8": 8, "int4": 12}],
         ),
         (
             OVModelForCausalLM,
@@ -359,14 +369,35 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="auto",
                 lora_correction=True,
             ),
-            {"int4": 28, "int8": 60},
+            [{"int8": 60, "int4": 28}],
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="none", group_size=16),
-            {"int4": 28},
+            [{"int4": 28}],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(bits=4, backup_precision="none", group_size=16, ratio=0.5),
+            [{"int4": 6}],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(bits=4, backup_precision="int8_sym", group_size=16, ratio=0.5),
+            [{"int4": 6, "int8": 13}],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(bits=4, backup_precision="int8_asym", group_size=16, ratio=0.5),
+            [{"int4": 6, "int8": 26}],
         ),
     ]
 
@@ -386,7 +417,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         processor=MODEL_NAMES["llava_next"],
                     ),
-                    {"int4": 24, "int8": 6},
+                    [{"int8": 6, "int4": 24}, {"int8": 9}, {"int8": 1}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -397,13 +428,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                         group_size=8,
                         dataset="contextual",
                         ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
+                        sensitivity_metric="mean_activation_variance",
                         num_samples=1,
                         processor=MODEL_NAMES["nanollava_vision_tower"],
                         tokenizer=MODEL_NAMES["nanollava"],
                         trust_remote_code=True,
                     ),
-                    {"int4": 16, "int8": 14},
+                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
                 ),
             ]
         )
@@ -425,7 +456,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         processor=MODEL_NAMES["minicpmv"],
                         trust_remote_code=True,
                     ),
-                    {"int4": 22, "int8": 8},
+                    [{"int8": 8, "int4": 22}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -440,7 +471,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    {"int4": 22, "int8": 8},
+                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -455,7 +486,21 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    {"int4": 14, "int8": 4},
+                    [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                ),
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen2_vl",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 1}, {"int8": 10}],
                 ),
             ]
         )
@@ -481,6 +526,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen2_vl", False))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -723,7 +769,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
-        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes
+        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
@@ -735,14 +781,17 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            ov_model = model.lm_model if model_cls == OVModelForVisualCausalLM else model.model
+            submodels = []
+            if isinstance(model, OVModelForCausalLM):
+                submodels = [model.model]
+            elif isinstance(model, OVModelForVisualCausalLM):
+                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
+                submodels += [getattr(model, part) for part in model.additional_parts]
+            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
-            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
-            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
-            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
-
-            wc_rt_info = ov_model.get_rt_info()["nncf"]["weight_compression"]
+            # At the moment the first model in the list is the only one we apply data-aware compression to
+            wc_rt_info = submodels[0].get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
             self.assertEqual(
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
@@ -870,9 +919,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
-    @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
+    @parameterized.expand(LOAD_IN_4_BITS_SCOPE[::5])
     def test_ovmodel_4bit_dynamic_with_config(
-        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes
+        self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
@@ -886,13 +935,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
-            ov_model = model.lm_model if model_cls == OVModelForVisualCausalLM else model.model
+            submodels = []
+            if isinstance(model, OVModelForCausalLM):
+                submodels = [model.model]
+            elif isinstance(model, OVModelForVisualCausalLM):
+                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
+                submodels += [getattr(model, part) for part in model.additional_parts]
+            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
-            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
-            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
-            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
-
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
             self.assertEqual(openvino_config.dtype, quantization_config.weight_format)

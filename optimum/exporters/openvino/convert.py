@@ -43,6 +43,7 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_diffusers_version,
     is_openvino_tokenizers_version,
     is_tokenizers_version,
     is_transformers_version,
@@ -100,9 +101,15 @@ def _set_runtime_options(
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
         sub_export_config.runtime_options = {}
-        if "diffusers" in library_name or "text-generation" in task:
+        if (
+            "diffusers" in library_name
+            or "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+        ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and "text-generation" in task:
+        if not quantized_model and (
+            "text-generation" in task or ("image-text-to-text" in task and model_name == "language_model")
+        ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
@@ -359,7 +366,7 @@ def export_pytorch(
     import torch
     from torch.utils._pytree import tree_map
 
-    from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
+    from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
@@ -450,7 +457,11 @@ def export_pytorch(
                 from openvino.frontend.pytorch.patch_model import unpatch_model
 
                 unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
-                model.to(torch.float32)
+                for m in model.modules():
+                    if any(p.dtype in [torch.float16, torch.bfloat16] for p in m.parameters(False)) or any(
+                        b.dtype in [torch.float16, torch.bfloat16] for b in m.buffers(False)
+                    ):
+                        m.float()
 
             return export_pytorch_via_onnx(
                 model,
@@ -653,6 +664,9 @@ def export_from_model(
     # Get the shapes to be used to generate dummy inputs
     input_shapes = {}
     for input_name in DEFAULT_DUMMY_SHAPES.keys():
+        if input_name in ["height", "width"]:
+            # use H and W from generator defaults
+            continue
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
@@ -978,24 +992,36 @@ def _get_submodels_and_export_configs(
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
-    try:
-        from diffusers import (
-            StableDiffusion3Img2ImgPipeline,
-            StableDiffusion3InpaintPipeline,
-            StableDiffusion3Pipeline,
-        )
+    if is_diffusers_version(">=", "0.29.0"):
+        from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 
-        is_sd3 = isinstance(
-            pipeline, (StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline)
-        )
-    except ImportError:
+        sd3_pipes = [StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline]
+        if is_diffusers_version(">=", "0.30.0"):
+            from diffusers import StableDiffusion3InpaintPipeline
+
+            sd3_pipes.append(StableDiffusion3InpaintPipeline)
+
+        is_sd3 = isinstance(pipeline, tuple(sd3_pipes))
+    else:
         is_sd3 = False
 
-    try:
+    if is_diffusers_version(">=", "0.30.0"):
         from diffusers import FluxPipeline
 
-        is_flux = isinstance(pipeline, FluxPipeline)
-    except ImportError:
+        flux_pipes = [FluxPipeline]
+
+        if is_diffusers_version(">=", "0.31.0"):
+            from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
+
+            flux_pipes.extend([FluxPipeline, FluxImg2ImgPipeline, FluxInpaintPipeline])
+
+        if is_diffusers_version(">=", "0.32.0"):
+            from diffusers import FluxFillPipeline
+
+            flux_pipes.append(FluxFillPipeline)
+
+        is_flux = isinstance(pipeline, tuple(flux_pipes))
+    else:
         is_flux = False
 
     if not is_sd3 and not is_flux:
