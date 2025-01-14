@@ -24,7 +24,7 @@ from transformers.modeling_attn_mask_utils import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPastAndCrossAttentions
 
-from optimum.intel.utils.import_utils import is_ipex_version
+from optimum.intel.utils.import_utils import is_ipex_version, is_torch_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
 
 from .cache_utils import IPEXPagedCache
@@ -32,7 +32,7 @@ from .cache_utils import IPEXPagedCache
 
 logger = logging.getLogger(__name__)
 
-_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.5.0"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.4.0"
 
 
 if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
@@ -40,7 +40,7 @@ if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
     )
 else:
-    from intel_extension_for_pytorch.llm.functional import rms_norm, rotary_embedding
+    from intel_extension_for_pytorch.llm.functional import rms_norm, rotary_embedding, varlen_attention
     from intel_extension_for_pytorch.llm.modules import (
         Linear2SiluMul,
         LinearAdd,
@@ -627,24 +627,49 @@ class _IPEXAttention(nn.Module):
         attn_output = attn_output.reshape(-1, attn_output.shape[-2] * attn_output.shape[-1])
         return attn_output
 
+    # Maybe removed after torch 2.6 released
+    def has_flash_attn(query):
+        if query.device.type == "cpu":
+            return is_torch_version(">", "2.4.99")
+        elif query.device.type == "xpu":
+            return is_torch_version(">", "2.5.99")
+
     def varlen_attn(self, query, key, value, past_key_value, input_lens):
         # prefill, remove padding
         attn_output = torch.empty_like(query)
         seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-        PagedAttention.flash_attn_varlen_func(
-            attn_output,
-            query,
-            key,
-            value,
-            seq_len_tensor,
-            seq_len_tensor,
-            input_lens.max(),
-            input_lens.max(),
-            1.0 / math.sqrt(self.head_dim),
-            True,
-            past_key_value.block_tables,
-            None,
-        )
+        if self.has_flash_attn(query):
+            PagedAttention.flash_attn_varlen_func(
+                attn_output,
+                query,
+                key,
+                value,
+                seq_len_tensor,
+                seq_len_tensor,
+                input_lens.max(),
+                input_lens.max(),
+                1.0 / math.sqrt(self.head_dim),
+                True,
+                past_key_value.block_tables,
+                None,
+            )
+        else:
+            varlen_attention(
+                query.contiguous() if query.device.type == "xpu" else query,
+                key.contiguous() if key.device.type == "xpu" else key,
+                value.contiguous() if value.device.type == "xpu" else value,
+                attn_output,
+                seq_len_tensor,
+                seq_len_tensor,
+                input_lens.max(),
+                input_lens.max(),
+                0.0,
+                1.0 / math.sqrt(self.head_dim),
+                False,
+                True,
+                False,
+                None,
+            )
 
         return attn_output
 
