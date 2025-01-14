@@ -710,6 +710,7 @@ class _IPEXAttention(nn.Module):
         query, key, value = self.qkv_gemm(hidden_states)
         query, key = self.rope(query, key, **kwargs)
 
+        key_cache, value_cache = None, None
         if past_key_value is not None:
             key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask, input_lens)
 
