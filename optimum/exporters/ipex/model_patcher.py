@@ -20,6 +20,11 @@ from transformers.models.llama.modeling_llama import (
     LlamaModel,
     LlamaRMSNorm,
 )
+from transformers.models.qwen2.modeling_qwen2 import (
+    Qwen2DecoderLayer,
+    Qwen2Model,
+    Qwen2RMSNorm,
+)
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
@@ -36,7 +41,9 @@ from .modeling_utils import (
     _IPEXGPT2Attention,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
+    _IPEXQwen2DecoderLayer,
     _llama_model_forward,
+    _qwen2_model_forward,
 )
 
 
@@ -116,6 +123,18 @@ def _patch_gpt2_model(model):
     return model
 
 
+def _patch_qwen2_model(model):
+    """
+    Patch qwen2 model:
+        1. Use IPEX rope and paged cache
+        2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
+    """
+    convert_functions(model, Qwen2Model, "forward", _qwen2_model_forward)
+    convert_functions(model, Qwen2RMSNorm, "forward", _ipex_rms_layer_norm_forward)
+    convert_class(model, Qwen2DecoderLayer, _IPEXQwen2DecoderLayer, model.config)
+    return model
+
+
 def _patch_bert_model(model):
     """
     Patch bert model:
@@ -149,6 +168,8 @@ def _patch_model(model):
         model = _patch_falcon_model(model)
     elif model.config.model_type == "gpt2":
         model = _patch_gpt2_model(model)
+    elif model.config.model_type == "qwen2":
+        model = _patch_qwen2_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
     elif model.config.model_type == "vit":

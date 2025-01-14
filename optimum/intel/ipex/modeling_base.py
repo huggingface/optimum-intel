@@ -58,11 +58,11 @@ from ..utils.import_utils import is_ipex_version, is_transformers_version
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
 # TODO: Some models are already fixed in torch 2.6, will enable them when torch upgrading to 2.6
-_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2")
+_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
