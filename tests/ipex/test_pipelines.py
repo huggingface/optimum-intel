@@ -66,6 +66,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "mistral",
         "mpt",
         "opt",
+        "qwen2",
     )
     QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES = (
         "bert",
