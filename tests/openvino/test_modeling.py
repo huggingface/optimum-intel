@@ -66,6 +66,7 @@ from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import (
     OVDiffusionPipeline,
     OVFluxPipeline,
@@ -1625,12 +1626,18 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
+    SUPPORT_STATEFUL = ("t5", "mt5")
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-
+        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
         if not ov_model.decoder.stateful:
@@ -2339,6 +2346,12 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        # whisper cache class support implemented in 4.43
+        expected_stateful = is_transformers_version(">", "4.43")
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
 
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
