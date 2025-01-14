@@ -655,7 +655,7 @@ class _IPEXAttention(nn.Module):
         elif self.has_flash_attn(query):
             attn_output = torch.empty_like(query)
             seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-            query_len_tensor = seq_len_tensor if past_len == 0 else torch.arange(seq_len_tensor.shape[0])
+            query_len_tensor = seq_len_tensor if past_len == 0 else torch.arange(seq_len_tensor.shape[0]).int()
             query_max_len = input_lens.max() if past_len == 0 else 1
             PagedAttention.flash_attn_varlen_func(
                 attn_output,
