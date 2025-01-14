@@ -628,7 +628,7 @@ class _IPEXAttention(nn.Module):
         return attn_output
 
     # Maybe removed after torch 2.6 released
-    def has_flash_attn(query):
+    def has_flash_attn(self, query):
         if query.device.type == "cpu":
             return is_torch_version(">", "2.4.99")
         elif query.device.type == "xpu":
