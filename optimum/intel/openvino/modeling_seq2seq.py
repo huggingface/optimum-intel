@@ -422,7 +422,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         return self.encoder
 
     def _reorder_cache(self, past, beam_idx) -> Tuple[Tuple[torch.FloatTensor]]:
-        self.decoder._reorder_cache(past, beam_idx)
+        return self.decoder._reorder_cache(past, beam_idx)
 
     def reshape(self, batch_size: int, sequence_length: int):
         """
@@ -627,6 +627,7 @@ class OVDecoder:
         if self.stateful and past_key_values is None:
             self.request.reset_state()
             self._past_length = 0
+            self.next_beam_idx = np.arange(input_ids.shape[0], dtype=int)
 
         if past_key_values is not None and not self.stateful:
             # Flatten the past_key_values
@@ -661,7 +662,6 @@ class OVDecoder:
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
             )
-
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -1016,7 +1016,6 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     auto_model_class = WhisperForConditionalGeneration
 
     # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
-    prepare_inputs_for_generation = WhisperForConditionalGeneration.prepare_inputs_for_generation
     generate = WhisperForConditionalGeneration.generate
 
     @classmethod
@@ -1083,7 +1082,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
 
         past_length = 0
         if past_key_values is not None:
-            self.decoder._get_past_length(past_key_values)
+            past_length = self.decoder._get_past_length(past_key_values)
 
             # Some generation methods already pass only the last input ID
             if decoder_input_ids.shape[1] > past_length:
