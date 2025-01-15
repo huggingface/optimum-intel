@@ -45,6 +45,7 @@ from optimum.intel.utils.import_utils import (
     compare_versions,
     is_diffusers_version,
     is_openvino_tokenizers_version,
+    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -366,6 +367,7 @@ def export_pytorch(
     import torch
     from torch.utils._pytree import tree_map
 
+    from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
     from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
@@ -428,6 +430,10 @@ def export_pytorch(
 
             patcher.patched_forward = ts_patched_forward
 
+            ts_decoder_kwargs = {}
+            if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
+                ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
+
             with patcher:
                 if patch_16bit_model:
                     from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
@@ -435,8 +441,9 @@ def export_pytorch(
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = _get_input_info(model, config, dummy_inputs)
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
                 ov_model = convert_model(
-                    model,
+                    ts_decoder,
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )

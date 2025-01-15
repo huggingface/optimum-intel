@@ -15,6 +15,7 @@
 from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconModel
 from transformers.models.gpt2.modeling_gpt2 import GPT2MLP, GPT2Attention, GPT2Block, GPT2Model
+from transformers.models.gpt2.modeling_gpt2 import GPT2MLP, GPT2Attention, GPT2Block, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaModel,
@@ -32,6 +33,7 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _IPEXGPT2MLP,
     _IPEXGPT2MLP,
     _falcon_model_forward,
     _gpt2_block_forward,

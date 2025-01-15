@@ -5,6 +5,10 @@ from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
 
 
+# May need to tune based on sequence length and different models but default to 16 currently.
+BLOCK_SIZE = 16
+
+
 class IPEXPagedCache(Cache):
     """
     A PagedCache that grows dynamically as more tokens are generated. everytime it grows block-size memory, vendor could set the pageCache memory layout.
@@ -44,7 +48,7 @@ class IPEXPagedCache(Cache):
         self.batch_size = batch_size
         # Used in `generate` to keep tally of how many tokens the cache has seen
         self._seen_tokens = torch.zeros([batch_size], dtype=torch.int32, device=device)
-        self.block_size = 64
+        self.block_size = BLOCK_SIZE
         self.num_blocks = (max_cache_len // self.block_size + (max_cache_len % self.block_size != 0)) * batch_size
         self.block_tables = -1 * torch.ones([self.num_blocks], dtype=torch.int32, device=device).reshape(
             batch_size, -1
