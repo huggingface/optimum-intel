@@ -1658,6 +1658,21 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens, **decoder_inputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**tokens, generation_config=gen_config)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**tokens, generation_config=gen_config)
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+
         del transformers_model
         del ov_model
 
@@ -2355,12 +2370,12 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
-        features = processor.feature_extractor(data, return_tensors="pt")
+        pt_features = processor.feature_extractor(data, return_tensors="pt")
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**features, **decoder_inputs)
+            transformers_outputs = transformers_model(**pt_features, **decoder_inputs)
 
         for input_type in ["pt", "np"]:
             features = processor.feature_extractor(data, return_tensors=input_type)
@@ -2372,6 +2387,21 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config)
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
 
         del transformers_model
         del ov_model
