@@ -101,12 +101,9 @@ def _set_runtime_options(
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
-        sub_export_config.runtime_options = {}
-        if (
-            "diffusers" in library_name
-            or "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
-        ):
+        if not hasattr(sub_export_config, "runtime_options"):
+            sub_export_config.runtime_options = {}
+        if "text-generation" in task or ("image-text-to-text" in task and model_name == "language_model"):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
         if not quantized_model and (
             "text-generation" in task or ("image-text-to-text" in task and model_name == "language_model")
@@ -999,41 +996,22 @@ def _get_submodels_and_export_configs(
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
-    if is_diffusers_version(">=", "0.29.0"):
-        from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
-
-        sd3_pipes = [StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline]
-        if is_diffusers_version(">=", "0.30.0"):
-            from diffusers import StableDiffusion3InpaintPipeline
-
-            sd3_pipes.append(StableDiffusion3InpaintPipeline)
-
-        is_sd3 = isinstance(pipeline, tuple(sd3_pipes))
-    else:
-        is_sd3 = False
-
-    if is_diffusers_version(">=", "0.30.0"):
-        from diffusers import FluxPipeline
-
-        flux_pipes = [FluxPipeline]
-
-        if is_diffusers_version(">=", "0.31.0"):
-            from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
-
-            flux_pipes.extend([FluxPipeline, FluxImg2ImgPipeline, FluxInpaintPipeline])
-
-        if is_diffusers_version(">=", "0.32.0"):
-            from diffusers import FluxFillPipeline
-
-            flux_pipes.append(FluxFillPipeline)
-
-        is_flux = isinstance(pipeline, tuple(flux_pipes))
-    else:
-        is_flux = False
+    is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
+    is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
+    is_flux = pipeline.__class__.__name__.startswith("Flux")
+    is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
 
     if not is_sd3 and not is_flux:
-        return None, get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
-    if is_sd3:
+        models_for_export = get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+        if is_sdxl and pipeline.vae.config.force_upcast:
+            models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
+            models_for_export["vae_decoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
+
+        if is_sd and pipeline.scheduler.config.prediction_type == "v_prediction":
+            models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+            models_for_export["vae_decoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+
+    elif is_sd3:
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
@@ -1135,6 +1113,7 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             int_dtype=int_dtype,
             float_dtype=float_dtype,
         )
+        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
 
     return models_for_export
@@ -1172,6 +1151,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config = export_config_constructor(
         pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
@@ -1187,6 +1167,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_encoder_export_config = vae_config_constructor(
         vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
 
     # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
@@ -1202,6 +1183,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_decoder_export_config = vae_config_constructor(
         vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
     text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
@@ -1218,6 +1200,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             int_dtype=int_dtype,
             float_dtype=float_dtype,
         )
+        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
 
     return models_for_export
