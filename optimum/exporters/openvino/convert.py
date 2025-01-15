@@ -1017,22 +1017,25 @@ def get_diffusion_models_for_export_ext(
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
+    is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
-    if not is_sd3 and not is_flux:
+    if is_sd or is_sdxl or is_lcm:
         models_for_export = get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
         if is_sdxl and pipeline.vae.config.force_upcast:
             models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
             models_for_export["vae_decoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
 
+        # only SD 2.1 has overflow issue, it uses different prediction_type than other models
         if is_sd and pipeline.scheduler.config.prediction_type == "v_prediction":
             models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
             models_for_export["vae_decoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
 
     elif is_sd3:
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
-    else:
+    elif is_flux:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
-
+    else:
+        raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
 
 
