@@ -66,7 +66,10 @@ from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import (
+    OVDiffusionPipeline,
+    OVFluxPipeline,
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
@@ -107,7 +110,9 @@ from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
+    DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+    DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
@@ -140,7 +145,8 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_SD_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
 
     def test_load_from_hub_and_save_model(self):
@@ -337,7 +343,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @require_diffusers
     def test_load_from_hub_and_save_stable_diffusion_model(self):
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_SD_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -375,6 +381,72 @@ class OVModelIntegrationTest(unittest.TestCase):
             compile_only_pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
             self.assertIsInstance(compile_only_pipeline.unet.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+
+            np.random.seed(0)
+            torch.manual_seed(0)
+            outputs = compile_only_pipeline(**inputs).images
+            np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+            del compile_only_pipeline
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        outputs = pipeline(**inputs).images
+        np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+        del pipeline
+        gc.collect()
+
+    @require_diffusers
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45"),
+        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
+    )
+    def test_load_from_hub_and_save_flux_model(self):
+        loaded_pipeline = OVDiffusionPipeline.from_pretrained(self.OV_FLUX_DIFFUSION_MODEL_ID, compile=False)
+        self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
+        self.assertIsInstance(loaded_pipeline.config, Dict)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        loaded_pipeline.compile()
+        self.assertIsNone(loaded_pipeline.unet)
+        self.assertEqual(loaded_pipeline.transformer.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+        batch_size, height, width = 2, 16, 16
+        inputs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "output_type": "np",
+        }
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        pipeline_outputs = loaded_pipeline(**inputs).images
+        self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_pipeline.save_pretrained(tmpdirname)
+            pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname)
+            self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertIn(loaded_pipeline.config_name, folder_contents)
+            for subfoler in {
+                DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            }:
+                folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
+                self.assertIn(OV_XML_FILE_NAME, folder_contents)
+                self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+
+            compile_only_pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_pipeline, OVFluxPipeline)
+            self.assertIsInstance(compile_only_pipeline.transformer.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder_2.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
 
@@ -536,8 +608,9 @@ class PipelineTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
+            if not ov_exported_pipe.model.decoder.stateful:
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
             ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
@@ -916,6 +989,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "mistral-nemo",
             "minicpm3",
             "glm",
+            "granite",
+            "granite-moe",
         )
 
         # gptq and awq install disabled for windows test environment
@@ -1551,16 +1626,23 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
+    SUPPORT_STATEFUL = ("t5", "mt5")
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-
+        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
-        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        if not ov_model.decoder.stateful:
+            self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1645,7 +1727,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["t5"]
+        model_id = MODEL_NAMES["bart"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -2264,6 +2346,12 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        # whisper cache class support implemented in 4.43
+        expected_stateful = is_transformers_version(">", "4.43")
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
 
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()

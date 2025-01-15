@@ -24,7 +24,12 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
+from optimum.exporters.onnx.model_patcher import (
+    DecoderModelPatcher,
+    ModelPatcher,
+    Seq2SeqModelPatcher,
+    override_arguments,
+)
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -3581,3 +3586,208 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
+
+
+# copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L321
+def _granite_moe_topk_gating_forward(self, hidden_states):
+    # compute the top_k routing decision
+    logits = self.layer(hidden_states).float()  # [batch_size x seq_len, num_experts]
+    top_k_logits, top_k_indices = logits.topk(self.top_k, dim=1)  # [num_tokens, top_k]
+    top_k_gates = torch.softmax(top_k_logits, dim=1).type_as(hidden_states)  # [num_tokens, top_k]
+
+    # compute number of input given to each expert
+    zeros = torch.zeros(
+        [top_k_gates.size(0), self.num_experts], dtype=top_k_gates.dtype, device=top_k_gates.device
+    )  # [num_tokens, num_experts]
+    gates = zeros.scatter(1, top_k_indices, 1)  # [num_tokens, num_experts]
+    expert_size = gates.long().sum(0)  # [num_experts,]
+    # difference with original, removed expert_size = expert_size.tolist() due to incorrect tracing
+
+    # sort and group input tokens according to expert assignment
+    top_k_experts = top_k_indices.flatten()  # [num_tokens * top_k]
+    _, index_sorted_experts = top_k_experts.sort(0)  # [num_tokens * top_k]
+    batch_index = index_sorted_experts.div(self.top_k, rounding_mode="trunc")  # [num_tokens * top_k]
+
+    # gather the gate values for grouped input tokens
+    top_k_gates = top_k_gates.flatten()  # [num_tokens * top_k]
+    batch_gates = top_k_gates[index_sorted_experts]  # [num_tokens * top_k]
+
+    return index_sorted_experts, batch_index, batch_gates, expert_size, logits
+
+
+# copied from https://github.com/huggingface/transformers/blob/v4.47.1/src/transformers/models/granitemoe/modeling_granitemoe.py#L281
+def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
+    output_list = []
+    # difference with original
+    # 1) expert_size is tensor instead of list of ints after gating patching, that does not allow use original inputs.split(expert_size)
+    # 2) use index_start:next_index for obtaining expert inputs splits one by one instead of precomputed splits once before cycle
+    index_start = torch.tensor(0, dtype=torch.int64)
+    for i in range(self.num_experts):
+        next_index = index_start + expert_size[i]
+        output_list.append(F.linear(inputs[index_start:next_index], self.weight[i]))
+        index_start = next_index
+    results = torch.cat(output_list, dim=0)
+    return results
+
+
+class GraniteMoEModelPatcher(LlamaModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            block_sparse_moe = layer.block_sparse_moe
+            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+            block_sparse_moe.router.forward = types.MethodType(
+                _granite_moe_topk_gating_forward, block_sparse_moe.router
+            )
+            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+            block_sparse_moe.input_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+            )
+            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+            block_sparse_moe.output_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.model.layers:
+            block_sparse_moe = layer.block_sparse_moe
+            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+
+
+# copied from https://github.com/huggingface/transformers/blob/v4.46.3/src/transformers/models/gpt_bigcode/modeling_gpt_bigcode.py#L401
+def gpt_bigcode_attn(self, query, key, value, attention_mask=None, head_mask=None):
+    if head_mask is not None:
+        # The super dispatch is done in the forward.
+        raise ValueError("PyTorch SDPA does not support head_mask. Please open an issue in Transformers repository.")
+
+    scale = None
+    if not self.scale_attn_weights:
+        scale = 1
+
+    # MQA models: (batch_size, query_length, num_heads * head_dim)
+    # MHA models: (batch_size, num_heads, query_length, head_dim)
+    query_shape = query.shape
+    batch_size = query_shape[0]
+    key.shape[-2]
+
+    if self.multi_query:
+        query_length = query_shape[1]
+
+        # SDPA requires the dimension [..., sequence_length, head_dim].
+        query = query.view(batch_size, query_length, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Without these unsqueeze, SDPA complains as the query and key/value have a different number of dimensions.
+        key = key.unsqueeze(1)
+        value = value.unsqueeze(1)
+
+        # Although these expand are not numerically useful, PyTorch can not dispatch to memory-efficient backend
+        # and flash attention backend (No available kernel.  Aborting execution.) from the shapes
+        # query = [batch_size, num_heads, query_length, head_dim]
+        # key = [batch_size, 1, past_length, head_dim]
+        # value = [batch_size, 1, past_length, head_dim]
+        #
+        # torch==2.1.2 is bugged with non-contiguous inputs with custom attn_mask (https://github.com/pytorch/pytorch/issues/112577), hence the check.
+        if is_torch_version(">=", "2.2.0"):
+            key = key.expand(-1, self.num_heads, -1, -1)
+            value = value.expand(-1, self.num_heads, -1, -1)
+    else:
+        query_length = query_shape[-1]
+
+        # See the comment above.
+        if query.device.type == "cuda" and attention_mask is not None:
+            query = query.contiguous()
+            key = key.contiguous()
+            value = value.contiguous()
+
+    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+    # The query_length > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not
+    # create a causal mask in case query_length == 1.
+    is_causal = True if self.is_causal and attention_mask is None and query_length > 1 else False
+    # different from original, due to loading model weights in original format transformer.wte dtype may be different from query dtype
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(query.dtype)
+    sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=attention_mask,
+        dropout_p=self.attn_pdrop if self.training else 0.0,
+        is_causal=is_causal,
+        scale=scale,
+    )
+
+    if self.multi_query:
+        # (batch_size, num_heads, seq_len, head_dim) --> (batch_size, seq_len, num_heads, head_dim)
+        sdpa_result = sdpa_result.transpose(1, 2)
+
+        # Reshape is kind of expensive here, as it does a memory copy,
+        # but I did not manage to make away without it (logits do not match when using view)
+        # (batch_size, seq_len, num_heads, head_dim) --> (batch_size, seq_len, num_heads * head_dim)
+        sdpa_result = sdpa_result.reshape(query_shape)
+
+    return sdpa_result, None
+
+
+class GptBigCodeModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+            for layer in self._model.transformer.h:
+                layer.attn._orig_attn = layer.attn._attn
+                layer.attn._attn = types.MethodType(gpt_bigcode_attn, layer.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+            for layer in self._model.transformer.h:
+                layer.attn._attn = layer.attn._orig_attn
+
+
+class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        @functools.wraps(model.__orig_forward)
+        def patched_forward(*args, **kwargs):
+            from transformers.cache_utils import EncoderDecoderCache
+
+            signature = inspect.signature(self.orig_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            return_legacy_cache = False
+            pkv_in_args = False
+            legacy_pkv = None
+            if "past_key_values" in kwargs:
+                legacy_pkv = kwargs.pop("past_key_values", None)
+            sign_names = list(signature.parameters.keys())
+            pkv_argument_index = sign_names.index("past_key_values")
+            if legacy_pkv is None and len(args) > pkv_argument_index:
+                legacy_pkv = args[pkv_argument_index]
+                pkv_in_args = True
+            if legacy_pkv is not None:
+                only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
+                pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
+                return_legacy_cache = True
+                if not pkv_in_args:
+                    kwargs["past_key_values"] = pkv
+                else:
+                    args[pkv_argument_index] = pkv
+
+            outputs = model.__orig_forward(*args, **kwargs)
+            if return_legacy_cache:
+                outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+
+            return outputs
+
+        model.forward = patched_forward
+
+        super().__init__(config, model, model_kwargs)

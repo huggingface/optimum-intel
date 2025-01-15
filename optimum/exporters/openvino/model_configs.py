@@ -20,6 +20,7 @@ from packaging import version
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
+from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
     CLIPOnnxConfig,
@@ -29,6 +30,7 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
+    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -37,8 +39,10 @@ from optimum.exporters.onnx.model_configs import (
     MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    T5OnnxConfig,
     UNetOnnxConfig,
     VisionOnnxConfig,
+    WhisperOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -56,7 +60,12 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
-from ...intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
+from ...intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_available,
+    is_diffusers_version,
+    is_transformers_version,
+)
 from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
@@ -68,10 +77,12 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
+    GraniteMoEModelPatcher,
     IBertModelPatcher,
     InputEmbeddingPatcher,
     InternLM2Patcher,
@@ -94,6 +105,7 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     RotaryEmbPatcher,
+    StatefulSeq2SeqDecoderPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
 )
@@ -117,6 +129,10 @@ def init_model_configs():
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+
+    if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -2554,3 +2570,114 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
 )
 class GLMOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
+
+
+@register_in_tasks_manager(
+    "granite",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GraniteOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+
+
+@register_in_tasks_manager(
+    "granitemoe", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gpt-bigcode",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "whisper",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "audio-classification",
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class WhisperOpenVINOConfig(WhisperOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
+
+
+@register_in_tasks_manager(
+    "t5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class T5OpenVINOConfig(T5OnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
+
+
+@register_in_tasks_manager(
+    "mt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class MT5OpenVINOConfig(T5OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "longt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class LongT5OpenVINOConfig(T5OpenVINOConfig):
+    pass

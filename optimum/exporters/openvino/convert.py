@@ -28,10 +28,13 @@ from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.utils import (
-    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
+    DECODER_NAME,
+    ENCODER_NAME,
+    _get_submodels_for_export_encoder_decoder,
+    get_diffusion_models_for_export,
 )
 from optimum.exporters.utils import (
-    get_diffusion_models_for_export,
+    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
 )
 from optimum.intel.utils.import_utils import (
     _diffusers_version,
@@ -43,7 +46,9 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_diffusers_version,
     is_openvino_tokenizers_version,
+    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -104,10 +109,13 @@ def _set_runtime_options(
             "diffusers" in library_name
             or "text-generation" in task
             or ("image-text-to-text" in task and model_name == "language_model")
+            or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
         if not quantized_model and (
-            "text-generation" in task or ("image-text-to-text" in task and model_name == "language_model")
+            "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+            or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
@@ -365,6 +373,7 @@ def export_pytorch(
     import torch
     from torch.utils._pytree import tree_map
 
+    from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
     from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
@@ -427,6 +436,10 @@ def export_pytorch(
 
             patcher.patched_forward = ts_patched_forward
 
+            ts_decoder_kwargs = {}
+            if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
+                ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
+
             with patcher:
                 if patch_16bit_model:
                     from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
@@ -434,8 +447,9 @@ def export_pytorch(
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = _get_input_info(model, config, dummy_inputs)
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
                 ov_model = convert_model(
-                    model,
+                    ts_decoder,
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )
@@ -634,10 +648,14 @@ def export_from_model(
 
         logger.info(f"Automatic task detection to: {task}.")
 
+    is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
+    model_type = getattr(getattr(model, "config", {}), "model_type", "")
     stateful = stateful and (
-        ensure_export_task_support_stateful(task)
-        or ensure_model_type_support_stateful(getattr(getattr(model, "config", {}), "model_type", ""))
+        ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
+
+    if stateful and is_encoder_decoder and not getattr(model, "_supports_cache_class", False):
+        stateful = False
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
@@ -663,6 +681,9 @@ def export_from_model(
     # Get the shapes to be used to generate dummy inputs
     input_shapes = {}
     for input_name in DEFAULT_DUMMY_SHAPES.keys():
+        if input_name in ["height", "width"]:
+            # use H and W from generator defaults
+            continue
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
@@ -676,6 +697,11 @@ def export_from_model(
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
+    elif stateful and is_encoder_decoder and not custom_architecture:
+        export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(
+            model=model, task=task, preprocessors=preprocessors, library_name=library_name, _variant="default"
+        )
+        stateful_submodels = [False, True]
     else:
         logging.disable(logging.INFO)
         export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
@@ -988,24 +1014,36 @@ def _get_submodels_and_export_configs(
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
-    try:
-        from diffusers import (
-            StableDiffusion3Img2ImgPipeline,
-            StableDiffusion3InpaintPipeline,
-            StableDiffusion3Pipeline,
-        )
+    if is_diffusers_version(">=", "0.29.0"):
+        from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 
-        is_sd3 = isinstance(
-            pipeline, (StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline)
-        )
-    except ImportError:
+        sd3_pipes = [StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline]
+        if is_diffusers_version(">=", "0.30.0"):
+            from diffusers import StableDiffusion3InpaintPipeline
+
+            sd3_pipes.append(StableDiffusion3InpaintPipeline)
+
+        is_sd3 = isinstance(pipeline, tuple(sd3_pipes))
+    else:
         is_sd3 = False
 
-    try:
+    if is_diffusers_version(">=", "0.30.0"):
         from diffusers import FluxPipeline
 
-        is_flux = isinstance(pipeline, FluxPipeline)
-    except ImportError:
+        flux_pipes = [FluxPipeline]
+
+        if is_diffusers_version(">=", "0.31.0"):
+            from diffusers import FluxImg2ImgPipeline, FluxInpaintPipeline
+
+            flux_pipes.extend([FluxPipeline, FluxImg2ImgPipeline, FluxInpaintPipeline])
+
+        if is_diffusers_version(">=", "0.32.0"):
+            from diffusers import FluxFillPipeline
+
+            flux_pipes.append(FluxFillPipeline)
+
+        is_flux = isinstance(pipeline, tuple(flux_pipes))
+    else:
         is_flux = False
 
     if not is_sd3 and not is_flux:
@@ -1198,3 +1236,42 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
 
     return models_for_export
+
+
+def _get_encoder_decoder_stateful_models_for_export(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    _variant: str,
+    library_name: str,
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    preprocessors: Optional[List[Any]] = None,
+):
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name=library_name
+    )
+    export_config = export_config_constructor(
+        model.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        preprocessors=preprocessors,
+        legacy=False,
+    )
+
+    export_config.variant = _variant
+    all_variants = "\n".join([f"    - {name}: {description}" for name, description in export_config.VARIANTS.items()])
+    logger.info(f"Using the export variant {export_config.variant}. Available variants are:\n{all_variants}")
+
+    models_for_export = _get_submodels_for_export_encoder_decoder(model, use_past=False)
+
+    encoder_export_config = export_config.with_behavior("encoder")
+    models_for_export[ENCODER_NAME] = (models_for_export[ENCODER_NAME], encoder_export_config)
+
+    decoder_export_config_with_past = export_config.with_behavior("decoder", use_past=True, use_past_in_inputs=True)
+
+    decoder_export_config_with_past.stateful = True
+    models_for_export[DECODER_NAME] = (
+        models_for_export[DECODER_NAME],
+        decoder_export_config_with_past,
+    )
+    return None, models_for_export
