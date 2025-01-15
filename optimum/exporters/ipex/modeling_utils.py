@@ -644,7 +644,11 @@ def _qwen2_model_forward(
         )
 
     if position_ids is None:
-        position_ids = cache_position.unsqueeze(0)
+        device = input_ids.device if input_ids is not None else inputs_embeds.device
+        position_ids = torch.arange(
+            past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+        )
+        position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
     causal_mask = self._update_causal_mask(
         attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
