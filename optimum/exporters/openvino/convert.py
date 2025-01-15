@@ -46,7 +46,6 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
-    is_diffusers_version,
     is_openvino_tokenizers_version,
     is_openvino_version,
     is_tokenizers_version,

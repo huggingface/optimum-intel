@@ -73,9 +73,9 @@ from .utils import (
     OV_XML_FILE_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
+    check_scale_available,
     model_has_dynamic_inputs,
     np_to_pt_generators,
-    check_scale_available,
 )
 
 
