@@ -206,31 +206,31 @@ TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 
 def get_num_quantized_nodes(model):
-    num_fake_quantize = 0
-    num_weight_nodes = {
-        "int8": 0,
-        "int4": 0,
-        "f4e2m1": 0,
-        "f8e8m0": 0,
-        "nf4": 0,
+    num_fake_nodes = 0
+    types_map = {
+        "i8": "int8",
+        "u8": "int8",
+        "i4": "int4",
+        "u4": "int4",
+        "f4e2m1": "f4e2m1",
+        "f8e8m0": "f8e8m0",
+        "nf4": "nf4",
+        "f8e4m3": "f8e4m3",
+        "f8e5m2": "f8e5m2",
     }
+    num_weight_nodes = {n: 0 for n in types_map.values()}
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
-            num_fake_quantize += 1
+            num_fake_nodes += 1
+        if "FakeConvert" in elem.name:
+            num_fake_nodes += 1
         for i in range(elem.get_output_size()):
             type_name = elem.get_output_element_type(i).get_type_name()
-            if type_name in ["i8", "u8"]:
-                num_weight_nodes["int8"] += 1
-            if type_name in ["i4", "u4"]:
-                num_weight_nodes["int4"] += 1
-            if type_name == "f4e2m1":
-                num_weight_nodes["f4e2m1"] += 1
-            if type_name == "f8e8m0":
-                num_weight_nodes["f8e8m0"] += 1
-            if type_name == "nf4":
-                num_weight_nodes["nf4"] += 1
-    return num_fake_quantize, num_weight_nodes
+            if type_name in types_map:
+                name = types_map[type_name]
+                num_weight_nodes[name] += 1
+    return num_fake_nodes, num_weight_nodes
 
 
 @contextmanager

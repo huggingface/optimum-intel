@@ -66,6 +66,7 @@ from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import (
     OVDiffusionPipeline,
     OVFluxPipeline,
@@ -607,8 +608,9 @@ class PipelineTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
+            if not ov_exported_pipe.model.decoder.stateful:
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
             ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
@@ -1624,16 +1626,23 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
+    SUPPORT_STATEFUL = ("t5", "mt5")
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-
+        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
-        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        if not ov_model.decoder.stateful:
+            self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1649,6 +1658,21 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens, **decoder_inputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**tokens, generation_config=gen_config)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**tokens, generation_config=gen_config)
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+
         del transformers_model
         del ov_model
 
@@ -1718,7 +1742,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["t5"]
+        model_id = MODEL_NAMES["bart"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -2337,15 +2361,21 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        # whisper cache class support implemented in 4.43
+        expected_stateful = is_transformers_version(">", "4.43")
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
 
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
-        features = processor.feature_extractor(data, return_tensors="pt")
+        pt_features = processor.feature_extractor(data, return_tensors="pt")
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**features, **decoder_inputs)
+            transformers_outputs = transformers_model(**pt_features, **decoder_inputs)
 
         for input_type in ["pt", "np"]:
             features = processor.feature_extractor(data, return_tensors=input_type)
@@ -2357,6 +2387,21 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config)
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
 
         del transformers_model
         del ov_model
