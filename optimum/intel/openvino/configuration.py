@@ -682,7 +682,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
             if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets:
                 raise ValueError(
-                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs or 
+                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs or
                     {speech_to_text_datasets} for speech-to-text models, but we found {self.dataset}."""
                 )
 
