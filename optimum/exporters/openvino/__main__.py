@@ -86,6 +86,7 @@ def infer_task(
                     revision=revision,
                     cache_dir=cache_dir,
                     token=token,
+                    library_name=library_name,
                 )
             except KeyError as e:
                 raise KeyError(
