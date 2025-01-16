@@ -397,7 +397,7 @@ def is_openvino_tokenizers_version(operation: str, version: str):
         except importlib_metadata.PackageNotFoundError:
             pass
 
-    tokenizers_version = tokenizers_version[:len("2025.0.0.0")]
+    tokenizers_version = tokenizers_version[: len("2025.0.0.0")]
     return compare_versions(parse(tokenizers_version), operation, version)
 
 
