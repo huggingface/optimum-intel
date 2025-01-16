@@ -458,11 +458,6 @@ class OVQuantizer(OptimumQuantizer):
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
 
-            if quantization_config.weight_format != "int8":
-                raise ValueError("Only 'int8' weight format is currently supported.")
-            if quantization_config.activation_format != "int8":
-                raise ValueError("Only 'int8' activation format is currently supported.")
-
             # Quantize model(s)
             if isinstance(self.model, _OVModelForWhisper):
                 self._quantize_whisper_model(quantization_config, calibration_dataset, **kwargs)
@@ -1076,6 +1071,14 @@ def _full_quantization(
         advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(
             matmul=quantization_config.smooth_quant_alpha
         )
+
+    q_mode_map = {
+        "f8e4m3": nncf.QuantizationMode.FP8_E4M3,
+        "f8e5m2": nncf.QuantizationMode.FP8_E5M2,
+    }
+
+    if quantization_config.activation_format in q_mode_map:
+        kwargs.update({"mode": q_mode_map[quantization_config.activation_format]})
 
     quantized_model = nncf.quantize(
         model,
