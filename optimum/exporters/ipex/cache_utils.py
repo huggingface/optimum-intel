@@ -1,3 +1,4 @@
+import os
 from typing import List, Optional, Tuple
 
 import torch
@@ -5,8 +6,8 @@ from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
 
 
-# May need to tune based on sequence length and different models but default to 16 currently.
-BLOCK_SIZE = 16
+# Recommend 16 on CPU and 64 on XPU.
+BLOCK_SIZE = int(os.environ.get("OI_PAGED_ATTN_BLOCK_SIZE", 16))
 
 
 class IPEXPagedCache(Cache):
