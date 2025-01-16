@@ -26,7 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
-from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
+from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_SPEECH_TO_TEXT_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
 
 
 if is_nncf_available():
@@ -672,6 +672,15 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         Safety checker that arguments are correct
         """
         super().post_init()
+
+        if self.dataset is not None:
+            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
+            speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            if self.dataset not in lm_datasets + speech_to_text_datasets:
+                raise ValueError(
+                    f"""You can only choose between the following datasets: {lm_datasets} for LLMs or 
+                    {speech_to_text_datasets} for speech-to-text models, but we found {self.dataset}."""
+                )
 
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
