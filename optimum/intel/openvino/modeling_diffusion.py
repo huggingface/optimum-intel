@@ -575,6 +575,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         model_save_dir = TemporaryDirectory()
         model_save_path = Path(model_save_dir.name)
+        variant = kwargs.pop("variant", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -589,6 +590,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             force_download=force_download,
             ov_config=ov_config,
             library_name=cls._library_name,
+            model_variant=variant,
         )
 
         return cls._from_pretrained(

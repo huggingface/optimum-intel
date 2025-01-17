@@ -106,6 +106,7 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     RotaryEmbPatcher,
+    SanaTextEncoderModelPatcher,
     StatefulSeq2SeqDecoderPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
@@ -1902,6 +1903,11 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return SanaTextEncoderModelPatcher(self, model, model_kwargs)
 
 
 class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):

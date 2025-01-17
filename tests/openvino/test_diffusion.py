@@ -149,12 +149,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             for output_type in ["latent", "np", "pt"]:
                 inputs["output_type"] = output_type
                 if model_arch == "sana":
-                    if output_type == "latent":
-                        continue
+                    # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
                     inputs["use_resolution_binning"] = False
-                    atol = 4e-2
-                else:
-                    atol = 6e-3
+                atol = 1e-4
 
                 ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
                 diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -166,12 +163,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
             if model_arch == "sana":
-                if output_type == "latent":
-                    continue
+                # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
                 inputs["use_resolution_binning"] = False
-                atol = 4e-2
-            else:
-                atol = 6e-3
+            atol = 6e-3
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
