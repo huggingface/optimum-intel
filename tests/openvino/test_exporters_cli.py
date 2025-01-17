@@ -100,7 +100,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "flux-fill": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
     }
 
@@ -118,9 +118,18 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "automatic-speech-recognition",
             "whisper",
-            "--quant-mode int8 --dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
+            "int8",
+            "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
             (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
+        ),
+        (
+            "text-generation",
+            "llama",
+            "f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
+            (13,),
+            (16,),
         ),
     ]
 
@@ -340,7 +349,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if task.startswith("text2text-generation"):
                 models = [model.encoder, model.decoder]
-                if task.endswith("with-past"):
+                if task.endswith("with-past") and not model.decoder.stateful:
                     models.append(model.decoder_with_past)
             elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
@@ -411,26 +420,31 @@ class OVCLIExportTestCase(unittest.TestCase):
         self,
         task: str,
         model_type: str,
+        quant_mode: str,
         option: str,
-        expected_num_fq_nodes_per_model: Tuple[int],
+        expected_num_f_nodes_per_model: Tuple[int],
         expected_num_weight_nodes_per_model: Tuple[int],
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --quant-mode {quant_mode} {option} {tmpdir}",
                 shell=True,
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
 
-            submodels = []
+            models = [model]
             if task == "automatic-speech-recognition":
-                submodels = [model.encoder, model.decoder, model.decoder_with_past]
-            self.assertEqual(len(expected_num_fq_nodes_per_model), len(submodels))
-            for i, model in enumerate(submodels):
-                actual_num_fq_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_num_fq_nodes_per_model[i], actual_num_fq_nodes)
-                self.assertEqual(expected_num_weight_nodes_per_model[i], actual_num_weight_nodes["int8"])
+                models = [model.encoder, model.decoder]
+                if model.decoder_with_past is not None:
+                    models.append(model.decoder_with_past)
+                else:
+                    expected_num_f_nodes_per_model = expected_num_f_nodes_per_model[:-1]
+            self.assertEqual(len(expected_num_f_nodes_per_model), len(models))
+            for i, model in enumerate(models):
+                actual_num_f_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
+                self.assertEqual(expected_num_f_nodes_per_model[i], actual_num_f_nodes)
+                self.assertEqual(expected_num_weight_nodes_per_model[i], actual_num_weight_nodes[quant_mode])
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
