@@ -369,7 +369,6 @@ def main_export(
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         else:
-            logger.warn(loading_kwargs)
             model = TasksManager.get_model_from_task(
                 task,
                 model_name_or_path,
