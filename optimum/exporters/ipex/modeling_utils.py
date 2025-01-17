@@ -628,10 +628,10 @@ class _IPEXAttention(nn.Module):
         return attn_output
 
     # Maybe removed after torch 2.6 released
-    def has_flash_attn(self, query):
-        if query.device.type == "cpu":
+    def has_flash_attn(self):
+        if self.module_device.type == "cpu":
             return is_torch_version(">", "2.4.99")
-        elif query.device.type == "xpu":
+        elif self.module_device.type == "xpu":
             return is_torch_version(">", "2.5.99")
 
     def attention_interface(
@@ -652,20 +652,23 @@ class _IPEXAttention(nn.Module):
                 is_causal=True,
             )
             self.use_sdpa = True
-        elif self.has_flash_attn(query):
+        elif self.has_flash_attn():
             attn_output = torch.empty_like(query)
             seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-            query_len_tensor = seq_len_tensor if past_len == 0 else torch.arange(seq_len_tensor.shape[0]).int()
-            query_max_len = input_lens.max() if past_len == 0 else 1
+            query_len_tensor = (
+                seq_len_tensor if past_len == 0 else torch.arange(seq_len_tensor.shape[0], device=query.device).int()
+            )
+            max_input_lens = input_lens.max().item()
+            query_max_len = max_input_lens if past_len == 0 else 1
             PagedAttention.flash_attn_varlen_func(
                 attn_output,
                 query.contiguous() if query.device.type == "xpu" else query,
-                key_cache.contiguous() if key_cache.device.type == "xpu" else key_cache,
-                value_cache.contiguous() if value_cache.device.type == "xpu" else value_cache,
+                key_cache,
+                value_cache,
                 query_len_tensor,
                 seq_len_tensor,
                 query_max_len,
-                input_lens.max(),
+                max_input_lens,
                 1.0 / math.sqrt(self.head_dim),
                 True,
                 past_key_value.block_tables,
