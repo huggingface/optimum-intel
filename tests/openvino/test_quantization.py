@@ -59,6 +59,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
     OVQuantizer,
+    OVSanaPipeline,
     OVTrainer,
     OVQuantizationConfig,
     OVWeightQuantizationConfig,
@@ -543,6 +544,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             [
                 (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
                 (OVFluxPipeline, "flux", 7, 56),
+                (OVSanaPipeline, "sana", 19, 53),
             ]
         )
 
