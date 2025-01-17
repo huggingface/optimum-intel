@@ -810,7 +810,7 @@ class _IPEXAttention(nn.Module):
                 query.contiguous() if query.device.type == "xpu" else query,
                 key_cache,
                 value_cache,
-                seq_len_tensor if past_len == 0 else query_len_tensor,
+                query_len_tensor,
                 seq_len_tensor,
                 query_max_len,
                 max_input_lens,
