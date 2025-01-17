@@ -365,7 +365,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 self.assertEqual(expected_int8[i], num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
-    def test_exporters_cli_hybrid_quantization(self, model_type: str, exp_num_fq: int, exp_num_int8: int):
+    def test_exporters_cli_hybrid_quantization(
+        self, model_type: str, expected_fake_nodes: int, expected_int8_nodes: int
+    ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
@@ -373,11 +375,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
-            num_fq, num_weight_nodes = get_num_quantized_nodes(
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
                 model.unet if model.unet is not None else model.transformer
             )
-            self.assertEqual(exp_num_int8, num_weight_nodes["int8"])
-            self.assertEqual(exp_num_fq, num_fq)
+            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
+            self.assertEqual(expected_fake_nodes, num_fake_nodes)
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
@@ -422,8 +424,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_type: str,
         quant_mode: str,
         option: str,
-        expected_num_f_nodes_per_model: Tuple[int],
-        expected_num_weight_nodes_per_model: Tuple[int],
+        expected_fake_nodes: Tuple[int],
+        expected_low_precision_nodes: Tuple[int],
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
@@ -439,12 +441,12 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if model.decoder_with_past is not None:
                     models.append(model.decoder_with_past)
                 else:
-                    expected_num_f_nodes_per_model = expected_num_f_nodes_per_model[:-1]
-            self.assertEqual(len(expected_num_f_nodes_per_model), len(models))
+                    expected_fake_nodes = expected_fake_nodes[:-1]
+            self.assertEqual(len(expected_fake_nodes), len(models))
             for i, model in enumerate(models):
-                actual_num_f_nodes, actual_num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_num_f_nodes_per_model[i], actual_num_f_nodes)
-                self.assertEqual(expected_num_weight_nodes_per_model[i], actual_num_weight_nodes[quant_mode])
+                num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
+                self.assertEqual(expected_fake_nodes[i], num_fake_nodes)
+                self.assertEqual(expected_low_precision_nodes[i], num_weight_nodes[quant_mode])
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
