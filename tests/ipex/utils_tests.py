@@ -50,6 +50,7 @@ MODEL_NAMES = {
     "mt5": "stas/mt5-tiny-random",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
+    "qwen2": "Jiqing/tiny-random-Qwen2",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -64,4 +65,5 @@ MODEL_NAMES = {
     "patched_falcon": "Intel/tiny-random-falcon_ipex_model",
     "patched_gpt2": "Intel/tiny-random-gpt2_ipex_model",
     "patched_llama2": "Intel/tiny-random-llama2_ipex_model",
+    "patched_qwen2": "Jiqing/tiny-random-Qwen2_ipex_model",
 }
