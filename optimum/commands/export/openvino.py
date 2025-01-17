@@ -364,6 +364,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
         else:
+            if self.args.dataset is None:
+                raise ValueError(
+                    "Dataset is required for full quantization. Please provide it with --dataset argument."
+                )
+
             quantization_config = {
                 "weight_format": self.args.quant_mode,
                 "activation_format": self.args.quant_mode,
