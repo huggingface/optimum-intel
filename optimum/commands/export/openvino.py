@@ -452,6 +452,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config=quantization_config,
                 stateful=not self.args.disable_stateful,
                 trust_remote_code=self.args.trust_remote_code,
+                variant=self.args.variant,
+                cache_dir=self.args.cache_dir,
             )
             model.save_pretrained(self.args.output)
 
