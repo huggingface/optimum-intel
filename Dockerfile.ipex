@@ -43,7 +43,7 @@ ARG KMP_HW_SUBSET=1T
 ENV KMP_HW_SUBSET=${KMP_HW_SUBSET}
 ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc.so"
 
-FROM intel/intel-extension-for-pytorch:2.3.110-xpu as xpu
+FROM intel/intel-extension-for-pytorch:2.5.10-xpu as xpu
 WORKDIR /usr/src/
 
 RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
