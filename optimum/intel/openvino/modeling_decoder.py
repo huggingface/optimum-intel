@@ -193,6 +193,10 @@ class OVBaseDecoderModel(OVModel):
         if not self._compile_only and enable_compilation:
             self.compile()
 
+    @property
+    def _is_stateful(self) -> bool:
+        return self.stateful
+
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful or self._compile_only:
             return
