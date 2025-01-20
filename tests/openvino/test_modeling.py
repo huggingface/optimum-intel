@@ -14,7 +14,6 @@
 
 import copy
 import gc
-import importlib
 import os
 import platform
 import tempfile
@@ -109,7 +108,12 @@ from optimum.intel.openvino.utils import (
     _print_compiled_model_properties,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _langchain_available,
+    _langchain_version,
+    is_openvino_version,
+    is_transformers_version,
+)
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -130,15 +134,6 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
-
-
-_langchain_available = importlib.util.find_spec("langchain") is not None
-_langchain_version = "N/A"
-if _langchain_available:
-    try:
-        _langchain_version = importlib.metadata.version("langchain")
-    except importlib.metadata.PackageNotFoundError:
-        _langchain_available = False
 
 
 class Timer(object):
