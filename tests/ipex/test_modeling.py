@@ -715,6 +715,25 @@ class IPEXSTModel(unittest.TestCase):
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_sentence_transformers
+    @unittest.skipIf(
+        not _langchain_hf_available or version.parse(_langchain_hf_version) <= version.parse("0.1.2"),
+        reason="Unsupported langchain version",
+    )
+    def test_langchain(self, model_arch):
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        model_id = MODEL_NAMES[model_arch]
+        model_kwargs = {"device": "cpu", "backend": "ipex"}
+
+        embedding = HuggingFaceEmbeddings(
+            model_name=model_id,
+            model_kwargs=model_kwargs,
+        )
+        output = embedding.embed_query("foo bar")
+        self.assertTrue(len(output) > 0)
+
 
 class IPEXLangchainTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("gpt2",)
