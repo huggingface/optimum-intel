@@ -14,13 +14,14 @@
 
 import copy
 import gc
+import importlib
 import os
 import platform
 import tempfile
 import time
 import unittest
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Generator
 
 import numpy as np
 import open_clip
@@ -32,6 +33,7 @@ import torch
 from datasets import load_dataset
 from evaluate import evaluator
 from huggingface_hub import HfApi
+from packaging import version
 from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
@@ -128,6 +130,15 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
+
+
+_langchain_available = importlib.util.find_spec("langchain") is not None
+_langchain_version = "N/A"
+if _langchain_available:
+    try:
+        _langchain_version = importlib.metadata.version("langchain")
+    except importlib.metadata.PackageNotFoundError:
+        _langchain_available = False
 
 
 class Timer(object):
@@ -2795,4 +2806,39 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(model_save_path)
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
+        gc.collect()
+
+
+class OVLangchainTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("gpt2",)
+
+    @unittest.skipIf(
+        not _langchain_available or version.parse(_langchain_version) <= version.parse("0.3.30"),
+        reason="Unsupported langchain",
+    )
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_huggingface_pipeline_streaming(self, model_arch):
+        from langchain_huggingface import HuggingFacePipeline
+
+        model_id = MODEL_NAMES[model_arch]
+
+        hf_pipe = HuggingFacePipeline.from_model_id(
+            model_id=model_id,
+            task="text-generation",
+            pipeline_kwargs={"max_new_tokens": 10},
+            backend="openvino",
+        )
+
+        generator = hf_pipe.stream("Q: How do you say 'hello' in German? A:'", stop=["."])
+
+        self.assertIsInstance(generator, Generator)
+
+        stream_results_string = ""
+        for chunk in generator:
+            self.assertIsInstance(chunk, str)
+            stream_results_string = chunk
+
+        self.assertTrue(len(stream_results_string.strip()) > 1)
+
+        del hf_pipe
         gc.collect()
