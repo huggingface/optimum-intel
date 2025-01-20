@@ -723,6 +723,23 @@ class OVWeightCompressionTest(unittest.TestCase):
             _, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_weight_nodes["int8"])
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    def test_raise_error_WC_over_WC(self, model_cls, model_type, trust_remote_code):
+        model = model_cls.from_pretrained(
+            MODEL_NAMES[model_type],
+            export=True,
+            load_in_8bit=True,
+            trust_remote_code=trust_remote_code,
+        )
+        quantization_config = OVWeightQuantizationConfig(bits=4, sym=True)
+        quantizer = OVQuantizer(model)
+        if isinstance(model, OVModelOpenCLIPForZeroShotImageClassification):
+            with pytest.raises(TypeError):
+                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+        else:
+            with pytest.raises(RuntimeError):
+                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_type]
