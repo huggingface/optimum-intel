@@ -109,8 +109,8 @@ from optimum.intel.openvino.utils import (
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
-    _langchain_available,
-    _langchain_version,
+    _langchain_hf_available,
+    _langchain_hf_version,
     is_openvino_version,
     is_transformers_version,
 )
@@ -2807,11 +2807,11 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVLangchainTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("gpt2",)
 
-    @unittest.skipIf(
-        not _langchain_available or version.parse(_langchain_version) <= version.parse("0.3.30"),
-        reason="Unsupported langchain",
-    )
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(
+        not _langchain_hf_available or version.parse(_langchain_hf_version) < version.parse("0.1.2"),
+        reason="Unsupported langchain version",
+    )
     def test_huggingface_pipeline_streaming(self, model_arch):
         from langchain_huggingface import HuggingFacePipeline
 

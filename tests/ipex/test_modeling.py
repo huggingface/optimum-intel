@@ -52,8 +52,8 @@ from optimum.utils.testing_utils import grid_parameters, require_sentence_transf
 from optimum.intel.utils.import_utils import (
     is_sentence_transformers_available,
     is_torch_version,
-    _langchain_available,
-    _langchain_version,
+    _langchain_hf_available,
+    _langchain_hf_version,
 )
 
 if is_sentence_transformers_available():
@@ -719,11 +719,11 @@ class IPEXSTModel(unittest.TestCase):
 class IPEXLangchainTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("gpt2",)
 
-    @unittest.skipIf(
-        not _langchain_available or version.parse(_langchain_version) <= version.parse("0.3.30"),
-        reason="Unsupported langchain",
-    )
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(
+        not _langchain_hf_available or version.parse(_langchain_hf_version) <= version.parse("0.1.2"),
+        reason="Unsupported langchain version",
+    )
     def test_huggingface_pipeline_streaming(self, model_arch):
         from langchain_huggingface import HuggingFacePipeline
 
