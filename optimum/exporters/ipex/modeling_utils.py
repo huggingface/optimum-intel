@@ -725,7 +725,7 @@ class _IPEXAttention(nn.Module):
             attn_output = torch.empty_like(query)
             seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
             query_len_tensor = seq_len_tensor if past_len == 0 else torch.arange(seq_len_tensor.shape[0]).int()
-            query_max_len = input_lens.max() if past_len == 0 else 1
+            query_max_len = input_lens.max().item() if past_len == 0 else 1
             PagedAttention.flash_attn_varlen_func(
                 attn_output,
                 query.contiguous() if query.device.type == "xpu" else query,
@@ -734,7 +734,7 @@ class _IPEXAttention(nn.Module):
                 query_len_tensor,
                 seq_len_tensor,
                 query_max_len,
-                input_lens.max(),
+                input_lens.max().item(),
                 1.0 / math.sqrt(self.head_dim),
                 True,
                 past_key_value.block_tables,
@@ -844,7 +844,7 @@ class _IPEXLlamaAttention(_IPEXAttention):
         value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
 
         return query, key, value
-
+    @torch.compiler.disable
     def rope(self, query, key, **kwargs):
         position_embeddings = kwargs.pop("position_embeddings", None)
         rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)

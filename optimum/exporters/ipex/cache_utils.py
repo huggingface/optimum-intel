@@ -78,7 +78,6 @@ class IPEXPagedCache(Cache):
             self.key_cache.append(new_layer_key_cache)
             self.value_cache.append(new_layer_value_cache)
 
-    @torch.compiler.disable()
     def reshape_and_cache(self, key_states, value_states, layer_idx):
         PagedAttention.reshape_and_cache(
             key_states,
