@@ -62,7 +62,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
 # TODO: Some models are already fixed in torch 2.6, will enable them when torch upgrading to 2.6
-_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2")
+_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "falcon", "gpt2")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
@@ -313,7 +313,32 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return self.model._reorder_cache(*args, **kwargs)
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
-        return self.model.prepare_inputs_for_generation(*args, **kwargs)
+        model_input = self.model.prepare_inputs_for_generation(*args, **kwargs)
+        inputs_embeds = self.model.model.embed_tokens(model_input["input_ids"])
+        position_embeddings = self.model.model.rotary_emb(inputs_embeds, model_input["position_ids"])
+        past_key_values = model_input["past_key_values"]
+        past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+        if past_key_values_length == 0:
+            # first token, remove the padding from hidden_states, varlen do not accept attention mask
+            index = model_input["attention_mask"].view(-1) != 0
+            hidden_states = (inputs_embeds.view(-1, inputs_embeds.shape[-1]))[index]
+            cos = position_embeddings[0]
+            sin = position_embeddings[1]
+            cos = (cos.reshape(-1, cos.shape[-1]))[index]
+            sin = (sin.reshape(-1, sin.shape[-1]))[index]
+            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+            input_lens = model_input["attention_mask"].cumsum(-1)[:, -1].to(torch.int32)
+            if isinstance(past_key_values, IPEXPagedCache):
+                past_key_values.alloc_slot_for_prefill(input_lens, inputs_embeds.shape[0])
+        else:
+            hidden_states = inputs_embeds.view(-1, inputs_embeds.shape[-1])
+            if isinstance(past_key_values, IPEXPagedCache):
+                past_key_values.alloc_slot_for_decode(inputs_embeds.shape[0])
+        model_input["position_embeddings"] = position_embeddings
+        model_input["hidden_states"] = hidden_states
+        model_input["inputs_embeds"] = inputs_embeds
+        model_input["input_ids"] = None
+        return model_input
 
     def generate(self, *args, **kwargs):
         if self._add_patch and kwargs.get("assistant_model", None):

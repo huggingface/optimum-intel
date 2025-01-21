@@ -17,6 +17,7 @@ from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, Falco
 from transformers.models.gpt2.modeling_gpt2 import GPT2MLP, GPT2Attention, GPT2Block, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
+    LlamaForCausalLM,
     LlamaModel,
     LlamaRMSNorm,
 )
@@ -37,6 +38,7 @@ from .modeling_utils import (
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
+    _LlamaForCausalLM_forward,
 )
 
 
@@ -80,6 +82,8 @@ def _patch_llama_model(model):
         1. Use IPEX rope and paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
+    if isinstance(model, LlamaForCausalLM):
+        convert_func(model, "forward", _LlamaForCausalLM_forward)
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
     convert_functions(model, LlamaRMSNorm, "forward", _ipex_rms_layer_norm_forward)
     convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
