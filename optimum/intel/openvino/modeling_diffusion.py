@@ -63,7 +63,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version
+from ..utils.import_utils import is_diffusers_version, is_openvino_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
@@ -73,6 +73,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
+    check_scale_available,
     model_has_dynamic_inputs,
     np_to_pt_generators,
 )
@@ -484,8 +485,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
-            if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
-                vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
+            if (
+                "GPU" in device.upper()
+                and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg
+                and is_openvino_version("<=", "2025.0")
+            ):
+                vae_model_path = models["vae_decoder"]
+                required_upcast = check_scale_available(vae_model_path)
+                if required_upcast:
+                    vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
             for name, path in models.items():
                 if name in kwargs:
                     models[name] = kwargs.pop(name)
@@ -1202,7 +1210,12 @@ class OVModelVaeEncoder(OVPipelinePart):
         return ModelOutput(**model_outputs)
 
     def _compile(self):
-        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
+        if (
+            "GPU" in self._device
+            and "INFERENCE_PRECISION_HINT" not in self.ov_config
+            and is_openvino_version("<", "2025.0")
+            and check_scale_available(self.model)
+        ):
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -1241,7 +1254,12 @@ class OVModelVaeDecoder(OVPipelinePart):
         return ModelOutput(**model_outputs)
 
     def _compile(self):
-        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
+        if (
+            "GPU" in self._device
+            and "INFERENCE_PRECISION_HINT" not in self.ov_config
+            and is_openvino_version("<", "2025.0")
+            and check_scale_available(self.model)
+        ):
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 

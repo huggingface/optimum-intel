@@ -26,7 +26,12 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
-from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_SPEECH_TO_TEXT_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
+from .utils import (
+    LANGUAGE_DATASETS,
+    PREDEFINED_SD_DATASETS,
+    PREDEFINED_SPEECH_TO_TEXT_DATASETS,
+    PREDEFINED_VISUAL_LM_DATASETS,
+)
 
 
 if is_nncf_available():
@@ -467,13 +472,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:
+            if self.dataset not in LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    {lm_datasets} for LLMs, {visual_lm_datasets} for visual LLMs
+                    {LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs
                     or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
 
@@ -617,7 +621,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
             dataset (`str`, *optional*):
-                The dataset used for quantization. For text-to-speech model quantization the allowed value is 'librispeech'.
+                The dataset used for quantization. For language models the allowed values are
+                ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value is 'librispeech'.
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset. You can pass either:
                     - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -638,9 +643,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
             weight_format (`str`, defaults to "int8"):
-                Data format weights are quantized to. Possible values: ['int8'].
+                Data format weights are quantized to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
             activation_format (`str`, defaults to "int8"):
-                Data format activations are compressed to. Possible values: ['int8'].
+                Data format activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
         """
         super().__init__(
             bits=bits,
@@ -658,6 +663,13 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self.overflow_fix = overflow_fix
         self.smooth_quant_alpha = smooth_quant_alpha
         self.activation_format = activation_format
+
+        f8_formats = ["f8e4m3", "f8e5m2"]
+        if self.activation_format in f8_formats and self.weight_format in f8_formats:
+            logger.info(
+                f"{self.activation_format} for activations and {self.weight_format} weights were found. A symmetrical scheme will be used."
+            )
+            self.sym = True
         self.post_init()
 
     def post_init(self):
@@ -666,26 +678,21 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         """
         super().post_init()
 
+        if self.dataset is not None:
+            speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets:
+                raise ValueError(
+                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs or
+                    {speech_to_text_datasets} for speech-to-text models, but we found {self.dataset}."""
+                )
+
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
-
-        if self.dataset is not None:
-            if self.dataset not in PREDEFINED_SPEECH_TO_TEXT_DATASETS:
-                raise ValueError(
-                    f"You have entered the following string value for dataset: {self.dataset}. But it is not supported."
-                    f" Currently you can only choose {list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())}."
-                )
 
         if self.smooth_quant_alpha is not None and not (0 <= self.smooth_quant_alpha <= 1):
             raise ValueError(
                 f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
-
-        if self.weight_format != "int8":
-            raise ValueError("Only 'int8' weight format is currently supported.")
-
-        if self.activation_format != "int8":
-            raise ValueError("Only 'int8' activation format is currently supported.")
 
 
 class OVConfig(BaseConfig):
@@ -711,10 +718,7 @@ class OVConfig(BaseConfig):
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, OVWeightQuantizationConfig):
-                self.dtype = self.quantization_config.weight_format
-            else:
-                self.dtype = "int8"
+            self.dtype = self.quantization_config.weight_format
         else:
             self.dtype = dtype
 

@@ -136,6 +136,8 @@ _HEAD_TO_AUTOMODELS = {
 }
 
 
+LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
+
 PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
@@ -565,3 +567,21 @@ class TemporaryDirectory(OrigTemporaryDirectory):
     def cleanup(self):
         if self._finalizer.detach() or os.path.exists(self.name):
             self._rmtree(self.name, ignore_errors=self._ignore_cleanup_errors)
+
+
+def check_scale_available(model: Union[Model, str, Path]):
+    if isinstance(model, Model):
+        return model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+    if not Path(model).exists():
+        return False
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(model)
+    root = tree.getroot()
+    rt_info = root.find("rt_info")
+    if rt_info is None:
+        return False
+    runtime_options = rt_info.find("runtime_options")
+    if runtime_options is None:
+        return False
+    return runtime_options.find("ACTIVATIONS_SCALE_FACTOR") is not None

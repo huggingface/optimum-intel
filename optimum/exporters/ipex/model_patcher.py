@@ -14,7 +14,7 @@
 
 from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconModel
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2Model
+from transformers.models.gpt2.modeling_gpt2 import GPT2MLP, GPT2Attention, GPT2Block, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaModel,
@@ -27,6 +27,7 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _IPEXGPT2MLP,
     _falcon_model_forward,
     _gpt2_block_forward,
     _gpt2_model_forward,
@@ -40,8 +41,8 @@ from .modeling_utils import (
 
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
-_TRANSFORMERS_MIN_VERSION = "4.46.0"
-_TRANSFORMERS_MAX_VERSION = "4.46.99"
+_TRANSFORMERS_MIN_VERSION = "4.47.0"
+_TRANSFORMERS_MAX_VERSION = "4.47.99"
 
 _IPEX_EXPORTED_GENERATION_TASKS = ("text-generation",)
 
@@ -111,6 +112,7 @@ def _patch_gpt2_model(model):
     convert_functions(model, GPT2Model, "forward", _gpt2_model_forward)
     convert_functions(model, GPT2Block, "forward", _gpt2_block_forward)
     convert_class(model, GPT2Attention, _IPEXGPT2Attention, model.device, model.config)
+    convert_class(model, GPT2MLP, _IPEXGPT2MLP, model.device, model.config)
     return model
 
 
