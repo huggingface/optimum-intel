@@ -36,7 +36,7 @@ class IPEXPagedCache(Cache):
     def __init__(
         self,
         config: PretrainedConfig,
-        batch_size: int,
+        max_batch_size: int,
         max_cache_len: int,
         device,
         dtype=None,
@@ -44,18 +44,19 @@ class IPEXPagedCache(Cache):
         **kwargs,
     ) -> None:
         super().__init__()
-        self.batch_size = batch_size
+        self.max_batch_size = max_batch_size
         self.device = device
         self.flash_decoding = (
             is_ipex_version(">", "2.4.99") if device.type == "cpu" else is_ipex_version(">", "2.5.99")
         )
         # Used in `generate` to keep tally of how many tokens the cache has seen
-        self._seen_tokens = torch.zeros([batch_size], dtype=torch.int32, device=device)
+
+        self._seen_tokens = torch.zeros([max_batch_size], dtype=torch.int32, device=device)
         default_block_size = 16 if device.type == "cpu" else 64
         self.block_size = int(os.environ.get("OI_PAGED_ATTN_BLOCK_SIZE", str(default_block_size)))
-        self.num_blocks = (max_cache_len // self.block_size + (max_cache_len % self.block_size != 0)) * batch_size
+        self.num_blocks = (max_cache_len // self.block_size + (max_cache_len % self.block_size != 0)) * max_batch_size
         self.block_tables = -1 * torch.ones([self.num_blocks], dtype=torch.int32, device=device).reshape(
-            batch_size, -1
+            max_batch_size, -1
         )
         self.free_blocks = torch.ones([self.num_blocks], dtype=torch.int32, device=device)
         self.max_cache_len = max_cache_len
@@ -220,7 +221,7 @@ class IPEXPagedCache(Cache):
 
     def reset(self):
         """Resets the cache values while preserving the objects"""
-        self._seen_tokens = torch.zeros([self.batch_size], dtype=torch.int32, device=self.device)
+        self._seen_tokens = torch.zeros([self.max_batch_size], dtype=torch.int32, device=self.device)
         self.block_tables.fill_(-1)
         self.free_blocks = torch.ones([self.num_blocks], dtype=torch.int32, device=self.device)
         self.max_seq_len = 0

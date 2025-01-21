@@ -114,10 +114,23 @@ class OVQuantizerTest(unittest.TestCase):
             (14, 22, 21) if is_transformers_version("<=", "4.42.4") else (14, 22, 25),
             (14, 21, 17) if is_transformers_version("<=", "4.42.4") else (14, 22, 18),
         ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVQuantizationConfig(
+                dataset="wikitext2",
+                num_samples=1,
+                weight_only=False,
+                weight_format="f8e4m3",
+                activation_format="f8e4m3",
+            ),
+            (13,),
+            (16,),
+        ),
     ]
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
-    def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
+    def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
@@ -149,9 +162,9 @@ class OVQuantizerTest(unittest.TestCase):
                 ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
-            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_weight_nodes["int8"])
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_fake_nodes, num_fake_nodes)
+            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -162,7 +175,7 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL)
-    def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
+    def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
@@ -190,9 +203,9 @@ class OVQuantizerTest(unittest.TestCase):
 
             model = model_cls.from_pretrained(tmp_dir)
 
-            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_weight_nodes["int8"])
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_fake_nodes, num_fake_nodes)
+            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -204,9 +217,10 @@ class OVQuantizerTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
     def test_ov_model_static_quantization_with_auto_dataset(
-        self, model_cls, model_name, quantization_config, expected_fake_quantize, expected_int8
+        self, model_cls, model_name, quantization_config, expected_fake_nodes, expected_low_precision_nodes
     ):
         model_id = MODEL_NAMES[model_name]
+        quant_mode = quantization_config.activation_format
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
@@ -217,17 +231,28 @@ class OVQuantizerTest(unittest.TestCase):
 
                 if ov_model.decoder_with_past is not None:
                     models.append(ov_model.decoder_with_past.model)
-                for model, expected_fq, expected_i8 in zip(
+                for model, expected_fake_nodes, expected_lp_nodes in zip(
                     models,
-                    expected_fake_quantize,
-                    expected_int8,
+                    expected_fake_nodes,
+                    expected_low_precision_nodes,
                 ):
-                    num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
-                    self.assertEqual(expected_fq, num_fake_quantize)
-                    self.assertEqual(expected_i8, num_weight_nodes["int8"])
+                    num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
+                    self.assertEqual(expected_fake_nodes, num_fake_nodes)
+                    self.assertEqual(expected_lp_nodes, num_weight_nodes[quant_mode])
 
                 input_features = torch.randn((1, 128, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
+            elif model_cls == OVModelForCausalLM:
+                num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model.model)
+                self.assertEqual(expected_fake_nodes[0], num_fake_nodes)
+                self.assertEqual(expected_low_precision_nodes[0], num_weight_nodes[quant_mode])
+
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+                tokens = tokenizer("This is a sample input", return_tensors="pt")
+                outputs = ov_model(**tokens)
+                self.assertTrue("logits" in outputs)
             else:
                 raise Exception("Unexpected model class.")
 
@@ -608,7 +633,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
-    def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8, expected_int4):
+    def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8_nodes, expected_int4_nodes):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
@@ -623,8 +648,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             model = model_cls.from_pretrained(tmp_dir)
 
             _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_int8, num_weight_nodes["int8"])
-            self.assertEqual(expected_int4, num_weight_nodes["int4"])
+            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
+            self.assertEqual(expected_int4_nodes, num_weight_nodes["int4"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -699,17 +724,17 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int8[i], num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
-    def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
+    def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_type]
         quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
         with TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
-            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(
+            num_fake, num_weight_nodes = get_num_quantized_nodes(
                 model.unet if model.unet is not None else model.transformer
             )
-            self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+            self.assertEqual(expected_fake_nodes, num_fake)
+            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
             self.assertEqual(0, num_weight_nodes["int4"])
 
             model.save_pretrained(tmp_dir)
@@ -721,16 +746,16 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
-        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(
+        num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
             int8_pipe.unet if int8_pipe.unet is not None else int8_pipe.transformer
         )
-        self.assertEqual(0, num_fake_quantize)
+        self.assertEqual(0, num_fake_nodes)
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
-        self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
+        self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes
     ):
         model_id = MODEL_NAMES[model_type]
         dataset = [
@@ -742,11 +767,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
-        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(
+        num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
             model.unet if model.unet is not None else model.transformer
         )
-        self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
-        self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+        self.assertEqual(expected_fake_nodes, num_fake_nodes)
+        self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
@@ -1050,7 +1075,7 @@ class OVTrainerTest(unittest.TestCase):
     @unittest.skipIf(
         is_transformers_version(">=", "4.46"), reason="OVTrainer is not compatible with transformers>=v4.46"
     )
-    def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
+    def test_aware_training_quantization(self, model_name, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_name]
         model = AutoModelForSequenceClassification.from_pretrained(model_id, attn_implementation="eager")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1084,9 +1109,9 @@ class OVTrainerTest(unittest.TestCase):
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_weight_nodes["int8"])
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_fake_nodes, num_fake_nodes)
+            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)

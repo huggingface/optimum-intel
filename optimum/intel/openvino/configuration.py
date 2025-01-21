@@ -26,7 +26,12 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
-from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
+from .utils import (
+    LANGUAGE_DATASETS,
+    PREDEFINED_SD_DATASETS,
+    PREDEFINED_SPEECH_TO_TEXT_DATASETS,
+    PREDEFINED_VISUAL_LM_DATASETS,
+)
 
 
 if is_nncf_available():
@@ -467,13 +472,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:
+            if self.dataset not in LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    {lm_datasets} for LLMs, {visual_lm_datasets} for visual LLMs
+                    {LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs
                     or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
 
@@ -617,7 +621,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
             dataset (`str`, *optional*):
-                The dataset used for quantization. For text-to-speech model quantization the allowed value is 'librispeech'.
+                The dataset used for quantization. For language models the allowed values are
+                ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value is 'librispeech'.
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset. You can pass either:
                     - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -672,6 +677,14 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         Safety checker that arguments are correct
         """
         super().post_init()
+
+        if self.dataset is not None:
+            speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets:
+                raise ValueError(
+                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs or
+                    {speech_to_text_datasets} for speech-to-text models, but we found {self.dataset}."""
+                )
 
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
