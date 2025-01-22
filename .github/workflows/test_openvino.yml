@@ -54,7 +54,7 @@ jobs:
       - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*modeling*'}}
         name: Install auto-gptq, autoawq
         run: |
-          pip install auto-gptq "autoawq<0.28" --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Uninstall NNCF
