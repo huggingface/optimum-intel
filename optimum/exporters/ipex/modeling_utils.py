@@ -869,7 +869,11 @@ class _IPEXFalconMLP(nn.Module):
         residual: torch.Tensor = None,
         **kwargs,
     ):
-        mlp_hidden_states = self.linear_gelu(hidden_states)
+        if hasattr(self, "linear_gelu"):
+            mlp_hidden_states = self.linear_gelu(hidden_states)
+        else:
+            mlp_hidden_states = self.act(self.dense_h_to_4h(hidden_states))
+
         if hasattr(self, "linear_add_add"):
             output = self.linear_add_add(mlp_hidden_states, attention_output, residual)
         else:
