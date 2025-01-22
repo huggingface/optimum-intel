@@ -136,6 +136,8 @@ _HEAD_TO_AUTOMODELS = {
 }
 
 
+LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
+
 PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
