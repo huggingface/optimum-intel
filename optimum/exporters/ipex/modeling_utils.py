@@ -877,7 +877,7 @@ class _IPEXFalconMLP(nn.Module):
         if hasattr(self, "linear_add_add"):
             output = self.linear_add_add(mlp_hidden_states, attention_output, residual)
         else:
-            mlp_output = self.mlp.dense_4h_to_h(mlp_hidden_states)
+            mlp_output = self.dense_4h_to_h(mlp_hidden_states)
             output = mlp_output + attention_output + residual
 
         return output
