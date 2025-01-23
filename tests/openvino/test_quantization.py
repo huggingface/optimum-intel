@@ -214,6 +214,7 @@ class OVQuantizerTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config=OVWeightQuantizationConfig(bits=8))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
     def test_ov_model_static_quantization_with_auto_dataset(
@@ -255,6 +256,7 @@ class OVQuantizerTest(unittest.TestCase):
                 self.assertTrue("logits" in outputs)
             else:
                 raise Exception("Unexpected model class.")
+            check_optimization_not_applicable_to_optimized_model(ov_model, quantization_config=quantization_config)
 
 
 class OVWeightCompressionTest(unittest.TestCase):
@@ -718,27 +720,17 @@ class OVWeightCompressionTest(unittest.TestCase):
         else:
             models = [model]
 
+        if model_type == "open-clip":
+            pytest.skip(reason="ticket 161043")
+        elif model_type == "t5":
+            pytest.skip(reason="ticket 160958")
+        else:
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
+
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         for i, model in enumerate(models):
             _, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_weight_nodes["int8"])
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
-    def test_raise_error_WC_over_WC(self, model_cls, model_type, trust_remote_code):
-        model = model_cls.from_pretrained(
-            MODEL_NAMES[model_type],
-            export=True,
-            load_in_8bit=True,
-            trust_remote_code=trust_remote_code,
-        )
-        quantization_config = OVWeightQuantizationConfig(bits=4, sym=True)
-        quantizer = OVQuantizer(model)
-        if isinstance(model, OVModelOpenCLIPForZeroShotImageClassification):
-            with pytest.raises(TypeError):
-                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
-        else:
-            with pytest.raises(RuntimeError):
-                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
@@ -755,6 +747,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(0, num_weight_nodes["int4"])
 
             model.save_pretrained(tmp_dir)
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config=quantization_config)
 
     def test_stable_diffusion_with_weight_compression(self):
         int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
@@ -769,6 +762,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(0, num_fake_nodes)
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
+        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2, quant_method=OVQuantizationMethod.HYBRID)
+        check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config=quantization_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
@@ -814,6 +809,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             if model_id == "facebook/opt-125m":
                 for key, value in self.DEFAULT_INT4_CONFIG.items():
                     self.assertEqual(value, getattr(openvino_config.quantization_config, key))
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
@@ -1338,3 +1334,9 @@ class InferRequestWrapperTest(unittest.TestCase):
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
             self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)
+
+
+def check_optimization_not_applicable_to_optimized_model(model, quantization_config):
+    quantizer = OVQuantizer(model)
+    with pytest.raises(RuntimeError, match="Cannot apply optimization to the model because it was already optimized with the following config"):
+        quantizer.quantize(quantization_config=quantization_config)
