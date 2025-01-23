@@ -32,7 +32,6 @@ import torch
 from datasets import load_dataset
 from evaluate import evaluator
 from huggingface_hub import HfApi
-from packaging import version
 from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
@@ -110,7 +109,6 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
     _langchain_hf_available,
-    _langchain_hf_version,
     is_openvino_version,
     is_transformers_version,
 )
