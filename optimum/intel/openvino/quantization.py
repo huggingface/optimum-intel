@@ -60,6 +60,7 @@ from ..utils.import_utils import (
 from ..utils.modeling_utils import get_model_device
 from .configuration import (
     OVConfig,
+    OVGeneralQuantizationConfig,
     OVQuantizationConfig,
     OVQuantizationConfigBase,
     OVQuantizationMethod,
@@ -451,7 +452,7 @@ class OVQuantizer(OptimumQuantizer):
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset, **kwargs)
                     self.model.request = None
-        else:
+        elif isinstance(quantization_config, OVQuantizationConfig):
             if not isinstance(quantization_config, OVQuantizationConfig):
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
@@ -467,6 +468,15 @@ class OVQuantizer(OptimumQuantizer):
                 )
                 self.model.model = quantized_model
                 self.model.request = None
+        else:
+            if calibration_dataset is None:
+                raise ValueError("Calibration dataset is required to run quantization.")
+
+            quantized_model = _general_quantization(
+                self.model.model, quantization_config, calibration_dataset, **kwargs
+            )
+            self.model.model = quantized_model
+            self.model.request = None
 
         if save_directory is not None:
             self.model.save_pretrained(save_directory)
@@ -1186,4 +1196,55 @@ def _hybrid_quantization(
         subset_size=subset_size,
         **kwargs,
     )
+    return quantized_model
+
+
+def _general_quantization(
+    model: openvino.Model,
+    quantization_config: OVGeneralQuantizationConfig,
+    calibration_dataset: nncf.Dataset,
+    **kwargs,
+) -> openvino.Model:
+    """
+    Quantize a model with NNCF in two possible steps:
+    - weights-only quantization with nncf.compress_weights method.
+    - full quantization (excluding weights from previous step) with nncf.quantize method.
+
+    Args:
+        model (`openvino.runtime.Model`):
+            The OpenVINO Runtime model for applying quantization.
+        quantization_config (`OVGeneralQuantizationConfig`):
+            The configuration containing the parameters related to quantization.
+        calibration_dataset (`nncf.Dataset`):
+            The dataset used for quantization.
+    Returns:
+        The OpenVINO Runtime model with applied quantization.
+    """
+    quantized_model = model
+
+    ignored_scope = quantization_config.get_ignored_scope_instance()
+
+    if quantization_config.compress_weights_options:
+        ops_with_weights = _collect_ops_with_weights(model)
+        wc_kwargs = copy.deepcopy(kwargs)
+        wc_kwargs.update(quantization_config.compress_weights_options.to_nncf_dict())
+        quantized_model = nncf.compress_weights(
+            model,
+            ignored_scope=ignored_scope,
+            dataset=calibration_dataset,
+            subset_size=quantization_config.num_samples,
+            **wc_kwargs,
+        )
+        ignored_scope.names += ops_with_weights
+
+    if quantization_config.quantize_options:
+        q_kwargs = copy.deepcopy(kwargs)
+        q_kwargs.update(quantization_config.quantize_options.to_nncf_dict())
+        quantized_model = nncf.quantize(
+            model,
+            calibration_dataset,
+            subset_size=quantization_config.num_samples,
+            ignored_scope=ignored_scope,
+            **q_kwargs,
+        )
     return quantized_model

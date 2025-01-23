@@ -717,10 +717,7 @@ class OVConfig(BaseConfig):
         self.compression = kwargs.get(
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
-        if self.quantization_config is not None:
-            self.dtype = self.quantization_config.weight_format
-        else:
-            self.dtype = dtype
+        self.dtype = dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
@@ -775,3 +772,348 @@ class OVConfig(BaseConfig):
 
     def to_diff_dict(self) -> Dict[str, Any]:
         return self._to_dict_safe(to_diff_dict=True)
+
+
+class OVCompressWeightsOptions:
+    def __init__(
+        self,
+        mode: str,
+        ratio: Optional[float] = None,
+        group_size: Optional[int] = None,
+        all_layers: Optional[bool] = None,
+        sensitivity_metric: Optional[str] = None,
+        awq: Optional[bool] = None,
+        scale_estimation: Optional[bool] = None,
+        gptq: Optional[bool] = None,
+        lora_correction: Optional[bool] = None,
+        backup_mode: Optional[str] = None,
+        advanced_parameters: Optional[Dict] = None,
+    ):
+        """
+        Class containing specific nncf.compress_weights method's options.
+        Args:
+            mode (`str`):
+                Mode for weight compression. Possible values: ['int4_sym', 'int4_asym', 'int8_sym', 'int8_asym', 'e2m1', 'nf4'].
+            ratio (`float`, *optional*):
+                The ratio between baseline and backup precisions.
+            group_size (`int`, *optional*):
+                The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
+            all_layers (`bool`, *optional*):
+                Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit precision.
+            sensitivity_metric (`str`, *optional*):
+                The sensitivity metric for assigning quantization precision to layers. In order to
+                preserve the accuracy of the model, the more sensitive layers receives a higher precision.
+            awq (`bool`, *optional*):
+                Indicates whether to apply a AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires
+                additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
+                required.
+            scale_estimation (`bool`, *optional*):
+                Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
+                compressed layers. Providing a dataset is required to run scale estimation.
+            qptq (`bool`, *optional*):
+                Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
+                difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
+            lora_correction (`bool`, *optional*):
+                If True, apply LoRA Correction algorithm. When enabled, this algorithm introduces low-rank adaptation
+                layers in the model that can recover accuracy after weight compression at some cost of inference latency.
+                It calculates low-rank matrices via singular value decomposition (SVD) on the difference between the
+                original and quantized weights. These matrices are iteratively refined by solving a system of linear
+                equations to improve accuracy.
+            backup_precision (`str`, *optional*):
+                Defines a backup precision for mixed-precision weight compression.
+                - "none" stands for original floating-point precision of the model weights, in this case weights are
+                    retained in their original precision without any quantization.
+                - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
+                - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
+            advanced_parameters(`Dict`, *optional*)
+                Defines a dictionary with the advanced parameters.
+        """
+        self.mode = mode
+        self.ratio = ratio
+        self.group_size = group_size
+        self.all_layers = all_layers
+        self.sensitivity_metric = sensitivity_metric
+        self.awq = awq
+        self.scale_estimation = scale_estimation
+        self.gptq = gptq
+        self.lora_correction = lora_correction
+        self.backup_mode = backup_mode
+
+        self._nncf_dict = None
+
+    @staticmethod
+    def init_with_format(
+        bits: int = 8,
+        sym: bool = False,
+        group_size: Optional[int] = None,
+        ratio: float = 1.0,
+        all_layers: Optional[bool] = None,
+        sensitivity_metric: Optional[str] = None,
+        quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        scale_estimation: bool = None,
+        weight_format: Optional[str] = None,
+        gptq: bool = None,
+        lora_correction: bool = None,
+        backup_precision: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Method for the backwards-compatible OVCompressWeightsOptions initialization.
+        All options are the same as those in the OVWeightQuantizationConfig.
+        """
+        signed_bitness = {
+            4: "int4",
+            8: "int8",
+        }
+        mode = weight_format if weight_format else signed_bitness[bits]
+        if mode in signed_bitness.values():
+            mode += "_sym" if sym else "_asym"
+        mode = mode
+
+        if isinstance(quant_method, str):
+            awq = quant_method == "awq"
+        elif isinstance(quant_method, OVQuantizationMethod):
+            awq = quant_method == OVQuantizationMethod.AWQ
+
+        return OVCompressWeightsOptions(
+            mode=mode,
+            ratio=ratio,
+            group_size=group_size,
+            all_layers=all_layers,
+            sensitivity_metric=sensitivity_metric,
+            awq=awq,
+            scale_estimation=scale_estimation,
+            gptq=gptq,
+            backup_mode=backup_precision,
+            lora_correction=lora_correction,
+        )
+
+    def to_nncf_dict(self) -> Dict[str, Any]:
+        """
+        Returns a dictionary with the NNCF-friendly variables that are ready to use.
+        """
+        if self._nncf_dict:
+            return self._nncf_dict
+
+        if is_nncf_available():
+            mode = nncf.CompressWeightsMode(self.mode)
+            sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
+            backup_mode = nncf.BackupMode(self.backup_mode) if self.backup_mode else None
+            self._nncf_dict = {
+                "mode": mode,
+                "ratio": self.ratio,
+                "group_size": self.group_size,
+                "all_layers": self.all_layers,
+                "sensitivity_metric": sensitivity_metric,
+                "awq": self.awq,
+                "scale_estimation": self.scale_estimation,
+                "gptq": self.gptq,
+                "lora_correction": self.lora_correction,
+                "backup_mode": backup_mode,
+            }
+            return self._nncf_dict
+
+        raise ImportError("NNCF is required to execute this method. Please install nncf first.")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return copy.deepcopy(self.__dict__)
+
+
+class OVQuantizeOptions:
+    def __init__(
+        self,
+        mode: Optional[str] = None,
+        preset: Optional[str] = None,
+        target_device: str = "any",
+        fast_bias_correction: bool = True,
+        model_type: Optional[str] = None,
+        advanced_parameters: Optional[Dict] = None,
+    ):
+        """
+        Class containing specific nncf.quantize method's options.
+        Args:
+            mode (`str`, *optional*):
+                Defines special quantization modes. Possible values: ['fp8_e4m3', 'fp8_e5m2'].
+            preset (`str`, *optional*):
+                Quantization presets, usually meaning to enable either a symmetrical or asymmetrical scheme. Possible values: ['performance', 'mixed'].
+            target_device (`str`, defaults to "any"):
+                Target device architecture for compression. Possible values: ['any', 'cpu', 'gpu', 'npu', 'cpu_spr'].
+            fast_bias_correction (`bool`, defaults to True):
+                Whether to apply fast or full bias correction algorithm.
+            model_type (`str`, *optional*):
+                Model type is needed to specify additional patterns in the model. Supported only `transformer` now.
+            advanced_parameters(`Dict`, *optional*)
+                Defines a dictionary with the advanced parameters.
+                Examples of the values:
+                - overflow_fix (`str`):
+                    Parameter for controlling overflow fix setting.
+                - smooth_quant_alphas (`dict`):
+                    SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
+                    reduces quantization error.
+                    Examples of the values:
+                    - matmul (`float`)
+                    - convolution (`float`)
+        """
+        self.mode = mode
+        self.preset = preset
+        self.target_device = target_device
+        self.fast_bias_correction = fast_bias_correction
+        self.model_type = model_type
+        self.advanced_parameters = advanced_parameters
+
+        self._nncf_dict = None
+
+    @staticmethod
+    def init_with_format(
+        bits: int = 8,
+        sym: bool = False,
+        ignored_scope: Optional[dict] = None,
+        num_samples: Optional[int] = 300,
+        model_type: str = "transformer",
+        fast_bias_correction: bool = True,
+        overflow_fix: str = "disable",
+        dataset: Optional[str] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: bool = False,
+        smooth_quant_alpha: Optional[float] = None,
+        weight_format: Optional[str] = "int8",
+        activation_format: Optional[str] = "int8",
+        **kwargs,
+    ):
+        """
+        Method for the backwards-compatible OVQuantizeOptions initialization.
+        All options are the same as those in the OVQuantizationConfig.
+        """
+        preset = "performance" if sym else "mixed"
+        advanced_parameters = {"overflow_fix": overflow_fix}
+        if smooth_quant_alpha:
+            advanced_parameters["smooth_quant_alphas"] = {"matmul": smooth_quant_alpha}
+
+        mode = None
+        if activation_format:
+            mode_map = {
+                "f8e4m3": "fp8_e4m3",
+                "f8e5m2": "fp8_e5m2",
+            }
+            mode = mode_map[activation_format]
+            preset = "performance"
+
+        return OVQuantizeOptions(
+            mode=mode,
+            preset=preset,
+            target_device="any",
+            fast_bias_correction=fast_bias_correction,
+            model_type=model_type,
+            advanced_parameters=advanced_parameters,
+        )
+
+    def to_nncf_dict(self) -> Dict[str, Any]:
+        """
+        Returns a dictionary with the NNCF-friendly variables that are ready to use.
+        """
+        if self._nncf_dict:
+            return self._nncf_dict
+
+        if is_nncf_available():
+            mode = nncf.QuantizationMode(self.mode) if self.mode else None
+            preset = nncf.QuantizationPreset(self.preset)
+            target_device = nncf.TargetDevice(self.target_device.upper())
+            model_type = nncf.ModelType(self.model_type) if self.model_type else None
+            advanced_parameters = None
+            if self.advanced_parameters:
+                advanced_parameters = nncf.AdvancedQuantizationParameters(
+                    overflow_fix=self.advanced_parameters["overflow_fix"],
+                )
+                if "smooth_quant_alphas" in self.advanced_parameters:
+                    advanced_parameters.smooth_quant_alphas = (
+                        nncf.AdvancedSmoothQuantParameters(**self.advanced_parameters["smooth_quant_alphas"]),
+                    )
+
+            self._nncf_dict = {
+                "mode": mode,
+                "preset": preset,
+                "target_device": target_device,
+                "fast_bias_correction": self.fast_bias_correction,
+                "model_type": model_type,
+                "advanced_parameters": advanced_parameters,
+            }
+            return self._nncf_dict
+
+        raise ImportError("NNCF is required to execute this method. Please install nncf first.")
+
+    def to_dict(self) -> Dict:
+        return copy.deepcopy(self.__dict__)
+
+
+class OVGeneralQuantizationConfig(QuantizationConfigMixin):
+    def __init__(
+        self,
+        ignored_scope: Optional[Dict] = None,
+        num_samples: Optional[int] = None,
+        compress_weights_options: Optional[OVCompressWeightsOptions] = None,
+        quantize_options: Optional[OVQuantizeOptions] = None,
+    ):
+        """
+        Class containing general options for the NNCF-based quantization.
+        Args:
+            ignored_scope (`dict`, *optional*):
+                An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
+                entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
+            num_samples (`int`, *optional*):
+                The maximum number of samples composing the calibration dataset.
+            compress_weights_options (`OVCompressWeightsOptions`, *optional*):
+                See OVCompressWeightsOptions instance.
+            quantize_options (`OVQuantizeOptions`, *optional*):
+                See OVQuantizeOptions instance.
+        """
+        self.ignored_scope = ignored_scope
+        self.num_samples = num_samples
+        self.compress_weights_options = compress_weights_options
+        self.quantize_options = quantize_options
+        self.bits = None
+        self.sym = None
+        self.dataset = None
+        self.tokenizer = None
+        self.processor = None
+        self.trust_remote_code = None
+        self.weight_format = None
+
+    @staticmethod
+    def init_with_format(
+        bits: int = 8,
+        sym: bool = False,
+        ignored_scope: Optional[dict] = None,
+        num_samples: Optional[int] = None,
+        dataset: Optional[Optional[Union[str, List[str]]]] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: bool = False,
+        weight_format: Optional[str] = None,
+    ):
+        """
+        Method for the backwards-compatible QuantizationConfigMixin initialization.
+        All options are the same as those in the QuantizationConfigMixin.
+        """
+        config = OVGeneralQuantizationConfig(
+            ignored_scope=ignored_scope,
+            num_samples=num_samples,
+        )
+        config.bits = bits
+        config.sym = sym
+        config.dataset = dataset
+        config.tokenizer = tokenizer
+        config.processor = processor
+        config.trust_remote_code = trust_remote_code
+        config.weight_format = weight_format
+        return config
+
+    def get_ignored_scope_instance(self) -> nncf.IgnoredScope:
+        ignored_scope = copy.deepcopy(self.ignored_scope) if self.ignored_scope else {}
+        return nncf.IgnoredScope(**ignored_scope)
+
+    def to_dict(self):
+        result = copy.deepcopy(self.__dict__)
+        result["compress_weights_options"] = self.compress_weights_options.to_dict()
+        result["quantize_options"] = self.quantize_options.to_dict()
+        return result
