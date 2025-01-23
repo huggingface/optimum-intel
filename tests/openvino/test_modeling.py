@@ -2804,10 +2804,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(
-        not _langchain_hf_available or version.parse(_langchain_hf_version) < version.parse("0.1.2"),
-        reason="Unsupported langchain version",
-    )
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
     def test_langchain(self, model_arch):
         from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -2826,10 +2823,7 @@ class OVLangchainTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("gpt2",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(
-        not _langchain_hf_available or version.parse(_langchain_hf_version) < version.parse("0.1.2"),
-        reason="Unsupported langchain version",
-    )
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
     def test_huggingface_pipeline_streaming(self, model_arch):
         from langchain_huggingface import HuggingFacePipeline
 
