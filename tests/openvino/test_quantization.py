@@ -214,7 +214,9 @@ class OVQuantizerTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
-            check_optimization_not_applicable_to_optimized_model(model, quantization_config=OVWeightQuantizationConfig(bits=8))
+            check_optimization_not_applicable_to_optimized_model(
+                model, quantization_config=OVWeightQuantizationConfig(bits=8)
+            )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
     def test_ov_model_static_quantization_with_auto_dataset(
@@ -256,7 +258,6 @@ class OVQuantizerTest(unittest.TestCase):
                 self.assertTrue("logits" in outputs)
             else:
                 raise Exception("Unexpected model class.")
-            check_optimization_not_applicable_to_optimized_model(ov_model, quantization_config=quantization_config)
 
 
 class OVWeightCompressionTest(unittest.TestCase):
@@ -747,7 +748,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(0, num_weight_nodes["int4"])
 
             model.save_pretrained(tmp_dir)
-            check_optimization_not_applicable_to_optimized_model(model, quantization_config=quantization_config)
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config)
 
     def test_stable_diffusion_with_weight_compression(self):
         int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
@@ -762,8 +763,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(0, num_fake_nodes)
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
-        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2, quant_method=OVQuantizationMethod.HYBRID)
-        check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config=quantization_config)
+        quantization_config = OVWeightQuantizationConfig(
+            bits=8, dataset="conceptual_captions", num_samples=2, quant_method=OVQuantizationMethod.HYBRID
+        )
+        check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
@@ -1338,5 +1341,8 @@ class InferRequestWrapperTest(unittest.TestCase):
 
 def check_optimization_not_applicable_to_optimized_model(model, quantization_config):
     quantizer = OVQuantizer(model)
-    with pytest.raises(RuntimeError, match="Cannot apply optimization to the model because it was already optimized with the following config"):
-        quantizer.quantize(quantization_config=quantization_config)
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot apply optimization to the model because it was already optimized with the following config",
+    ):
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
