@@ -179,8 +179,8 @@ def _llama_model_forward(
 
     past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
 
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
     if position_ids is None:
-        device = input_ids.device if input_ids is not None else inputs_embeds.device
         position_ids = torch.arange(
             past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
         )
@@ -200,6 +200,9 @@ def _llama_model_forward(
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
+    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
+    max_input_lens = input_lens.max().item()
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -235,6 +238,9 @@ def _llama_model_forward(
             use_cache=use_cache,
             position_embeddings=position_embeddings,
             input_lens=input_lens,
+            max_input_lens=max_input_lens,
+            seq_len_tensor=seq_len_tensor,
+            query_len_tensor=query_len_tensor,
         )
 
         hidden_states = layer_outputs[0]
@@ -303,10 +309,11 @@ def _falcon_model_forward(
 
     past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
     batch_size, seq_length, _ = inputs_embeds.shape
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
 
     if cache_position is None:
         cache_position = torch.arange(
-            past_key_values_length, past_key_values_length + seq_length, device=inputs_embeds.device
+            past_key_values_length, past_key_values_length + seq_length, device=device
         )
 
     if position_ids is None:
@@ -323,6 +330,9 @@ def _falcon_model_forward(
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
+    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
+    max_input_lens = input_lens.max().item()
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -365,6 +375,9 @@ def _falcon_model_forward(
             cache_position=cache_position,
             position_embeddings=position_embeddings,
             input_lens=input_lens,
+            max_input_lens=max_input_lens,
+            seq_len_tensor=seq_len_tensor,
+            query_len_tensor=query_len_tensor,
         )
 
         hidden_states = outputs[0]
@@ -459,6 +472,9 @@ def _gpt2_model_forward(
     hidden_states = self.drop(hidden_states)
 
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
+    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
+    max_input_lens = input_lens.max().item()
 
     if past_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -494,6 +510,9 @@ def _gpt2_model_forward(
             use_cache=use_cache,
             output_attentions=output_attentions,
             input_lens=input_lens,
+            max_input_lens=max_input_lens,
+            seq_len_tensor=seq_len_tensor,
+            query_len_tensor=query_len_tensor,
         )
 
         hidden_states = outputs[0]
@@ -635,7 +654,19 @@ class _IPEXAttention(nn.Module):
             return is_torch_version(">", "2.5.99")
 
     def attention_interface(
-        self, query, key_cache, value_cache, key, value, past_key_value, attention_mask, input_lens, past_len
+        self,
+        query,
+        key_cache,
+        value_cache,
+        key,
+        value,
+        past_key_value,
+        attention_mask,
+        input_lens,
+        past_len,
+        seq_len_tensor,
+        query_len_tensor,
+        max_input_lens,
     ):
         if past_key_value is None:
             n_rep = query.shape[1] // key.shape[1]
@@ -654,18 +685,13 @@ class _IPEXAttention(nn.Module):
             self.use_sdpa = True
         elif self.has_flash_attn():
             attn_output = torch.empty_like(query)
-            seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-            query_len_tensor = (
-                seq_len_tensor if past_len == 0 else torch.arange(seq_len_tensor.shape[0], device=query.device).int()
-            )
-            max_input_lens = input_lens.max().item()
             query_max_len = max_input_lens if past_len == 0 else 1
             PagedAttention.flash_attn_varlen_func(
                 attn_output,
                 query.contiguous() if query.device.type == "xpu" else query,
                 key_cache,
                 value_cache,
-                query_len_tensor,
+                seq_len_tensor if past_len == 0 else query_len_tensor,
                 seq_len_tensor,
                 query_max_len,
                 max_input_lens,
@@ -677,7 +703,6 @@ class _IPEXAttention(nn.Module):
         elif past_len == 0:
             # prefill, remove padding
             attn_output = torch.empty_like(query)
-            seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
             varlen_attention(
                 query.contiguous() if query.device.type == "xpu" else query,
                 key.contiguous() if key.device.type == "xpu" else key,
@@ -726,6 +751,9 @@ class _IPEXAttention(nn.Module):
         if past_key_value is None and kwargs.get("layer_past", None) is not None:
             past_key_value = kwargs.pop("layer_past", None)
         input_lens = kwargs.pop("input_lens", None)
+        seq_len_tensor = kwargs.pop("seq_len_tensor", None)
+        query_len_tensor = kwargs.pop("query_len_tensor", None)
+        max_input_lens = kwargs.pop("max_input_lens", 0)
         past_len = 0
         if past_key_value is not None:
             past_len = past_key_value.get_seq_length()
@@ -737,7 +765,18 @@ class _IPEXAttention(nn.Module):
             key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask, input_lens)
 
         attn_output = self.attention_interface(
-            query, key_cache, value_cache, key, value, past_key_value, attention_mask, input_lens, past_len
+            query,
+            key_cache,
+            value_cache,
+            key,
+            value,
+            past_key_value,
+            attention_mask,
+            input_lens,
+            past_len,
+            seq_len_tensor,
+            query_len_tensor,
+            max_input_lens,
         )
 
         attn_output = self.postprocess_attention_output(attn_output)
