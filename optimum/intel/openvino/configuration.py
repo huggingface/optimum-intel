@@ -1026,8 +1026,8 @@ class OVQuantizeOptions:
                     overflow_fix=self.advanced_parameters["overflow_fix"],
                 )
                 if "smooth_quant_alphas" in self.advanced_parameters:
-                    advanced_parameters.smooth_quant_alphas = (
-                        nncf.AdvancedSmoothQuantParameters(**self.advanced_parameters["smooth_quant_alphas"]),
+                    advanced_parameters.smooth_quant_alphas = nncf.AdvancedSmoothQuantParameters(
+                        **self.advanced_parameters["smooth_quant_alphas"]
                     )
 
             self._nncf_dict = {
