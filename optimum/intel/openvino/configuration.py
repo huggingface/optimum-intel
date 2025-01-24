@@ -717,7 +717,10 @@ class OVConfig(BaseConfig):
         self.compression = kwargs.get(
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
-        self.dtype = dtype
+        if self.quantization_config is not None:
+            self.dtype = self.quantization_config.weight_format
+        else:
+            self.dtype = dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
