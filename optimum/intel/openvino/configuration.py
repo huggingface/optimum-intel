@@ -1108,7 +1108,7 @@ class OVGeneralQuantizationConfig(QuantizationConfigMixin):
         config.weight_format = weight_format
         return config
 
-    def get_ignored_scope_instance(self) -> nncf.IgnoredScope:
+    def get_ignored_scope_instance(self) -> "nncf.IgnoredScope":
         ignored_scope = copy.deepcopy(self.ignored_scope) if self.ignored_scope else {}
         return nncf.IgnoredScope(**ignored_scope)
 
