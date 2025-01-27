@@ -1010,6 +1010,7 @@ def _weight_only_quantization(
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
     **kwargs,
 ) -> openvino.runtime.Model:
+    _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -1066,6 +1067,7 @@ def _full_quantization(
     calibration_dataset: nncf.Dataset,
     **kwargs,
 ):
+    _verify_not_optimized(model)
     advanced_parameters_kwargs = {}
     if quantization_config.smooth_quant_alpha is not None:
         advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(
@@ -1187,3 +1189,20 @@ def _hybrid_quantization(
         **kwargs,
     )
     return quantized_model
+
+
+def _verify_not_optimized(ov_model):
+    message_template = (
+        "Cannot apply optimization to the model because it was already optimized with the following config: {}. "
+        "To avoid this issue, check that you set load_in_8bit=False or not using quantization_config at export in the .from_pretrained(), "
+        "or explicitly specify weight format with --weight_format fp16/fp32 when using CLI."
+    )
+
+    rt_info = ov_model.get_rt_info()
+    if "nncf" in rt_info:
+        model_weight_compression_config = rt_info["nncf"].get("weight_compression", None)
+        model_quantization_config = rt_info["nncf"].get("quantization", None)
+        if model_weight_compression_config is not None:
+            raise RuntimeError(message_template.format(model_weight_compression_config))
+        elif model_quantization_config is not None:
+            raise RuntimeError(message_template.format(model_quantization_config))
