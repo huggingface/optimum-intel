@@ -131,6 +131,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             (13,),
             (16,),
         ),
+        (
+            "text-generation",
+            "llama",
+            "int8",
+            "--dataset wikitext2 --trust-remote-code",
+            (13,),
+            (16,),
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [
