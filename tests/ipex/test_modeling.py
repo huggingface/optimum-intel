@@ -21,6 +21,7 @@ import os
 import numpy as np
 import requests
 import torch
+from typing import Generator
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -34,6 +35,7 @@ from transformers import (
     pipeline,
     set_seed,
 )
+from packaging import version
 from optimum.intel import (
     IPEXModel,
     IPEXModelForAudioClassification,
@@ -47,7 +49,12 @@ from optimum.intel import (
     IPEXSentenceTransformer,
 )
 from optimum.utils.testing_utils import grid_parameters, require_sentence_transformers
-from optimum.intel.utils.import_utils import is_sentence_transformers_available, is_torch_version
+from optimum.intel.utils.import_utils import (
+    is_sentence_transformers_available,
+    is_torch_version,
+    _langchain_hf_available,
+    _langchain_hf_version,
+)
 
 if is_sentence_transformers_available():
     from sentence_transformers import SentenceTransformer
@@ -707,3 +714,54 @@ class IPEXSTModel(unittest.TestCase):
             model = IPEXSentenceTransformer(tmpdirname, model_kwargs={"subfolder": "ipex"})
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_sentence_transformers
+    @unittest.skipIf(
+        not _langchain_hf_available or version.parse(_langchain_hf_version) <= version.parse("0.1.2"),
+        reason="Unsupported langchain version",
+    )
+    def test_langchain(self, model_arch):
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        model_id = MODEL_NAMES[model_arch]
+        model_kwargs = {"device": "cpu", "backend": "ipex"}
+
+        embedding = HuggingFaceEmbeddings(
+            model_name=model_id,
+            model_kwargs=model_kwargs,
+        )
+        output = embedding.embed_query("foo bar")
+        self.assertTrue(len(output) > 0)
+
+
+class IPEXLangchainTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("gpt2",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(
+        not _langchain_hf_available or version.parse(_langchain_hf_version) <= version.parse("0.1.2"),
+        reason="Unsupported langchain version",
+    )
+    def test_huggingface_pipeline_streaming(self, model_arch):
+        from langchain_huggingface import HuggingFacePipeline
+
+        model_id = MODEL_NAMES[model_arch]
+
+        hf_pipe = HuggingFacePipeline.from_model_id(
+            model_id=model_id,
+            task="text-generation",
+            pipeline_kwargs={"max_new_tokens": 10},
+            backend="ipex",
+        )
+
+        generator = hf_pipe.stream("Q: How do you say 'hello' in German? A:'", stop=["."])
+
+        self.assertIsInstance(generator, Generator)
+
+        stream_results_string = ""
+        for chunk in generator:
+            self.assertIsInstance(chunk, str)
+            stream_results_string = chunk
+
+        self.assertTrue(len(stream_results_string.strip()) > 1)

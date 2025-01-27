@@ -58,6 +58,7 @@ TESTS_REQUIRE = [
     "peft",
     "datasets[audio]>=1.4.0",
     "tbb",
+    "langchain-huggingface",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

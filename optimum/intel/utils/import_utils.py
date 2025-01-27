@@ -183,6 +183,15 @@ if _sentence_transformers_available:
         _sentence_transformers_available = False
 
 
+_langchain_hf_available = importlib.util.find_spec("langchain_huggingface") is not None
+_langchain_hf_version = "N/A"
+if _langchain_hf_available:
+    try:
+        _langchain_hf_version = importlib.metadata.version("langchain_huggingface")
+    except importlib.metadata.PackageNotFoundError:
+        _langchain_hf_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 

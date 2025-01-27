@@ -20,7 +20,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Generator
 
 import numpy as np
 import open_clip
@@ -107,7 +107,11 @@ from optimum.intel.openvino.utils import (
     _print_compiled_model_properties,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _langchain_hf_available,
+    is_openvino_version,
+    is_transformers_version,
+)
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -2795,4 +2799,51 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(model_save_path)
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    def test_langchain(self, model_arch):
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        model_id = MODEL_NAMES[model_arch]
+        model_kwargs = {"device": "cpu", "backend": "openvino"}
+
+        embedding = HuggingFaceEmbeddings(
+            model_name=model_id,
+            model_kwargs=model_kwargs,
+        )
+        output = embedding.embed_query("foo bar")
+        self.assertTrue(len(output) > 0)
+
+
+class OVLangchainTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("gpt2",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    def test_huggingface_pipeline_streaming(self, model_arch):
+        from langchain_huggingface import HuggingFacePipeline
+
+        model_id = MODEL_NAMES[model_arch]
+
+        hf_pipe = HuggingFacePipeline.from_model_id(
+            model_id=model_id,
+            task="text-generation",
+            pipeline_kwargs={"max_new_tokens": 10},
+            backend="openvino",
+        )
+
+        generator = hf_pipe.stream("Q: How do you say 'hello' in German? A:'", stop=["."])
+
+        self.assertIsInstance(generator, Generator)
+
+        stream_results_string = ""
+        for chunk in generator:
+            self.assertIsInstance(chunk, str)
+            stream_results_string = chunk
+
+        self.assertTrue(len(stream_results_string.strip()) > 1)
+
+        del hf_pipe
         gc.collect()
