@@ -127,7 +127,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation",
             "llama",
             "f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
+            "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
             (13,),
             (16,),
         ),
