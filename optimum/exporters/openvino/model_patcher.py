@@ -25,6 +25,7 @@ from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
+from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     DecoderModelPatcher,
     ModelPatcher,
@@ -115,9 +116,11 @@ def patch_model_with_bettertransformer(model):
     return model
 
 
-def patch_update_causal_mask(model, transformers_version, inner_model_name="model", patch_fn=None):
+def patch_update_causal_mask(
+    model, transformers_version, inner_model_name="model", patch_fn=None, patch_extrnal_model=False
+):
     if is_transformers_version(">=", transformers_version):
-        inner_model = getattr(model, inner_model_name, None)
+        inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
         if inner_model is not None:
             if hasattr(inner_model, "_update_causal_mask"):
                 inner_model._orig_update_causal_mask = inner_model._update_causal_mask
@@ -125,8 +128,8 @@ def patch_update_causal_mask(model, transformers_version, inner_model_name="mode
             inner_model._update_causal_mask = types.MethodType(patch_fn, inner_model)
 
 
-def unpatch_update_causal_mask(model, inner_model_name="model"):
-    inner_model = getattr(model, inner_model_name, None)
+def unpatch_update_causal_mask(model, inner_model_name="model", patch_extrnal_model=False):
+    inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
     if inner_model is not None and hasattr(inner_model, "._orig_update_causal_mask"):
         inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
@@ -3872,3 +3875,29 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
         model.forward = patched_forward
 
         super().__init__(config, model, model_kwargs)
+
+
+class SanaTextEncoderModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        patch_update_causal_mask(self._model, "4.39.0", None, patch_extrnal_model=True)
+
+        if self._model.config._attn_implementation != "sdpa":
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            if is_transformers_version("<", "4.47.0"):
+                from transformers.models.gemma2.modeling_gemma2 import GEMMA2_ATTENTION_CLASSES
+
+                sdpa_attn = GEMMA2_ATTENTION_CLASSES["sdpa"]
+                for layer in self._model.layers:
+                    layer.self_attn._orig_forward = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, None, True)
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for layer in self._model.layers:
+                if hasattr(layer.self_attn, "_orig_forward"):
+                    layer.self_attn.forward = layer.self_attn._orig_forward

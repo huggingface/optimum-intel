@@ -615,6 +615,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config = OVConfig(dtype="fp32" if load_in_8bit is False else "auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+        variant = kwargs.pop("variant", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -629,6 +630,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             stateful=stateful,
+            model_variant=variant,
         )
         config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
         return cls._from_pretrained(
