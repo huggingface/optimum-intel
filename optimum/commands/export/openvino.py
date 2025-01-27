@@ -78,7 +78,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -307,7 +307,14 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
+        from ...intel.openvino.configuration import (
+            _DEFAULT_4BIT_CONFIG,
+            OVCompressWeightsOptions,
+            OVConfig,
+            OVGeneralQuantizationConfig,
+            OVQuantizeOptions,
+            get_default_int4_config,
+        )
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
@@ -342,43 +349,39 @@ class OVExportCommand(BaseOptimumCLICommand):
             if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
                 quantization_config = get_default_int4_config(self.args.model)
             else:
-                is_int8 = self.args.weight_format == "int8"
-                quantization_config = {
-                    "bits": 8 if is_int8 else 4,
-                    "ratio": 1 if is_int8 else (self.args.ratio or _DEFAULT_4BIT_CONFIG["ratio"]),
-                    "sym": self.args.sym or False,
-                    "group_size": -1 if is_int8 else self.args.group_size,
-                    "all_layers": None if is_int8 else self.args.all_layers,
-                    "dataset": self.args.dataset,
-                    "num_samples": self.args.num_samples,
-                    "quant_method": "awq" if self.args.awq else "default",
-                    "sensitivity_metric": self.args.sensitivity_metric,
-                    "scale_estimation": self.args.scale_estimation,
-                    "gptq": self.args.gptq,
-                    "lora_correction": self.args.lora_correction,
-                    "weight_format": self.args.weight_format,
-                    "backup_precision": self.args.backup_precision,
-                }
+                quantization_config = prepare_for_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
 
             if quantization_config.get("dataset", None) is not None:
                 quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
-        else:
+        elif self.args.quant_mode is not None:
             if self.args.dataset is None:
                 raise ValueError(
                     "Dataset is required for full quantization. Please provide it with --dataset argument."
                 )
 
-            quantization_config = {
-                "weight_format": self.args.quant_mode,
-                "activation_format": self.args.quant_mode,
-                "bits": 8,
-                "sym": self.args.sym or False,
-                "dataset": self.args.dataset,
-                "num_samples": self.args.num_samples,
-                "smooth_quant_alpha": self.args.smooth_quant_alpha,
-                "trust_remote_code": self.args.trust_remote_code,
-            }
+            if self.args.quant_mode == "nf4_f8e4m3":
+                wc_config = prepare_for_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
+                wc_config["weight_format"] = "nf4"
+                cw_options = OVCompressWeightsOptions.init_with_format(**wc_config)
+
+                q_config = prepare_for_q_config(self.args)
+                q_config["activation_format"] = "f8e4m3"
+                q_options = OVQuantizeOptions.init_with_format(**q_config)
+
+                quantization_config = OVGeneralQuantizationConfig.init_with_format(
+                    bits=8,
+                    sym=self.args.sym,
+                    ignored_scope=None,
+                    num_samples=self.args.num_samples,
+                    dataset=self.args.dataset,
+                    trust_remote_code=self.args.trust_remote_code,
+                    weight_format=self.args.weight_format,
+                )
+                quantization_config.compress_weights_options = cw_options
+                quantization_config.quantize_options = q_options
+            else:
+                quantization_config = prepare_for_q_config(self.args)
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
@@ -470,3 +473,36 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 # **input_shapes,
             )
+
+
+def prepare_for_wc_config(args, default_configs):
+    is_int8 = args.weight_format == "int8"
+    return {
+        "bits": 8 if is_int8 else 4,
+        "ratio": 1 if is_int8 else (args.ratio or default_configs["ratio"]),
+        "sym": args.sym or False,
+        "group_size": -1 if is_int8 else args.group_size,
+        "all_layers": None if is_int8 else args.all_layers,
+        "dataset": args.dataset,
+        "num_samples": args.num_samples,
+        "quant_method": "awq" if args.awq else "default",
+        "sensitivity_metric": args.sensitivity_metric,
+        "scale_estimation": args.scale_estimation,
+        "gptq": args.gptq,
+        "lora_correction": args.lora_correction,
+        "weight_format": args.weight_format,
+        "backup_precision": args.backup_precision,
+    }
+
+
+def prepare_for_q_config(args):
+    return {
+        "weight_format": args.quant_mode,
+        "activation_format": args.quant_mode,
+        "bits": 8,
+        "sym": args.sym or False,
+        "dataset": args.dataset,
+        "num_samples": args.num_samples,
+        "smooth_quant_alpha": args.smooth_quant_alpha,
+        "trust_remote_code": args.trust_remote_code,
+    }

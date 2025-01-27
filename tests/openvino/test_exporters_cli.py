@@ -131,6 +131,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             (13,),
             (16,),
         ),
+        (
+            "text-generation",
+            "llama",
+            "nf4_f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code",
+            (4,),
+            (14,),
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [
@@ -446,7 +454,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             for i, model in enumerate(models):
                 num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
                 self.assertEqual(expected_fake_nodes[i], num_fake_nodes)
-                self.assertEqual(expected_low_precision_nodes[i], num_weight_nodes[quant_mode])
+                weight_types = quant_mode.split("_")
+                num_weights = 0
+                for weight_type in weight_types:
+                    num_weights += num_weight_nodes[weight_type]
+                self.assertEqual(expected_low_precision_nodes[i], num_weights)
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
