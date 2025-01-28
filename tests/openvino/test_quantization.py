@@ -61,6 +61,7 @@ from optimum.intel import (
     OVQuantizer,
     OVTrainer,
     OVQuantizationConfig,
+    OVMixedQuantizationConfig,
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
     OVModelOpenCLIPForZeroShotImageClassification,
@@ -126,6 +127,18 @@ class OVQuantizerTest(unittest.TestCase):
             ),
             (13,),
             (16,),
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, weight_format="nf4", group_size=16),
+                quantization_config=OVQuantizationConfig(activation_format="f8e4m3", smooth_quant_alpha=0.9),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            (4,),
+            (14,),
         ),
     ]
 
@@ -220,7 +233,10 @@ class OVQuantizerTest(unittest.TestCase):
         self, model_cls, model_name, quantization_config, expected_fake_nodes, expected_low_precision_nodes
     ):
         model_id = MODEL_NAMES[model_name]
-        quant_mode = quantization_config.activation_format
+        if isinstance(quantization_config, OVMixedQuantizationConfig):
+            quant_mode = f"{quantization_config.weight_quantization_config.weight_format}_{quantization_config.quantization_config.activation_format}"
+        else:
+            quant_mode = quantization_config.activation_format
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
@@ -245,7 +261,11 @@ class OVQuantizerTest(unittest.TestCase):
             elif model_cls == OVModelForCausalLM:
                 num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model.model)
                 self.assertEqual(expected_fake_nodes[0], num_fake_nodes)
-                self.assertEqual(expected_low_precision_nodes[0], num_weight_nodes[quant_mode])
+                weight_types = quant_mode.split("_")
+                num_weights = 0
+                for weight_type in weight_types:
+                    num_weights += num_weight_nodes[weight_type]
+                self.assertEqual(expected_low_precision_nodes[0], num_weights)
 
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:

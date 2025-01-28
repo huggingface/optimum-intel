@@ -84,6 +84,7 @@ except OptionalDependencyNotAvailable:
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
+            "OVMixedQuantizationConfig",
         ]
     )
 else:
@@ -94,6 +95,7 @@ else:
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
+            "OVMixedQuantizationConfig",
         ]
     )
 
@@ -270,6 +272,7 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import (
             OVDynamicQuantizationConfig,
+            OVMixedQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVTrainingArguments,
@@ -278,6 +281,7 @@ if TYPE_CHECKING:
     else:
         from .openvino import (
             OVDynamicQuantizationConfig,
+            OVMixedQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVTrainingArguments,
