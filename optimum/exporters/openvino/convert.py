@@ -437,7 +437,7 @@ def export_pytorch(
             patcher.patched_forward = ts_patched_forward
 
             ts_decoder_kwargs = {}
-            if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
+            if is_openvino_version(">=", "2025.0"):
                 ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
             with patcher:
