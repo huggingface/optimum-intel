@@ -590,7 +590,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             force_download=force_download,
             ov_config=ov_config,
             library_name=cls._library_name,
-            model_variant=variant,
+            weights_variant=variant,
         )
 
         return cls._from_pretrained(
@@ -767,7 +767,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         self, model: openvino.runtime.Model, batch_size: int = -1, tokenizer_max_length: int = -1
     ):
         if batch_size != -1:
-            shapes = {model.inputs[0]: [batch_size, tokenizer_max_length]}
+            shapes = {input_tensor: [batch_size, tokenizer_max_length] for input_tensor in model.inputs}
             model.reshape(shapes)
         return model
 
@@ -824,9 +824,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 tokenizer_max_len = -1
             else:
                 tokenizer_max_len = (
-                    self.tokenizer.model_max_length
+                    getattr(self.tokenizer, "model_max_length", -1)
                     if self.tokenizer is not None
-                    else self.tokenizer_2.model_max_length
+                    else getattr(self.tokenizer_2, "model_max_length", -1)
                 )
 
         if self.unet is not None:
@@ -848,21 +848,19 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.text_encoder.model = self._reshape_text_encoder(
                 self.text_encoder.model,
                 batch_size,
-                self.tokenizer.model_max_length if "Gemma" not in self.tokenizer.__class__.__name__ else -1,
+                getattr(self.tokenizer, "model_max_length", -1)
+                if "Gemma" not in self.tokenizer.__class__.__name__
+                else -1,
             )
 
         if self.text_encoder_2 is not None:
             self.text_encoder_2.model = self._reshape_text_encoder(
-                self.text_encoder_2.model,
-                batch_size,
-                self.tokenizer_2.model_max_length if "Gemma" not in self.tokenizer.__class__.__name__ else -1,
+                self.text_encoder_2.model, batch_size, getattr(self.tokenizer_2, "model_max_length", -1)
             )
 
         if self.text_encoder_3 is not None:
             self.text_encoder_3.model = self._reshape_text_encoder(
-                self.text_encoder_3.model,
-                batch_size,
-                self.tokenizer_3.model_max_length if "Gemma" not in self.tokenizer.__class__.__name__ else -1,
+                self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1)
             )
 
         self.clear_requests()
@@ -1068,9 +1066,7 @@ class OVModelTextEncoder(OVPipelinePart):
         model_inputs = {"input_ids": input_ids}
 
         if "attention_mask" in self.input_names:
-            model_inputs["attention_mask"] = (
-                attention_mask if attention_mask is not None else torch.ones(input_ids.shape, dtype=torch.long)
-            )
+            model_inputs["attention_mask"] = attention_mask
 
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]

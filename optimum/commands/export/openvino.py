@@ -106,10 +106,10 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "--variant",
+        "--weights-variant",
         type=str,
         default=None,
-        help=("Select a variant of the model to export."),
+        help=("If specified load weights from variant filename."),
     )
     optional_group.add_argument(
         "--ratio",
@@ -452,7 +452,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config=quantization_config,
                 stateful=not self.args.disable_stateful,
                 trust_remote_code=self.args.trust_remote_code,
-                variant=self.args.variant,
+                variant=self.args.weights_variant,
                 cache_dir=self.args.cache_dir,
             )
             model.save_pretrained(self.args.output)
@@ -475,6 +475,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 stateful=not self.args.disable_stateful,
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
-                model_variant=self.args.variant,
+                weights_variant=self.args.weights_variant,
                 # **input_shapes,
             )

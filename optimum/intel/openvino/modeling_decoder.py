@@ -327,7 +327,7 @@ class OVBaseDecoderModel(OVModel):
             stateful=stateful,
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
-            model_variant=variant,
+            weughts_variant=variant,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(
