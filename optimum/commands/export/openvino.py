@@ -345,7 +345,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 is_int8 = self.args.weight_format == "int8"
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
-                    "ratio": 1 if is_int8 else (self.args.ratio or _DEFAULT_4BIT_CONFIG["ratio"]),
+                    "ratio": 1.0 if is_int8 else (self.args.ratio or _DEFAULT_4BIT_CONFIG["ratio"]),
                     "sym": self.args.sym or False,
                     "group_size": -1 if is_int8 else self.args.group_size,
                     "all_layers": None if is_int8 else self.args.all_layers,
