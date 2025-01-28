@@ -43,6 +43,7 @@ jobs:
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,tests] transformers[testing]
+          pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
           pip uninstall -y nncf
 
       - if: ${{ matrix.transformers-version != 'latest' }}
@@ -71,7 +72,7 @@ jobs:
 
       - name: Test with Pytest (slow)
         run: |
-          pytest tests/openvino -m "run_slow" --durations=0
+          pytest tests/openvino --durations=0
         env:
           RUN_SLOW: 1
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
