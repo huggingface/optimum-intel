@@ -2182,11 +2182,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.clear_requests()
         self._check_device_and_request(ov_model, test_device, False)
 
-        # nanollava pixel_values input named as images
-        if model_arch == "nanollava":
-            pixel_values = transformers_inputs.pop("pixel_values", None)
-            transformers_inputs["images"] = pixel_values
-        # pytorch minicpmv is not designed to be used via forward
+        # pytorch minicpmv and internvl2 are not designed to be used via forward
         if model_arch not in ["minicpmv", "internvl2"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
