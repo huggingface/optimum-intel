@@ -466,7 +466,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         tokenizer=MODEL_NAMES["nanollava"],
                         trust_remote_code=True,
                     ),
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 14, "int4": 16}, {"int8": 15}, {"int8": 1}],
                 ),
             ]
         )

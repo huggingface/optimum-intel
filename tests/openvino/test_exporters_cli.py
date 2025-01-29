@@ -197,7 +197,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "nanollava",
                     "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 14, "int4": 16}, {"int8": 15}, {"int8": 1}],
                 ),
                 (
                     "image-text-to-text",
