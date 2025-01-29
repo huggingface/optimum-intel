@@ -1738,6 +1738,8 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         vision_embeds = None
         IGNORE_INDEX = -100
         IMAGE_TOKEN_INDEX = -200
+        if pixel_values is None and "images" in kwargs:
+            pixel_values = kwargs["images"]
         if pixel_values is not None:
             vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
         if vision_embeds is None:
