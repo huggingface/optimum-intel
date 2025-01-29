@@ -695,8 +695,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         image_grid_thw=None,
         video_grid_thw=None,
         rope_deltas=None,
+        images=None,
         **kwargs,
     ):
+        pixel_values = pixel_values if pixel_values is not None else images
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -793,6 +795,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_inputs = {"inputs_embeds": inputs_embeds}
         else:
             model_inputs = {"input_ids": input_ids}
+
+        if pixel_values is None:
+            pixel_values = kwargs.get("images")
 
         model_inputs.update(
             {
@@ -1907,7 +1912,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
         if image is not None:
-            result["pixel_values"] = processor(images=[image], return_tensors="pt")["pixel_values"]
+            result["images"] = processor(images=[image], return_tensors="pt")["pixel_values"]
         return result
 
 
