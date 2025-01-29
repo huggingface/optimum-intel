@@ -423,7 +423,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             stateful=stateful,
-            model_variant=variant,
+            variant=variant,
         )
 
         return cls._from_pretrained(

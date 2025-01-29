@@ -609,7 +609,7 @@ class OVBaseModel(OptimizedModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             library_name=cls._library_name,
-            weights_variant=variant,
+            variant=variant,
         )
 
         return cls._from_pretrained(

@@ -590,7 +590,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             force_download=force_download,
             ov_config=ov_config,
             library_name=cls._library_name,
-            weights_variant=variant,
+            variant=variant,
         )
 
         return cls._from_pretrained(

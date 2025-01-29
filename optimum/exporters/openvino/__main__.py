@@ -122,7 +122,7 @@ def main_export(
     convert_tokenizer: bool = False,
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
-    weights_variant: Optional[str] = None,
+    variant: Optional[str] = None,
     **kwargs_shapes,
 ):
     """
@@ -238,8 +238,8 @@ def main_export(
     custom_architecture = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
-    if weights_variant is not None:
-        loading_kwargs["variant"] = weights_variant
+    if variant is not None:
+        loading_kwargs["variant"] = variant
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -350,7 +350,7 @@ def main_export(
 
                 GPTQQuantizer.post_init_model = post_init_model
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
-        _loading_kwargs = {} if weights_variant is None else {"variant": weights_variant}
+        _loading_kwargs = {} if variant is None else {"variant": variant}
         dtype = deduce_diffusers_dtype(
             model_name_or_path,
             revision=revision,
