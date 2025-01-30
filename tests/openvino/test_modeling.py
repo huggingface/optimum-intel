@@ -2829,6 +2829,7 @@ class OVLangchainTest(unittest.TestCase):
             pipeline_kwargs={"max_new_tokens": 10},
             backend="openvino",
         )
+        self.assertIsInstance(hf_pipe.pipeline.model, OVBaseModel)
 
         generator = hf_pipe.stream("Q: How do you say 'hello' in German? A:'", stop=["."])
 
