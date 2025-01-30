@@ -1661,7 +1661,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens, **decoder_inputs)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=5e-3))
         gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,

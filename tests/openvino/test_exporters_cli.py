@@ -90,11 +90,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
-        "distilbert": 1,  # no detokenizer
+        "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
-        "bert": 1,  # no detokenizer
+        "bert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
