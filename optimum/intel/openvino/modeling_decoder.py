@@ -310,6 +310,8 @@ class OVBaseDecoderModel(OVModel):
         if torch_dtype is not None:
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
+        variant = kwargs.pop("variant", None)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -325,6 +327,7 @@ class OVBaseDecoderModel(OVModel):
             stateful=stateful,
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
+            variant=variant,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(

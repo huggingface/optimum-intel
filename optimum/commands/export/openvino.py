@@ -106,6 +106,12 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--variant",
+        type=str,
+        default=None,
+        help=("If specified load weights from variant filename."),
+    )
+    optional_group.add_argument(
         "--ratio",
         type=float,
         default=None,
@@ -415,6 +421,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVFluxPipeline
 
                 model_cls = OVFluxPipeline
+            elif class_name == "SanaPipeline":
+                from optimum.intel import OVSanaPipeline
+
+                model_cls = OVSanaPipeline
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
@@ -447,6 +457,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config=quantization_config,
                 stateful=not self.args.disable_stateful,
                 trust_remote_code=self.args.trust_remote_code,
+                variant=self.args.variant,
+                cache_dir=self.args.cache_dir,
             )
             model.save_pretrained(self.args.output)
 
@@ -468,5 +480,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 stateful=not self.args.disable_stateful,
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
+                variant=self.args.variant,
                 # **input_shapes,
             )
