@@ -104,7 +104,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
