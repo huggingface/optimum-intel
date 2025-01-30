@@ -134,7 +134,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        diffusers_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -179,7 +180,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         auto_callback = Callback()
 
         ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        auto_pipe = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        auto_pipe = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
         # callback_steps=1 to trigger callback every step
         ov_pipe(**inputs, callback=ov_callback, callback_steps=1)
