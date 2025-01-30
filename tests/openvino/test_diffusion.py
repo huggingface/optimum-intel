@@ -110,7 +110,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
-        auto_pipeline = auto_pipeline.from_pretrained(MODEL_NAMES[model_arch])
+        auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
