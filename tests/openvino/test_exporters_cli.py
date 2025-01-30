@@ -568,3 +568,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "Some compression parameters are provided, but the weight format is not specified.",
                 str(exc_info.exception.stderr),
             )
+
+    def test_export_openvino_with_custom_variant(self):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model katuni4ka/tiny-stable-diffusion-torch-custom-variant --variant custom {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
+            for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
+                self.assertIsNotNone(getattr(model, component))

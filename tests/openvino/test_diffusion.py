@@ -416,6 +416,21 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
+    @require_diffusers
+    def test_load_custom_weight_variant(self):
+        model_id = "katuni4ka/tiny-stable-diffusion-torch-custom-variant"
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, variant="custom")
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, variant="custom")
+        height, width, batch_size = 32, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED))
+        ov_images = ov_output.images
+        diffusers_images = diffusers_output.images
+
+        np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
