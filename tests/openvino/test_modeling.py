@@ -271,6 +271,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             else:
                 self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
+        processor.patch_size = 16
+        # sould be fixed in https://huggingface.co/katuni4ka/tiny-random-llava-ov/blob/main/processor_config.json#L3
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         set_seed(SEED)
         loaded_model_outputs = loaded_model(**inputs)
