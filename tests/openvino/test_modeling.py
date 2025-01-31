@@ -271,8 +271,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             else:
                 self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
-        processor.patch_size = 16
-        # sould be fixed in https://huggingface.co/katuni4ka/tiny-random-llava-ov/blob/main/processor_config.json#L3
+        processor.patch_size = loaded_model.config.vision_config.patch_size
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         set_seed(SEED)
         loaded_model_outputs = loaded_model(**inputs)
@@ -2247,8 +2246,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(processor.patch_size is not None)
         self.assertTrue(processor.vision_feature_select_strategy is not None)
         inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
-        self.assertTrue(
-            (inputs.input_ids == ov_model.config.image_token_index).sum(1).max() >= ov_model.config.image_seq_length
+        self.assertGreaterEqual(
+            (inputs.input_ids == ov_model.config.image_token_index).sum().max().item(),
+            ov_model.config.image_seq_length,
         )
         set_seed(SEED)
         with torch.no_grad():
