@@ -1020,6 +1020,10 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                 prompt = "<image>\n" + text
             else:
                 prompt = text
+
+        if hasattr(processor, "patch_size") and processor.patch_size is None:
+            processor.patch_size = config.vision_config.patch_size
+
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
 
