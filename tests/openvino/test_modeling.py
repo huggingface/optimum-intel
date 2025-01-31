@@ -2173,10 +2173,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
-        # TODO: fix in models
-        if preprocessors.get("processor") is not None:
-            preprocessors["processor"].patch_size = ov_model.config.vision_config.patch_size
-
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
         test_device = "AUTO"
