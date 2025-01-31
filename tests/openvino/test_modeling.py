@@ -2311,17 +2311,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
         if model_arch == "nanollava":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             processor = AutoProcessor.from_pretrained(
                 config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": tokenizer}
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         elif model_arch == "internvl2":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
@@ -2330,7 +2330,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": None}
+            preprocessors = {"processor": processor, "tokenizer": None, "config": config}
+
         return preprocessors
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
