@@ -1023,8 +1023,8 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
         if (
             getattr(processor, "patch_size", None) is None
-            and hasattr(config, "vision_config")
-            and hasattr(config.vision_config, "patch_size")
+            and getattr(config, "vision_config", None) is not None
+            and getattr(config.vision_config, "patch_size", None) is not None
         ):
             processor.patch_size = config.vision_config.patch_size
 
