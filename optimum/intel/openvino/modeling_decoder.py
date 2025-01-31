@@ -56,7 +56,6 @@ from .utils import (
 
 
 if TYPE_CHECKING:
-    from transformers.generation.streamers import BaseStreamer
     from transformers.modeling_utils import PreTrainedModel
 
 
@@ -706,7 +705,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
-        streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
@@ -734,7 +732,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             prefix_allowed_tokens_fn,
             synced_gpus,
             assistant_model,
-            streamer,
             negative_prompt_ids,
             negative_prompt_attention_mask,
             **kwargs,

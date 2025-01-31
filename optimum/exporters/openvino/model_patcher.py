@@ -1581,19 +1581,19 @@ class Phi3ModelPatcher(DecoderModelPatcher):
         ):
             self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
-        if is_transformers_version(">=", "4.42.0"):
+        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
 
         # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
         # init inv_freq for torchscript tracing
         for layer in self._model.model.layers:
-            if is_torch_version(">=", "2.1.0"):
+            if is_torch_version(">=", "2.1.0") and is_transformers_version("<", "4.48.0"):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
 
-            if layer.self_attn.rotary_emb.inv_freq is None:
+            if hasattr(layer.self_attn, "rotary_emb") and layer.self_attn.rotary_emb.inv_freq is None:
                 rotary_emb = layer.self_attn.rotary_emb
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
