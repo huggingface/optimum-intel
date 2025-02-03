@@ -23,7 +23,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPooling, BaseModelOutputWithPast
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -66,6 +66,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self,
         model: ov.Model,
         text_embeds_model: ov.Model,
+        lm_head: Optional[ov.Model] = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -76,8 +77,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     ):
         self.model = model
         self.text_emb_model = text_embeds_model
+        self.lm_head_model = lm_head
         self.request = None
         self.text_emb_request = None
+        self.lm_head_request = None
         compile_only = kwargs.get("compile_only", False)
         if compile_only:
             self.text_emb_request = self.text_emb_model
@@ -92,6 +95,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             logger.info(f"Compiling the Language model to {self._device} ...")
             super().compile()
         self._compile_text_emb()
+        self._compile_lm_head()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
@@ -104,6 +108,18 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                     self.text_emb_model, self._device, self.ov_config, self.model_save_dir
                 )
 
+    def _compile_lm_head(self):
+        if self.lm_head_model is not None and self.lm_head_request is None:
+            logger.info(f"Compiling the LM head model to {self._device} ...")
+            if self._compile_only:
+                self.lm_head_request = self.lm_head_model
+            else:
+                logger.info(f"Compiling the LM head model to {self._device} ...")
+                self.lm_head_request = self._compile_model(
+                    self.lm_head_model, self._device, self.ov_config, self.model_save_dir
+                )
+
+
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
@@ -111,6 +127,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             )
         self.request = None
         self.text_emb_request = None
+        self.lm_head_request = None
 
     def embed_tokens(self, input_ids: torch.LongTensor):
         self._compile_text_emb()
@@ -197,13 +214,21 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
+        include_head = kwargs.get("include_head", True)
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = self.request.get_tensor("logits").data
-        logits = torch.from_numpy(logits).to(self.device)
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
+        if self.lm_head_request is not None:
+            last_hidden_state = self.request.get_tensor("last_hidden_state").data
+            if include_head:
+                logits = self.lm_head_request(logits)[0]
+            else:
+                return BaseModelOutputWithPast(torch.from_numpy(last_hidden_state).to(self.device), past_key_values=past_key_values)
+        else:
+            logits = self.request.get_tensor("logits" if self.lm_head_request is None else "last_hidden_state").data
+        logits = torch.from_numpy(logits).to(self.device)
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
@@ -281,6 +306,9 @@ MODEL_PARTS_CLS_MAPPING = {
     "vision_embeddings": OVVisionEmbedding,
     "vision_projection": OVVisionProjection,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "vision_gen_embeddings": OVVisionGenEmbedding,
+    "vision_gen_head": OVVisionGenHead,
+    "vision_gen_decoder": OVVisionGenDecoder,
 }
 
 
@@ -294,6 +322,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         language_model: ov.Model,
         text_embeddings: ov.Model,
         vision_embeddings: ov.Model,
+        lm_head: Optional[ov.Model] = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -310,6 +339,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self.lm_model = language_model
+        self.lm_head_model = lm_head
         self.text_embeddings_model = text_embeddings
         self.vision_embeddings_model = vision_embeddings
         self._supports_cache_class = False
@@ -328,6 +358,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.language_model = OVModelWithEmbedForCausalLM(
             self.lm_model,
             self.text_embeddings_model,
+            lm_head=self.lm_head_model,
             config=config,
             device=device,
             ov_config=ov_config,
@@ -338,6 +369,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
         for part in self.additional_parts:
+            if model_part == "lm_head":
+                continue
             model_part = getattr(self, f"{part}_model", None)
             if model_part is not None:
                 model_part = MODEL_PARTS_CLS_MAPPING[part](model_part, self)
@@ -2352,6 +2385,10 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         return processed_inputs
 
 
+class _OVJanusForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_gen_embeddings", "vision_gen_head", "vision_gen_decoder", "lm_head"]
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -2361,4 +2398,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi3_v": _OVPhi3VisionForCausalLM,
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,
+    "multi_modality": _OVJanusForCausalLM
 }
