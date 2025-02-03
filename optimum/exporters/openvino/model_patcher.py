@@ -4549,6 +4549,113 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
                     layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+def janus_vision_embed_forward(self, pixel_values):
+    from einops import rearrange
+    
+    bs, n = pixel_values.shape[0:2]
+    images = rearrange(pixel_values, "b n c h w -> (b n) c h w")
+    # [b x n, T2, D]
+    images_embeds = self.aligner(self.vision_model(images))
+
+    # [b x n, T2, D] -> [b, n x T2, D]
+    images_embeds = rearrange(images_embeds, "(b n) t d -> b (n t) d", b=bs, n=n)
+    return images_embeds
+
+
+class JanusVisionEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(janus_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class JanusVisionGenEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any]
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.prepare_gen_img_embeds
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class JanusVisionGenDecoderModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.decode_code
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class RemoveLMHeadPatcherHelper(DecoderModelPatcher):
+    def __init__(self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+        internal_patcher = None
+    ):
+        model.__orig_forward = model.forward
+        @functools.wraps(model.__orig_forward)
+        def patched_forward(*args, **kwargs):
+            return model.model.forward(*args, **kwargs)
+        model.forward = patched_forward
+        self._internal_patcher = internal_patcher
+        if self._internal_patcher is not None:
+            self._patched_forward = self._internal_patcher.patched_forward
+        super().__init__(config, model, model_kwargs)
+
+
+    def __enter__(self):
+        if self._internal_patcher is not None:
+            return self._internal_patcher.__enter__()
+        return super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._internal_patcher:
+            self._internal_patcher.__exit__(exc_type, exc_value, traceback)
+        else:
+            super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+    @property
+    def patched_forward(self):
+        if self._internal_patcher is not None:
+            return self._internal_patcher.patched_forward
+        return self._patched_forward
+
+    @patched_forward.setter
+    def patched_forward(self, fn):
+        self._patched_forward = fn
+        if self._internal_patcher is not None:
+            self._internal_patcher.patched_forward = fn
+
+
 class MiniCPMModelPatcher(DecoderModelPatcher):
     def __init__(
         self,

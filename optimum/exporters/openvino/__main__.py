@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import gc
+import importlib
 import logging
 import operator
 import warnings
@@ -192,7 +193,6 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
-
     if use_auth_token is not None:
         warnings.warn(
             "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
@@ -214,6 +214,7 @@ def main_export(
             revision=revision,
             cache_dir=cache_dir,
             token=token,
+            library_name=library_name
         )
         if library_name == "sentence_transformers":
             logger.warning(
@@ -232,6 +233,9 @@ def main_export(
         token=token,
         library_name=library_name,
     )
+
+    logger.warn(task)
+    logger.warn(library_name)
 
     do_gptq_patching = False
     do_quant_patching = False
@@ -458,6 +462,7 @@ def main_export(
             device=device,
             trust_remote_code=trust_remote_code,
             patch_16bit_model=patch_16bit,
+            library_name=library_name,
             **kwargs_shapes,
         )
 

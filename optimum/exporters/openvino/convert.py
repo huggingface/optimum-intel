@@ -615,6 +615,7 @@ def export_from_model(
     device: str = "cpu",
     trust_remote_code: bool = False,
     patch_16bit_model: bool = False,
+    library_name: Optional[str] = None,
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
@@ -624,9 +625,9 @@ def export_from_model(
             f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
         )
 
-    library_name = _infer_library_from_model_or_model_class(model)
+    library_name = _infer_library_from_model_or_model_class(model, library_name=library_name)
     if library_name != "open_clip":
-        TasksManager.standardize_model_attributes(model)
+        TasksManager.standardize_model_attributes(model, library_name=library_name)
 
     if hasattr(model.config, "export_model_type"):
         model_type = model.config.export_model_type.replace("_", "-")
@@ -639,7 +640,7 @@ def export_from_model(
         task = TasksManager.map_from_synonym(task)
     else:
         try:
-            task = TasksManager._infer_task_from_model_or_model_class(model=model)
+            task = TasksManager._infer_task_from_model_or_model_class(model=model, library_name=library_name)
         except (ValueError, KeyError) as e:
             raise RuntimeError(
                 f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"

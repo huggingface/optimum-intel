@@ -288,6 +288,7 @@ def infer_library_from_model(
     revision: Optional[str] = None,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
+    library_name: Optional[str] = None
 ):
     if isinstance(model, str):
         library_name = _infer_library_from_model_name_or_path(
@@ -296,11 +297,12 @@ def infer_library_from_model(
             revision=revision,
             cache_dir=cache_dir,
             token=token,
+            library_name=library_name
         )
     elif type(model) == type:
-        library_name = _infer_library_from_model_or_model_class(model_class=model)
+        library_name = _infer_library_from_model_or_model_class(model_class=model, library_name=library_name)
     else:
-        library_name = _infer_library_from_model_or_model_class(model=model)
+        library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
     return library_name
 

@@ -290,6 +290,7 @@ def patch_stateful_decoder(config: PretrainedConfig, ov_model: ov.Model):
             openvino model
     """
 
+    log.warn(ov_model)
     key_value_input_names = [
         key_name for key in ov_model.inputs for key_name in key.get_names() if "key_values" in key_name
     ]

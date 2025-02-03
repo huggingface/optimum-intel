@@ -13,6 +13,8 @@
 #  limitations under the License.
 
 import enum
+import importlib
+import math
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -95,6 +97,9 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    JanusVisionEmbeddingModelPatcher,
+    JanusVisionGenDecoderModelPatcher,
+    JanusVisionGenEmbeddingModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
@@ -114,6 +119,7 @@ from .model_patcher import (
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
+    RemoveLMHeadPatcherHelper,
     RotaryEmbPatcher,
     SanaTextEncoderModelPatcher,
     StatefulSeq2SeqDecoderPatcher,
@@ -164,6 +170,17 @@ def init_model_configs():
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["video-text-to-text"] = "AutoModelForVision2Seq"
+
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
+        "any-to-any"
+    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+
+    # for model registration in auto transformers classses
+    if importlib.util.find_spec("janus") is not None:
+        try:
+            from janus.models import MultiModalityCausalLM  # noqa: F401
+        except ImportError:
+            pass
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -445,7 +462,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             decoder_sequence_name = "past_sequence_length"
             name = "past_key_values"
         else:
-            decoder_sequence_name = "past_sequence_length + present_lenght"
+            decoder_sequence_name = "past_sequence_length + present_length"
             name = "present"
 
         is_v4 = hasattr(self._normalized_config, "rope_ratio")
@@ -1409,7 +1426,7 @@ class IBertOpenVINOConfig(IBertOnnxConfig):
 
 
 class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
-    def __init__(self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None):
+    def __init__(self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None, remove_lm_head=False):
         self.orig_export_config = export_config
         if dummy_input_generator is not None:
             export_config.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -1423,18 +1440,30 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         self.use_past = export_config.use_past
         self.patcher_cls = patcher_cls
         self.input_info_upd = inputs_update
+        self.remove_lm_head = remove_lm_head
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         if self.patcher_cls is not None:
-            return self.patcher_cls(self, model, model_kwargs=model_kwargs)
+            patcher = self.patcher_cls(self, model, model_kwargs=model_kwargs)
         # Refer to DecoderModelPatcher.
-        return self.orig_export_config.patch_model_for_export(model, model_kwargs=model_kwargs)
+        else:
+            patcher = self.orig_export_config.patch_model_for_export(model, model_kwargs=model_kwargs)
+
+        if self.remove_lm_head:
+            patcher = RemoveLMHeadPatcherHelper(self, model, model_kwargs, patcher)
+
+        return patcher
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return self.orig_export_config.outputs
+        outputs = self.orig_export_config.outputs
+        if self.remove_lm_head:
+            logits_info = outputs.pop("logits")
+            updated_outputs = {"last_hidden_state": logits_info}
+            return {**updated_outputs, **outputs}
+        return outputs
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1526,6 +1555,7 @@ def get_vlm_text_generation_config(
     model_patcher=None,
     dummy_input_generator=None,
     inputs_update=None,
+    remove_lm_head=False,
 ):
     internal_export_config = get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype)
     export_config = LMInputEmbedsConfigHelper(
@@ -1533,6 +1563,7 @@ def get_vlm_text_generation_config(
         patcher_cls=model_patcher,
         dummy_input_generator=dummy_input_generator,
         inputs_update=inputs_update,
+        remove_lm_head=remove_lm_head,
     )
     export_config._normalized_config = internal_export_config._normalized_config
     return export_config
@@ -3266,3 +3297,289 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("smolvlm", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+
+class JanusConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    LM_HEAD = "lm_head"
+    VISION_GEN_EMBEDDINGS = "vision_gen_embeddings"
+    VISION_GEN_HEAD = "vision_gen_head"
+    VISION_GEN_DECODER = "vision_gen_decoder"
+
+
+class JanusDummyVisionGenInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_ids", "code_b", "image_shape", "lm_hidden_state", "hidden_state")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.normalized_config = normalized_config
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [
+                    self.batch_size,
+                    1,
+                    3,
+                    self.normalized_config.config.params.image_size,
+                    self.normalized_config.config.params.image_size,
+                ]
+            )
+
+        if input_name == "image_ids":
+            return self.random_int_tensor(
+                [self.sequence_length],
+                max_value=self.normalized_config.config.params.image_token_size,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name == "code_b":
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/janus/models/vq_model.py#L42
+            z_channels = getattr(self.normalized_config.config.params, "z_channels", 256)
+            patch_size = int(math.sqrt(z_channels))
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/generation_inference.py#L63
+            generated_image_size = getattr(self.normalized_config.config.params, "img_size", 384)
+            latent_heigh = int(generated_image_size // patch_size)
+            latent_width = int(generated_image_size // patch_size)
+            return self.random_int_tensor(
+                [self.batch_size, int(latent_heigh * latent_width)],
+                max_value=self.normalized_config.config.params.image_token_size,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name == "image_shape":
+            import torch
+
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/janus/models/vq_model.py#L42
+            z_channels = getattr(self.normalized_config.config.params, "z_channels", 256)
+            patch_size = int(math.sqrt(z_channels))
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/generation_inference.py#L63
+            generated_image_size = getattr(self.normalized_config.config.params, "img_size", 384)
+            latent_heigh = int(generated_image_size // patch_size)
+            latent_width = int(generated_image_size // patch_size)
+
+            return torch.tensor(
+                [self.batch_size, self.normalized_config.config.params.n_embed, latent_heigh, latent_width],
+                dtype=torch.int64,
+            )
+        if input_name == "hidden_state":
+            return self.random_float_tensor(
+                [self.batch_size, self.sequence_length, self.normalized_config.hidden_size]
+            )
+        if input_name == "lm_hidden_state":
+            return self.random_float_tensor([self.sequence_length, self.normalized_config.hidden_size])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("multi-modality", *["image-text-to-text", "any-to-any"], library_name="transformers")
+class JanusOpenVINOConfig(BaseVLMOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in JanusConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (JanusDummyVisionGenInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: JanusConfigBehavior = JanusConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == JanusConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = NormalizedVisionConfig(self._config)
+        if self._behavior in [JanusConfigBehavior.LM_HEAD, JanusConfigBehavior.VISION_GEN_HEAD] and hasattr(
+            config, "language_config"
+        ):
+            self._config = config.language_config
+            self._normalized_config = NormalizedTextConfig(self._config)
+        if self._behavior == JanusConfigBehavior.VISION_GEN_EMBEDDINGS and hasattr(config, "gen_head_config"):
+            self._config = config.gen_head_config
+            self._normalized_config = NormalizedConfig(self._config)
+        if self._behavior == JanusConfigBehavior.VISION_GEN_DECODER and hasattr(config, "gen_vision_config"):
+            self._config = config.gen_vision_config
+            self._normalized_config = NormalizedConfig(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == JanusConfigBehavior.VISION_EMBEDDINGS:
+            return {"pixel_values": {0: "batch_size", 1: "num_images", 3: "height", 4: "width"}}
+        if self._behavior == JanusConfigBehavior.VISION_GEN_EMBEDDINGS:
+            return {"image_ids": {0: "num_tokens"}}
+        if self._behavior == JanusConfigBehavior.LM_HEAD:
+            return {"hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        if self._behavior == JanusConfigBehavior.VISION_GEN_HEAD:
+            return {"lm_hidden_state": {0: "num_tokens"}}
+        if self._behavior == JanusConfigBehavior.VISION_GEN_DECODER:
+            return {"code_b": {0: "batch_size", 1: "sequence_length"}, "image_shape": {}}
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == JanusConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "batch_size"}}
+        if self._behavior == JanusConfigBehavior.VISION_GEN_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_tokens"}}
+
+        if self._behavior == JanusConfigBehavior.LM_HEAD:
+            return {"logits": {0: "batch_size", 1: "sequence_length"}}
+
+        if self._behavior == JanusConfigBehavior.VISION_GEN_HEAD:
+            return {"logits": {0: "sequence_length"}}
+
+        if self._behavior == JanusConfigBehavior.VISION_GEN_DECODER:
+            return {"images": {0: "batch_size", 2: "height", 3: "width"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, JanusConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, JanusConfigBehavior):
+            behavior = JanusConfigBehavior(behavior)
+
+        if behavior == JanusConfigBehavior.TEXT_EMBEDDINGS:
+            model_type = self._orig_config.language_config.model_type
+            return get_vlm_text_embeddings_config(
+                model_type, self._orig_config.language_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == JanusConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.language_config.model_type
+            return get_vlm_text_generation_config(
+                model_type, self._orig_config.language_config, self.int_dtype, self.float_dtype, remove_lm_head=True
+            )
+
+        if behavior == JanusConfigBehavior.LM_HEAD:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+        if behavior == JanusConfigBehavior.VISION_GEN_HEAD:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+        if behavior == JanusConfigBehavior.VISION_GEN_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+        if behavior == JanusConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+        if behavior == JanusConfigBehavior.VISION_GEN_DECODER:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, JanusConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, JanusConfigBehavior):
+            behavior = JanusConfigBehavior(behavior)
+
+        if behavior == JanusConfigBehavior.LANGUAGE:
+            return model.language_model
+
+        if behavior == JanusConfigBehavior.VISION_EMBEDDINGS:
+            return model
+
+        if behavior == JanusConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.language_model.get_input_embeddings()
+            text_embedding.config = model.language_model.config
+            return text_embedding
+
+        if behavior == JanusConfigBehavior.LM_HEAD:
+            lm_head = model.language_model.lm_head
+            lm_head.config = model.language_model.config
+            return lm_head
+
+        if behavior == JanusConfigBehavior.VISION_GEN_EMBEDDINGS:
+            return model
+
+        if behavior == JanusConfigBehavior.VISION_GEN_HEAD:
+            gen_head = model.gen_head
+            gen_head.config = model.language_model.config
+            return gen_head
+
+        if behavior == JanusConfigBehavior.VISION_GEN_DECODER:
+            return model.gen_vision_model
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == JanusConfigBehavior.VISION_EMBEDDINGS:
+            return JanusVisionEmbeddingModelPatcher(self, model, model_kwargs)
+        if self._behavior == JanusConfigBehavior.VISION_GEN_EMBEDDINGS:
+            return JanusVisionGenEmbeddingModelPatcher(self, model, model_kwargs)
+        if self._behavior == JanusConfigBehavior.VISION_GEN_DECODER:
+            return JanusVisionGenDecoderModelPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    def rename_ambiguous_inputs(self, inputs):
+        if self._behavior == JanusConfigBehavior.VISION_GEN_HEAD:
+            data = inputs.pop("lm_hidden_state")
+            inputs["x"] = data
+        if self._behavior == JanusConfigBehavior.LM_HEAD:
+            data = inputs.pop("hidden_state")
+            inputs["input"] = data
+        if self._behavior == JanusConfigBehavior.VISION_GEN_DECODER:
+            data = inputs.pop("image_shape")
+            inputs["shape"] = data
+        return inputs
