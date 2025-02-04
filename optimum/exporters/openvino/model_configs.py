@@ -146,7 +146,7 @@ def init_model_configs():
     # for model registration in auto transformers classses
     if importlib.util.find_spec("janus") is not None:
         try:
-            from janus.models import MultiModalityCausalLM, VLChatProcessor
+            from janus.models import MultiModalityCausalLM  # noqa: F401
         except ImportError:
             pass
 
