@@ -2237,6 +2237,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             patch_size=config.vision_config.patch_size,
             vision_feature_select_strategy=config.vision_feature_select_strategy,
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            num_additional_image_tokens=1,
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
