@@ -766,7 +766,6 @@ def export_from_model(
                 logger.warning(
                     f"The generation config will not be saved, saving failed with following error:\n{exception}"
                 )
-        logger.warn(preprocessors)
         save_preprocessors(preprocessors, model.config, output, trust_remote_code)
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
