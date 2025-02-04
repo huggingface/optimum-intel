@@ -213,8 +213,7 @@ def main_export(
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            token=token,
-            library_name=library_name,
+            token=token
         )
         if library_name == "sentence_transformers":
             logger.warning(
