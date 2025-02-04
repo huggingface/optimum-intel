@@ -56,7 +56,11 @@ from .utils import (
 
 
 if TYPE_CHECKING:
-    from transformers.generation.streamers import BaseStreamer
+    try:
+        from transformers.generation.streamers import BaseStreamer
+    except Exception:
+        from typing import Generator as BaseStreamer
+
     from transformers.modeling_utils import PreTrainedModel
 
 

@@ -271,6 +271,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             else:
                 self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
+        processor.patch_size = loaded_model.config.vision_config.patch_size
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         set_seed(SEED)
         loaded_model_outputs = loaded_model(**inputs)
@@ -2170,6 +2171,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         for component_name, component in ov_model.components.items():
             self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
         test_device = "AUTO"
@@ -2235,6 +2237,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             patch_size=config.vision_config.patch_size,
             vision_feature_select_strategy=config.vision_feature_select_strategy,
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            num_additional_image_tokens=1,
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
@@ -2244,8 +2247,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(processor.patch_size is not None)
         self.assertTrue(processor.vision_feature_select_strategy is not None)
         inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
-        self.assertTrue(
-            (inputs.input_ids == ov_model.config.image_token_index).sum(1).max() >= ov_model.config.image_seq_length
+        self.assertGreaterEqual(
+            (inputs.input_ids == ov_model.config.image_token_index).sum().max().item(),
+            ov_model.config.image_seq_length,
         )
         set_seed(SEED)
         with torch.no_grad():
@@ -2308,17 +2312,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
         if model_arch == "nanollava":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             processor = AutoProcessor.from_pretrained(
                 config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": tokenizer}
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         elif model_arch == "internvl2":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
@@ -2327,7 +2331,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": None}
+            preprocessors = {"processor": processor, "tokenizer": None, "config": config}
+
         return preprocessors
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

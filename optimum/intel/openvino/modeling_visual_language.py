@@ -1020,6 +1020,18 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                 prompt = "<image>\n" + text
             else:
                 prompt = text
+
+        if getattr(processor, "patch_size", None) is None:
+            if (
+                getattr(config, "vision_config", None) is not None
+                and getattr(config.vision_config, "patch_size", None) is not None
+            ):
+                processor.patch_size = config.vision_config.patch_size
+            else:
+                raise ValueError(
+                    "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
+                )
+
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
 
@@ -1915,6 +1927,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
             input_ids = tokenizer(text, return_tensors="pt").input_ids
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
+
         if image is not None:
             result["images"] = processor(images=[image], return_tensors="pt")["pixel_values"]
         return result

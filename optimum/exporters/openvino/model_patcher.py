@@ -718,14 +718,15 @@ def _mistral_update_causal_mask(
 class MistralModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.42.0"):
+        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             # apply fix https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
 
         else:
             for layer in self._model.model.layers:
-                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+                if hasattr(layer.self_attn, "rotary_emb"):
+                    _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -734,7 +735,7 @@ class MistralModelPatcher(DecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
         for layer in self._model.model.layers:
-            if hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
+            if hasattr(layer.self_attn, "rotary_emb") and hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
                 layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
@@ -1580,19 +1581,19 @@ class Phi3ModelPatcher(DecoderModelPatcher):
         ):
             self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
-        if is_transformers_version(">=", "4.42.0"):
+        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
 
         # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
         # init inv_freq for torchscript tracing
         for layer in self._model.model.layers:
-            if is_torch_version(">=", "2.1.0"):
+            if is_torch_version(">=", "2.1.0") and is_transformers_version("<", "4.48.0"):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
 
-            if layer.self_attn.rotary_emb.inv_freq is None:
+            if hasattr(layer.self_attn, "rotary_emb") and layer.self_attn.rotary_emb.inv_freq is None:
                 rotary_emb = layer.self_attn.rotary_emb
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
@@ -2493,7 +2494,9 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.42.0")
-        if hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"):
+        if hasattr(self._model.model.layers[0].self_attn, "rotary_emb") and hasattr(
+            self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"
+        ):
             for layer in self._model.model.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
@@ -3045,15 +3048,16 @@ class InternVL2ChatLangModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         if is_torch_version(">=", "2.1.0"):
             if self._model.config.model_type == "qwen2" and self._model.config._attn_implementation != "sdpa":
-                from transformers.models.qwen2.modeling_qwen2 import QWEN2_ATTENTION_CLASSES
+                if is_transformers_version("<", "4.48"):
+                    from transformers.models.qwen2.modeling_qwen2 import QWEN2_ATTENTION_CLASSES
 
-                sdpa_attn = QWEN2_ATTENTION_CLASSES["sdpa"]
-                self._model.config._orig_attn_implementation = self._model.config._attn_implementation
-                self._model.config._attn_implementation = "sdpa"
+                    sdpa_attn = QWEN2_ATTENTION_CLASSES["sdpa"]
+                    self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+                    self._model.config._attn_implementation = "sdpa"
 
-                for layer in self._model.model.layers:
-                    layer.self_attn._orig_forward = layer.self_attn.forward
-                    layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+                    for layer in self._model.model.layers:
+                        layer.self_attn._orig_forward = layer.self_attn.forward
+                        layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
 
             if self._model.config.model_type == "llama" and self._model.config._attn_implementation != "sdpa":
                 self._model.config._orig_attn_implementation = self._model.config._attn_implementation
