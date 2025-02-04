@@ -234,8 +234,6 @@ def main_export(
         library_name=library_name,
     )
 
-    logger.warn(task)
-    logger.warn(library_name)
 
     do_gptq_patching = False
     do_quant_patching = False
