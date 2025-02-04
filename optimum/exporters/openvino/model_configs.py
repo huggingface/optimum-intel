@@ -1426,7 +1426,9 @@ class IBertOpenVINOConfig(IBertOnnxConfig):
 
 
 class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
-    def __init__(self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None, remove_lm_head=False):
+    def __init__(
+        self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None, remove_lm_head=False
+    ):
         self.orig_export_config = export_config
         if dummy_input_generator is not None:
             export_config.DUMMY_INPUT_GENERATOR_CLASSES = (

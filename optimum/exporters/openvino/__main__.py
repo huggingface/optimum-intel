@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import gc
-import importlib
 import logging
 import operator
 import warnings
@@ -40,13 +39,13 @@ from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _OpenClipForZeroShotImageClassification,
 )
-from optimum.utils.save_utils import maybe_load_preprocessors
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    load_preprocessors,
 )
 
 
@@ -193,6 +192,7 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
+
     if use_auth_token is not None:
         warnings.warn(
             "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
@@ -214,7 +214,7 @@ def main_export(
             revision=revision,
             cache_dir=cache_dir,
             token=token,
-            library_name=library_name
+            library_name=library_name,
         )
         if library_name == "sentence_transformers":
             logger.warning(
@@ -445,7 +445,7 @@ def main_export(
                 possible_synonyms = ""
             logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
-        preprocessors = maybe_load_preprocessors(
+        preprocessors = load_preprocessors(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
         )
 

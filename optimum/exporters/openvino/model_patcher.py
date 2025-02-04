@@ -4551,7 +4551,7 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
 
 def janus_vision_embed_forward(self, pixel_values):
     from einops import rearrange
-    
+
     bs, n = pixel_values.shape[0:2]
     images = rearrange(pixel_values, "b n c h w -> (b n) c h w")
     # [b x n, T2, D]
@@ -4614,22 +4614,24 @@ class JanusVisionGenDecoderModelPatcher(ModelPatcher):
 
 
 class RemoveLMHeadPatcherHelper(DecoderModelPatcher):
-    def __init__(self,
+    def __init__(
+        self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Dict[str, Any],
-        internal_patcher = None
+        internal_patcher=None,
     ):
         model.__orig_forward = model.forward
+
         @functools.wraps(model.__orig_forward)
         def patched_forward(*args, **kwargs):
             return model.model.forward(*args, **kwargs)
+
         model.forward = patched_forward
         self._internal_patcher = internal_patcher
         if self._internal_patcher is not None:
             self._patched_forward = self._internal_patcher.patched_forward
         super().__init__(config, model, model_kwargs)
-
 
     def __enter__(self):
         if self._internal_patcher is not None:
