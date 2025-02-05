@@ -369,7 +369,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         language_model: ov.Model,
         text_embeddings: ov.Model,
         vision_embeddings: ov.Model,
-        lm_head: Optional[ov.Model] = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -739,7 +738,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         for part in self.additional_parts:
             if part == "lm_head" and getattr(self, part + "_model", None) is not None:
                 model_names.append(part + "_model")
-                continue
+                continue 
             if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
