@@ -1021,7 +1021,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
             else:
                 prompt = text
 
-        if getattr(processor, "patch_size", None) is None:
+        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
             if (
                 getattr(config, "vision_config", None) is not None
                 and getattr(config.vision_config, "patch_size", None) is not None
