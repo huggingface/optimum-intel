@@ -295,6 +295,14 @@ def save_preprocessors(
         if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
+        if (
+            is_transformers_version(">=", "4.45")
+            and model_type in ["llava", "llava-next"]
+            and preprocessors is not None
+        ):
+            if getattr(preprocessors[1], "patch_size", None) is None:
+                preprocessors[1].patch_size = config.vision_config.patch_size
+                preprocessors[1].vision_feature_select_strategy = config.vision_feature_select_strategy
         for processor in preprocessors:
             try:
                 processor.save_pretrained(output)
