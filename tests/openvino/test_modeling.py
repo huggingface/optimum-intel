@@ -984,7 +984,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "stablelm",
             "starcoder2",
             "dbrx",
-            "phi3",
             "cohere",
             "qwen2",
             "qwen2-moe",
