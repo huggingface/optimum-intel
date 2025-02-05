@@ -74,6 +74,7 @@ from .utils import (
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
+    deepcopy_data,
 )
 
 
@@ -131,7 +132,7 @@ class InferRequestWrapper:
 
     def collect_inputs(self, inputs):
         if not self.apply_caching or not isinstance(inputs, dict):
-            self.collected_inputs.append(copy.deepcopy(inputs))
+            self.collected_inputs.append(deepcopy_data(inputs))
             return
 
         copied_inputs = {}
@@ -146,7 +147,7 @@ class InferRequestWrapper:
             # Avoid data copying if tensor contains data encountered earlier
             self.tensor_cache.setdefault(k, {})
             if data_hash not in self.tensor_cache[k]:
-                self.tensor_cache[k][data_hash] = copy.deepcopy(v)
+                self.tensor_cache[k][data_hash] = deepcopy_data(v)
             copied_inputs[k] = self.tensor_cache[k][data_hash]
         self.collected_inputs.append(copied_inputs)
 

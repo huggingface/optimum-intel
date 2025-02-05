@@ -42,6 +42,9 @@ from transformers import (
 from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
 
+from optimum.intel.openvino.utils import deepcopy_data
+
+
 from optimum.intel import (
     OVConfig,
     OVFluxPipeline,
@@ -1353,6 +1356,34 @@ class InferRequestWrapperTest(unittest.TestCase):
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
             self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)
+
+    def test_deepcopy_data(self):
+        data = {
+            "a": torch.tensor([1, 2, 3]),
+            "b": np.array([1, 2, 3]),
+            "c": 1,
+            "d": "string",
+            "e": {"a": torch.tensor([1, 2, 3]), "b": np.array([1, 2, 3])},
+            "f": [ov.Tensor(np.ones((1, 2, 3))), ov.Tensor(np.ones((1, 2, 3)))],
+        }
+        copied_data = deepcopy_data(data)
+        assert copied_data["a"] is not data["a"]
+        assert copied_data["b"] is not data["b"]
+        assert copied_data["e"]["a"] is not data["e"]["a"]
+        assert copied_data["e"]["b"] is not data["e"]["b"]
+        assert copied_data["f"][0] is not data["f"][0]
+        assert copied_data["f"][1] is not data["f"][1]
+
+        assert torch.equal(copied_data["a"], data["a"])
+        assert np.array_equal(copied_data["b"], data["b"])
+        assert copied_data["c"] == data["c"]
+        assert copied_data["d"] == data["d"]
+        assert torch.equal(copied_data["e"]["a"], data["e"]["a"])
+        assert np.array_equal(copied_data["e"]["b"], data["e"]["b"])
+        assert np.array_equal(copied_data["f"][0].data, data["f"][0].data)
+        assert np.array_equal(copied_data["f"][1].data, data["f"][1].data)
+
+        assert copied_data is not data
 
 
 def check_optimization_not_applicable_to_optimized_model(model, quantization_config):

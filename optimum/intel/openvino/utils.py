@@ -19,21 +19,22 @@ import os
 import stat
 import warnings
 import weakref
+from copy import deepcopy
 from glob import glob
 from pathlib import Path
 from tempfile import TemporaryDirectory as OrigTemporaryDirectory
 from tempfile import mkdtemp
-from typing import Tuple, Type, Union
+from typing import Tuple, Type, Union, Any
 
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, Model, properties
+from openvino.runtime import Core, Model, properties, Tensor
 from openvino.runtime import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
-
+import openvino
 from optimum.intel.utils.import_utils import is_torch_version
 
 
@@ -586,3 +587,20 @@ def check_scale_available(model: Union[Model, str, Path]):
     if runtime_options is None:
         return False
     return runtime_options.find("ACTIVATIONS_SCALE_FACTOR") is not None
+
+
+def deepcopy_data(inputs: Any) -> Any:
+    if isinstance(inputs, dict):
+        new_inputs = {}
+        for k, v in inputs.items():
+            new_inputs[deepcopy_data(k)] = deepcopy_data(v)
+    elif isinstance(inputs, list):
+        new_inputs = [deepcopy_data(elem) for elem in inputs]
+    elif isinstance(inputs, tuple):
+        new_inputs = tuple(deepcopy_data(elem) for elem in inputs)
+    elif isinstance(inputs, openvino.Tensor):
+        new_inputs = openvino.Tensor(np.zeros(inputs.shape, dtype=inputs.element_type.to_dtype()))
+        new_inputs.copy_from(inputs)
+    else:
+        new_inputs = deepcopy(inputs)
+    return new_inputs
