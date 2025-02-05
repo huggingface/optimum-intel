@@ -738,7 +738,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         for part in self.additional_parts:
             if part == "lm_head" and getattr(self, part + "_model", None) is not None:
                 model_names.append(part + "_model")
-                continue 
+                continue
             if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
