@@ -196,10 +196,10 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
     "flux-fill": (56, 24, 28, 64),
-    "llava": (30, 9, 1),
-    "llava_next": (30, 9, 1),
-    "minicpmv": (30, 26, 1, 6),
-    "nanollava": (30, 15, 1),
+    "llava": (30, 1, 9),
+    "llava_next": (30, 1, 9),
+    "minicpmv": (30, 1, 26, 6),
+    "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
 }
@@ -290,7 +290,7 @@ def patch_awq_for_inference(to_patch):
             WQLinearMMFunction.forward = orig_gemm_forward
 
 
-def compare_num_quantized_nodes_per_model(
+def check_compression_state_per_model(
     test_case: unittest.TestCase,
     models: List[Union[ov.Model, OVBaseModel]],
     expected_num_weight_nodes_per_model: List[Dict],
@@ -298,7 +298,9 @@ def compare_num_quantized_nodes_per_model(
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = []
     for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
-        _, num_weight_nodes = get_num_quantized_nodes(submodel)
+        ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+        _, num_weight_nodes = get_num_quantized_nodes(ov_model)
         expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
         actual_num_weights_per_model.append(num_weight_nodes)
+        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)

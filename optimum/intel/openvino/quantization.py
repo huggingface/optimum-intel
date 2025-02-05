@@ -1042,7 +1042,7 @@ def _weight_only_quantization(
         else:
             mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
 
-    return nncf.compress_weights(
+    compressed_model = nncf.compress_weights(
         model,
         mode=mode,
         ratio=config.ratio,
@@ -1059,6 +1059,15 @@ def _weight_only_quantization(
         backup_mode=None if config.backup_precision is None else nncf.BackupMode(config.backup_precision),
         **kwargs,
     )
+
+    # If KV cache compression was disabled, remove the disabling flag from the model
+    if compressed_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
+        prev_rt_info = compressed_model.get_rt_info("runtime_options").value
+        if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
+            prev_rt_info.pop("KV_CACHE_PRECISION")
+            compressed_model.set_rt_info(prev_rt_info, "runtime_options")
+
+    return compressed_model
 
 
 def _full_quantization(

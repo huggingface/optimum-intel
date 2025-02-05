@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
-    compare_num_quantized_nodes_per_model,
+    check_compression_state_per_model,
     get_num_quantized_nodes,
 )
 
@@ -192,27 +192,27 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "llava_next",
                     "int4 --group-size 16 --ratio 0.8",
-                    [{"int8": 14, "int4": 16}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 14, "int4": 16}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     "image-text-to-text",
                     "llava_next",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
                     "--dataset contextual --num-samples 1",
-                    [{"int8": 6, "int4": 24}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
             ]
         )
@@ -224,40 +224,40 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "minicpmv",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 10, "int4": 20}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     "image-text-to-text",
                     "minicpmv",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 10}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 8, "int4": 10}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     "image-text-to-text",
@@ -369,14 +369,15 @@ class OVCLIExportTestCase(unittest.TestCase):
                     model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2
                 )
             elif task.startswith("image-text-to-text"):
-                models = [model.language_model, model.vision_embeddings]
+                models = list(model.submodels.values())
             else:
                 models = [model]
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-            for i, model in enumerate(models):
-                _, num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_int8[i], num_weight_nodes["int8"])
+            expected_int8 = [{"int8": it} for it in expected_int8]
+            if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
+                expected_int8 = expected_int8[:2]
+            check_compression_state_per_model(self, models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -389,11 +390,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
-            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
-                model.unet if model.unet is not None else model.transformer
-            )
+            vision_model = model.unet.model if model.unet is not None else model.transformer.model
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(vision_model)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
+            self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
@@ -419,10 +420,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-generation-with-past":
                 submodels = [model]
             elif task == "image-text-to-text":
-                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-                submodels += [getattr(model, part) for part in model.additional_parts]
+                submodels = list(model.submodels.values())
 
-            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)

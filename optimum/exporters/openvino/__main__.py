@@ -493,12 +493,6 @@ def main_export(
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
             _weight_only_quantization(submodel, quantization_config)
-            # kv cache compression disabled if quantization config is not provided,
-            # to keep aligned result of applying auto int8 compression and via explicit setting config, we should update it
-            if submodel.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
-                prev_rt_info = submodel.get_rt_info("runtime_options").value
-                prev_rt_info.pop("KV_CACHE_PRECISION")
-                submodel.set_rt_info(prev_rt_info, "runtime_options")
             compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
             save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
             del submodel
