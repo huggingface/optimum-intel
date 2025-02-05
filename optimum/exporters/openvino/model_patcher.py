@@ -4625,7 +4625,16 @@ class RemoveLMHeadPatcherHelper(DecoderModelPatcher):
 
         @functools.wraps(model.__orig_forward)
         def patched_forward(*args, **kwargs):
-            return model.model.forward(*args, **kwargs)
+            fwd_args = inspect.signature(model.__orig_forward).parameters
+            internal_fwd_args = inspect.signature(model.model.forward).parameters
+            inputs = {}
+            for arg, fwd_arg_name in zip(args, fwd_args):
+                if fwd_arg_name in internal_fwd_args:
+                    inputs[fwd_arg_name] = arg
+            for key, value in kwargs.items():
+                if key in internal_fwd_args:
+                    inputs[key] = value
+            return model.model.forward(**inputs)
 
         model.forward = patched_forward
         self._internal_patcher = internal_patcher

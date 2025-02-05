@@ -2178,7 +2178,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_VIDEO.append("llava_next_video")
 
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl", "janus"]
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
@@ -2191,7 +2191,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
-
+    TASK = "image-text-to-text"
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "janus"]
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,
@@ -2323,8 +2324,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 **transformers_inputs, generation_config=gen_config, **additional_inputs
             )
 
-        # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "internvl2"]:
+        # original minicpmv, internvl, janus always skip input tokens in generation results, while transformers based approach provide them
+        if model_arch in ["minicpmv", "internvl2", "janus"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
