@@ -375,6 +375,8 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = [{"int8": it} for it in expected_int8]
+            if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
+                expected_int8 = expected_int8[:2]
             check_compression_state_per_model(self, models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
