@@ -222,6 +222,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava-next",
     "llava-qwen2",
     "internvl-chat",
+    "maira2",
     "minicpmv",
     "phi3-v",
     "qwen2-vl",
