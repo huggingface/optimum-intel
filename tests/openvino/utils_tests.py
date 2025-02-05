@@ -170,7 +170,7 @@ MODEL_NAMES = {
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
-    "janus": "katuni4ka/tiny-random-janus"
+    "janus": "katuni4ka/tiny-random-janus",
 }
 
 

@@ -719,7 +719,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         for part in self.additional_parts:
             if part == "lm_head" and getattr(self, part + "_model", None) is not None:
                 model_names.append(part + "_model")
-                continue 
+                continue
             if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
@@ -2475,7 +2475,7 @@ class _OVJanusForCausalLM(OVModelForVisualCausalLM):
         image_token_num_per_image: int = 576,
         img_size: int = 384,
         patch_size: int = 16,
-        generator=None
+        generator=None,
     ):
         from PIL import Image
 
@@ -2524,7 +2524,11 @@ class _OVJanusForCausalLM(OVModelForVisualCausalLM):
             logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
             probs = torch.softmax(logits / temperature, dim=-1)
 
-            next_token = torch.multinomial(probs, num_samples=1) if generator is None else torch.multinomial(probs, num_samples=1, generator=generator)
+            next_token = (
+                torch.multinomial(probs, num_samples=1)
+                if generator is None
+                else torch.multinomial(probs, num_samples=1, generator=generator)
+            )
             generated_tokens[:, i] = next_token.squeeze(dim=-1)
 
             next_token = torch.cat([next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], dim=1).view(-1)
