@@ -580,7 +580,7 @@ class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
         self.activations_group_size = activations_group_size
         logger.warning(
             "OVDynamicQuantizationConfig is deprecated and will be removed in optimum-intel v1.24.0. "
-            "Dynamic quantization and KV cache compression are enabled by default starting from OpenVINO 2025.0 and "
+            "Dynamic quantization and KV cache compression are enabled by default starting from OpenVINO 2024.6 and "
             "there is no need to enable them manually. If you need precise control over these parameters, please "
             "provide `DYNAMIC_QUANTIZATION_GROUP_SIZE` and `KV_CACHE_PRECISION` with `ov_config` argument during model "
             "inference."
