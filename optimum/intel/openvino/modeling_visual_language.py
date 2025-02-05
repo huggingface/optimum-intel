@@ -349,13 +349,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         language_model: ov.Model,
         text_embeddings: ov.Model,
         vision_embeddings: ov.Model,
-        lm_head: Optional[ov.Model] = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        lm_head: Optional[ov.Model] = None,
         **kwargs,
     ):
         self.config = config
@@ -717,6 +717,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     def _submodel_names(self):
         model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
         for part in self.additional_parts:
+            if part == "lm_head" and getattr(self, part + "_model", None) is not None:
+                model_names.append(part + "_model")
+                continue 
             if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
@@ -2472,6 +2475,7 @@ class _OVJanusForCausalLM(OVModelForVisualCausalLM):
         image_token_num_per_image: int = 576,
         img_size: int = 384,
         patch_size: int = 16,
+        generator=None
     ):
         from PIL import Image
 
@@ -2520,7 +2524,7 @@ class _OVJanusForCausalLM(OVModelForVisualCausalLM):
             logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
             probs = torch.softmax(logits / temperature, dim=-1)
 
-            next_token = torch.multinomial(probs, num_samples=1)
+            next_token = torch.multinomial(probs, num_samples=1) if generator is None else torch.multinomial(probs, num_samples=1, generator=generator)
             generated_tokens[:, i] = next_token.squeeze(dim=-1)
 
             next_token = torch.cat([next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], dim=1).view(-1)
@@ -2563,11 +2567,10 @@ class _OVJanusForCausalLM(OVModelForVisualCausalLM):
                 },
                 {"role": "<|Assistant|>", "content": ""},
             ]
-            prompt = None
+            prepare_inputs = processor(conversations=conversation, images=[image], force_batchify=True)
         else:
-            conversation = None
-            prompt = text
-        prepare_inputs = processor(prompt=prompt, conversations=conversation, images=[image], force_batchify=True)
+            tokenizer = tokenizer if tokenizer is not None else processor.tokenizer
+            prepare_inputs = tokenizer(text, return_tensors="pt")
         required_keys = ["input_ids", "pixel_values", "images_seq_mask", "images_emb_mask"]
         inputs = {}
         for key in required_keys:
