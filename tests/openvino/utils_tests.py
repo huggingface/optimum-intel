@@ -180,7 +180,7 @@ MODEL_NAMES = {
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
     "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
-    "janus": "katuni4ka/tiny-random-janus"
+    "janus": "katuni4ka/tiny-random-janus",
 }
 
 

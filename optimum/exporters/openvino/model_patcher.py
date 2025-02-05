@@ -4581,10 +4581,7 @@ class JanusVisionEmbeddingModelPatcher(ModelPatcher):
 
 class JanusVisionGenEmbeddingModelPatcher(ModelPatcher):
     def __init__(
-        self,
-        config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Dict[str, Any]
+        self, config: "OnnxConfig", model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Dict[str, Any]
     ):
         model.__orig_forward = model.forward
         model.forward = model.prepare_gen_img_embeds

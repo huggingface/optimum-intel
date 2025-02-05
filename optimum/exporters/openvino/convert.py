@@ -640,7 +640,7 @@ def export_from_model(
         task = TasksManager.map_from_synonym(task)
     else:
         try:
-            task = TasksManager._infer_task_from_model_or_model_class(model=model, library_name=library_name)
+            task = TasksManager._infer_task_from_model_or_model_class(model=model)
         except (ValueError, KeyError) as e:
             raise RuntimeError(
                 f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
