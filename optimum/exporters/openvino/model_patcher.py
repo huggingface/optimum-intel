@@ -3905,3 +3905,18 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
             for layer in self._model.layers:
                 if hasattr(layer.self_attn, "_orig_forward"):
                     layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class MiniCPMModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        for layer in model.model.layers:
+            if hasattr(layer, "scale_depth"):
+                layer.self_attn.o_proj.to(torch.float32)
+                layer.mlp.down_proj.to(torch.float32)
+
+        super().__init__(config, model, model_kwargs)
