@@ -104,12 +104,11 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForSpeechSeq2Seq,
             "whisper",
-            OVQuantizationConfig(
+            dict(
                 dataset="librispeech",
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
                 trust_remote_code=True,
-                weight_only=False,
                 smooth_quant_alpha=0.95,
             ),
             (14, 22, 21) if is_transformers_version("<=", "4.42.4") else (14, 22, 25),
@@ -118,11 +117,9 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama",
-            OVQuantizationConfig(
+            dict(
                 dataset="wikitext2",
                 num_samples=1,
-                weight_only=False,
-                weight_format="f8e4m3",
                 activation_format="f8e4m3",
             ),
             (13,),
@@ -131,9 +128,9 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama",
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(bits=4, weight_format="nf4", group_size=16),
-                quantization_config=OVQuantizationConfig(activation_format="f8e4m3", smooth_quant_alpha=0.9),
+            dict(
+                weight_quantization_config=dict(bits=4, weight_format="nf4", group_size=16),
+                activation_quantization_config=dict(activation_format="f8e4m3"),
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -233,14 +230,18 @@ class OVQuantizerTest(unittest.TestCase):
         self, model_cls, model_name, quantization_config, expected_fake_nodes, expected_low_precision_nodes
     ):
         model_id = MODEL_NAMES[model_name]
-        if isinstance(quantization_config, OVMixedQuantizationConfig):
-            quant_mode = f"{quantization_config.weight_quantization_config.weight_format}_{quantization_config.quantization_config.activation_format}"
-        else:
-            quant_mode = quantization_config.activation_format
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
+
+            # Convert dict config to class through OVConfig
+            if isinstance(quantization_config, dict):
+                quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
+            if isinstance(quantization_config, OVMixedQuantizationConfig):
+                quant_mode = f"{quantization_config.weight_quantization_config.weight_format}_{quantization_config.activation_quantization_config.activation_format}"
+            else:
+                quant_mode = quantization_config.activation_format
 
             if model_cls == OVModelForSpeechSeq2Seq:
                 models = [ov_model.encoder.model, ov_model.decoder.model]
@@ -1274,7 +1275,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
     @parameterized.expand(DEFAULT_CONFIGURATIONS)
     def test_named_default_configurations(self, config_id: str):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
-        prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
+        prepared_config = OVModelForCausalLM._prepare_quantization_config(custom_configuration)
         for field_name, reference_value in custom_configuration.items():
             value = prepared_config.__getattribute__(field_name)
             self.assertEqual(value, reference_value)

@@ -342,33 +342,33 @@ class OVExportCommand(BaseOptimumCLICommand):
             if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
                 quantization_config = get_default_int4_config(self.args.model)
             else:
-                quantization_config = prepare_for_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
+                quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
 
             if quantization_config.get("dataset", None) is not None:
                 quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
-        elif self.args.quant_mode is not None:
+        else:
             if self.args.dataset is None:
                 raise ValueError(
                     "Dataset is required for full quantization. Please provide it with --dataset argument."
                 )
 
             if self.args.quant_mode == "nf4_f8e4m3":
-                wc_config = prepare_for_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
+                wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
                 wc_config["weight_format"] = "nf4"
 
-                q_config = prepare_for_q_config(self.args)
+                q_config = prepare_q_config(self.args)
                 q_config["activation_format"] = "f8e4m3"
 
                 quantization_config = dict(
                     weight_quantization_config=wc_config,
-                    quantization_config=q_config,
+                    activation_quantization_config=q_config,
                     num_samples=self.args.num_samples,
                     dataset=self.args.dataset,
                     trust_remote_code=self.args.trust_remote_code,
                 )
             else:
-                quantization_config = prepare_for_q_config(self.args)
+                quantization_config = prepare_q_config(self.args)
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
@@ -462,7 +462,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
 
 
-def prepare_for_wc_config(args, default_configs):
+def prepare_wc_config(args, default_configs):
     is_int8 = args.weight_format == "int8"
     return {
         "bits": 8 if is_int8 else 4,
@@ -482,9 +482,8 @@ def prepare_for_wc_config(args, default_configs):
     }
 
 
-def prepare_for_q_config(args):
+def prepare_q_config(args):
     return {
-        "weight_format": args.quant_mode,
         "activation_format": args.quant_mode,
         "bits": 8,
         "sym": args.sym or False,

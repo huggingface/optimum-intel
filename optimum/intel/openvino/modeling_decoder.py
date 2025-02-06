@@ -840,7 +840,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if quantization_config.get("dataset", None) is not None:
                 quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
 
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
 

@@ -30,7 +30,6 @@ import requests
 import torch
 import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf import CompressWeightsMode, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -395,7 +394,7 @@ class OVQuantizer(OptimumQuantizer):
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     # Apply weight-only quantization to all SD submodels except UNet
-                    quantization_config_copy = copy.deepcopy(quantization_config)
+                    quantization_config_copy = quantization_config.clone()
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
                     sub_model_names = [
@@ -453,9 +452,6 @@ class OVQuantizer(OptimumQuantizer):
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset, **kwargs)
                     self.model.request = None
         elif isinstance(quantization_config, OVQuantizationConfig):
-            if not isinstance(quantization_config, OVQuantizationConfig):
-                raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
-
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
 
@@ -468,15 +464,15 @@ class OVQuantizer(OptimumQuantizer):
                 )
                 self.model.model = quantized_model
                 self.model.request = None
-        else:
+        elif isinstance(quantization_config, OVMixedQuantizationConfig):
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
 
-            quantized_model = _general_quantization(
-                self.model.model, quantization_config, calibration_dataset, **kwargs
-            )
+            quantized_model = _mixed_quantization(self.model.model, quantization_config, calibration_dataset, **kwargs)
             self.model.model = quantized_model
             self.model.request = None
+        else:
+            raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
         if save_directory is not None:
             self.model.save_pretrained(save_directory)
@@ -983,7 +979,7 @@ class OVQuantizer(OptimumQuantizer):
     def _quantize_whisper_model(self, quantization_config, calibration_dataset, **kwargs):
         # Quantize encoder model
         # quantization_config.num_samples of audio samples result in more actual model inputs
-        config = copy.deepcopy(quantization_config)
+        config = quantization_config.clone()
         config.num_samples = calibration_dataset[0].get_length()
         quantized_encoder_model = _full_quantization(
             self.model.encoder_model, config, calibration_dataset[0], **kwargs
@@ -993,7 +989,7 @@ class OVQuantizer(OptimumQuantizer):
         self.model.encoder.request = None
 
         # Quantize decoder model
-        config = copy.deepcopy(quantization_config)
+        config = quantization_config.clone()
         config.num_samples = calibration_dataset[1].get_length()
         quantized_decoder_model = _full_quantization(
             self.model.decoder_model, config, calibration_dataset[1], **kwargs
@@ -1004,7 +1000,7 @@ class OVQuantizer(OptimumQuantizer):
 
         if self.model.decoder_with_past_model is not None:
             # Quantize decoder with past model
-            config = copy.deepcopy(quantization_config)
+            config = quantization_config.clone()
             config.num_samples = calibration_dataset[2].get_length()
             quantized_decoder_w_p_model = _full_quantization(
                 self.model.decoder_with_past_model, config, calibration_dataset[2], **kwargs
@@ -1037,36 +1033,12 @@ def _weight_only_quantization(
         else:
             dataset = nncf.Dataset(calibration_dataset)
 
-    sensitivity_metric = None
-    if isinstance(config.sensitivity_metric, str):
-        sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
-
-    if config.weight_format == "mxfp4":
-        mode = CompressWeightsMode.E2M1
-    elif config.weight_format == "nf4":
-        mode = CompressWeightsMode.NF4
-    else:
-        if config.bits == 8:
-            mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
-        else:
-            mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
-
+    wc_kwargs = copy.deepcopy(kwargs)
+    wc_kwargs.update(config.to_nncf_dict())
     return nncf.compress_weights(
         model,
-        mode=mode,
-        ratio=config.ratio,
-        group_size=config.group_size,
-        all_layers=config.all_layers,
-        sensitivity_metric=sensitivity_metric,
-        awq=getattr(config.quant_method, "name", "") == "AWQ" or None,
-        ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
-        subset_size=config.num_samples if config.num_samples else 128,
-        scale_estimation=config.scale_estimation,
-        gptq=config.gptq,
-        lora_correction=config.lora_correction,
-        backup_mode=None if config.backup_precision is None else nncf.BackupMode(config.backup_precision),
-        **kwargs,
+        **wc_kwargs,
     )
 
 
@@ -1076,36 +1048,13 @@ def _full_quantization(
     calibration_dataset: nncf.Dataset,
     **kwargs,
 ):
-    advanced_parameters_kwargs = {}
-    if quantization_config.smooth_quant_alpha is not None:
-        advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(
-            matmul=quantization_config.smooth_quant_alpha
-        )
-
-    q_mode_map = {
-        "f8e4m3": nncf.QuantizationMode.FP8_E4M3,
-        "f8e5m2": nncf.QuantizationMode.FP8_E5M2,
-    }
-
-    if quantization_config.activation_format in q_mode_map:
-        kwargs.update({"mode": q_mode_map[quantization_config.activation_format]})
-
-    quantized_model = nncf.quantize(
+    q_kwargs = copy.deepcopy(kwargs)
+    q_kwargs.update(quantization_config.to_nncf_dict())
+    return nncf.quantize(
         model,
-        calibration_dataset,
-        subset_size=quantization_config.num_samples,
-        ignored_scope=quantization_config.get_ignored_scope_instance(),
-        model_type=nncf.ModelType(quantization_config.model_type),
-        preset=nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED,
-        fast_bias_correction=quantization_config.fast_bias_correction,
-        advanced_parameters=nncf.AdvancedQuantizationParameters(
-            overflow_fix=OverflowFix(quantization_config.overflow_fix),
-            **advanced_parameters_kwargs,
-        ),
-        **kwargs,
+        calibration_dataset=calibration_dataset,
+        **q_kwargs,
     )
-
-    return quantized_model
 
 
 def _get_operation_const_op(operation, const_port_id: int):
@@ -1173,7 +1122,7 @@ def _hybrid_quantization(
     """
     ops_to_compress = _collect_ops_with_weights(model)
 
-    wc_config = copy.deepcopy(quantization_config)
+    wc_config = quantization_config.clone()
     wc_config.ignored_scope = wc_config.ignored_scope or {}
 
     wc_ignored_types = ["Convolution"] if any(op.get_type_name() == "Convolution" for op in model.get_ops()) else []
@@ -1199,21 +1148,21 @@ def _hybrid_quantization(
     return quantized_model
 
 
-def _general_quantization(
+def _mixed_quantization(
     model: openvino.Model,
     quantization_config: OVMixedQuantizationConfig,
     calibration_dataset: nncf.Dataset,
     **kwargs,
 ) -> openvino.Model:
     """
-    Quantize a model with NNCF in two possible steps:
+    Quantize a model with NNCF in two steps:
     - weights-only quantization with nncf.compress_weights method.
     - full quantization (excluding weights from previous step) with nncf.quantize method.
 
     Args:
         model (`openvino.runtime.Model`):
             The OpenVINO Runtime model for applying quantization.
-        quantization_config (`OVGeneralMixedConfig`):
+        quantization_config (`OVMixedQuantizationConfig`):
             The configuration containing the parameters related to quantization.
         calibration_dataset (`nncf.Dataset`):
             The dataset used for quantization.
@@ -1222,22 +1171,16 @@ def _general_quantization(
     """
 
     ops_with_weights = _collect_ops_with_weights(model)
-    wc_kwargs = copy.deepcopy(kwargs)
-    wc_kwargs.update(quantization_config.weight_quantization_config.to_nncf_dict())
-    compressed_model = nncf.compress_weights(
-        model,
-        dataset=calibration_dataset,
-        subset_size=quantization_config.num_samples,
-        **wc_kwargs,
+    compressed_model = _weight_only_quantization(
+        model, quantization_config.weight_quantization_config, calibration_dataset, **kwargs
     )
 
-    q_kwargs = copy.deepcopy(kwargs)
-    q_kwargs.update(quantization_config.quantization_config.to_nncf_dict())
-    q_kwargs["ignored_scope"].names += ops_with_weights
-    quantized_model = nncf.quantize(
-        compressed_model,
-        calibration_dataset,
-        subset_size=quantization_config.num_samples,
-        **q_kwargs,
+    activation_quantization_config = quantization_config.activation_quantization_config.clone()
+    if activation_quantization_config.ignored_scope is None:
+        activation_quantization_config.ignored_scope = {}
+    ignored_names = activation_quantization_config.ignored_scope.get("names", []) + ops_with_weights
+    activation_quantization_config.ignored_scope["names"] = ignored_names
+    quantized_model = _full_quantization(
+        compressed_model, activation_quantization_config, calibration_dataset, **kwargs
     )
     return quantized_model

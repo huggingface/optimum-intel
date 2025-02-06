@@ -1029,6 +1029,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     ):
         compile_only = kwargs.get("compile_only", False)
 
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         if not compile_only and isinstance(quantization_config, OVQuantizationConfig):
             model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
                 model_id, config, load_in_8bit=False, **kwargs

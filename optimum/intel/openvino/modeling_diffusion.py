@@ -474,7 +474,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 kwargs[config_key] = value
 
         compile_only = kwargs.get("compile_only", False)
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
             for name, path in models.items():
                 if name in kwargs:

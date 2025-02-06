@@ -545,7 +545,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = model_cls._prepare_quantization_config(quantization_config, load_in_8bit)
         to_quantize = not compile_only and quantization_config is not None
         if to_quantize:
             kwargs["compile"] = False
