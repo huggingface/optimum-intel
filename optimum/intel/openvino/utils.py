@@ -24,17 +24,17 @@ from glob import glob
 from pathlib import Path
 from tempfile import TemporaryDirectory as OrigTemporaryDirectory
 from tempfile import mkdtemp
-from typing import Tuple, Type, Union, Any
+from typing import Any, Tuple, Type, Union
 
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, Model, properties, Tensor
+from openvino.runtime import Core, Model, Tensor, properties
 from openvino.runtime import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
-import openvino
+
 from optimum.intel.utils.import_utils import is_torch_version
 
 
@@ -598,8 +598,8 @@ def deepcopy_data(inputs: Any) -> Any:
         new_inputs = [deepcopy_data(elem) for elem in inputs]
     elif isinstance(inputs, tuple):
         new_inputs = tuple(deepcopy_data(elem) for elem in inputs)
-    elif isinstance(inputs, openvino.Tensor):
-        new_inputs = openvino.Tensor(np.zeros(inputs.shape, dtype=inputs.element_type.to_dtype()))
+    elif isinstance(inputs, Tensor):
+        new_inputs = Tensor(np.empty(inputs.shape), inputs.shape, inputs.get_element_type())
         new_inputs.copy_from(inputs)
     else:
         new_inputs = deepcopy(inputs)
