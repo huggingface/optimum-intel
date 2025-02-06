@@ -599,7 +599,7 @@ def deepcopy_data(inputs: Any) -> Any:
     elif isinstance(inputs, tuple):
         new_inputs = tuple(deepcopy_data(elem) for elem in inputs)
     elif isinstance(inputs, Tensor):
-        new_inputs = Tensor(np.empty(inputs.shape), inputs.shape, inputs.get_element_type())
+        new_inputs = Tensor(np.empty_like(inputs.data), inputs.get_shape(), inputs.get_element_type())
         new_inputs.copy_from(inputs)
     else:
         new_inputs = deepcopy(inputs)

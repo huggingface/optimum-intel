@@ -1361,7 +1361,10 @@ class InferRequestWrapperTest(unittest.TestCase):
             "c": 1,
             "d": "string",
             "e": {"a": torch.tensor([1, 2, 3]), "b": np.array([1, 2, 3])},
-            "f": [ov.Tensor(np.ones((1, 2, 3)), (1, 2, 3), ov.Type.i4), ov.Tensor(np.ones((1, 2, 3)))],
+            "f": [
+                ov.Tensor(np.ones((1, 2, 3)), (1, 2, 3), ov.Type.i4),
+                ov.Tensor(np.empty((1, 2, 3)), (2, 3, 1), ov.Type.i4),
+            ],
         }
         copied_data = deepcopy_data(data)
 
