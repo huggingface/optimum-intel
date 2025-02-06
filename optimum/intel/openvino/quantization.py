@@ -30,7 +30,7 @@ import requests
 import torch
 import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
+from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
@@ -1056,9 +1056,11 @@ def _full_quantization(
     model: openvino.runtime.Model,
     quantization_config: OVQuantizationConfig,
     calibration_dataset: nncf.Dataset,
+    verify_not_optimized: bool = True,
     **kwargs,
 ):
-    _verify_not_optimized(model)
+    if verify_not_optimized:
+        _verify_not_optimized(model)
     q_kwargs = copy.deepcopy(kwargs)
     q_kwargs.update(quantization_config.to_nncf_dict())
     return nncf.quantize(
@@ -1131,38 +1133,32 @@ def _hybrid_quantization(
     Returns:
         The OpenVINO Runtime model with applied hybrid quantization.
     """
-    ops_to_compress = _collect_ops_with_weights(model)
 
     wc_config = quantization_config.clone()
     wc_config.ignored_scope = wc_config.ignored_scope or {}
-
     wc_ignored_types = ["Convolution"] if any(op.get_type_name() == "Convolution" for op in model.get_ops()) else []
     wc_config.ignored_scope["types"] = wc_config.ignored_scope.get("types", []) + wc_ignored_types
-    compressed_model = _weight_only_quantization(model, wc_config, **kwargs)
 
-    ptq_ignored_scope = quantization_config.get_ignored_scope_instance()
-    ptq_ignored_scope.names += ops_to_compress
-
-    subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
-    quantized_model = nncf.quantize(
-        model=compressed_model,
-        calibration_dataset=dataset,
-        model_type=nncf.ModelType.TRANSFORMER,
-        ignored_scope=ptq_ignored_scope,
-        # SQ algo should be disabled for MatMul nodes because their weights are already compressed
-        advanced_parameters=nncf.AdvancedQuantizationParameters(
-            smooth_quant_alphas=AdvancedSmoothQuantParameters(matmul=-1)
-        ),
-        subset_size=subset_size,
+    q_config = OVQuantizationConfig(
+        ignored_scope=quantization_config.ignored_scope,
+        num_samples=quantization_config.num_samples or 200,
+        smooth_quant_alpha=-1,
         **kwargs,
     )
-    return quantized_model
+
+    mixed_quantization_config = OVMixedQuantizationConfig(
+        weight_quantization_config=wc_config,
+        activation_quantization_config=q_config,
+        **kwargs,
+    )
+
+    return _mixed_quantization(model, mixed_quantization_config, dataset, **kwargs)
 
 
 def _mixed_quantization(
     model: openvino.Model,
     quantization_config: OVMixedQuantizationConfig,
-    calibration_dataset: nncf.Dataset,
+    dataset: nncf.Dataset,
     **kwargs,
 ) -> openvino.Model:
     """
@@ -1175,25 +1171,22 @@ def _mixed_quantization(
             The OpenVINO Runtime model for applying quantization.
         quantization_config (`OVMixedQuantizationConfig`):
             The configuration containing the parameters related to quantization.
-        calibration_dataset (`nncf.Dataset`):
+        dataset (`nncf.Dataset`):
             The dataset used for quantization.
     Returns:
         The OpenVINO Runtime model with applied quantization.
     """
 
-    ops_with_weights = _collect_ops_with_weights(model)
-    compressed_model = _weight_only_quantization(
-        model, quantization_config.weight_quantization_config, calibration_dataset, **kwargs
-    )
+    wc_config = quantization_config.weight_quantization_config
+    wc_dataset = dataset if wc_config.bits != 8 else None
 
-    activation_quantization_config = quantization_config.activation_quantization_config.clone()
-    if activation_quantization_config.ignored_scope is None:
-        activation_quantization_config.ignored_scope = {}
-    ignored_names = activation_quantization_config.ignored_scope.get("names", []) + ops_with_weights
-    activation_quantization_config.ignored_scope["names"] = ignored_names
-    quantized_model = _full_quantization(
-        compressed_model, activation_quantization_config, calibration_dataset, **kwargs
-    )
+    q_config = quantization_config.activation_quantization_config.clone()
+    q_config.ignored_scope = q_config.ignored_scope or {}
+    ops_with_weights = _collect_ops_with_weights(model)
+    q_config.ignored_scope["names"] = q_config.ignored_scope.get("names", []) + ops_with_weights
+
+    compressed_model = _weight_only_quantization(model, wc_config, wc_dataset, **kwargs)
+    quantized_model = _full_quantization(compressed_model, q_config, dataset, verify_not_optimized=False, **kwargs)
     return quantized_model
 
 

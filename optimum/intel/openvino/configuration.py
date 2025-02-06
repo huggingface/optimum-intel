@@ -596,14 +596,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfig
             "ignored_scope": self.get_ignored_scope_instance(),
             "all_layers": self.all_layers,
             "sensitivity_metric": sensitivity_metric,
+            "subset_size": self.num_samples or 128,
             "awq": awq,
             "scale_estimation": self.scale_estimation,
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
         }
-        if self.num_samples is not None:
-            result["subset_size"] = self.num_samples
         return result
 
 
@@ -733,9 +732,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
 
-        if self.smooth_quant_alpha is not None and not (0 <= self.smooth_quant_alpha <= 1):
+        if self.smooth_quant_alpha is not None and (
+            self.smooth_quant_alpha != -1 and not (0 <= self.smooth_quant_alpha <= 1)
+        ):
             raise ValueError(
-                f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
+                f"SmoothQuant alpha parameter can equal -1 or be in range [0, 1], but found {self.smooth_quant_alpha}"
             )
 
     def to_nncf_dict(self) -> Dict[str, Any]:
@@ -894,7 +895,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
         # in case user sets those parameters inside child configs only.
         wqc, aqc = self.weight_quantization_config, self.activation_quantization_config
-        num_samples = num_samples or wqc.num_samples or aqc.num_samples
+        num_samples = max(num_samples or 0, max(wqc.num_samples, aqc.num_samples))
         dataset = dataset or wqc.dataset or aqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or aqc.tokenizer
         processor = processor or wqc.processor or aqc.processor
