@@ -312,9 +312,7 @@ def _falcon_model_forward(
     device = input_ids.device if input_ids is not None else inputs_embeds.device
 
     if cache_position is None:
-        cache_position = torch.arange(
-            past_key_values_length, past_key_values_length + seq_length, device=device
-        )
+        cache_position = torch.arange(past_key_values_length, past_key_values_length + seq_length, device=device)
 
     if position_ids is None:
         position_ids = cache_position.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
