@@ -42,7 +42,6 @@ from transformers import (
 from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
 
-
 from optimum.intel import (
     OVConfig,
     OVFluxPipeline,
