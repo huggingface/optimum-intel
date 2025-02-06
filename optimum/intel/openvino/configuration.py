@@ -890,11 +890,11 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
         # in case user sets those parameters inside child configs only.
         wqc, aqc = self.weight_quantization_config, self.activation_quantization_config
-        num_samples = num_samples or self.wqc.num_samples or self.aqc.num_samples
-        dataset = dataset or self.wqc.dataset or self.aqc.dataset
-        tokenizer = tokenizer or self.wqc.tokenizer or self.aqc.tokenizer
-        processor = processor or self.wqc.processor or self.aqc.processor
-        trust_remote_code = trust_remote_code or self.wqc.trust_remote_code or self.aqc.trust_remote_code
+        num_samples = num_samples or wqc.num_samples or aqc.num_samples
+        dataset = dataset or wqc.dataset or aqc.dataset
+        tokenizer = tokenizer or wqc.tokenizer or aqc.tokenizer
+        processor = processor or wqc.processor or aqc.processor
+        trust_remote_code = trust_remote_code or wqc.trust_remote_code or aqc.trust_remote_code
         super().__init__(
             num_samples=num_samples,
             dataset=dataset,

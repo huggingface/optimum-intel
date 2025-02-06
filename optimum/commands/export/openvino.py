@@ -366,13 +366,13 @@ class OVExportCommand(BaseOptimumCLICommand):
                 q_config = prepare_q_config(self.args)
                 q_config["activation_format"] = "f8e4m3"
 
-                quantization_config = dict(
-                    weight_quantization_config=wc_config,
-                    activation_quantization_config=q_config,
-                    num_samples=self.args.num_samples,
-                    dataset=self.args.dataset,
-                    trust_remote_code=self.args.trust_remote_code,
-                )
+                quantization_config = {
+                    "weight_quantization_config": wc_config,
+                    "activation_quantization_config": q_config,
+                    "num_samples": self.args.num_samples,
+                    "dataset": self.args.dataset,
+                    "trust_remote_code": self.args.trust_remote_code,
+                }
             else:
                 quantization_config = prepare_q_config(self.args)
             ov_config = OVConfig(quantization_config=quantization_config)
