@@ -1365,23 +1365,29 @@ class InferRequestWrapperTest(unittest.TestCase):
             "f": [ov.Tensor(np.ones((1, 2, 3)), (1, 2, 3), ov.Type.i4), ov.Tensor(np.ones((1, 2, 3)))],
         }
         copied_data = deepcopy_data(data)
-        assert copied_data["a"] is not data["a"]
-        assert copied_data["b"] is not data["b"]
-        assert copied_data["e"]["a"] is not data["e"]["a"]
-        assert copied_data["e"]["b"] is not data["e"]["b"]
-        assert copied_data["f"][0] is not data["f"][0]
-        assert copied_data["f"][1] is not data["f"][1]
 
-        assert torch.equal(copied_data["a"], data["a"])
-        assert np.array_equal(copied_data["b"], data["b"])
-        assert copied_data["c"] == data["c"]
-        assert copied_data["d"] == data["d"]
-        assert torch.equal(copied_data["e"]["a"], data["e"]["a"])
-        assert np.array_equal(copied_data["e"]["b"], data["e"]["b"])
-        assert np.array_equal(copied_data["f"][0].data, data["f"][0].data)
-        assert np.array_equal(copied_data["f"][1].data, data["f"][1].data)
+        # Checks that objects have different IDs
+        self.assertTrue(copied_data is not data)
+        self.assertTrue(copied_data["a"] is not data["a"])
+        self.assertTrue(copied_data["b"] is not data["b"])
+        self.assertTrue(copied_data["e"]["a"] is not data["e"]["a"])
+        self.assertTrue(copied_data["e"]["b"] is not data["e"]["b"])
+        self.assertTrue(copied_data["f"][0] is not data["f"][0])
+        self.assertTrue(copied_data["f"][1] is not data["f"][1])
 
-        assert copied_data is not data
+        # Checks that constant objects have the same IDs
+        self.assertTrue(copied_data["c"] is data["c"])
+        self.assertTrue(copied_data["d"] is data["d"])
+
+        # Checks that objects have the same data
+        self.assertTrue(torch.equal(copied_data["a"], data["a"]))
+        self.assertTrue(np.array_equal(copied_data["b"], data["b"]))
+        self.assertTrue(copied_data["c"] == data["c"])
+        self.assertTrue(copied_data["d"] == data["d"])
+        self.assertTrue(torch.equal(copied_data["e"]["a"], data["e"]["a"]))
+        self.assertTrue(np.array_equal(copied_data["e"]["b"], data["e"]["b"]))
+        self.assertTrue(np.array_equal(copied_data["f"][0].data, data["f"][0].data))
+        self.assertTrue(np.array_equal(copied_data["f"][1].data, data["f"][1].data))
 
 
 def check_optimization_not_applicable_to_optimized_model(model, quantization_config):
