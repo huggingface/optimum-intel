@@ -1587,8 +1587,13 @@ class Phi3ModelPatcher(DecoderModelPatcher):
 
         # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
         # init inv_freq for torchscript tracing
+        # 4.48 transformers version phi3 fixed, but issue still visible with trust_remote_true=True (trust_remote_code has _support_sdpa = False)
         for layer in self._model.model.layers:
-            if is_torch_version(">=", "2.1.0") and is_transformers_version("<", "4.48.0"):
+            if (
+                is_torch_version(">=", "2.1.0")
+                and is_transformers_version("<", "4.48.0")
+                or not getattr(self._model, "_supports_sdpa", False)
+            ):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
