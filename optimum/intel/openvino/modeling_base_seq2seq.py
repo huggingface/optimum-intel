@@ -408,6 +408,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         else:
             ov_config = OVConfig(dtype="fp32")
         stateful = kwargs.get("stateful", True)
+        variant = kwargs.pop("variant", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -422,6 +423,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             stateful=stateful,
+            variant=variant,
         )
 
         return cls._from_pretrained(

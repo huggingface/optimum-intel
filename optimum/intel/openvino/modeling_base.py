@@ -601,6 +601,8 @@ class OVBaseModel(OptimizedModel):
         else:
             ov_config = OVConfig(dtype="fp32")
 
+        variant = kwargs.pop("variant", None)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -614,6 +616,7 @@ class OVBaseModel(OptimizedModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             library_name=cls._library_name,
+            variant=variant,
         )
 
         return cls._from_pretrained(

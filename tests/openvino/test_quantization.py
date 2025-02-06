@@ -23,6 +23,7 @@ from enum import Enum
 from functools import partial
 from typing import Union
 
+import openvino as ov
 import pytest
 import evaluate
 import numpy as np
@@ -59,6 +60,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
     OVStableDiffusion3Pipeline,
     OVQuantizer,
+    OVSanaPipeline,
     OVTrainer,
     OVQuantizationConfig,
     OVMixedQuantizationConfig,
@@ -82,7 +84,7 @@ from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
     _ARCHITECTURES_TO_EXPECTED_INT8,
-    compare_num_quantized_nodes_per_model,
+    check_compression_state_per_model,
 )
 
 _TASK_TO_DATASET = {
@@ -224,6 +226,9 @@ class OVQuantizerTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
+            check_optimization_not_applicable_to_optimized_model(
+                model, quantization_config=OVWeightQuantizationConfig(bits=8)
+            )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
     def test_ov_model_static_quantization_with_auto_dataset(
@@ -467,7 +472,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         processor=MODEL_NAMES["llava_next"],
                     ),
-                    [{"int8": 6, "int4": 24}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -484,7 +489,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         tokenizer=MODEL_NAMES["nanollava"],
                         trust_remote_code=True,
                     ),
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
             ]
         )
@@ -506,7 +511,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         processor=MODEL_NAMES["minicpmv"],
                         trust_remote_code=True,
                     ),
-                    [{"int8": 8, "int4": 22}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -521,7 +526,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -536,7 +541,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -589,6 +594,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             [
                 (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
                 (OVFluxPipeline, "flux", 7, 56),
+                (OVSanaPipeline, "sana", 19, 53),
             ]
         )
 
@@ -626,6 +632,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 if isinstance(v, Enum):
                     original_config_as_dict[k] = v.value
             self.assertEqual(original_config_as_dict, loaded_config.quantization_config.to_dict())
+            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -652,6 +659,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
+            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8_nodes, expected_int4_nodes):
@@ -679,6 +687,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
+            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -704,6 +713,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
+            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
@@ -730,19 +740,24 @@ class OVWeightCompressionTest(unittest.TestCase):
                 models.append(model.decoder_with_past)
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2)
         elif model_type == "open-clip":
             models = [model.text_model, model.visual_model]
         elif model.export_feature == "image-text-to-text":
-            models = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-            models += [getattr(model, part) for part in model.additional_parts]
+            models = list(model.submodels.values())
         else:
             models = [model]
 
+        if model_type == "open-clip":
+            pytest.skip(reason="ticket 161043")
+        elif model_type == "t5":
+            pytest.skip(reason="ticket 160958")
+        else:
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
+
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-        for i, model in enumerate(models):
-            _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8[i], num_weight_nodes["int8"])
+        expected_ov_int8 = [{"int8": it} for it in expected_ov_int8]
+        check_compression_state_per_model(self, models, expected_ov_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
@@ -759,6 +774,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(0, num_weight_nodes["int4"])
 
             model.save_pretrained(tmp_dir)
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config)
 
     def test_stable_diffusion_with_weight_compression(self):
         int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
@@ -773,6 +789,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(0, num_fake_nodes)
         self.assertEqual(242, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
+        quantization_config = OVWeightQuantizationConfig(
+            bits=8, dataset="conceptual_captions", num_samples=2, quant_method=OVQuantizationMethod.HYBRID
+        )
+        check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
@@ -818,6 +838,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             if model_id == "facebook/opt-125m":
                 for key, value in self.DEFAULT_INT4_CONFIG.items():
                     self.assertEqual(value, getattr(openvino_config.quantization_config, key))
+            check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
@@ -837,9 +858,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             if isinstance(model, OVModelForCausalLM):
                 submodels = [model.model]
             elif isinstance(model, OVModelForVisualCausalLM):
-                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-                submodels += [getattr(model, part) for part in model.additional_parts]
-            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
+                submodels = list(model.submodels.values())
+            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             # At the moment the first model in the list is the only one we apply data-aware compression to
@@ -865,7 +885,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type][0]
         _, num_weight_nodes = get_num_quantized_nodes(model)
-        self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+        check_compression_state_per_model(self, [model.model], [{"int8": expected_ov_int8}])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
@@ -878,23 +898,31 @@ class OVWeightCompressionTest(unittest.TestCase):
                 models.append(model.decoder_with_past)
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2)
         elif model_type == "open-clip":
             models = [model.text_model, model.visual_model]
         elif model.export_feature == "image-text-to-text":
-            models = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-            models += [getattr(model, part) for part in model.additional_parts]
+            models = list(model.submodels.values())
         else:
             models = [model]
 
-        for i, model in enumerate(models):
-            _, num_weight_nodes = get_num_quantized_nodes(model)
+        for i, submodel in enumerate(models):
+            ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+            _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             self.assertEqual(0, num_weight_nodes["int8"])
+            if "text-generation" in model.export_feature or ("image-text-to-text" in model.export_feature and i == 0):
+                self.assertTrue(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+                kv_cache_precision = ov_model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value
+                self.assertTrue(kv_cache_precision == "f16")
 
     def test_ovmodel_load_large_model_with_default_compressed_weights(self):
+        compressed_model_mock_obj = unittest.mock.Mock()
+        compressed_model_mock_obj.has_rt_info.return_value = False
+
         def main_export_in_stacktrace(*args, **kwargs):
             # Compression was called from `main_export`
             self.assertTrue(inspect.stack()[5].function == "main_export")
+            return compressed_model_mock_obj
 
         with unittest.mock.patch(
             "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
@@ -932,15 +960,20 @@ class OVWeightCompressionTest(unittest.TestCase):
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
-                _ = OVModelForCausalLM.from_pretrained(
+                model = OVModelForCausalLM.from_pretrained(
                     MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
                 )
                 compress_weights_patch.assert_not_called()
+                self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
+        compressed_model_mock_obj = unittest.mock.Mock()
+        compressed_model_mock_obj.has_rt_info.return_value = False
+
         def main_export_not_in_stacktrace(*args, **kwargs):
             # Compression was not called from `main_export`
             self.assertTrue(all(frame_info.function != "main_export" for frame_info in inspect.stack()))
+            return compressed_model_mock_obj
 
         with unittest.mock.patch(
             "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
@@ -993,9 +1026,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             if isinstance(model, OVModelForCausalLM):
                 submodels = [model.model]
             elif isinstance(model, OVModelForVisualCausalLM):
-                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-                submodels += [getattr(model, part) for part in model.additional_parts]
-            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
+                submodels = list(model.submodels.values())
+            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir)
@@ -1090,7 +1122,7 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 63, 39),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 61, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     @unittest.skipIf(
@@ -1342,3 +1374,12 @@ class InferRequestWrapperTest(unittest.TestCase):
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
             self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)
+
+
+def check_optimization_not_applicable_to_optimized_model(model, quantization_config):
+    quantizer = OVQuantizer(model)
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot apply optimization to the model because it was already optimized with the following config",
+    ):
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))

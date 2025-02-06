@@ -21,9 +21,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import is_tf_available
 
+from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     DecoderModelPatcher,
     ModelPatcher,
@@ -114,9 +116,11 @@ def patch_model_with_bettertransformer(model):
     return model
 
 
-def patch_update_causal_mask(model, transformers_version, inner_model_name="model", patch_fn=None):
+def patch_update_causal_mask(
+    model, transformers_version, inner_model_name="model", patch_fn=None, patch_extrnal_model=False
+):
     if is_transformers_version(">=", transformers_version):
-        inner_model = getattr(model, inner_model_name, None)
+        inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
         if inner_model is not None:
             if hasattr(inner_model, "_update_causal_mask"):
                 inner_model._orig_update_causal_mask = inner_model._update_causal_mask
@@ -124,8 +128,8 @@ def patch_update_causal_mask(model, transformers_version, inner_model_name="mode
             inner_model._update_causal_mask = types.MethodType(patch_fn, inner_model)
 
 
-def unpatch_update_causal_mask(model, inner_model_name="model"):
-    inner_model = getattr(model, inner_model_name, None)
+def unpatch_update_causal_mask(model, inner_model_name="model", patch_extrnal_model=False):
+    inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
     if inner_model is not None and hasattr(inner_model, "._orig_update_causal_mask"):
         inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
@@ -714,14 +718,15 @@ def _mistral_update_causal_mask(
 class MistralModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.42.0"):
+        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             # apply fix https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
 
         else:
             for layer in self._model.model.layers:
-                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+                if hasattr(layer.self_attn, "rotary_emb"):
+                    _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -730,7 +735,7 @@ class MistralModelPatcher(DecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
         for layer in self._model.model.layers:
-            if hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
+            if hasattr(layer.self_attn, "rotary_emb") and hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
                 layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
@@ -1576,19 +1581,19 @@ class Phi3ModelPatcher(DecoderModelPatcher):
         ):
             self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
-        if is_transformers_version(">=", "4.42.0"):
+        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
 
         # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
         # init inv_freq for torchscript tracing
         for layer in self._model.model.layers:
-            if is_torch_version(">=", "2.1.0"):
+            if is_torch_version(">=", "2.1.0") and is_transformers_version("<", "4.48.0"):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
 
-            if layer.self_attn.rotary_emb.inv_freq is None:
+            if hasattr(layer.self_attn, "rotary_emb") and layer.self_attn.rotary_emb.inv_freq is None:
                 rotary_emb = layer.self_attn.rotary_emb
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
@@ -2489,7 +2494,9 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.42.0")
-        if hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"):
+        if hasattr(self._model.model.layers[0].self_attn, "rotary_emb") and hasattr(
+            self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"
+        ):
             for layer in self._model.model.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
@@ -2992,11 +2999,92 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
         model.__orig_forward = model.forward
         model.forward = model.extract_feature
 
+        if model.vision_model.encoder.layers[0].attn.use_flash_attn:
+            for layer in model.vision_model.encoder.layers:
+                layer.attn._orig_use_flash_attn = layer.attn.use_flash_attn
+                layer.attn.use_flash_attn = False
+
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        if hasattr(self._model.vision_model.encoder.layers[0].attn, "_orig_use_flash_attn"):
+            for layer in self._model.vision_model.encoder.layers:
+                layer.attn.use_flash_attn = layer.attn._orig_use_flash_attn
+
+
+class InternVL2ChatLangModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self, config: "OnnxConfig", model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Dict[str, Any]
+    ):
+        model_type = model.config.model_type
+        patcher_for_model_type = {
+            "llama": LlamaModelPatcher,
+            "qwen2": UpdateCausalMaskModelPatcher,
+            "phi3": Phi3ModelPatcher,
+            "internlm2": InternLM2Patcher,
+        }
+        self._internal_patcher = None
+        self._patched_forward = None
+        internal_patcher_cls = patcher_for_model_type.get(model_type)
+        if internal_patcher_cls is not None:
+            self._internal_patcher = internal_patcher_cls(config, model, model_kwargs)
+            self._patched_forward = self._internal_patcher.patched_forward
+        super().__init__(config, model, model_kwargs)
+
+    @property
+    def patched_forward(self):
+        if self._internal_patcher is not None:
+            return self._internal_patcher.patched_forward
+        return self._patched_forward
+
+    @patched_forward.setter
+    def patched_forward(self, fn):
+        self._patched_forward = fn
+        if self._internal_patcher is not None:
+            self._internal_patcher.patched_forward = fn
+
+    def __enter__(self):
+        if is_torch_version(">=", "2.1.0"):
+            if self._model.config.model_type == "qwen2" and self._model.config._attn_implementation != "sdpa":
+                if is_transformers_version("<", "4.48"):
+                    from transformers.models.qwen2.modeling_qwen2 import QWEN2_ATTENTION_CLASSES
+
+                    sdpa_attn = QWEN2_ATTENTION_CLASSES["sdpa"]
+                    self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+                    self._model.config._attn_implementation = "sdpa"
+
+                    for layer in self._model.model.layers:
+                        layer.self_attn._orig_forward = layer.self_attn.forward
+                        layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+
+            if self._model.config.model_type == "llama" and self._model.config._attn_implementation != "sdpa":
+                self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+                self._model.config._attn_implementation = "sdpa"
+                if is_transformers_version("<", "4.47"):
+                    from transformers.models.llama.modeling_llama import LLAMA_ATTENTION_CLASSES
+
+                    sdpa_attn = LLAMA_ATTENTION_CLASSES["sdpa"]
+                    for layer in self._model.model.layers:
+                        layer.self_attn._orig_forward = layer.self_attn.forward
+                        layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+
+        if self._internal_patcher is not None:
+            return self._internal_patcher.__enter__()
+        return super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._internal_patcher:
+            self._internal_patcher.__exit__(exc_type, exc_value, traceback)
+        else:
+            super().__exit__(exc_type, exc_value, traceback)
+
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for layer in self._model.model.layers:
+                if hasattr(layer.self_attn, "_orig_forward"):
+                    layer.self_attn.forward = layer.self_attn._orig_forward
 
 
 def llava_vision_embed_forward(self, pixel_values):
@@ -3789,5 +3877,46 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
             return outputs
 
         model.forward = patched_forward
+
+        super().__init__(config, model, model_kwargs)
+
+
+class SanaTextEncoderModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        patch_update_causal_mask(self._model, "4.39.0", None, patch_extrnal_model=True)
+
+        if self._model.config._attn_implementation != "sdpa":
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            if is_transformers_version("<", "4.47.0"):
+                from transformers.models.gemma2.modeling_gemma2 import GEMMA2_ATTENTION_CLASSES
+
+                sdpa_attn = GEMMA2_ATTENTION_CLASSES["sdpa"]
+                for layer in self._model.layers:
+                    layer.self_attn._orig_forward = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        unpatch_update_causal_mask(self._model, None, True)
+        if hasattr(self._model.config, "_orig_attn_implementation"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for layer in self._model.layers:
+                if hasattr(layer.self_attn, "_orig_forward"):
+                    layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class MiniCPMModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        for layer in model.model.layers:
+            if hasattr(layer, "scale_depth"):
+                layer.self_attn.o_proj.to(torch.float32)
+                layer.mlp.down_proj.to(torch.float32)
 
         super().__init__(config, model, model_kwargs)

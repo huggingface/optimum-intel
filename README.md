@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="readme_logo.png" />
+    <img src="https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/logo/hf_intel_logo.png" />
 </p>
 
 # Optimum Intel

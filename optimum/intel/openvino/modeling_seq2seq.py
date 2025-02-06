@@ -668,7 +668,7 @@ class OVDecoder:
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
         self._past_length += input_ids.shape[1]
 
-        out_past_key_values = ()
+        out_past_key_values = ((),)
 
         if not self.stateful:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
