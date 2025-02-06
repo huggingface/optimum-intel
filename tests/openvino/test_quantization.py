@@ -42,8 +42,6 @@ from transformers import (
 from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
 
-from optimum.intel.openvino.utils import deepcopy_data
-
 
 from optimum.intel import (
     OVConfig,
@@ -77,7 +75,7 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_CONFIGS,
     _DEFAULT_4BIT_CONFIG,
 )
-from optimum.intel.openvino.utils import TemporaryDirectory
+from optimum.intel.openvino.utils import TemporaryDirectory, deepcopy_data
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
