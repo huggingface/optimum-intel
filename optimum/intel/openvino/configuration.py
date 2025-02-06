@@ -895,7 +895,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
         # in case user sets those parameters inside child configs only.
         wqc, aqc = self.weight_quantization_config, self.activation_quantization_config
-        num_samples = max(num_samples or 0, max(wqc.num_samples, aqc.num_samples))
+        num_samples = max(num_samples or 0, max(wqc.num_samples or 0, aqc.num_samples))
         dataset = dataset or wqc.dataset or aqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or aqc.tokenizer
         processor = processor or wqc.processor or aqc.processor
