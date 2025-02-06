@@ -580,9 +580,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfig
         mode = self.weight_format if self.weight_format else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
+        if mode == "mxfp4":
+            mode = "e2m1"
         mode = nncf.CompressWeightsMode(mode)
 
-        awq = self.quant_method == ("awq" if isinstance(self.quant_method, str) else OVQuantizationMethod.AWQ)
+        awq = None
+        if self.quant_method == "awq" or self.quant_method == OVQuantizationMethod.AWQ:
+            awq = True
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
         result = {
