@@ -541,7 +541,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                 try:
                     export_tokenizer(tokenizer, output, task=task, additional_chat_templates=additional_chat_templates)
                 except Exception as exception:
-                    logger.warn(
+                    logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
                         f"models won't be generated. Exception: {exception}"
                     )
