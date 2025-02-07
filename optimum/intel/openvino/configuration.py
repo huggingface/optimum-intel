@@ -631,7 +631,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
         bits: int = 8,
         sym: bool = False,
         ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None,
-        num_samples: Optional[int] = 300,
+        num_samples: Optional[int] = 128,
         model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
