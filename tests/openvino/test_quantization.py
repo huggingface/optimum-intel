@@ -1128,9 +1128,7 @@ class OVTrainerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 61, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    @unittest.skipIf(
-        is_transformers_version(">=", "4.46"), reason="OVTrainer is not compatible with transformers>=v4.46"
-    )
+    @unittest.skip(reason="Not supported on hosts running pre-commit jobs since OpenVINO 2025.0 relase.")
     def test_aware_training_quantization(self, model_name, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_name]
         model = AutoModelForSequenceClassification.from_pretrained(model_id, attn_implementation="eager")
