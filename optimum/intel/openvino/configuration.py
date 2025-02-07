@@ -303,7 +303,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 class _OVQuantizationConfigWithIgnoredScope(abc.ABC):
     def __init__(self, ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None):
         """
-        Base class for configs with ignored scope.
+        Base class for configs with an ignored scope.
 
         Args:
             ignored_scope (`dict`, *optional*):
@@ -570,11 +570,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfig
 
     def to_nncf_dict(self) -> Dict[str, Any]:
         """
-        Returns a dictionary with the NNCF-friendly variables that are ready to use.
+        Returns a dictionary with the variables that are ready to use for nncf.quantize() call.
         """
-
-        if not is_nncf_available():
-            raise ImportError("NNCF is required to execute this method. Please install nncf first.")
 
         signed_bitness = {4: "int4", 8: "int8"}
         mode = self.weight_format if self.weight_format else signed_bitness[self.bits]
@@ -741,11 +738,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
 
     def to_nncf_dict(self) -> Dict[str, Any]:
         """
-        Returns a dictionary with the NNCF-friendly variables that are ready to use.
+        Returns a dictionary with the variables that are ready to use for nncf.compress_weights() call.
         """
-
-        if not is_nncf_available():
-            raise ImportError("NNCF is required to execute this method. Please install nncf first.")
 
         preset = "performance" if self.sym else "mixed"
         advanced_parameters_dict = {"overflow_fix": self.overflow_fix}
@@ -805,7 +799,7 @@ class OVConfig(BaseConfig):
                 self.dtype = self.quantization_config.activation_format
             elif isinstance(self.quantization_config, OVMixedQuantizationConfig):
                 weight_format = self.quantization_config.weight_quantization_config.weight_format
-                activation_format = self.quantization_config.activation_quantization_config.activation_format
+                activation_format = self.quantization_config.full_quantization_config.activation_format
                 self.dtype = f"{weight_format}_{activation_format}"
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(self.quantization_config)}")
@@ -824,10 +818,7 @@ class OVConfig(BaseConfig):
 
     @staticmethod
     def quantization_config_from_dict(quantization_config: dict) -> OVQuantizationConfigBase:
-        if (
-            "weight_quantization_config" in quantization_config
-            and "activation_quantization_config" in quantization_config
-        ):
+        if "weight_quantization_config" in quantization_config and "full_quantization_config" in quantization_config:
             return OVMixedQuantizationConfig.from_dict(quantization_config)
         wq_args = inspect.getfullargspec(OVWeightQuantizationConfig.__init__).args
         q_args = inspect.getfullargspec(OVQuantizationConfig.__init__).args
@@ -876,7 +867,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         weight_quantization_config: Union[OVWeightQuantizationConfig, dict],
-        activation_quantization_config: Union[OVQuantizationConfig, dict],
+        full_quantization_config: Union[OVQuantizationConfig, dict],
         num_samples: Optional[int] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
@@ -884,22 +875,50 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        """
+        Configuration class for mixed quantization where we separately quantize:
+            (1) weights of weighted layers to the precision given in the `weight_quantization_config`, and
+            (2) weights and activations of other possible layers; precision is given in the `full_quantization_config`.
+
+        By default, all weighted layers are quantized in the first step. This leaves only non-weighted layers for the second step.
+        If some layers are instructed to be ignored in the first step with `weight_quantization_config.ignored_scope` parameter,
+        weights and activations of these layers are fully quantized to the precision given in the `full_quantization_config`.
+
+        Args:
+            weight_quantization_config (`OVWeightQuantizationConfig` or `dict`):
+                Configuration related to weight quantization.
+            full_quantization_config (`OVQuantizationConfig` or `dict`):
+                Configuration related to full quantization.
+            num_samples (`int`, *optional*):
+                The maximum number of samples composing the calibration dataset.
+            dataset (`str or List[str]`, *optional*):
+                The dataset used for data-aware optimization with NNCF.
+            tokenizer (`str`, *optional*):
+                The tokenizer used to process the dataset.
+            processor (`str`, *optional*):
+                A transformers processor used to process the dataset inputs.
+            trust_remote_code (`bool`, defaults to `False`):
+                Allows to use custom code for the modeling hosted in the model repository. This option should only be
+                set for repositories you trust and in which you have read the code, as it will execute on your local
+                machine arbitrary code present in the model repository.
+            **kwargs:
+        """
         if isinstance(weight_quantization_config, dict):
             weight_quantization_config = OVWeightQuantizationConfig.from_dict(weight_quantization_config)
         self.weight_quantization_config = weight_quantization_config
 
-        if isinstance(activation_quantization_config, dict):
-            activation_quantization_config = OVQuantizationConfig.from_dict(activation_quantization_config)
-        self.activation_quantization_config = activation_quantization_config
+        if isinstance(full_quantization_config, dict):
+            full_quantization_config = OVQuantizationConfig.from_dict(full_quantization_config)
+        self.full_quantization_config = full_quantization_config
 
         # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
         # in case user sets those parameters inside child configs only.
-        wqc, aqc = self.weight_quantization_config, self.activation_quantization_config
-        num_samples = max(num_samples or 0, max(wqc.num_samples or 0, aqc.num_samples))
-        dataset = dataset or wqc.dataset or aqc.dataset
-        tokenizer = tokenizer or wqc.tokenizer or aqc.tokenizer
-        processor = processor or wqc.processor or aqc.processor
-        trust_remote_code = trust_remote_code or wqc.trust_remote_code or aqc.trust_remote_code
+        wqc, fqc = self.weight_quantization_config, self.full_quantization_config
+        num_samples = max((num_samples or 0, wqc.num_samples or 0, fqc.num_samples or 0)) or None
+        dataset = dataset or wqc.dataset or fqc.dataset
+        tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
+        processor = processor or wqc.processor or fqc.processor
+        trust_remote_code = trust_remote_code or wqc.trust_remote_code or fqc.trust_remote_code
         super().__init__(
             num_samples=num_samples,
             dataset=dataset,
@@ -913,5 +932,5 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
     def to_dict(self):
         result = super().to_dict()
         result["weight_quantization_config"] = self.weight_quantization_config.to_dict()
-        result["activation_quantization_config"] = self.activation_quantization_config.to_dict()
+        result["full_quantization_config"] = self.full_quantization_config.to_dict()
         return result

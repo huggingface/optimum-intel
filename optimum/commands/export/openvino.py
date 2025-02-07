@@ -368,7 +368,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
                 quantization_config = {
                     "weight_quantization_config": wc_config,
-                    "activation_quantization_config": q_config,
+                    "full_quantization_config": q_config,
                     "num_samples": self.args.num_samples,
                     "dataset": self.args.dataset,
                     "trust_remote_code": self.args.trust_remote_code,

@@ -132,7 +132,7 @@ class OVQuantizerTest(unittest.TestCase):
             "llama",
             dict(
                 weight_quantization_config=dict(bits=4, weight_format="nf4", group_size=16),
-                activation_quantization_config=dict(activation_format="f8e4m3"),
+                full_quantization_config=dict(activation_format="f8e4m3"),
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -244,7 +244,10 @@ class OVQuantizerTest(unittest.TestCase):
             if isinstance(quantization_config, dict):
                 quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
             if isinstance(quantization_config, OVMixedQuantizationConfig):
-                quant_mode = f"{quantization_config.weight_quantization_config.weight_format}_{quantization_config.activation_quantization_config.activation_format}"
+                quant_mode = (
+                    f"{quantization_config.weight_quantization_config.weight_format}_"
+                    f"{quantization_config.full_quantization_config.activation_format}"
+                )
             else:
                 quant_mode = quantization_config.activation_format
 

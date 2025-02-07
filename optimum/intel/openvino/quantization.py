@@ -1148,7 +1148,7 @@ def _hybrid_quantization(
 
     mixed_quantization_config = OVMixedQuantizationConfig(
         weight_quantization_config=wc_config,
-        activation_quantization_config=q_config,
+        full_quantization_config=q_config,
         **kwargs,
     )
 
@@ -1162,9 +1162,13 @@ def _mixed_quantization(
     **kwargs,
 ) -> openvino.Model:
     """
-    Quantize a model with NNCF in two steps:
-    - weights-only quantization with nncf.compress_weights method.
-    - full quantization (excluding weights from previous step) with nncf.quantize method.
+    Perform mixed precision quantization where we separately quantize:
+        (1) weights of weighted layers to the precision given in the `quantization_config.weight_quantization_config`, and
+        (2) weights and activations of other possible layers; precision is given in the `quantization_config.full_quantization_config`.
+
+    By default, all weighted layers are quantized in the first step. This leaves only non-weighted layers for the second step.
+    If some weighted layers are instructed to be ignored in the first step with `weight_quantization_config.ignored_scope` parameter,
+    weights and activations of these layers are fully quantized to the precision given in the `quantization_config.full_quantization_config`.
 
     Args:
         model (`openvino.runtime.Model`):
@@ -1180,7 +1184,7 @@ def _mixed_quantization(
     wc_config = quantization_config.weight_quantization_config
     wc_dataset = dataset if wc_config.bits != 8 else None
 
-    q_config = quantization_config.activation_quantization_config.clone()
+    q_config = quantization_config.full_quantization_config.clone()
     q_config.ignored_scope = q_config.ignored_scope or {}
     ops_with_weights = _collect_ops_with_weights(model)
     q_config.ignored_scope["names"] = q_config.ignored_scope.get("names", []) + ops_with_weights
