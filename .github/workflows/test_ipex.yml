@@ -38,7 +38,7 @@ jobs:
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
           pip install .[ipex,tests] transformers[testing]==${{ matrix.transformers-version }} intel_extension_for_pytorch==${{ matrix.torch-version }}
           pip install build setuptools wheel
-          pip install autoawq[cpu]
+          pip install git+https://github.com/casper-hansen/AutoAWQ.git
 
       - name: Assert versions
         run: |
