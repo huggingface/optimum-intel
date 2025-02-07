@@ -768,7 +768,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
         return {
             "mode": mode,
             "preset": preset,
-            "subset_size": self.num_samples,
+            "subset_size": self.num_samples or 128,
             "fast_bias_correction": self.fast_bias_correction,
             "model_type": model_type,
             "ignored_scope": self.get_ignored_scope_instance(),
