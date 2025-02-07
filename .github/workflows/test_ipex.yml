@@ -38,6 +38,12 @@ jobs:
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
           pip install .[ipex,tests] transformers[testing]==${{ matrix.transformers-version }} intel_extension_for_pytorch==${{ matrix.torch-version }}
 
+      - name: Install bitsandbytes
+        run: |
+          git clone --branch multi-backend-refactor https://github.com/bitsandbytes-foundation/bitsandbytes.git
+          cd bitsandbytes
+          pip install .
+
       - name: Assert versions
         run: |
           python -c "import torch; print(torch.__version__); assert torch.__version__.startswith('${{ matrix.torch-version }}'.replace('.*', ''))"
