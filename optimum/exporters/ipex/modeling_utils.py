@@ -33,7 +33,7 @@ from .cache_utils import IPEXPagedCache
 logger = logging.getLogger(__name__)
 
 _IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.4.0"
-_accelerate_added_attributes = ["to", "cuda", "npu", "xpu", "mlu", "musa"]
+_accelerate_added_attributes = ["to", "xpu"]
 
 
 if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
