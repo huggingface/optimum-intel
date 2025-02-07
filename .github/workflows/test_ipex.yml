@@ -46,7 +46,7 @@ jobs:
 
       - name: Install autoawq
         run: |
-          pip install autoawq
+          pip install autoawq[cpu]
 
       - name: Test with Pytest
         run: |
