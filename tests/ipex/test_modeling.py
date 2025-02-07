@@ -30,13 +30,13 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForQuestionAnswering,
     AutoTokenizer,
-    BitsAndBytesConfig,
+    AwqConfig,
     GenerationConfig,
     PretrainedConfig,
     pipeline,
     set_seed,
-    is_bitsandbytes_available,
 )
+from transformers.utils import is_auto_awq_available
 from packaging import version
 from optimum.intel import (
     IPEXModel,
@@ -442,13 +442,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-7))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
-    def test_bnb(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
+    @unittest.skipIf(not is_auto_awq_available(), reason="Test requires auto-awq")
+    def test_awq(self):
+        model_id = "PrunaAI/JackFram-llama-68m-AWQ-4bit-smashed"
         set_seed(SEED)
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
-        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        quantization_config = AwqConfig(version="ipex")
         # Test model forward do not need cache.
         ipex_model = IPEXModelForCausalLM.from_pretrained(
             model_id, torch_dtype=dtype, device_map=DEVICE, quantization_config=quantization_config
@@ -458,7 +457,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokens = tokenizer(
             "This is a sample",
             return_tensors="pt",
-            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+            return_token_type_ids=False,
         ).to(DEVICE)
         inputs = ipex_model.prepare_inputs_for_generation(**tokens)
         outputs = ipex_model(**inputs)
@@ -482,7 +481,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(**inputs)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=5e-2))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
