@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
-    compare_num_quantized_nodes_per_model,
+    check_compression_state_per_model,
     get_num_quantized_nodes,
 )
 
@@ -44,6 +44,7 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -84,17 +85,22 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
-            [("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux"), ("inpainting", "flux-fill")]
+            [
+                ("text-to-image", "stable-diffusion-3"),
+                ("text-to-image", "flux"),
+                ("inpainting", "flux-fill"),
+                ("text-to-image", "sana"),
+            ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
-        "distilbert": 1,  # no detokenizer
+        "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
-        "bert": 1,  # no detokenizer
+        "bert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
@@ -102,6 +108,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -113,6 +120,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 19, 53))
 
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         (
@@ -127,7 +135,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation",
             "llama",
             "f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
+            "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
             (13,),
             (16,),
         ),
@@ -184,27 +192,27 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "llava_next",
                     "int4 --group-size 16 --ratio 0.8",
-                    [{"int8": 14, "int4": 16}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 14, "int4": 16}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     "image-text-to-text",
                     "llava_next",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
                     "--dataset contextual --num-samples 1",
-                    [{"int8": 6, "int4": 24}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
             ]
         )
@@ -216,40 +224,40 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "minicpmv",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 10, "int4": 20}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     "image-text-to-text",
                     "minicpmv",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 10}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 8, "int4": 10}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     "image-text-to-text",
@@ -351,18 +359,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past") and not model.decoder.stateful:
                     models.append(model.decoder_with_past)
-            elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
+            elif (
+                model_type.startswith("stable-diffusion")
+                or model_type.startswith("flux")
+                or model_type.startswith("sana")
+            ):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
-                models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+                models.append(
+                    model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2
+                )
             elif task.startswith("image-text-to-text"):
-                models = [model.language_model, model.vision_embeddings]
+                models = list(model.submodels.values())
             else:
                 models = [model]
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-            for i, model in enumerate(models):
-                _, num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_int8[i], num_weight_nodes["int8"])
+            expected_int8 = [{"int8": it} for it in expected_int8]
+            if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
+                expected_int8 = expected_int8[:2]
+            check_compression_state_per_model(self, models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -375,11 +390,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
-            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
-                model.unet if model.unet is not None else model.transformer
-            )
+            vision_model = model.unet.model if model.unet is not None else model.transformer.model
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(vision_model)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
+            self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
@@ -405,10 +420,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-generation-with-past":
                 submodels = [model]
             elif task == "image-text-to-text":
-                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-                submodels += [getattr(model, part) for part in model.additional_parts]
+                submodels = list(model.submodels.values())
 
-            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
@@ -556,3 +570,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "Some compression parameters are provided, but the weight format is not specified.",
                 str(exc_info.exception.stderr),
             )
+
+    def test_export_openvino_with_custom_variant(self):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model katuni4ka/tiny-stable-diffusion-torch-custom-variant --variant custom {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
+            for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
+                self.assertIsNotNone(getattr(model, component))

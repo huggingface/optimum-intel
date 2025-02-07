@@ -1010,6 +1010,7 @@ def _weight_only_quantization(
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
     **kwargs,
 ) -> openvino.runtime.Model:
+    _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -1041,7 +1042,7 @@ def _weight_only_quantization(
         else:
             mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
 
-    return nncf.compress_weights(
+    compressed_model = nncf.compress_weights(
         model,
         mode=mode,
         ratio=config.ratio,
@@ -1059,6 +1060,15 @@ def _weight_only_quantization(
         **kwargs,
     )
 
+    # If KV cache compression was disabled, remove the disabling flag from the model
+    if compressed_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
+        prev_rt_info = compressed_model.get_rt_info("runtime_options").value
+        if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
+            prev_rt_info.pop("KV_CACHE_PRECISION")
+            compressed_model.set_rt_info(prev_rt_info, "runtime_options")
+
+    return compressed_model
+
 
 def _full_quantization(
     model: openvino.runtime.Model,
@@ -1066,6 +1076,7 @@ def _full_quantization(
     calibration_dataset: nncf.Dataset,
     **kwargs,
 ):
+    _verify_not_optimized(model)
     advanced_parameters_kwargs = {}
     if quantization_config.smooth_quant_alpha is not None:
         advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(
@@ -1083,7 +1094,7 @@ def _full_quantization(
     quantized_model = nncf.quantize(
         model,
         calibration_dataset,
-        subset_size=quantization_config.num_samples,
+        subset_size=quantization_config.num_samples if quantization_config.num_samples else 128,
         ignored_scope=quantization_config.get_ignored_scope_instance(),
         model_type=nncf.ModelType(quantization_config.model_type),
         preset=nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED,
@@ -1187,3 +1198,20 @@ def _hybrid_quantization(
         **kwargs,
     )
     return quantized_model
+
+
+def _verify_not_optimized(ov_model):
+    message_template = (
+        "Cannot apply optimization to the model because it was already optimized with the following config: {}. "
+        "To avoid this issue, check that you set load_in_8bit=False or not using quantization_config at export in the .from_pretrained(), "
+        "or explicitly specify weight format with --weight_format fp16/fp32 when using CLI."
+    )
+
+    rt_info = ov_model.get_rt_info()
+    if "nncf" in rt_info:
+        model_weight_compression_config = rt_info["nncf"].get("weight_compression", None)
+        model_quantization_config = rt_info["nncf"].get("quantization", None)
+        if model_weight_compression_config is not None:
+            raise RuntimeError(message_template.format(model_weight_compression_config))
+        elif model_quantization_config is not None:
+            raise RuntimeError(message_template.format(model_quantization_config))

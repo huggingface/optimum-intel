@@ -24,15 +24,22 @@ from sentence_transformers.util import import_from_string
 from transformers import MT5Config, T5Config
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
+from ..utils.import_utils import _sentence_transformers_version, is_sentence_transformers_version
 from .modeling_base import IPEXModel
 
 
 class IPEXTransformer(Transformer):
     def __init__(self, *args, **kwargs):
+        if is_sentence_transformers_version("<", "3.4"):
+            raise ImportError(
+                f"Backend: ipex requires sentence-transformers>=3.4 but found {_sentence_transformers_version}. "
+                "You can install it with pip: `pip install --upgrade sentence-transformers`"
+            )
+
         super().__init__(*args, **kwargs)
         self.backend = "ipex"
 
-    def _load_model(self, model_name_or_path, config, cache_dir, backend, **model_args) -> None:
+    def _load_model(self, model_name_or_path, config, cache_dir, backend, is_peft_model, **model_args) -> None:
         self._load_ipex_model(model_name_or_path, config, cache_dir, **model_args)
 
     def _load_ipex_model(self, model_name_or_path, config, cache_dir, **model_args) -> None:
