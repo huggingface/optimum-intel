@@ -71,6 +71,7 @@ from .utils import (
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
+    set_simplified_chat_template
 )
 
 
@@ -825,6 +826,7 @@ def export_tokenizer(
     output: Union[str, Path],
     suffix: Optional[str] = "",
     task: Optional[str] = None,
+    additional_chat_templates: Optional[List[str]] = None
 ):
     # avoid circular imports
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
@@ -849,7 +851,7 @@ def export_tokenizer(
 
     if (
         task is not None
-        and task.startswith("text-generation")
+        and (task.startswith("text-generation") or task.startswith("image-text-to-text"))
         and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0")
     ):
         logger.info(f"Set tokenizer padding side to left for `{task}` task.")
@@ -858,6 +860,8 @@ def export_tokenizer(
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
+        set_simplified_chat_template(converted[0], additional_chat_templates)
+
     except NotImplementedError:
         logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)

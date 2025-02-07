@@ -531,12 +531,17 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
 
     if is_openvino_tokenizers_available():
         if library_name != "diffusers" and preprocessors:
+            additional_chat_templates = []
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
+            if len(preprocessors) > 1:
+                for processor in preprocessors:
+                    if processor != tokenizer and hasattr(processor, "chat_template"):
+                        additional_chat_templates.append(processor.chat_template)
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task)
+                    export_tokenizer(tokenizer, output, task=task, additional_chat_templates=additional_chat_templates)
                 except Exception as exception:
-                    logger.warning(
+                    logger.warn(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
                         f"models won't be generated. Exception: {exception}"
                     )

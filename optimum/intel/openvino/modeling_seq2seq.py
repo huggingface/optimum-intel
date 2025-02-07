@@ -572,6 +572,15 @@ class OVDecoder:
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
+        if self.key_value_input_names:
+            self.key_value_output_names = []
+            for i in range(6):
+                self.key_value_output_names.extend([f"present.{i}.decoder.key", f"present.{i}.decoder.value"])
+        else:
+            self.key_value_output_names = []
+            for i in range(6):
+                self.key_value_output_names.extend([f"present.{i}.decoder.key", f"present.{i}.decoder.value", f"present.{i}.encoder.key", f"present.{i}.encoder.value"])
+
         self.key_value_output_names = [key for key in self.output_names if "key_values" in key or "present" in key]
         self.stateful = model_has_state(self.model)
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
