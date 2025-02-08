@@ -26,7 +26,12 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
-from .utils import PREDEFINED_SD_DATASETS, PREDEFINED_VISUAL_LM_DATASETS
+from .utils import (
+    LANGUAGE_DATASETS,
+    PREDEFINED_SD_DATASETS,
+    PREDEFINED_SPEECH_TO_TEXT_DATASETS,
+    PREDEFINED_VISUAL_LM_DATASETS,
+)
 
 
 if is_nncf_available():
@@ -123,11 +128,18 @@ _DEFAULT_4BIT_CONFIGS = {
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
     "baichuan-inc/Baichuan2-7B-Chat": {
         "bits": 4,
-        "sym": True,
+        "sym": False,
         "group_size": 128,
         "ratio": 0.8,
+    },
+    "baichuan-inc/Baichuan2-13B-Chat": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "lmsys/longchat-7b-16k": {
         "bits": 4,
@@ -255,6 +267,11 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         sym: bool = False,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
+        dataset: Optional[Optional[Union[str, List[str]]]] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: bool = False,
+        weight_format: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -268,10 +285,27 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
+            dataset (`str or List[str]`, *optional*):
+                The dataset used for data-aware optimization with NNCF.
+            tokenizer (`str`, *optional*):
+                The tokenizer used to process the dataset.
+            processor (`str`, *optional*):
+                A transformers processor used to process the dataset inputs.
+            trust_remote_code (`bool`, defaults to `False`):
+                Allows to use custom code for the modeling hosted in the model repository. This option should only be
+                set for repositories you trust and in which you have read the code, as it will execute on your local
+                machine arbitrary code present in the model repository.
+            weight_format (`str`, *optional*):
+                Data format weights are compressed to.
         """
         self.bits = bits
         self.sym = sym
         self.num_samples = num_samples
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.processor = processor
+        self.trust_remote_code = trust_remote_code
+        self.weight_format = weight_format
 
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
@@ -313,6 +347,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     user or organization name, like `dbmdz/bert-base-german-cased`.
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
+        trust_remote_code (`bool`, defaults to `False`):
+            Allows to use custom code for the modeling hosted in the model repository. This option should only be set
+            for repositories you trust and in which you have read the code, as it will execute on your local machine
+            arbitrary code present in the model repository.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression with NNCF.
             - For language models you can provide your own dataset in a list of strings or just use one from the list
@@ -325,6 +363,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
+            Note: If dataset is provided, and the ratio is less than 1.0, then data-aware mixed precision assignment
+            will be applied.
         all_layers (`bool`, *optional*):
             Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit precision.
         sensitivity_metric (`str`, *optional*):
@@ -349,7 +389,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
-        weight_format (`str`, defaults to 'int'):
+        weight_format (`str`, *optional*):
             Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
@@ -395,19 +435,24 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         backup_precision: Optional[str] = None,
         **kwargs,
     ):
-        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
-        self.tokenizer = tokenizer
-        self.trust_remote_code = trust_remote_code
-        self.dataset = dataset
+        super().__init__(
+            bits=bits,
+            sym=sym,
+            ignored_scope=ignored_scope,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+            weight_format=weight_format,
+        )
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
-        self.weight_format = weight_format
         self.gptq = gptq
-        self.processor = processor
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
         self.post_init()
@@ -417,7 +462,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         Safety checker that arguments are correct
         """
         super().post_init()
-        if self.ratio is not None and not (0 <= self.ratio <= 1):
+        if not (0 <= self.ratio <= 1):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
@@ -427,15 +472,26 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            lm_datasets = ["wikitext2", "c4", "c4-new", "auto"]
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            if self.dataset not in lm_datasets + visual_lm_datasets + stable_diffusion_datasets:
+            if self.dataset not in LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    {lm_datasets} for LLMs, {visual_lm_datasets} for visual LLMs
+                    {LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs
                     or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
+
+        if self.dataset is not None and not (
+            self.quant_method == OVQuantizationMethod.AWQ
+            or self.scale_estimation
+            or self.gptq
+            or self.lora_correction
+            or (self.ratio < 1.0 and self.sensitivity_metric != nncf.SensitivityMetric.WEIGHT_QUANTIZATION_ERROR)
+        ):
+            logger.warning(
+                "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
+                "quantization algorithm is selected and compression ratio is 1.0."
+            )
 
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
@@ -522,6 +578,13 @@ class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
     ):
         super().__init__(bits=bits, sym=sym, group_size=weights_group_size, **kwargs)
         self.activations_group_size = activations_group_size
+        logger.warning(
+            "OVDynamicQuantizationConfig is deprecated and will be removed in optimum-intel v1.24.0. "
+            "Dynamic quantization and KV cache compression are enabled by default starting from OpenVINO 2024.6 and "
+            "there is no need to enable them manually. If you need precise control over these parameters, please "
+            "provide `DYNAMIC_QUANTIZATION_GROUP_SIZE` and `KV_CACHE_PRECISION` with `ov_config` argument during model "
+            "inference."
+        )
 
 
 @dataclass
@@ -535,6 +598,13 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
+        dataset: Optional[str] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: bool = False,
+        smooth_quant_alpha: Optional[float] = None,
+        weight_format: Optional[str] = "int8",
+        activation_format: Optional[str] = "int8",
         **kwargs,
     ):
         """
@@ -557,11 +627,56 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Whether to apply fast or full bias correction algorithm.
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
+            dataset (`str`, *optional*):
+                The dataset used for quantization. For language models the allowed values are
+                ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value is 'librispeech'.
+            tokenizer (`str`, *optional*):
+                The tokenizer used to process the dataset. You can pass either:
+                    - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
+                        Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
+                        user or organization name, like `dbmdz/bert-base-german-cased`.
+                    - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
+                        using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
+            processor (`str`, *optional*):
+                A transformers processor used to process inputs for multi-modal models. You can pass either:
+                    - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
+                    - A path to a *directory* containing files required by the processor, for instance saved
+                        using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
+            trust_remote_code (`bool`, defaults to `False`):
+                Allows to use custom code for the modeling hosted in the model repository. This option should only be set
+                for repositories you trust and in which you have read the code, as it will execute on your local machine
+                arbitrary code present in the model repository.
+            smooth_quant_alpha (`float`, *optional*):
+                SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
+                reduces quantization error.
+            weight_format (`str`, defaults to "int8"):
+                Data format weights are quantized to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
+            activation_format (`str`, defaults to "int8"):
+                Data format activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
         """
-        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
+        super().__init__(
+            bits=bits,
+            sym=sym,
+            ignored_scope=ignored_scope,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+            weight_format=weight_format,
+        )
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
+        self.smooth_quant_alpha = smooth_quant_alpha
+        self.activation_format = activation_format
+
+        f8_formats = ["f8e4m3", "f8e5m2"]
+        if self.activation_format in f8_formats and self.weight_format in f8_formats:
+            logger.info(
+                f"{self.activation_format} for activations and {self.weight_format} weights were found. A symmetrical scheme will be used."
+            )
+            self.sym = True
         self.post_init()
 
     def post_init(self):
@@ -570,8 +685,21 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         """
         super().post_init()
 
+        if self.dataset is not None:
+            speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets:
+                raise ValueError(
+                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs or
+                    {speech_to_text_datasets} for speech-to-text models, but we found {self.dataset}."""
+                )
+
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
+
+        if self.smooth_quant_alpha is not None and not (0 <= self.smooth_quant_alpha <= 1):
+            raise ValueError(
+                f"SmoothQuant alpha parameter must be in range [0, 1], but found {self.smooth_quant_alpha}"
+            )
 
 
 class OVConfig(BaseConfig):
@@ -597,10 +725,7 @@ class OVConfig(BaseConfig):
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, OVWeightQuantizationConfig):
-                self.dtype = self.quantization_config.weight_format
-            else:
-                self.dtype = "int8"
+            self.dtype = self.quantization_config.weight_format
         else:
             self.dtype = dtype
 

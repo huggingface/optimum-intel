@@ -215,6 +215,10 @@ class OptimizationArguments:
         default="sym",
         metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
     )
+    use_layer_wise: bool = field(
+        default=False,
+        metadata={"help": "Use layer wise to do quantization to save memory."},
+    )
     quantization_methodology: str = field(
         default="rtn",
         metadata={"help": "Quantization methodology for weight only quantization. Choose from 'rtn' and 'gptq'."},
@@ -659,6 +663,7 @@ def main():
                     "bits": optim_args.bits,
                     "sym": optim_args.weight_only_scheme == "sym",
                     "group_size": optim_args.group_size,
+                    "use_layer_wise": optim_args.use_layer_wise,
                 }
 
                 if optim_args.quantization_methodology == "gptq":
@@ -666,6 +671,7 @@ def main():
                         damp_percent=optim_args.damp_percent,
                         nsamples=optim_args.num_calibration_samples,
                         blocksize=optim_args.gptq_block_size,
+                        tokenizer=tokenizer,
                         **algorithm_args,
                     )
                 else:

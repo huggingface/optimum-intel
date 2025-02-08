@@ -20,7 +20,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-import onnx
 from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
@@ -28,15 +27,14 @@ from openvino.runtime import Model, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
-from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
-from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.utils import (
-    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
+    DECODER_NAME,
+    ENCODER_NAME,
+    _get_submodels_for_export_encoder_decoder,
+    get_diffusion_models_for_export,
 )
 from optimum.exporters.utils import (
-    get_diffusion_models_for_export,
+    _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
 )
 from optimum.intel.utils.import_utils import (
     _diffusers_version,
@@ -49,6 +47,7 @@ from optimum.intel.utils.import_utils import (
     _transformers_version,
     compare_versions,
     is_openvino_tokenizers_version,
+    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -89,6 +88,7 @@ if is_tf_available():
 
 
 if TYPE_CHECKING:
+    from optimum.exporters.onnx.base import OnnxConfig
     from optimum.intel.openvino.configuration import OVConfig
 
 
@@ -99,11 +99,24 @@ def _set_runtime_options(
     ],
     task: str,
     library_name: str,
+    quantized_model: bool,
 ):
     for model_name in models_and_export_configs.keys():
         _, sub_export_config = models_and_export_configs[model_name]
-        if "diffusers" in library_name or "text-generation" in task:
-            sub_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+        if not hasattr(sub_export_config, "runtime_options"):
+            sub_export_config.runtime_options = {}
+        if (
+            "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+            or getattr(sub_export_config, "stateful", False)
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        if not quantized_model and (
+            "text-generation" in task
+            or ("image-text-to-text" in task and model_name == "language_model")
+            or getattr(sub_export_config, "stateful", False)
+        ):
+            sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
 
 
 def _save_model(
@@ -111,13 +124,13 @@ def _save_model(
     path: str,
     ov_config: Optional["OVConfig"] = None,
     library_name: Optional[str] = None,
-    config: OnnxConfig = None,
+    config: "OnnxConfig" = None,
 ):
     compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
 
-    if hasattr(config, "runtime_options"):
-        model = _add_runtime_options_to_rt_info(model, config.runtime_options)
+    runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
+    model = _add_runtime_options_to_rt_info(model, runtime_options)
     save_model(model, path, compress_to_fp16)
     del model
     gc.collect()
@@ -125,7 +138,7 @@ def _save_model(
 
 def export(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     output: Path,
     opset: Optional[int] = None,
     device: str = "cpu",
@@ -208,7 +221,7 @@ def export(
 
 def export_tensorflow(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     opset: int,
     output: Path,
     ov_config: Optional["OVConfig"] = None,
@@ -228,6 +241,8 @@ def export_tensorflow(
         output_names: list of output names from ONNX configuration
         bool:  True if the model was exported successfully.
     """
+    from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
+
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
@@ -248,7 +263,7 @@ def export_tensorflow(
 
 def export_pytorch_via_onnx(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     opset: int,
     output: Path,
     device: str = "cpu",
@@ -285,6 +300,8 @@ def export_pytorch_via_onnx(
     """
     import torch
 
+    from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
+
     output = Path(output)
     orig_torch_onnx_export = torch.onnx.export
     torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
@@ -313,7 +330,7 @@ def export_pytorch_via_onnx(
 
 def export_pytorch(
     model: Union["PreTrainedModel", "ModelMixin"],
-    config: OnnxConfig,
+    config: "OnnxConfig",
     opset: int,
     output: Path,
     device: str = "cpu",
@@ -354,6 +371,9 @@ def export_pytorch(
     """
     import torch
     from torch.utils._pytree import tree_map
+
+    from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
+    from optimum.exporters.utils import check_dummy_inputs_are_allowed
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
@@ -415,6 +435,10 @@ def export_pytorch(
 
             patcher.patched_forward = ts_patched_forward
 
+            ts_decoder_kwargs = {}
+            if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
+                ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
+
             with patcher:
                 if patch_16bit_model:
                     from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
@@ -422,8 +446,9 @@ def export_pytorch(
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = _get_input_info(model, config, dummy_inputs)
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
                 ov_model = convert_model(
-                    model,
+                    ts_decoder,
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )
@@ -444,7 +469,11 @@ def export_pytorch(
                 from openvino.frontend.pytorch.patch_model import unpatch_model
 
                 unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
-                model.to(torch.float32)
+                for m in model.modules():
+                    if any(p.dtype in [torch.float16, torch.bfloat16] for p in m.parameters(False)) or any(
+                        b.dtype in [torch.float16, torch.bfloat16] for b in m.buffers(False)
+                    ):
+                        m.float()
 
             return export_pytorch_via_onnx(
                 model,
@@ -618,10 +647,14 @@ def export_from_model(
 
         logger.info(f"Automatic task detection to: {task}.")
 
+    is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
+    model_type = getattr(getattr(model, "config", {}), "model_type", "")
     stateful = stateful and (
-        ensure_export_task_support_stateful(task)
-        or ensure_model_type_support_stateful(getattr(getattr(model, "config", {}), "model_type", ""))
+        ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
+
+    if stateful and is_encoder_decoder and not getattr(model, "_supports_cache_class", False):
+        stateful = False
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
@@ -647,6 +680,9 @@ def export_from_model(
     # Get the shapes to be used to generate dummy inputs
     input_shapes = {}
     for input_name in DEFAULT_DUMMY_SHAPES.keys():
+        if input_name in ["height", "width"]:
+            # use H and W from generator defaults
+            continue
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
@@ -660,6 +696,11 @@ def export_from_model(
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
+    elif stateful and is_encoder_decoder and not custom_architecture:
+        export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(
+            model=model, task=task, preprocessors=preprocessors, library_name=library_name, _variant="default"
+        )
+        stateful_submodels = [False, True]
     else:
         logging.disable(logging.INFO)
         export_config, models_and_export_configs, stateful_submodels = _get_submodels_and_export_configs(
@@ -755,7 +796,12 @@ def export_from_model(
 
         model.save_config(output)
 
-    _set_runtime_options(models_and_export_configs, task, library_name)
+    _set_runtime_options(
+        models_and_export_configs,
+        task,
+        library_name,
+        hasattr(ov_config, "quantization_config") and ov_config.quantization_config,
+    )
 
     export_models(
         models_and_export_configs=models_and_export_configs,
@@ -869,6 +915,8 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
             model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
         input_model = rt_info["conversion_parameters"].get("input_model", None)
         if input_model is not None and "onnx" in input_model.value:
+            import onnx
+
             model.set_rt_info(onnx.__version__, ["optimum", "onnx_version"])
 
     except Exception:
@@ -965,34 +1013,98 @@ def _get_submodels_and_export_configs(
 def get_diffusion_models_for_export_ext(
     pipeline: "DiffusionPipeline", int_dtype: str = "int64", float_dtype: str = "fp32", exporter: str = "openvino"
 ):
-    try:
-        from diffusers import (
-            StableDiffusion3Img2ImgPipeline,
-            StableDiffusion3InpaintPipeline,
-            StableDiffusion3Pipeline,
-        )
+    is_sdxl = pipeline.__class__.__name__.startswith("StableDiffusionXL")
+    is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
+    is_flux = pipeline.__class__.__name__.startswith("Flux")
+    is_sana = pipeline.__class__.__name__.startswith("Sana")
+    is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
+    is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
-        is_sd3 = isinstance(
-            pipeline, (StableDiffusion3Pipeline, StableDiffusion3InpaintPipeline, StableDiffusion3Img2ImgPipeline)
-        )
-    except ImportError:
-        is_sd3 = False
+    if is_sd or is_sdxl or is_lcm:
+        models_for_export = get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
+        if is_sdxl and pipeline.vae.config.force_upcast:
+            models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
+            models_for_export["vae_decoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
 
-    try:
-        from diffusers import FluxPipeline
+        # only SD 2.1 has overflow issue, it uses different prediction_type than other models
+        if is_sd and pipeline.scheduler.config.prediction_type == "v_prediction":
+            models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+            models_for_export["vae_decoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
 
-        is_flux = isinstance(pipeline, FluxPipeline)
-    except ImportError:
-        is_flux = False
-
-    if not is_sd3 and not is_flux:
-        return None, get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
-    if is_sd3:
+    elif is_sd3:
         models_for_export = get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype)
-    else:
+    elif is_flux:
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
-
+    elif is_sana:
+        models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    else:
+        raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
+
+
+def get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+    text_encoder = pipeline.text_encoder
+    text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=text_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        model_type="gemma2-text-encoder",
+    )
+    text_encoder_export_config = text_encoder_config_constructor(
+        pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    text_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+    transformer = pipeline.transformer
+    transformer.config.text_encoder_projection_dim = transformer.config.caption_channels
+    transformer.config.requires_aesthetics_score = False
+    transformer.config.time_cond_proj_dim = None
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="sana-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+    # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent": vae_encoder.encode(x=sample)["latent"]}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="dcae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.forward = lambda latent_sample: vae_decoder.decode(z=latent_sample)
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
 
 
 def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
@@ -1089,6 +1201,7 @@ def get_sd3_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             int_dtype=int_dtype,
             float_dtype=float_dtype,
         )
+        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_3"] = (text_encoder_3, export_config)
 
     return models_for_export
@@ -1126,6 +1239,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config = export_config_constructor(
         pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
@@ -1141,6 +1255,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_encoder_export_config = vae_config_constructor(
         vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
 
     # VAE Decoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L600
@@ -1156,6 +1271,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     vae_decoder_export_config = vae_config_constructor(
         vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
     text_encoder_2 = getattr(pipeline, "text_encoder_2", None)
@@ -1172,6 +1288,46 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             int_dtype=int_dtype,
             float_dtype=float_dtype,
         )
+        export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
         models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
 
     return models_for_export
+
+
+def _get_encoder_decoder_stateful_models_for_export(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    _variant: str,
+    library_name: str,
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    preprocessors: Optional[List[Any]] = None,
+):
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name=library_name
+    )
+    export_config = export_config_constructor(
+        model.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        preprocessors=preprocessors,
+        legacy=False,
+    )
+
+    export_config.variant = _variant
+    all_variants = "\n".join([f"    - {name}: {description}" for name, description in export_config.VARIANTS.items()])
+    logger.info(f"Using the export variant {export_config.variant}. Available variants are:\n{all_variants}")
+
+    models_for_export = _get_submodels_for_export_encoder_decoder(model, use_past=False)
+
+    encoder_export_config = export_config.with_behavior("encoder")
+    models_for_export[ENCODER_NAME] = (models_for_export[ENCODER_NAME], encoder_export_config)
+
+    decoder_export_config_with_past = export_config.with_behavior("decoder", use_past=True, use_past_in_inputs=True)
+
+    decoder_export_config_with_past.stateful = True
+    models_for_export[DECODER_NAME] = (
+        models_for_export[DECODER_NAME],
+        decoder_export_config_with_past,
+    )
+    return None, models_for_export

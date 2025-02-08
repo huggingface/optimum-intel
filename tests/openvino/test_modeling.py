@@ -15,11 +15,12 @@
 import copy
 import gc
 import os
+import platform
 import tempfile
 import time
 import unittest
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Generator
 
 import numpy as np
 import open_clip
@@ -62,10 +63,13 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
+from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import (
+    OVDiffusionPipeline,
+    OVFluxPipeline,
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
@@ -103,10 +107,16 @@ from optimum.intel.openvino.utils import (
     _print_compiled_model_properties,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _langchain_hf_available,
+    is_openvino_version,
+    is_transformers_version,
+)
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
+    DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+    DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
@@ -139,7 +149,8 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_SD_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
 
     def test_load_from_hub_and_save_model(self):
@@ -260,6 +271,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             else:
                 self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
+        processor.patch_size = loaded_model.config.vision_config.patch_size
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         set_seed(SEED)
         loaded_model_outputs = loaded_model(**inputs)
@@ -336,7 +348,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @require_diffusers
     def test_load_from_hub_and_save_stable_diffusion_model(self):
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_SD_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -390,12 +402,78 @@ class OVModelIntegrationTest(unittest.TestCase):
         del pipeline
         gc.collect()
 
+    @require_diffusers
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45"),
+        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
+    )
+    def test_load_from_hub_and_save_flux_model(self):
+        loaded_pipeline = OVDiffusionPipeline.from_pretrained(self.OV_FLUX_DIFFUSION_MODEL_ID, compile=False)
+        self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
+        self.assertIsInstance(loaded_pipeline.config, Dict)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        loaded_pipeline.compile()
+        self.assertIsNone(loaded_pipeline.unet)
+        self.assertEqual(loaded_pipeline.transformer.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+        batch_size, height, width = 2, 16, 16
+        inputs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "output_type": "np",
+        }
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        pipeline_outputs = loaded_pipeline(**inputs).images
+        self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_pipeline.save_pretrained(tmpdirname)
+            pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname)
+            self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertIn(loaded_pipeline.config_name, folder_contents)
+            for subfoler in {
+                DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            }:
+                folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
+                self.assertIn(OV_XML_FILE_NAME, folder_contents)
+                self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+
+            compile_only_pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_pipeline, OVFluxPipeline)
+            self.assertIsInstance(compile_only_pipeline.transformer.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder_2.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+
+            np.random.seed(0)
+            torch.manual_seed(0)
+            outputs = compile_only_pipeline(**inputs).images
+            np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+            del compile_only_pipeline
+
+        np.random.seed(0)
+        torch.manual_seed(0)
+        outputs = pipeline(**inputs).images
+        np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
+        del pipeline
+        gc.collect()
+
     @pytest.mark.run_slow
     @slow
     def test_load_model_from_hub_private_with_token(self):
         model_id = "optimum-internal-testing/tiny-random-phi-private"
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
-        if token is None:
+        if not token:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
         model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
@@ -535,8 +613,9 @@ class PipelineTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-            self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
+            if not ov_exported_pipe.model.decoder.stateful:
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
+                self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
             ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
@@ -872,7 +951,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "llama_gptq",
         "marian",
         "minicpm",
         "mistral",
@@ -915,7 +993,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "exaone",
             "mistral-nemo",
             "minicpm3",
+            "glm",
+            "granite",
+            "granite-moe",
         )
+
+        # gptq and awq install disabled for windows test environment
+        if platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
+
+        # autoawq install disabled for windows test environment
+        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -949,9 +1038,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_openvino_version("<", "2024.1"):
             not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
 
-        if "gptq" in model_arch:
-            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
-
         set_seed(SEED)
 
         model_kwargs = {}
@@ -978,20 +1064,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         if model_arch in ["qwen", "arctic", "glm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         atol = 1e-3 if model_arch == "minicpm" else 1e-4
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
+        # quantized models have different logits value range
+        if "awq" not in model_arch and "gptq" not in model_arch:
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
-
         if model_arch in ["qwen"]:
             return
 
@@ -1025,7 +1118,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
+        with patch_awq_for_inference("awq" in model_arch):
+            transformers_outputs = transformers_model.generate(
+                **tokens, generation_config=gen_config, **additional_inputs
+            )
+        print(f"ov_outputs: {ov_outputs}")
+        print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
             "OV output {ov_outputs}\nTransformers output  {transformers_output}",
@@ -1261,8 +1359,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
+        if "awq" in model_arch or "gptq" in model_arch:
+            # infer in FP32
+            model_kwargs["torch_dtype"] = torch.float32
+
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
@@ -1273,7 +1376,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model._supports_cache_class = True
             from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
-        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokenization_args = {}
+        if is_transformers_version(">=", "4.45") and model_arch == "gpt_neo":
+            tokenization_args["padding_side"] = "left"
+        tokens = tokenizer(
+            ["Today is a nice day and I am longer", "This is me"],
+            return_tensors="pt",
+            padding=True,
+            **tokenization_args,
+        )
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1288,9 +1399,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             if model_arch == "gemma2":
                 additional_inputs = {"past_key_values": DynamicCache()}
-            transformers_outputs = transformers_model.generate(
-                **tokens, generation_config=gen_config, **additional_inputs
-            )
+            with patch_awq_for_inference("awq" in model_arch):
+                transformers_outputs = transformers_model.generate(
+                    **tokens, generation_config=gen_config, **additional_inputs
+                )
             set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
@@ -1519,16 +1631,23 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
+    SUPPORT_STATEFUL = ("t5", "mt5")
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-
+        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
-        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        if not ov_model.decoder.stateful:
+            self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1543,7 +1662,22 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens, **decoder_inputs)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=5e-3))
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**tokens, generation_config=gen_config)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**tokens, generation_config=gen_config)
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+
         del transformers_model
         del ov_model
 
@@ -1613,7 +1747,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["t5"]
+        model_id = MODEL_NAMES["bart"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -1976,7 +2110,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
 
@@ -1996,6 +2130,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaNextForConditionalGeneration
 
             return LlavaNextForConditionalGeneration
+        if model_arch == "qwen2_vl":
+            from transformers import Qwen2VLForConditionalGeneration
+
+            return Qwen2VLForConditionalGeneration
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -2033,6 +2171,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         for component_name, component in ov_model.components.items():
             self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
         test_device = "AUTO"
@@ -2045,11 +2184,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.clear_requests()
         self._check_device_and_request(ov_model, test_device, False)
 
-        # nanollava pixel_values input named as images
-        if model_arch == "nanollava":
-            pixel_values = transformers_inputs.pop("pixel_values", None)
-            transformers_inputs["images"] = pixel_values
-        # pytorch minicpmv is not designed to be used via forward
+        # pytorch minicpmv and internvl2 are not designed to be used via forward
         if model_arch not in ["minicpmv", "internvl2"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
@@ -2102,6 +2237,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             patch_size=config.vision_config.patch_size,
             vision_feature_select_strategy=config.vision_feature_select_strategy,
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            num_additional_image_tokens=1,
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
@@ -2111,8 +2247,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(processor.patch_size is not None)
         self.assertTrue(processor.vision_feature_select_strategy is not None)
         inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
-        self.assertTrue(
-            (inputs.input_ids == ov_model.config.image_token_index).sum(1).max() >= ov_model.config.image_seq_length
+        self.assertGreaterEqual(
+            (inputs.input_ids == ov_model.config.image_token_index).sum().max().item(),
+            ov_model.config.image_seq_length,
         )
         set_seed(SEED)
         with torch.no_grad():
@@ -2175,17 +2312,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
         if model_arch == "nanollava":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             processor = AutoProcessor.from_pretrained(
                 config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": tokenizer}
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         elif model_arch == "internvl2":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
@@ -2194,7 +2331,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": None}
+            preprocessors = {"processor": processor, "tokenizer": None, "config": config}
+
         return preprocessors
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -2228,15 +2366,21 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        # whisper cache class support implemented in 4.43
+        expected_stateful = is_transformers_version(">", "4.43")
+        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
+        check_with_past_available(ov_model.decoder_with_past)
 
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
-        features = processor.feature_extractor(data, return_tensors="pt")
+        pt_features = processor.feature_extractor(data, return_tensors="pt")
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**features, **decoder_inputs)
+            transformers_outputs = transformers_model(**pt_features, **decoder_inputs)
 
         for input_type in ["pt", "np"]:
             features = processor.feature_extractor(data, return_tensors=input_type)
@@ -2248,6 +2392,21 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        set_seed(SEED)
+        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config)
+        set_seed(SEED)
+        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config)
+
+        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
 
         del transformers_model
         del ov_model
@@ -2641,4 +2800,52 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(model_save_path)
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    def test_langchain(self, model_arch):
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        model_id = MODEL_NAMES[model_arch]
+        model_kwargs = {"device": "cpu", "backend": "openvino"}
+
+        embedding = HuggingFaceEmbeddings(
+            model_name=model_id,
+            model_kwargs=model_kwargs,
+        )
+        output = embedding.embed_query("foo bar")
+        self.assertTrue(len(output) > 0)
+
+
+class OVLangchainTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("gpt2",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    def test_huggingface_pipeline_streaming(self, model_arch):
+        from langchain_huggingface import HuggingFacePipeline
+
+        model_id = MODEL_NAMES[model_arch]
+
+        hf_pipe = HuggingFacePipeline.from_model_id(
+            model_id=model_id,
+            task="text-generation",
+            pipeline_kwargs={"max_new_tokens": 10},
+            backend="openvino",
+        )
+        self.assertIsInstance(hf_pipe.pipeline.model, OVBaseModel)
+
+        generator = hf_pipe.stream("Q: How do you say 'hello' in German? A:'", stop=["."])
+
+        self.assertIsInstance(generator, Generator)
+
+        stream_results_string = ""
+        for chunk in generator:
+            self.assertIsInstance(chunk, str)
+            stream_results_string = chunk
+
+        self.assertTrue(len(stream_results_string.strip()) > 1)
+
+        del hf_pipe
         gc.collect()

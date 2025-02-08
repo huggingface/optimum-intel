@@ -175,13 +175,21 @@ if _psutil_available:
 
 
 _sentence_transformers_available = importlib.util.find_spec("sentence_transformers") is not None
-_sentence_transformers_available = "N/A"
-
+_sentence_transformers_version = "N/A"
 if _sentence_transformers_available:
     try:
-        _sentence_transformers_available = importlib_metadata.version("sentence_transformers")
+        _sentence_transformers_version = importlib_metadata.version("sentence_transformers")
     except importlib_metadata.PackageNotFoundError:
         _sentence_transformers_available = False
+
+
+_langchain_hf_available = importlib.util.find_spec("langchain_huggingface") is not None
+_langchain_hf_version = "N/A"
+if _langchain_hf_available:
+    try:
+        _langchain_hf_version = importlib.metadata.version("langchain_huggingface")
+    except importlib.metadata.PackageNotFoundError:
+        _langchain_hf_available = False
 
 
 def is_transformers_available():
@@ -397,6 +405,7 @@ def is_openvino_tokenizers_version(operation: str, version: str):
         except importlib_metadata.PackageNotFoundError:
             pass
 
+    tokenizers_version = tokenizers_version[: len("2025.0.0.0")]
     return compare_versions(parse(tokenizers_version), operation, version)
 
 
@@ -448,6 +457,15 @@ def is_datasets_version(operation: str, version: str):
     return compare_versions(parse(_datasets_version), operation, version)
 
 
+def is_sentence_transformers_version(operation: str, version: str):
+    """
+    Compare the current sentence-transformers version to a given reference with an operation.
+    """
+    if not _sentence_transformers_available:
+        return False
+    return compare_versions(parse(_sentence_transformers_version), operation, version)
+
+
 DIFFUSERS_IMPORT_ERROR = """
 {0} requires the diffusers library but it was not found in your environment. You can install it with pip:
 `pip install diffusers`. Please note that you may need to restart your runtime after installation.
@@ -483,6 +501,12 @@ ACCELERATE_IMPORT_ERROR = """
 `pip install accelerate`. Please note that you may need to restart your runtime after installation.
 """
 
+SENTENCE_TRANSFORMERS_IMPORT_ERROR = """
+{0} requires the sentence-transformers library but it was not found in your environment. You can install it with pip:
+`pip install sentence-transformers`. Please note that you may need to restart your runtime after installation.
+"""
+
+
 BACKENDS_MAPPING = OrderedDict(
     [
         ("diffusers", (is_diffusers_available, DIFFUSERS_IMPORT_ERROR)),
@@ -491,6 +515,7 @@ BACKENDS_MAPPING = OrderedDict(
         ("openvino", (is_openvino_available, OPENVINO_IMPORT_ERROR)),
         ("neural_compressor", (is_neural_compressor_available, NEURAL_COMPRESSOR_IMPORT_ERROR)),
         ("accelerate", (is_accelerate_available, ACCELERATE_IMPORT_ERROR)),
+        ("sentence_transformers", (is_sentence_transformers_available, SENTENCE_TRANSFORMERS_IMPORT_ERROR)),
     ]
 )
 

@@ -26,6 +26,7 @@ from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -216,7 +217,15 @@ def _get_open_clip_submodels_fn_and_export_configs(
     return custom_export, fn_get_submodels
 
 
-MULTI_MODAL_TEXT_GENERATION_MODELS = ["llava", "llava-next", "llava-qwen2", "internvl-chat", "minicpmv", "phi3-v"]
+MULTI_MODAL_TEXT_GENERATION_MODELS = [
+    "llava",
+    "llava-next",
+    "llava-qwen2",
+    "internvl-chat",
+    "minicpmv",
+    "phi3-v",
+    "qwen2-vl",
+]
 
 
 def save_config(config, save_dir):
@@ -232,6 +241,47 @@ def save_config(config, save_dir):
         config.to_json_file(output_config_file, use_diff=True)
 
 
+def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
+    dtype = None
+    if is_safetensors_available():
+        if Path(model_name_or_path).is_dir():
+            path = Path(model_name_or_path)
+        else:
+            from diffusers import DiffusionPipeline
+
+            path = Path(DiffusionPipeline.download(model_name_or_path, **loading_kwargs))
+        model_part_name = None
+        if (path / "transformer").is_dir():
+            model_part_name = "transformer"
+        elif (path / "unet").is_dir():
+            model_part_name = "unet"
+        if model_part_name:
+            directory = path / model_part_name
+
+            pattern = "*.safetensors"
+            if "variant" in loading_kwargs:
+                variant = loading_kwargs["variant"]
+                pattern = f"*.{variant}.safetensors"
+                safetensors_files = list(directory.glob(pattern))
+            else:
+                # filter out variant files
+                safetensors_files = [filename for filename in directory.glob(pattern) if len(filename.suffixes) == 1]
+            safetensors_file = None
+            if len(safetensors_files) > 0:
+                safetensors_file = safetensors_files.pop(0)
+            if safetensors_file:
+                from safetensors import safe_open
+
+                with safe_open(safetensors_file, framework="pt", device="cpu") as f:
+                    if len(f.keys()) > 0:
+                        for key in f.keys():
+                            tensor = f.get_tensor(key)
+                            if tensor.dtype.is_floating_point:
+                                dtype = tensor.dtype
+                                break
+    return dtype
+
+
 def save_preprocessors(
     preprocessors: List, config: PretrainedConfig, output: Union[str, Path], trust_remote_code: bool
 ):
@@ -245,6 +295,14 @@ def save_preprocessors(
         if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
+        if (
+            is_transformers_version(">=", "4.45")
+            and model_type in ["llava", "llava-next"]
+            and preprocessors is not None
+        ):
+            if getattr(preprocessors[1], "patch_size", None) is None:
+                preprocessors[1].patch_size = config.vision_config.patch_size
+                preprocessors[1].vision_feature_select_strategy = config.vision_feature_select_strategy
         for processor in preprocessors:
             try:
                 processor.save_pretrained(output)

@@ -126,14 +126,19 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
+    "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
     "open_clip_text": "OVModelOpenCLIPText",
     "open_clip_vision": "OVModelOpenCLIPVisual",
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
 }
 
+
+LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
 
 PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
@@ -143,9 +148,18 @@ PREDEFINED_SD_DATASETS = {
 
 PREDEFINED_VISUAL_LM_DATASETS = {
     "contextual": {
-        "name": "ucla-contextual/contextual_test",
+        "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
+    }
+}
+
+PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
+    "librispeech": {
+        "id": "openslr/librispeech_asr",
+        "name": "clean",
+        "split": "validation",
+        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
     }
 }
 
@@ -201,6 +215,8 @@ def _is_timm_ov_dir(model_dir):
 
 
 def _print_compiled_model_properties(compiled_model):
+    cur_log_level = logger.getEffectiveLevel()
+    logger.setLevel(logging.INFO)
     supported_properties = properties.supported_properties()
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
@@ -223,6 +239,7 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+    logger.setLevel(cur_log_level)
 
 
 def np_to_pt_generators(np_object, device):
@@ -552,3 +569,21 @@ class TemporaryDirectory(OrigTemporaryDirectory):
     def cleanup(self):
         if self._finalizer.detach() or os.path.exists(self.name):
             self._rmtree(self.name, ignore_errors=self._ignore_cleanup_errors)
+
+
+def check_scale_available(model: Union[Model, str, Path]):
+    if isinstance(model, Model):
+        return model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+    if not Path(model).exists():
+        return False
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(model)
+    root = tree.getroot()
+    rt_info = root.find("rt_info")
+    if rt_info is None:
+        return False
+    runtime_options = rt_info.find("runtime_options")
+    if runtime_options is None:
+        return False
+    return runtime_options.find("ACTIVATIONS_SCALE_FACTOR") is not None

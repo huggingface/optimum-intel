@@ -1,6 +1,7 @@
 name: OpenVINO - Test
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -46,9 +47,14 @@ jobs:
           pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
-        name: Downgrade Transformers and Accelerate
+        name: Install specific dependencies and versions required for older transformers
         run: |
-          pip install transformers==${{ matrix.transformers-version }} accelerate==0.*
+          pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
+      
+      - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*modeling*'}}
+        name: Install auto-gptq, autoawq
+        run: |
+          pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Uninstall NNCF

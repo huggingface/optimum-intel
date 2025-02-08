@@ -77,8 +77,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux"])
-        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.append("stable-diffusion-3")
+        SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux", "sana"])
+        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.extend(["stable-diffusion-3"])
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -104,7 +104,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
@@ -130,14 +131,30 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        height, width, batch_size = 128, 128, 1
+        height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
+            if model_arch == "sana":
+                # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
+                inputs["use_resolution_binning"] = False
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+        # test on inputs nondivisible on 64
+        height, width, batch_size = 96, 96, 1
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+            if model_arch == "sana":
+                # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
+                inputs["use_resolution_binning"] = False
 
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -163,7 +180,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         auto_callback = Callback()
 
         ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        auto_pipe = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
         # callback_steps=1 to trigger callback every step
         ov_pipe(**inputs, callback=ov_callback, callback_steps=1)
@@ -180,6 +198,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         height, width, batch_size = 128, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        if model_arch == "sana":
+            inputs["use_resolution_binning"] = False
 
         for output_type in ["pil", "np", "pt", "latent"]:
             inputs["output_type"] = output_type
@@ -207,8 +227,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                         ),
                     )
                 else:
-                    packed_height = height // pipeline.vae_scale_factor
-                    packed_width = width // pipeline.vae_scale_factor
+                    packed_height = height // pipeline.vae_scale_factor // 2
+                    packed_width = width // pipeline.vae_scale_factor // 2
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
@@ -396,6 +416,21 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
+    @require_diffusers
+    def test_load_custom_weight_variant(self):
+        model_id = "katuni4ka/tiny-stable-diffusion-torch-custom-variant"
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, variant="custom")
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, variant="custom")
+        height, width, batch_size = 32, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED))
+        ov_images = ov_output.images
+        diffusers_images = diffusers_output.images
+
+        np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
@@ -415,7 +450,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
             height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
         )
 
-        if "flux" == model_type:
+        if model_type in ["flux", "stable-diffusion-3"]:
             inputs["height"] = height
             inputs["width"] = width
 
@@ -518,8 +553,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                             ),
                         )
                     else:
-                        packed_height = height // pipeline.vae_scale_factor
-                        packed_width = width // pipeline.vae_scale_factor
+                        packed_height = height // pipeline.vae_scale_factor // 2
+                        packed_width = width // pipeline.vae_scale_factor // 2
                         channels = pipeline.transformer.config.in_channels
                         self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
@@ -531,6 +566,20 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
+        for output_type in ["latent", "np", "pt"]:
+            print(output_type)
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+        # test generation when input resolution nondevisible on 64
+        height, width, batch_size = 96, 96, 1
+
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         for output_type in ["latent", "np", "pt"]:
             print(output_type)
@@ -642,13 +691,14 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
         SUPPORTED_ARCHITECTURES.append("flux")
+        SUPPORTED_ARCHITECTURES.append("flux-fill")
 
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
 
     TASK = "inpainting"
 
-    def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil"):
+    def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil", model_arch=""):
         inputs = _generate_prompts(batch_size=batch_size)
 
         inputs["image"] = _generate_images(
@@ -658,7 +708,8 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
             height=height, width=width, batch_size=batch_size, channel=1, input_type=input_type
         )
 
-        inputs["strength"] = 0.75
+        if model_arch != "flux-fill":
+            inputs["strength"] = 0.75
         inputs["height"] = height
         inputs["width"] = width
 
@@ -674,7 +725,12 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        if model_arch != "flux-fill":
+            auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        else:
+            from diffusers import FluxFillPipeline
+
+            auto_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
@@ -688,7 +744,9 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
             for height in [64, 128]:
                 for width in [64, 128]:
                     for num_images_per_prompt in [1, 3]:
-                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        inputs = self.generate_inputs(
+                            height=height, width=width, batch_size=batch_size, model_arch=model_arch
+                        )
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
                         self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
@@ -727,7 +785,9 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         height, width, batch_size = 128, 64, 1
 
         for input_type in ["pil", "np", "pt"]:
-            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, input_type=input_type)
+            inputs = self.generate_inputs(
+                height=height, width=width, batch_size=batch_size, input_type=input_type, model_arch=model_arch
+            )
 
             for output_type in ["pil", "np", "pt", "latent"]:
                 inputs["output_type"] = output_type
@@ -739,7 +799,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
-                    if model_arch != "flux":
+                    if not model_arch.startswith("flux"):
                         out_channels = (
                             pipeline.unet.config.out_channels
                             if pipeline.unet is not None
@@ -755,19 +815,40 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                             ),
                         )
                     else:
-                        packed_height = height // pipeline.vae_scale_factor
-                        packed_width = width // pipeline.vae_scale_factor
-                        channels = pipeline.transformer.config.in_channels
+                        packed_height = height // pipeline.vae_scale_factor // 2
+                        packed_width = width // pipeline.vae_scale_factor // 2
+                        channels = (
+                            pipeline.transformer.config.in_channels
+                            if model_arch != "flux-fill"
+                            else pipeline.transformer.out_channels
+                        )
                         self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        if model_arch != "flux-fill":
+            diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        else:
+            from diffusers import FluxFillPipeline
+
+            diffusers_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
+
+        for output_type in ["latent", "np", "pt"]:
+            inputs["output_type"] = output_type
+
+            ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+            diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
+
+            np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+        # test generation when input resolution nondevisible on 64
+        height, width, batch_size = 96, 96, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -783,7 +864,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
 
         for generator_framework in ["np", "pt"]:
             ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))

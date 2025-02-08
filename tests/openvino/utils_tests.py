@@ -11,10 +11,15 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import unittest
+from contextlib import contextmanager
+from typing import Dict, List, Union
 
 import numpy as np
 import openvino as ov
 import torch
+
+from optimum.intel.openvino.modeling_base import OVBaseModel
 
 
 MODEL_NAMES = {
@@ -61,12 +66,15 @@ MODEL_NAMES = {
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "flux": "katuni4ka/tiny-random-flux",
+    "flux-fill": "katuni4ka/tiny-random-flux-fill",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_neox_japanese": "hf-internal-testing/tiny-random-GPTNeoXJapaneseForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "granite": "katuni4ka/tiny-random-granite",
+    "granite-moe": "katuni4ka/tiny-random-granite-moe",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
     "internlm": "katuni4ka/tiny-random-internlm",
@@ -77,12 +85,12 @@ MODEL_NAMES = {
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
-    "llama_gptq": "hf-internal-testing/TinyLlama-1.1B-Chat-v0.3-GPTQ",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",
+    "opt_gptq": "ybelkada/opt-125m-gptq-4bit",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
@@ -91,6 +99,7 @@ MODEL_NAMES = {
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
+    "mixtral_awq": "TitanML/tiny-mixtral-AWQ-4bit",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
@@ -115,6 +124,7 @@ MODEL_NAMES = {
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
+    "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -147,16 +157,18 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "wav2vec2-hf": "hf-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
-    "whisper": "openai/whisper-tiny.en",
+    "whisper": "yujiepan/whisper-v3-tiny-random",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
     "glm4": "katuni4ka/tiny-random-glm4",
+    "glm": "katuni4ka/tiny-random-glm-edge",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
+    "sana": "katuni4ka/tiny-random-sana",
 }
 
 
@@ -183,38 +195,112 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "open-clip": (20, 28),
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
-    "llava": (30, 9, 1),
-    "llava_next": (30, 9, 1),
-    "minicpmv": (30, 26, 1, 6),
-    "nanollava": (30, 15, 1),
+    "flux-fill": (56, 24, 28, 64),
+    "llava": (30, 1, 9),
+    "llava_next": (30, 1, 9),
+    "minicpmv": (30, 1, 26, 6),
+    "nanollava": (30, 1, 15),
+    "qwen2_vl": (30, 1, 1, 10),
+    "sana": (58, 28, 28, 18),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
 
 def get_num_quantized_nodes(model):
-    num_fake_quantize = 0
-    num_weight_nodes = {
-        "int8": 0,
-        "int4": 0,
-        "f4e2m1": 0,
-        "f8e8m0": 0,
-        "nf4": 0,
+    num_fake_nodes = 0
+    types_map = {
+        "i8": "int8",
+        "u8": "int8",
+        "i4": "int4",
+        "u4": "int4",
+        "f4e2m1": "f4e2m1",
+        "f8e8m0": "f8e8m0",
+        "nf4": "nf4",
+        "f8e4m3": "f8e4m3",
+        "f8e5m2": "f8e5m2",
     }
+    num_weight_nodes = {n: 0 for n in types_map.values()}
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
-            num_fake_quantize += 1
+            num_fake_nodes += 1
+        if "FakeConvert" in elem.name:
+            num_fake_nodes += 1
         for i in range(elem.get_output_size()):
             type_name = elem.get_output_element_type(i).get_type_name()
-            if type_name in ["i8", "u8"]:
-                num_weight_nodes["int8"] += 1
-            if type_name in ["i4", "u4"]:
-                num_weight_nodes["int4"] += 1
-            if type_name == "f4e2m1":
-                num_weight_nodes["f4e2m1"] += 1
-            if type_name == "f8e8m0":
-                num_weight_nodes["f8e8m0"] += 1
-            if type_name == "nf4":
-                num_weight_nodes["nf4"] += 1
-    return num_fake_quantize, num_weight_nodes
+            if type_name in types_map:
+                name = types_map[type_name]
+                num_weight_nodes[name] += 1
+    return num_fake_nodes, num_weight_nodes
+
+
+@contextmanager
+def mock_torch_cuda_is_available(to_patch):
+    original_is_available = torch.cuda.is_available
+    if to_patch:
+        torch.cuda.is_available = lambda: True
+    try:
+        yield
+    finally:
+        if to_patch:
+            torch.cuda.is_available = original_is_available
+
+
+@contextmanager
+def patch_awq_for_inference(to_patch):
+    orig_gemm_forward = None
+    if to_patch:
+        # patch GEMM module to allow inference without CUDA GPU
+        from awq.modules.linear.gemm import WQLinearMMFunction
+        from awq.utils.packing_utils import dequantize_gemm
+
+        def new_forward(
+            ctx,
+            x,
+            qweight,
+            qzeros,
+            scales,
+            w_bit=4,
+            group_size=128,
+            bias=None,
+            out_features=0,
+        ):
+            ctx.out_features = out_features
+
+            out_shape = x.shape[:-1] + (out_features,)
+            x = x.to(torch.float16)
+
+            out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
+            out = torch.matmul(x, out)
+
+            out = out + bias if bias is not None else out
+            out = out.reshape(out_shape)
+
+            if len(out.shape) == 2:
+                out = out.unsqueeze(0)
+            return out
+
+        orig_gemm_forward = WQLinearMMFunction.forward
+        WQLinearMMFunction.forward = new_forward
+    try:
+        yield
+    finally:
+        if orig_gemm_forward is not None:
+            WQLinearMMFunction.forward = orig_gemm_forward
+
+
+def check_compression_state_per_model(
+    test_case: unittest.TestCase,
+    models: List[Union[ov.Model, OVBaseModel]],
+    expected_num_weight_nodes_per_model: List[Dict],
+):
+    test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
+    actual_num_weights_per_model = []
+    for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
+        ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+        _, num_weight_nodes = get_num_quantized_nodes(ov_model)
+        expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+        actual_num_weights_per_model.append(num_weight_nodes)
+        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+    test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)

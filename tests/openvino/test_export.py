@@ -75,6 +75,13 @@ class ExportModelTest(unittest.TestCase):
         "llava": OVModelForVisualCausalLM,
     }
 
+    EXPECTED_DIFFUSERS_SCALE_FACTORS = {
+        "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
+        "stable-diffusion-3": {"text_encoder_3": "8.0"},
+        "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
+    }
+
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.update({"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline})
 
@@ -132,34 +139,44 @@ class ExportModelTest(unittest.TestCase):
                         ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                     )
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                    self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+
+                if task == "image-text-to-text":
+                    self.assertTrue(
+                        ov_model.language_model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"])
+                    )
+                    self.assertTrue(
+                        ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                    )
 
                 if library_name == "diffusers":
-                    self.assertTrue(
-                        ov_model.vae_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                    )
-                    self.assertTrue(
-                        ov_model.vae_decoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                    )
-                    if hasattr(ov_model, "text_encoder") and ov_model.text_encoder:
-                        self.assertTrue(
-                            ov_model.text_encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                        )
-                    if hasattr(ov_model, "text_encoder_2") and ov_model.text_encoder_2:
-                        self.assertTrue(
-                            ov_model.text_encoder_2.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                        )
-                    if hasattr(ov_model, "text_encoder_3") and ov_model.text_encoder_3:
-                        self.assertTrue(
-                            ov_model.text_encoder_3.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                        )
-                    if hasattr(ov_model, "unet") and ov_model.unet:
-                        self.assertTrue(
-                            ov_model.unet.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                        )
-                    if hasattr(ov_model, "transformer") and ov_model.transformer:
-                        self.assertTrue(
-                            ov_model.transformer.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                        )
+                    expected_scale_factors = self.EXPECTED_DIFFUSERS_SCALE_FACTORS.get(model_type, {})
+                    components = [
+                        "unet",
+                        "transformer",
+                        "text_encoder",
+                        "text_encoder_2",
+                        "text_encoder_3",
+                        "vae_encoder",
+                        "vae_decoder",
+                    ]
+                    for component in components:
+                        component_model = getattr(ov_model, component, None)
+                        if component_model is None:
+                            continue
+                        component_scale = expected_scale_factors.get(component)
+                        if component_scale is not None:
+                            self.assertTrue(
+                                component_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                            )
+                            self.assertEqual(
+                                component_model.model.get_rt_info()["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"],
+                                component_scale,
+                            )
+                        else:
+                            self.assertFalse(
+                                component_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                            )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
