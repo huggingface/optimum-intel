@@ -53,6 +53,8 @@ from .utils import (
     get_export_transformers_version,
     model_has_dynamic_inputs,
 )
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 
 if TYPE_CHECKING:
