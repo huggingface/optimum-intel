@@ -146,7 +146,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "remote_code": False,
         },
         "minicpm3": {  # transformers, no processor, simplified chat template
-            "num_tokinizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
             "task": "text-generation-with-past",
             "expected_chat_template": True,
             "simplified_chat_template": True,
