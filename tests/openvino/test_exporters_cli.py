@@ -157,6 +157,30 @@ class OVCLIExportTestCase(unittest.TestCase):
                 {"int8": 4, "nf4": 14},
             ],
         ),
+        (
+            "text-generation",
+            "llama",
+            "int4_f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code",
+            [
+                13,
+            ],
+            [
+                {"int8": 4, "int4": 28},
+            ],
+        ),
+        (
+            "text-generation",
+            "llama",
+            "int4_f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code --sym",
+            [
+                13,
+            ],
+            [
+                {"int8": 4, "int4": 14},
+            ],
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [

@@ -174,6 +174,22 @@ class OVQuantizerTest(unittest.TestCase):
                 {"int8": 4, "f8e4m3": 4, "nf4": 6},
             ],
         ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e4m3"),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                13,
+            ],
+            [
+                {"int8": 4, "int4": 28},
+            ],
+        ),
     ]
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
