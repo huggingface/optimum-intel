@@ -865,9 +865,10 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             (1) weights of weighted layers to the precision given in the `weight_quantization_config`, and
             (2) weights and activations of other possible layers; precision is given in the `full_quantization_config`.
 
-        By default, all weighted layers are quantized in the first step. This leaves only non-weighted layers for the second step.
-        If some layers are instructed to be ignored in the first step with `weight_quantization_config.ignored_scope` parameter,
-        weights and activations of these layers are fully quantized to the precision given in the `full_quantization_config`.
+        By default, weights of all weighted layers are quantized in the first step. In the second step activations of
+        weighted and non-weighted layers are quantized. If some layers are instructed to be ignored in the first step
+        with `weight_quantization_config.ignored_scope` parameter, both weights and activations of these layers are
+        quantized to the precision given in the `full_quantization_config`.
 
         Args:
             weight_quantization_config (`OVWeightQuantizationConfig` or `dict`):
