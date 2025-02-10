@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Core, Type, save_model
@@ -531,15 +531,15 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
 
     if is_openvino_tokenizers_available():
         if library_name != "diffusers" and preprocessors:
-            additional_chat_templates = []
+            processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if len(preprocessors) > 1:
                 for processor in preprocessors:
-                    if processor != tokenizer and hasattr(processor, "chat_template"):
-                        additional_chat_templates.append(processor.chat_template)
+                    if isinstance(processor, ProcessorMixin) and hasattr(processor, "chat_template"):
+                        processor_chat_template = processor.chat_template
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task, additional_chat_templates=additional_chat_templates)
+                    export_tokenizer(tokenizer, output, task=task, processor_chat_template=processor_chat_template)
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
