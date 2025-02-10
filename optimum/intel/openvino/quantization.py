@@ -1014,6 +1014,7 @@ def _weight_only_quantization(
     model: openvino.runtime.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
+    remove_kv_cache_precision_flag: Optional[bool] = True,
     **kwargs,
 ) -> openvino.runtime.Model:
     _verify_not_optimized(model)
@@ -1042,12 +1043,13 @@ def _weight_only_quantization(
         **wc_kwargs,
     )
 
-    # If KV cache compression was disabled, remove the disabling flag from the model
-    if compressed_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
-        prev_rt_info = compressed_model.get_rt_info("runtime_options").value
-        if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
-            prev_rt_info.pop("KV_CACHE_PRECISION")
-            compressed_model.set_rt_info(prev_rt_info, "runtime_options")
+    if remove_kv_cache_precision_flag:
+        # Remove the KV cache compression disabling flag from the model
+        if compressed_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
+            prev_rt_info = compressed_model.get_rt_info("runtime_options").value
+            if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
+                prev_rt_info.pop("KV_CACHE_PRECISION")
+                compressed_model.set_rt_info(prev_rt_info, "runtime_options")
 
     return compressed_model
 
@@ -1135,12 +1137,13 @@ def _hybrid_quantization(
     """
 
     wc_config = quantization_config.clone()
-    wc_config.ignored_scope = wc_config.ignored_scope or {}
-    wc_ignored_types = ["Convolution"] if any(op.get_type_name() == "Convolution" for op in model.get_ops()) else []
-    wc_config.ignored_scope["types"] = wc_config.ignored_scope.get("types", []) + wc_ignored_types
+    wc_config.ignored_scope = {}
+    if any(op.get_type_name() == "Convolution" for op in model.get_ops()):
+        wc_config.ignored_scope["types"] = ["Convolution"]
 
+    q_config_ignored_scope = {"names": _collect_ops_with_weights(model)}
     q_config = OVQuantizationConfig(
-        ignored_scope=quantization_config.ignored_scope,
+        ignored_scope=q_config_ignored_scope,
         num_samples=quantization_config.num_samples or 200,
         smooth_quant_alpha=-1,
         **kwargs,
@@ -1149,6 +1152,7 @@ def _hybrid_quantization(
     mixed_quantization_config = OVMixedQuantizationConfig(
         weight_quantization_config=wc_config,
         full_quantization_config=q_config,
+        ignored_scope=quantization_config.ignored_scope,
         **kwargs,
     )
 
@@ -1181,16 +1185,29 @@ def _mixed_quantization(
         The OpenVINO Runtime model with applied quantization.
     """
 
-    wc_config = quantization_config.weight_quantization_config
+    def merge_ignored_scopes(
+        ignored_scope_1: Union[Dict[str, List[str]], None], ignored_scope_2: Union[Dict[str, List[str]], None]
+    ) -> Dict[str, List[str]]:
+        if ignored_scope_1 is None:
+            return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
+        if ignored_scope_2 is None:
+            return copy.deepcopy(ignored_scope_1)
+        merged_ignored_scope = {}
+        for key in set(ignored_scope_1) | set(ignored_scope_2):
+            merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
+        return merged_ignored_scope
+
+    wc_config = quantization_config.weight_quantization_config.clone()
+    wc_config.ignored_scope = merge_ignored_scopes(wc_config.ignored_scope, quantization_config.ignored_scope)
     wc_dataset = dataset if wc_config.bits != 8 else None
+    compressed_model = _weight_only_quantization(
+        model, wc_config, wc_dataset, remove_kv_cache_precision_flag=False, **kwargs
+    )
 
     q_config = quantization_config.full_quantization_config.clone()
-    q_config.ignored_scope = q_config.ignored_scope or {}
-    ops_with_weights = _collect_ops_with_weights(model)
-    q_config.ignored_scope["names"] = q_config.ignored_scope.get("names", []) + ops_with_weights
-
-    compressed_model = _weight_only_quantization(model, wc_config, wc_dataset, **kwargs)
+    q_config.ignored_scope = merge_ignored_scopes(q_config.ignored_scope, quantization_config.ignored_scope)
     quantized_model = _full_quantization(compressed_model, q_config, dataset, verify_not_optimized=False, **kwargs)
+
     return quantized_model
 
 

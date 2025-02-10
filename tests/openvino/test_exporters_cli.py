@@ -14,7 +14,7 @@
 import subprocess
 import unittest
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM
@@ -128,24 +128,34 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
-            (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
+            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+            if is_transformers_version("<=", "4.36.0")
+            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
         ),
         (
             "text-generation",
             "llama",
             "f8e4m3",
             "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
-            (13,),
-            (16,),
+            [
+                13,
+            ],
+            [
+                {"f8e4m3": 16},
+            ],
         ),
         (
             "text-generation",
             "llama",
             "nf4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code",
-            (4,),
-            (14,),
+            [
+                13,
+            ],
+            [
+                {"int8": 4, "nf4": 14},
+            ],
         ),
     ]
 
@@ -446,8 +456,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_type: str,
         quant_mode: str,
         option: str,
-        expected_fake_nodes: Tuple[int],
-        expected_low_precision_nodes: Tuple[int],
+        expected_fake_nodes_per_model: List[int],
+        expected_num_weight_nodes_per_model: List[Dict[str, int]],
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
@@ -457,22 +467,28 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
 
-            models = [model]
             if task == "automatic-speech-recognition":
-                models = [model.encoder, model.decoder]
+                submodels = [model.encoder, model.decoder]
                 if model.decoder_with_past is not None:
-                    models.append(model.decoder_with_past)
+                    submodels.append(model.decoder_with_past)
+                    expected_kv_cache_precision_per_model = [None, None, None]
                 else:
-                    expected_fake_nodes = expected_fake_nodes[:-1]
-            self.assertEqual(len(expected_fake_nodes), len(models))
-            for i, model in enumerate(models):
-                num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_fake_nodes[i], num_fake_nodes)
-                weight_types = quant_mode.split("_")
-                num_weights = 0
-                for weight_type in weight_types:
-                    num_weights += num_weight_nodes[weight_type]
-                self.assertEqual(expected_low_precision_nodes[i], num_weights)
+                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
+                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
+                    expected_kv_cache_precision_per_model = [None, "f16"]
+            elif "text-generation" in task:
+                submodels = [model]
+                expected_kv_cache_precision_per_model = ["f16"]
+            else:
+                raise Exception("Unexpected task.")
+
+            check_compression_state_per_model(
+                self,
+                submodels,
+                expected_num_weight_nodes_per_model,
+                expected_fake_nodes_per_model,
+                expected_kv_cache_precision_per_model,
+            )
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:

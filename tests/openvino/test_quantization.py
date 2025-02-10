@@ -113,8 +113,10 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
                 smooth_quant_alpha=0.95,
             ),
-            (14, 22, 21) if is_transformers_version("<=", "4.42.4") else (14, 22, 25),
-            (14, 21, 17) if is_transformers_version("<=", "4.42.4") else (14, 22, 18),
+            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+            if is_transformers_version("<=", "4.36.0")
+            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
         ),
         (
             OVModelForCausalLM,
@@ -124,8 +126,12 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
                 activation_format="f8e4m3",
             ),
-            (13,),
-            (16,),
+            [
+                13,
+            ],
+            [
+                {"f8e4m3": 16},
+            ],
         ),
         (
             OVModelForCausalLM,
@@ -136,8 +142,36 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            (4,),
-            (14,),
+            [
+                13,
+            ],
+            [
+                {"int8": 4, "nf4": 14},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    bits=4,
+                    weight_format="nf4",
+                    group_size=16,
+                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    activation_format="f8e4m3", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                7,
+            ],
+            [
+                {"int8": 4, "f8e4m3": 4, "nf4": 6},
+            ],
         ),
     ]
 
@@ -232,7 +266,12 @@ class OVQuantizerTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
     def test_ov_model_static_quantization_with_auto_dataset(
-        self, model_cls, model_name, quantization_config, expected_fake_nodes, expected_low_precision_nodes
+        self,
+        model_cls,
+        model_name,
+        quantization_config,
+        expected_fake_nodes_per_model,
+        expected_num_weight_nodes_per_model,
     ):
         model_id = MODEL_NAMES[model_name]
 
@@ -240,41 +279,21 @@ class OVQuantizerTest(unittest.TestCase):
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            # Convert dict config to class through OVConfig
-            if isinstance(quantization_config, dict):
-                quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
-            if isinstance(quantization_config, OVMixedQuantizationConfig):
-                quant_mode = (
-                    f"{quantization_config.weight_quantization_config.weight_format}_"
-                    f"{quantization_config.full_quantization_config.activation_format}"
-                )
-            else:
-                quant_mode = quantization_config.activation_format
-
             if model_cls == OVModelForSpeechSeq2Seq:
-                models = [ov_model.encoder.model, ov_model.decoder.model]
-
+                submodels = [ov_model.encoder.model, ov_model.decoder.model]
                 if ov_model.decoder_with_past is not None:
-                    models.append(ov_model.decoder_with_past.model)
-                for model, expected_fake_nodes, expected_lp_nodes in zip(
-                    models,
-                    expected_fake_nodes,
-                    expected_low_precision_nodes,
-                ):
-                    num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-                    self.assertEqual(expected_fake_nodes, num_fake_nodes)
-                    self.assertEqual(expected_lp_nodes, num_weight_nodes[quant_mode])
+                    submodels.append(ov_model.decoder_with_past.model)
+                    expected_kv_cache_precision_per_model = [None, None, None]
+                else:
+                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
+                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
+                    expected_kv_cache_precision_per_model = [None, "f16"]
 
                 input_features = torch.randn((1, 128, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
             elif model_cls == OVModelForCausalLM:
-                num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model.model)
-                self.assertEqual(expected_fake_nodes[0], num_fake_nodes)
-                weight_types = quant_mode.split("_")
-                num_weights = 0
-                for weight_type in weight_types:
-                    num_weights += num_weight_nodes[weight_type]
-                self.assertEqual(expected_low_precision_nodes[0], num_weights)
+                submodels = [ov_model]
+                expected_kv_cache_precision_per_model = ["f16"]
 
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
@@ -284,6 +303,14 @@ class OVQuantizerTest(unittest.TestCase):
                 self.assertTrue("logits" in outputs)
             else:
                 raise Exception("Unexpected model class.")
+
+            check_compression_state_per_model(
+                self,
+                submodels,
+                expected_num_weight_nodes_per_model,
+                expected_fake_nodes_per_model,
+                expected_kv_cache_precision_per_model,
+            )
 
 
 class OVWeightCompressionTest(unittest.TestCase):

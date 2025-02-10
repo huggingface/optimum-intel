@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import abc
 import copy
 import inspect
 import json
@@ -264,6 +263,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 
     def __init__(
         self,
+        ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None,
         num_samples: Optional[int] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
@@ -273,6 +273,9 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     ):
         """
         Args:
+            ignored_scope (`dict` or `nncf.IgnoredScope`, *optional*):
+                An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
+                entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
@@ -291,25 +294,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self.tokenizer = tokenizer
         self.processor = processor
         self.trust_remote_code = trust_remote_code
-
-    def post_init(self):
-        if not (self.num_samples is None or isinstance(self.num_samples, int) and self.num_samples > 0):
-            raise ValueError(f"`num_samples` is expected to be a positive integer, but found: {self.num_samples}")
-
-    def clone(self):
-        return copy.deepcopy(self)
-
-
-class _OVQuantizationConfigWithIgnoredScope(abc.ABC):
-    def __init__(self, ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None):
-        """
-        Base class for configs with an ignored scope.
-
-        Args:
-            ignored_scope (`dict`, *optional*):
-                An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
-                entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
-        """
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
@@ -321,15 +305,20 @@ class _OVQuantizationConfigWithIgnoredScope(abc.ABC):
             raise ValueError(
                 f"Can't create an `IgnoredScope` object from the provided ignored scope dict: {self.ignored_scope}.\n{e}"
             )
+        if not (self.num_samples is None or isinstance(self.num_samples, int) and self.num_samples > 0):
+            raise ValueError(f"`num_samples` is expected to be a positive integer, but found: {self.num_samples}")
 
     def get_ignored_scope_instance(self) -> "nncf.IgnoredScope":
         if self.ignored_scope is None:
             return nncf.IgnoredScope()
         return nncf.IgnoredScope(**copy.deepcopy(self.ignored_scope))
 
+    def clone(self):
+        return copy.deepcopy(self)
+
 
 @dataclass
-class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIgnoredScope):
+class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     """
     This is a wrapper class about all possible attributes and features that you can play with a model that has been
     loaded using `optimum-intel` api for weight-only quantization with NNCF. For full model quantization please see
@@ -371,7 +360,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfig
         sensitivity_metric (`str`, *optional*):
             The sensitivity metric for assigning quantization precision to layers. In order to
             preserve the accuracy of the model, the more sensitive layers receives a higher precision.
-        ignored_scope (`dict`, *optional*):
+        ignored_scope (`dict` or `nncf.IgnoredScope`, *optional*):
             An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
             entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
         num_samples (`int`, *optional*):
@@ -436,15 +425,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfig
         backup_precision: Optional[str] = None,
         **kwargs,
     ):
-        OVQuantizationConfigBase.__init__(
-            self,
+        super().__init__(
+            ignored_scope=ignored_scope,
             num_samples=num_samples,
             dataset=dataset,
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
         )
-        _OVQuantizationConfigWithIgnoredScope.__init__(self, ignored_scope)
         self.bits = bits
         self.sym = sym
         self.group_size = group_size or (-1 if bits == 8 else 128)
@@ -463,8 +451,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfig
         r"""
         Safety checker that arguments are correct
         """
-        OVQuantizationConfigBase.post_init(self)
-        _OVQuantizationConfigWithIgnoredScope.post_init(self)
+        super().post_init()
         if not (0 <= self.ratio <= 1):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
@@ -625,7 +612,7 @@ class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
 
 
 @dataclass
-class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIgnoredScope):
+class OVQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         bits: int = 8,
@@ -652,7 +639,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
                 The number of bits to quantize to.
             sym (`bool`, defaults to `False`):
                 Whether to use symmetric quantization on the activations. Symmetric quantization will be applied on the weights in any case.
-            ignored_scope (`dict`, *optional*):
+            ignored_scope (`dict` or `nncf.IgnoredScope`, *optional*):
                 An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
@@ -688,15 +675,14 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
             activation_format (`str`, defaults to "int8"):
                 Data format activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
         """
-        OVQuantizationConfigBase.__init__(
-            self,
+        super().__init__(
+            ignored_scope=ignored_scope,
             num_samples=num_samples,
             dataset=dataset,
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
         )
-        _OVQuantizationConfigWithIgnoredScope.__init__(self, ignored_scope)
         self.bits = bits
         self.sym = sym
         self.model_type = model_type
@@ -715,8 +701,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase, _OVQuantizationConfigWithIg
         r"""
         Safety checker that arguments are correct
         """
-        OVQuantizationConfigBase.post_init(self)
-        _OVQuantizationConfigWithIgnoredScope.post_init(self)
+        super().post_init()
 
         if self.dataset is not None:
             speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
@@ -868,6 +853,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         self,
         weight_quantization_config: Union[OVWeightQuantizationConfig, dict],
         full_quantization_config: Union[OVQuantizationConfig, dict],
+        ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None,
         num_samples: Optional[int] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
@@ -889,6 +875,10 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
                 Configuration related to weight quantization.
             full_quantization_config (`OVQuantizationConfig` or `dict`):
                 Configuration related to full quantization.
+            ignored_scope (`dict` or `nncf.IgnoredScope`, *optional*):
+                An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
+                entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
+                Ignored scope provided here will be used for both weight and full quantization steps.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
@@ -920,6 +910,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         processor = processor or wqc.processor or fqc.processor
         trust_remote_code = trust_remote_code or wqc.trust_remote_code or fqc.trust_remote_code
         super().__init__(
+            ignored_scope=ignored_scope,
             num_samples=num_samples,
             dataset=dataset,
             tokenizer=tokenizer,
