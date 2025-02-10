@@ -379,8 +379,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
-        weight_format (`str`, *optional*):
-            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
+        dtype (`str`, *optional*):
+            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -418,7 +418,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         num_samples: Optional[int] = None,
         quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
-        weight_format: Optional[str] = None,
+        dtype: Optional[str] = None,
         gptq: bool = None,
         processor: Optional[str] = None,
         lora_correction: bool = None,
@@ -444,7 +444,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.gptq = gptq
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
-        self.weight_format = weight_format
+        self.dtype = dtype
         self.post_init()
 
     def post_init(self):
@@ -486,7 +486,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
 
-        if self.bits == 8 and self.weight_format:
+        if self.bits == 8 and self.dtype:
             if self.ratio != 1:
                 raise ValueError(
                     f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
@@ -532,26 +532,26 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.processor is not None and not isinstance(self.processor, str):
             raise ValueError(f"Processor is expected to be a string, but found {self.processor}")
 
-        if self.weight_format is None:
-            self.weight_format = "int4" if self.bits == 4 else "int8"
-        if self.weight_format not in ["int4", "int8", "mxfp4", "nf4"]:
+        if self.dtype is None:
+            self.dtype = "int4" if self.bits == 4 else "int8"
+        if self.dtype not in ["int4", "int8", "mxfp4", "nf4"]:
             raise ValueError(
-                f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.weight_format}."
+                f"Weights quantization data type must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.dtype}."
             )
-        if self.weight_format in ["mxfp4", "nf4"]:
+        if self.dtype in ["mxfp4", "nf4"]:
             if self.bits != 4:
                 raise ValueError(
-                    f"When applying weight compression with '{self.weight_format}' weight format, the `bits` parameter must be set to 4, but found {self.bits}"
+                    f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
                 )
-            if self.weight_format == "mxfp4":
+            if self.dtype == "mxfp4":
                 if self.quant_method == OVQuantizationMethod.AWQ:
-                    raise ValueError("The AWQ algorithm is not supported for 'mxpf4' weight format")
+                    raise ValueError("The AWQ algorithm is not supported for 'mxpf4' data type")
                 if self.scale_estimation:
-                    raise ValueError("The Scale Estimation algorithm is not supported for 'mxpf4' weight format")
+                    raise ValueError("The Scale Estimation algorithm is not supported for 'mxpf4' data type")
                 if self.gptq:
-                    raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' weight format")
+                    raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' data type")
                 if self.lora_correction:
-                    raise ValueError("The LoRA Correction algorithm is not supported for 'mxfp4' weight format")
+                    raise ValueError("The LoRA Correction algorithm is not supported for 'mxfp4' data type")
         if self.gptq and self.lora_correction:
             raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
@@ -561,7 +561,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         """
 
         signed_bitness = {4: "int4", 8: "int8"}
-        mode = self.weight_format if self.weight_format else signed_bitness[self.bits]
+        mode = self.dtype if self.dtype else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
         if mode == "mxfp4":
@@ -627,7 +627,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         trust_remote_code: bool = False,
         smooth_quant_alpha: Optional[float] = None,
-        activation_format: Optional[str] = "int8",
+        dtype: Optional[str] = "int8",
         **kwargs,
     ):
         """
@@ -672,8 +672,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             smooth_quant_alpha (`float`, *optional*):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
-            activation_format (`str`, defaults to "int8"):
-                Data format activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
+            dtype (`str`, defaults to "int8"):
+                Data type activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
         """
         super().__init__(
             ignored_scope=ignored_scope,
@@ -689,11 +689,10 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
         self.smooth_quant_alpha = smooth_quant_alpha
-        self.activation_format = activation_format
+        self.dtype = dtype
 
-        f8_formats = ["f8e4m3", "f8e5m2"]
-        if self.activation_format in f8_formats:
-            logger.info(f"{self.activation_format} for activations was found. A symmetrical scheme will be used.")
+        f8_dtypes = ["f8e4m3", "f8e5m2"]
+        if self.dtype in f8_dtypes:
             self.sym = True
         self.post_init()
 
@@ -732,7 +731,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             advanced_parameters_dict["smooth_quant_alphas"] = {"matmul": self.smooth_quant_alpha}
 
         mode_map = {"f8e4m3": "fp8_e4m3", "f8e5m2": "fp8_e5m2"}
-        mode = mode_map.get(self.activation_format)
+        mode = mode_map.get(self.dtype)
 
         preset = nncf.QuantizationPreset(preset)
         model_type = nncf.ModelType(self.model_type)
@@ -778,14 +777,14 @@ class OVConfig(BaseConfig):
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, OVWeightQuantizationConfig):
-                self.dtype = self.quantization_config.weight_format
-            elif isinstance(self.quantization_config, OVQuantizationConfig):
-                self.dtype = self.quantization_config.activation_format
+            if isinstance(self.quantization_config, OVWeightQuantizationConfig) or isinstance(
+                self.quantization_config, OVQuantizationConfig
+            ):
+                self.dtype = self.quantization_config.dtype
             elif isinstance(self.quantization_config, OVMixedQuantizationConfig):
-                weight_format = self.quantization_config.weight_quantization_config.weight_format
-                activation_format = self.quantization_config.full_quantization_config.activation_format
-                self.dtype = f"{weight_format}_{activation_format}"
+                wc_dtype = self.quantization_config.weight_quantization_config.dtype
+                q_dtype = self.quantization_config.full_quantization_config.dtype
+                self.dtype = f"{wc_dtype}_{q_dtype}"
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(self.quantization_config)}")
         else:

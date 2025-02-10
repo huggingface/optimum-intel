@@ -361,10 +361,10 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             if self.args.quant_mode == "nf4_f8e4m3":
                 wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-                wc_config["weight_format"] = "nf4"
+                wc_config["dtype"] = "nf4"
 
                 q_config = prepare_q_config(self.args)
-                q_config["activation_format"] = "f8e4m3"
+                q_config["dtype"] = "f8e4m3"
 
                 quantization_config = {
                     "weight_quantization_config": wc_config,
@@ -490,14 +490,14 @@ def prepare_wc_config(args, default_configs):
         "scale_estimation": args.scale_estimation,
         "gptq": args.gptq,
         "lora_correction": args.lora_correction,
-        "weight_format": args.weight_format,
+        "dtype": args.weight_format,
         "backup_precision": args.backup_precision,
     }
 
 
 def prepare_q_config(args):
     return {
-        "activation_format": args.quant_mode,
+        "dtype": args.quant_mode,
         "bits": 8,
         "sym": args.sym or False,
         "dataset": args.dataset,

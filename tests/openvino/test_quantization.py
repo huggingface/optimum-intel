@@ -124,7 +124,8 @@ class OVQuantizerTest(unittest.TestCase):
             dict(
                 dataset="wikitext2",
                 num_samples=1,
-                activation_format="f8e4m3",
+                dtype="f8e4m3",
+                weight_only=False,
             ),
             [
                 13,
@@ -137,8 +138,8 @@ class OVQuantizerTest(unittest.TestCase):
             OVModelForCausalLM,
             "llama",
             dict(
-                weight_quantization_config=dict(bits=4, weight_format="nf4", group_size=16),
-                full_quantization_config=dict(activation_format="f8e4m3"),
+                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, weight_only=True),
+                full_quantization_config=dict(dtype="f8e4m3", weight_only=False),
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -155,12 +156,12 @@ class OVQuantizerTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(
                     bits=4,
-                    weight_format="nf4",
+                    dtype="nf4",
                     group_size=16,
                     ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
                 ),
                 full_quantization_config=OVQuantizationConfig(
-                    activation_format="f8e4m3", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                    dtype="f8e4m3", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
                 ),
                 ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
                 dataset="wikitext2",
@@ -335,14 +336,14 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             False,
-            dict(bits=4, weight_format="mxfp4", group_size=32),
+            dict(bits=4, dtype="mxfp4", group_size=32),
             [{"int8": 4, "f4e2m1": 20, "f8e8m0": 20}],
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
-            dict(bits=4, weight_format="nf4", group_size=32),
+            dict(bits=4, dtype="nf4", group_size=32),
             [
                 {
                     "int8": 4,
@@ -905,7 +906,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
+            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -1062,7 +1063,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
+            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
 
 class OVQuantizerQATest(unittest.TestCase):
