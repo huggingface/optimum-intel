@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
-from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
@@ -343,40 +343,44 @@ class OVExportCommand(BaseOptimumCLICommand):
                 )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
-        elif self.args.weight_format is not None:
-            # For int4 quantization if no parameter is provided, then use the default config if exists
-            if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
-                quantization_config = get_default_int4_config(self.args.model)
-            else:
-                quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-
-            if quantization_config.get("dataset", None) is not None:
-                quantization_config["trust_remote_code"] = self.args.trust_remote_code
-            ov_config = OVConfig(quantization_config=quantization_config)
         else:
-            if self.args.dataset is None:
-                raise ValueError(
-                    "Dataset is required for full quantization. Please provide it with --dataset argument."
-                )
+            if not is_nncf_available():
+                raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
 
-            if self.args.quant_mode in ["nf4_f8e4m3", "int4_f8e4m3"]:
-                wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-                weight_dtype_map = {"nf4_f8e4m3": "nf4", "int4_f8e4m3": "int4"}
-                wc_config["dtype"] = weight_dtype_map[self.args.quant_mode]
+            if self.args.weight_format is not None:
+                # For int4 quantization if no parameter is provided, then use the default config if exists
+                if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
+                    quantization_config = get_default_int4_config(self.args.model)
+                else:
+                    quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
 
-                q_config = prepare_q_config(self.args)
-                q_config["dtype"] = "f8e4m3"
-
-                quantization_config = {
-                    "weight_quantization_config": wc_config,
-                    "full_quantization_config": q_config,
-                    "num_samples": self.args.num_samples,
-                    "dataset": self.args.dataset,
-                    "trust_remote_code": self.args.trust_remote_code,
-                }
+                if quantization_config.get("dataset", None) is not None:
+                    quantization_config["trust_remote_code"] = self.args.trust_remote_code
+                ov_config = OVConfig(quantization_config=quantization_config)
             else:
-                quantization_config = prepare_q_config(self.args)
-            ov_config = OVConfig(quantization_config=quantization_config)
+                if self.args.dataset is None:
+                    raise ValueError(
+                        "Dataset is required for full quantization. Please provide it with --dataset argument."
+                    )
+
+                if self.args.quant_mode in ["nf4_f8e4m3", "int4_f8e4m3"]:
+                    wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
+                    weight_dtype_map = {"nf4_f8e4m3": "nf4", "int4_f8e4m3": "int4"}
+                    wc_config["dtype"] = weight_dtype_map[self.args.quant_mode]
+
+                    q_config = prepare_q_config(self.args)
+                    q_config["dtype"] = "f8e4m3"
+
+                    quantization_config = {
+                        "weight_quantization_config": wc_config,
+                        "full_quantization_config": q_config,
+                        "num_samples": self.args.num_samples,
+                        "dataset": self.args.dataset,
+                        "trust_remote_code": self.args.trust_remote_code,
+                    }
+                else:
+                    quantization_config = prepare_q_config(self.args)
+                ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
