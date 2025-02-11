@@ -2342,6 +2342,8 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
     ):
         if processor is None:
             raise ValueError("processor is required")
+        if image is None:
+            return processor(text=text, return_tensors="pt")
         processed_inputs = processor.format_and_preprocess_phrase_grounding_input(
             frontal_image=image,
             phrase=text,

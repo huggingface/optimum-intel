@@ -91,6 +91,7 @@ MODEL_NAMES = {
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",
     "opt_gptq": "ybelkada/opt-125m-gptq-4bit",
+    "maira2": "katuni4ka/tiny-random-maira2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
