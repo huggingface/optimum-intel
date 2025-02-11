@@ -603,6 +603,125 @@ def _gpt2_block_forward(
     return outputs  # hidden_states, present, (attentions, cross_attentions)
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/qwen2/modeling_qwen2.py#L499
+def _qwen2_model_forward(
+    self,
+    input_ids: torch.LongTensor = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> Union[Tuple, BaseModelOutputWithPast]:
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    use_cache = use_cache if use_cache is not None else self.config.use_cache
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    if (input_ids is None) ^ (inputs_embeds is not None):
+        raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+    if self.gradient_checkpointing and self.training and use_cache:
+        logger.warning_once("`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.")
+        use_cache = False
+
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+
+    batch_size, seq_length = inputs_embeds.shape[:2]
+
+    past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    if cache_position is None:
+        cache_position = torch.arange(
+            past_key_values_length, past_key_values_length + inputs_embeds.shape[1], device=inputs_embeds.device
+        )
+
+    if position_ids is None:
+        device = input_ids.device if input_ids is not None else inputs_embeds.device
+        position_ids = torch.arange(
+            past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+        )
+        position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
+
+    causal_mask = self._update_causal_mask(
+        attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+    )
+
+    hidden_states = inputs_embeds
+
+    # create position embeddings to be shared across the decoder layers
+    position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+
+    if past_key_values_length == 0 and past_key_values is not None:
+        # first token, remove the padding from hidden_states, varlen do not accept attention mask
+        hidden_states_copy = hidden_states
+        index = attention_mask.view(-1) != 0
+        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+        cos = position_embeddings[0]
+        sin = position_embeddings[1]
+        cos = (cos.reshape(-1, cos.shape[-1]))[index]
+        sin = (sin.reshape(-1, sin.shape[-1]))[index]
+        position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    else:
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+
+    if past_key_values is None:
+        attention_mask = causal_mask
+
+    # decoder layers
+    all_hidden_states = () if output_hidden_states else None
+    all_self_attns = () if output_attentions else None
+
+    for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_values,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            input_lens=input_lens,
+            **kwargs,
+        )
+
+        hidden_states = layer_outputs[0]
+
+        if output_attentions:
+            all_self_attns += (layer_outputs[1],)
+
+    hidden_states = self.norm(hidden_states)
+
+    if hidden_states.shape[0] != batch_size * seq_length:
+        (hidden_states_copy.view(-1, hidden_states.shape[-1]))[attention_mask.view(-1) != 0] = hidden_states
+        hidden_states = hidden_states_copy
+    hidden_states = hidden_states.view(batch_size, -1, hidden_states.shape[-1])
+    # add hidden states from the last decoder layer
+    if output_hidden_states:
+        all_hidden_states += (hidden_states,)
+
+    output = BaseModelOutputWithPast(
+        last_hidden_state=hidden_states,
+        past_key_values=past_key_values if use_cache else None,
+        hidden_states=all_hidden_states,
+        attentions=all_self_attns,
+    )
+    return output if return_dict else output.to_tuple()
+
+
 class _IPEXAttention(nn.Module):
     def __init__(self, module, config) -> None:
         super().__init__()
@@ -618,8 +737,10 @@ class _IPEXAttention(nn.Module):
     def qkv_gemm(self, hidden_states):
         raise NotImplementedError("Need to implement in specific model class")
 
-    def rope(self, *args, **kwargs):
-        raise NotImplementedError("Need to implement in specific model class")
+    def rope(self, query, key, **kwargs):
+        position_embeddings = kwargs.pop("position_embeddings", None)
+        rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
+        return query, key
 
     def postprocess_attention_output(self, attn_output):
         if self.use_sdpa:
@@ -748,13 +869,13 @@ class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         super().__init__(module, config)
         concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
-        bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias]
+        bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias is not None]
         use_bias = bias_list != []
         self.concat_qkv = nn.Linear(concat_weight.shape[1], concat_weight.shape[0], bias=use_bias)
         self.concat_qkv.weight = nn.Parameter(concat_weight)
         if use_bias:
             concat_bias = torch.concat(bias_list, 0).contiguous()
-            self.concat_linear.bias = nn.Parameter(concat_bias)
+            self.concat_qkv.bias = nn.Parameter(concat_bias)
         self.q_slice = self.q_proj.weight.shape[0]
         self.k_slice = self.q_slice + self.k_proj.weight.shape[0]
         self.v_slice = self.k_slice + self.v_proj.weight.shape[0]
@@ -773,11 +894,6 @@ class _IPEXLlamaAttention(_IPEXAttention):
         value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
 
         return query, key, value
-
-    def rope(self, query, key, **kwargs):
-        position_embeddings = kwargs.pop("position_embeddings", None)
-        rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
-        return query, key
 
 
 class _IPEXFalconAttention(_IPEXAttention):
@@ -800,11 +916,6 @@ class _IPEXFalconAttention(_IPEXAttention):
             key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
             value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
         return query, key, value
-
-    def rope(self, query, key, **kwargs):
-        position_embeddings = kwargs.pop("position_embeddings", None)
-        rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
-        return query, key
 
 
 class _IPEXGPT2Attention(_IPEXAttention):
@@ -1004,6 +1115,12 @@ class _IPEXFalconDecoderLayer(nn.Module):
             outputs += (present,)
 
         return outputs
+
+
+# Currently can just apply llama decoder layer.
+class _IPEXQwen2DecoderLayer(_IPEXLlamaDecoderLayer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.41.2/src/transformers/models/bert/modeling_bert.py#L524
