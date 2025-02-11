@@ -345,3 +345,13 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
     if tokenizer_chat_template is not None and tokenizer_chat_template in COMPLEX_CHAT_TEMPLATES:
         ov_tokenizer_model.set_rt_info(COMPLEX_CHAT_TEMPLATES[tokenizer_chat_template], "simplified_chat_template")
     return ov_tokenizer_model
+
+
+
+SKIP_CHECK_TRACE_MODELS = ("deepseek", "deepseek-v2", "deepseek-v3")
+
+
+def allow_skip_tracing_check(model):
+    config = getattr(model, "config", {})
+    model_type = getattr(config, "model_type", "").replace("_", "-")
+    return model_type in SKIP_CHECK_TRACE_MODELS

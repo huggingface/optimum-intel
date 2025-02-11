@@ -67,6 +67,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
+    allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
     save_config,
@@ -437,7 +438,7 @@ def export_pytorch(
             patcher.patched_forward = ts_patched_forward
 
             ts_decoder_kwargs = {}
-            if is_openvino_version(">=", "2025.0"):
+            if library_name == "diffusers" or allow_skip_tracing_check(model) and is_openvino_version(">=", "2025.0"):
                 ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
             with patcher:
