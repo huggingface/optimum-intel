@@ -128,7 +128,7 @@ def _patch_qwen2_model(model):
     """
     convert_functions(model, Qwen2Model, "forward", _qwen2_model_forward)
     convert_functions(model, Qwen2RMSNorm, "forward", _ipex_rms_layer_norm_forward)
-    convert_class(model, Qwen2DecoderLayer, _IPEXQwen2DecoderLayer, model.config)
+    convert_class(model, Qwen2DecoderLayer, _IPEXQwen2DecoderLayer, model.device, model.config)
     return model
 
 
