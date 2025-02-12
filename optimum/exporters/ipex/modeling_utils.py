@@ -825,7 +825,7 @@ class _IPEXLlamaAttention(_IPEXAttention):
         super().__init__(module, device, config)
         if getattr(config, "quantization_config", None) is None:
             concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
-            bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias]
+            bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias is not None]
             use_bias = bias_list != []
             self.concat_qkv = nn.Linear(concat_weight.shape[1], concat_weight.shape[0], bias=use_bias)
             self.concat_qkv.weight = nn.Parameter(concat_weight)
