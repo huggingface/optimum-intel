@@ -1093,6 +1093,7 @@ class _IPEXFalconDecoderLayer(nn.Module):
 
         return outputs
 
+
 class _IPEXGPT2Block(nn.Module):
     def __init__(self, module, device, config):
         super().__init__()
