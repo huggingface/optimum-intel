@@ -294,8 +294,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 dst_path = save_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.save_model(model.model, dst_path, compress_to_fp16=False)
-                model_dir = model.config.get("_name_or_path", None) or model.model_save_dir
-                config_path = Path(model_dir) / CONFIG_NAME
+                model_dir = self.config.get("_name_or_path", None) or model.model_save_dir
+                config_path = Path(model_dir) / save_path.name / CONFIG_NAME
                 if config_path.is_file():
                     config_save_path = save_path / CONFIG_NAME
                     shutil.copyfile(config_path, config_save_path)
