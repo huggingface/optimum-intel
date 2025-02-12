@@ -243,8 +243,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "distilgpt2",
         "mpt",
         "opt",
+        "qwen2",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "falcon", "gpt2")
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "falcon", "gpt2", "qwen2")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
