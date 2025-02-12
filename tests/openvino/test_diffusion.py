@@ -359,6 +359,13 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                     self.assertTrue(model_lib in ["diffusers", "transformers"])
                     self.assertFalse(model_class.startswith("OV"))
             loaded_pipeline = self.OVMODEL_CLASS.from_pretrained(tmpdirname)
+            for component in ["text_encoder", "unet", "vae_encoder", "vae_decoder"]:
+                config = getattr(getattr(ov_pipeline, component), "config", None)
+                if config is not None:
+                    loaded_config = getattr(getattr(loaded_pipeline, component), "config")
+                    self.assertDictEqual(
+                        config, loaded_config, f"Expected config:\n{config}\nLoaded config:|n{loaded_config}"
+                    )
             self.assertTrue(loaded_pipeline.safety_checker is not None)
             self.assertIsInstance(loaded_pipeline.safety_checker, StableDiffusionSafetyChecker)
             del loaded_pipeline
