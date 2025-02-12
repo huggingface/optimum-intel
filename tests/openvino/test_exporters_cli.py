@@ -149,36 +149,48 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation",
             "llama",
             "nf4_f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
             [
-                13,
+                14,
             ],
             [
-                {"int8": 4, "nf4": 14},
+                {"f8e4m3": 11, "nf4": 5},
+            ],
+        ),
+        (
+            "text-generation",
+            "llama",
+            "nf4_f8e5m2",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
+            [
+                14,
+            ],
+            [
+                {"f8e5m2": 11, "nf4": 5},
             ],
         ),
         (
             "text-generation",
             "llama",
             "int4_f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
             [
-                13,
+                14,
             ],
             [
-                {"int8": 4, "int4": 28},
+                {"f8e4m3": 11, "int4": 5},
             ],
         ),
         (
             "text-generation",
             "llama",
-            "int4_f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --group-size 16 --trust-remote-code --sym",
+            "int4_f8e5m2",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
             [
                 13,
             ],
             [
-                {"int8": 4, "int4": 14},
+                {"f8e5m2": 2, "int4": 28},
             ],
         ),
     ]

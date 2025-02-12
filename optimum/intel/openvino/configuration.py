@@ -483,6 +483,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
 
+        if self.dtype in ["int4", "int8"]:
+            self.bits = 4 if self.dtype == "int4" else 8
+
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
 
@@ -895,15 +898,24 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         """
         if isinstance(weight_quantization_config, dict):
             weight_quantization_config = OVWeightQuantizationConfig.from_dict(weight_quantization_config)
+        else:
+            weight_quantization_config = weight_quantization_config.clone()
         self.weight_quantization_config = weight_quantization_config
+        wqc = self.weight_quantization_config
 
         if isinstance(full_quantization_config, dict):
             full_quantization_config = OVQuantizationConfig.from_dict(full_quantization_config)
+        else:
+            full_quantization_config = full_quantization_config.clone()
         self.full_quantization_config = full_quantization_config
+        fqc = self.full_quantization_config
+
+        if fqc.dtype in ["f8e4m3", "f8e5m2"] and wqc.backup_precision is None:
+            # TODO: remove once there is support for FP8 weight compression in NNCF
+            wqc.backup_precision = "none"
 
         # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
         # in case user sets those parameters inside child configs only.
-        wqc, fqc = self.weight_quantization_config, self.full_quantization_config
         num_samples = max((num_samples or 0, wqc.num_samples or 0, fqc.num_samples or 0)) or None
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer

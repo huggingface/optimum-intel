@@ -138,16 +138,16 @@ class OVQuantizerTest(unittest.TestCase):
             OVModelForCausalLM,
             "llama",
             dict(
-                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, weight_only=True),
+                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, weight_only=True, ratio=0.5),
                 full_quantization_config=dict(dtype="f8e4m3", weight_only=False),
                 dataset="wikitext2",
                 num_samples=1,
             ),
             [
-                13,
+                14,
             ],
             [
-                {"int8": 4, "nf4": 14},
+                {"f8e4m3": 11, "nf4": 5},
             ],
         ),
         (
@@ -158,6 +158,7 @@ class OVQuantizerTest(unittest.TestCase):
                     bits=4,
                     dtype="nf4",
                     group_size=16,
+                    ratio=0.5,
                     ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
                 ),
                 full_quantization_config=OVQuantizationConfig(
@@ -171,7 +172,48 @@ class OVQuantizerTest(unittest.TestCase):
                 7,
             ],
             [
-                {"int8": 4, "f8e4m3": 4, "nf4": 6},
+                {"f8e4m3": 8, "nf4": 2},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    bits=4,
+                    dtype="nf4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e5m2", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                7,
+            ],
+            [
+                {"f8e5m2": 8, "nf4": 2},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16, ratio=0.5),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e4m3"),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                14,
+            ],
+            [
+                {"f8e4m3": 11, "int4": 10},
             ],
         ),
         (
@@ -179,7 +221,7 @@ class OVQuantizerTest(unittest.TestCase):
             "llama",
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16),
-                full_quantization_config=OVQuantizationConfig(dtype="f8e4m3"),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e5m2"),
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -187,7 +229,7 @@ class OVQuantizerTest(unittest.TestCase):
                 13,
             ],
             [
-                {"int8": 4, "int4": 28},
+                {"f8e5m2": 2, "int4": 28},
             ],
         ),
     ]
