@@ -980,23 +980,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
-            "gemma2",
             "olmo",
             "stablelm",
             "starcoder2",
             "dbrx",
-            "phi3",
             "cohere",
             "qwen2",
             "qwen2-moe",
             "arctic",
-            "exaone",
-            "mistral-nemo",
-            "minicpm3",
-            "glm",
-            "granite",
-            "granite-moe",
         )
+
+    if is_transformers_version(">=", "4.41.0"):
+        SUPPORTED_ARCHITECTURES += ("phi3",)
+
+    if is_transformers_version(">=", "4.43.0"):
+        SUPPORTED_ARCHITECTURES += ("gemma2", "exaone")
+
+    if is_transformers_version(">=", "4.44.0"):
+        SUPPORTED_ARCHITECTURES += ("granite", "granite-moe")
+
+    if is_transformers_version(">=", "4.46.0"):
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3")
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
