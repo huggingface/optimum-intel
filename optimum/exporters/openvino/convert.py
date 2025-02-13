@@ -851,7 +851,7 @@ def export_tokenizer(
 
     if (
         task is not None
-        and (task.startswith("text-generation") or task.startswith("image-text-to-text"))
+        and (task.startswith("text-generation") or task == "image-text-to-text")
         and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0")
     ):
         logger.info(f"Set tokenizer padding side to left for `{task}` task.")
