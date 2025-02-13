@@ -422,20 +422,105 @@ class OVCLIExportTestCase(unittest.TestCase):
             else:
                 rt_info_chat_template = tokenizer_model.get_rt_info("chat_template")
                 if not model_test_config.get("processor_chat_template"):
-                    ref_chat_template = AutoTokenizer.from_pretrained(
-                        tmpdir, trust_remote_code=remote_code
-                    ).chat_template
+                    tokenizer = AutoTokenizer.from_pretrained(tmpdir, trust_remote_code=remote_code)
                 else:
-                    ref_chat_template = AutoProcessor.from_pretrained(
-                        tmpdir, trust_remote_code=remote_code
-                    ).chat_template
-                self.assertEqual(rt_info_chat_template, ref_chat_template)
+                    tokenizer = AutoProcessor.from_pretrained(tmpdir, trust_remote_code=remote_code)
+                ref_chat_template = tokenizer.chat_template
+                self.assertEqual(rt_info_chat_template.value, ref_chat_template)
                 if not model_test_config.get("simplified_chat_template", False):
                     self.assertFalse(tokenizer_model.has_rt_info("simplified_chat_template"))
                 else:
-                    simplified_rt_chat_template = tokenizer_model.get_rt_info("simplified_chat_template")
+                    simplified_rt_chat_template = tokenizer_model.get_rt_info("simplified_chat_template").value
                     self.assertTrue(rt_info_chat_template in COMPLEX_CHAT_TEMPLATES)
-                    self.assertEqual(simplified_rt_chat_template, COMPLEX_CHAT_TEMPLATES[rt_info_chat_template])
+                    self.assertEqual(simplified_rt_chat_template, COMPLEX_CHAT_TEMPLATES[rt_info_chat_template.value])
+                    # there are some difference in content key for conversation templates, simplified templates align to use common
+                    if "llava" not in model_type:
+                        origin_history_messages = [
+                            {
+                                "role": "system",
+                                "content": "You are a friendly chatbot who always responds in the style of a pirate",
+                            },
+                            {"role": "user", "content": "How many helicopters can a human eat in one sitting?"},
+                            {
+                                "role": "assistant",
+                                "content": " There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                            },
+                            {"role": "user", "content": "Why is it not recommended?"},
+                        ]
+                    else:
+                        origin_history_messages = [
+                            {
+                                "role": "system",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "You are a friendly chatbot who always responds in the style of a pirate",
+                                    }
+                                ],
+                            },
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "How many helicopters can a human eat in one sitting?"}
+                                ],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                                    }
+                                ],
+                            },
+                            {"role": "user", "content": [{"type": "text", "text": "Why is it not recommended?"}]},
+                        ]
+                    history_messages = [
+                        {
+                            "role": "system",
+                            "content": "You are a friendly chatbot who always responds in the style of a pirate",
+                        },
+                        {"role": "user", "content": "How many helicopters can a human eat in one sitting?"},
+                        {
+                            "role": "assistant",
+                            "content": "There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                        },
+                        {"role": "user", "content": "Why is it not recommended?"},
+                    ]
+                    reference_input_text_no_gen_prompt = tokenizer.apply_chat_template(
+                        origin_history_messages,
+                        add_generation_prompt=False,
+                        chat_template=ref_chat_template,
+                        tokenize=False,
+                    )
+                    simplified_input_text_no_gen_prompt = tokenizer.apply_chat_template(
+                        history_messages,
+                        add_generation_prompt=False,
+                        chat_template=simplified_rt_chat_template,
+                        tokenize=False,
+                    )
+                    self.assertEqual(
+                        reference_input_text_no_gen_prompt,
+                        simplified_input_text_no_gen_prompt,
+                        f"Expected text:\n{reference_input_text_no_gen_prompt}\nSimplified text:\n{simplified_input_text_no_gen_prompt}",
+                    )
+                    reference_input_text_gen_prompt = tokenizer.apply_chat_template(
+                        origin_history_messages,
+                        chat_template=ref_chat_template,
+                        add_generation_prompt=True,
+                        tokenize=False,
+                    )
+                    simplified_input_text_gen_prompt = tokenizer.apply_chat_template(
+                        history_messages,
+                        add_generation_prompt=True,
+                        chat_template=simplified_rt_chat_template,
+                        tokenize=False,
+                    )
+                    self.assertEqual(
+                        reference_input_text_gen_prompt,
+                        simplified_input_text_gen_prompt,
+                        f"Expected text:\n{reference_input_text_gen_prompt}\nSimplified text:\n{simplified_input_text_gen_prompt}",
+                    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
