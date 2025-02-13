@@ -2331,11 +2331,33 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if image is None:
+            return processor(text=text, return_tensors="pt")
+        processed_inputs = processor.format_and_preprocess_phrase_grounding_input(
+            frontal_image=image,
+            phrase=text,
+            return_tensors="pt",
+        )
+        return processed_inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
+    "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,

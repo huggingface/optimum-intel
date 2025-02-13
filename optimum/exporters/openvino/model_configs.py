@@ -1488,6 +1488,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
         float_dtype: str = "fp32",
         behavior: LlavaConfigBehavior = LlavaConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
+        **kwargs,
     ):
         super().__init__(
             config=config,
@@ -1582,6 +1583,14 @@ class LlavaOpenVINOConfig(OnnxConfig):
 @register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
+
+
+@register_in_tasks_manager(
+    "maira2", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class MairaOpenVINOConfig(LlavaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.46.0")
+    SUPPORTS_PAST = True
 
 
 class InternVLChatConfigBehavior(str, enum.Enum):
