@@ -442,7 +442,7 @@ def main_export(
             logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
         preprocessors = load_preprocessors(
-            model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+            model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
 
         submodel_paths = export_from_model(
