@@ -14,6 +14,7 @@
 
 import enum
 import importlib
+import math
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -2862,8 +2863,15 @@ class JanusDummyVisionGenInputGenerator(DummyInputGenerator):
                 dtype=int_dtype,
             )
         if input_name == "code_b":
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/janus/models/vq_model.py#L42
+            z_channels = getattr(self.normalized_config.config.params, "z_channels", 256)
+            patch_size = int(math.sqrt(z_channels))
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/generation_inference.py#L63
+            generated_image_size = getattr(self.normalized_config.config.params, "img_size", 384)
+            latent_heigh = int(generated_image_size // patch_size)
+            latent_width = int(generated_image_size // patch_size)
             return self.random_int_tensor(
-                [self.batch_size, 576],
+                [self.batch_size, int(latent_heigh * latent_width)],
                 max_value=self.normalized_config.config.params.image_token_size,
                 framework=framework,
                 dtype=int_dtype,
@@ -2871,8 +2879,17 @@ class JanusDummyVisionGenInputGenerator(DummyInputGenerator):
         if input_name == "image_shape":
             import torch
 
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/janus/models/vq_model.py#L42
+            z_channels = getattr(self.normalized_config.config.params, "z_channels", 256)
+            patch_size = int(math.sqrt(z_channels))
+            # default value from https://github.com/deepseek-ai/Janus/blob/1daa72fa409002d40931bd7b36a9280362469ead/generation_inference.py#L63
+            generated_image_size = getattr(self.normalized_config.config.params, "img_size", 384)
+            latent_heigh = int(generated_image_size // patch_size)
+            latent_width = int(generated_image_size // patch_size)
+
             return torch.tensor(
-                [self.batch_size, self.normalized_config.config.params.n_embed, 24, 24], dtype=torch.int64
+                [self.batch_size, self.normalized_config.config.params.n_embed, latent_heigh, latent_width],
+                dtype=torch.int64,
             )
         if input_name == "hidden_state":
             return self.random_float_tensor(
