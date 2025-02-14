@@ -1014,7 +1014,6 @@ def _weight_only_quantization(
     model: openvino.runtime.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
-    remove_kv_cache_precision_flag: Optional[bool] = True,
     **kwargs,
 ) -> openvino.runtime.Model:
     _verify_not_optimized(model)
@@ -1043,13 +1042,7 @@ def _weight_only_quantization(
         **wc_kwargs,
     )
 
-    if remove_kv_cache_precision_flag:
-        # Remove the KV cache compression disabling flag from the model
-        if compressed_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
-            prev_rt_info = compressed_model.get_rt_info("runtime_options").value
-            if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
-                prev_rt_info.pop("KV_CACHE_PRECISION")
-                compressed_model.set_rt_info(prev_rt_info, "runtime_options")
+    _remove_f16_kv_cache_precision_flag(compressed_model)
 
     return compressed_model
 
@@ -1065,11 +1058,11 @@ def _full_quantization(
         _verify_not_optimized(model)
     q_kwargs = copy.deepcopy(kwargs)
     q_kwargs.update(quantization_config.to_nncf_dict())
-    return nncf.quantize(
-        model,
-        calibration_dataset=calibration_dataset,
-        **q_kwargs,
-    )
+    quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
+
+    _remove_f16_kv_cache_precision_flag(quantized_model)
+
+    return quantized_model
 
 
 def _get_operation_const_op(operation, const_port_id: int):
@@ -1201,9 +1194,7 @@ def _mixed_quantization(
     wc_config = quantization_config.weight_quantization_config.clone()
     wc_config.ignored_scope = merge_ignored_scopes(wc_config.ignored_scope, quantization_config.ignored_scope)
     wc_dataset = dataset if wc_config.bits != 8 else None
-    compressed_model = _weight_only_quantization(
-        model, wc_config, wc_dataset, remove_kv_cache_precision_flag=False, **kwargs
-    )
+    compressed_model = _weight_only_quantization(model, wc_config, wc_dataset, **kwargs)
 
     q_config = quantization_config.full_quantization_config.clone()
     q_config.ignored_scope = merge_ignored_scopes(q_config.ignored_scope, quantization_config.ignored_scope)
@@ -1227,3 +1218,13 @@ def _verify_not_optimized(ov_model):
             raise RuntimeError(message_template.format(model_weight_compression_config))
         elif model_quantization_config is not None:
             raise RuntimeError(message_template.format(model_quantization_config))
+
+
+def _remove_f16_kv_cache_precision_flag(model: openvino.Model) -> openvino.Model:
+    # Remove the KV cache compression disabling flag from the model
+    if model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
+        prev_rt_info = model.get_rt_info("runtime_options").value
+        if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
+            prev_rt_info.pop("KV_CACHE_PRECISION")
+            model.set_rt_info(prev_rt_info, "runtime_options")
+    return model

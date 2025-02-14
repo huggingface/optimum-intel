@@ -507,14 +507,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 submodels = [model.encoder, model.decoder]
                 if model.decoder_with_past is not None:
                     submodels.append(model.decoder_with_past)
-                    expected_kv_cache_precision_per_model = [None, None, None]
                 else:
                     expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
                     expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
-                    expected_kv_cache_precision_per_model = [None, "f16"]
             elif "text-generation" in task:
                 submodels = [model]
-                expected_kv_cache_precision_per_model = ["f16"]
             else:
                 raise Exception("Unexpected task.")
 
@@ -523,7 +520,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                 submodels,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
-                expected_kv_cache_precision_per_model,
             )
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):

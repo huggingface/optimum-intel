@@ -295,12 +295,10 @@ def check_compression_state_per_model(
     models: List[Union[ov.Model, OVBaseModel]],
     expected_num_weight_nodes_per_model: List[Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[List[int]] = None,
-    expected_kv_cache_precision_per_model: Optional[List[Union[str, None]]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = [{}] * len(models)
     actual_num_fake_nodes_per_model = [0] * len(models)
-    actual_kv_cache_precision_per_model = [None] * len(models)
     for i, (submodel, expected_num_weight_nodes) in enumerate(zip(models, expected_num_weight_nodes_per_model)):
         ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
@@ -309,11 +307,7 @@ def check_compression_state_per_model(
         actual_num_weights_per_model[i] = num_weight_nodes
         actual_num_fake_nodes_per_model[i] = num_fake_nodes
 
-        if ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
-            actual_kv_cache_precision = ov_model.get_rt_info(["runtime_options", "KV_CACHE_PRECISION"]).value
-        else:
-            actual_kv_cache_precision = None
-        actual_kv_cache_precision_per_model[i] = actual_kv_cache_precision
+        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
@@ -321,7 +315,3 @@ def check_compression_state_per_model(
     # Check fake nodes
     if expected_num_fake_nodes_per_model is not None:
         test_case.assertEqual(expected_num_fake_nodes_per_model, actual_num_fake_nodes_per_model)
-
-    # Check KV cache precision
-    expected_kv_cache_precision_per_model = expected_kv_cache_precision_per_model or ([None] * len(models))
-    test_case.assertEqual(expected_kv_cache_precision_per_model, actual_kv_cache_precision_per_model)

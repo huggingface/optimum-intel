@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 import torch
 from transformers.utils.quantization_config import QuantizationConfigMixin
@@ -571,9 +571,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             mode = "e2m1"
         mode = nncf.CompressWeightsMode(mode)
 
-        awq = None
-        if self.quant_method == "awq" or self.quant_method == OVQuantizationMethod.AWQ:
-            awq = True
+        awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
         result = {
@@ -896,21 +894,22 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
                 machine arbitrary code present in the model repository.
             **kwargs:
         """
-        if isinstance(weight_quantization_config, dict):
-            weight_quantization_config = OVWeightQuantizationConfig.from_dict(weight_quantization_config)
-        else:
-            weight_quantization_config = weight_quantization_config.clone()
-        self.weight_quantization_config = weight_quantization_config
+        self.weight_quantization_config = self._initialize_quantization_config(
+            weight_quantization_config, OVWeightQuantizationConfig
+        )
         wqc = self.weight_quantization_config
 
-        if isinstance(full_quantization_config, dict):
-            full_quantization_config = OVQuantizationConfig.from_dict(full_quantization_config)
-        else:
-            full_quantization_config = full_quantization_config.clone()
-        self.full_quantization_config = full_quantization_config
+        self.full_quantization_config = self._initialize_quantization_config(
+            full_quantization_config, OVQuantizationConfig
+        )
         fqc = self.full_quantization_config
 
         if fqc.dtype in ["f8e4m3", "f8e5m2"] and wqc.backup_precision is None:
+            # Here we simulate FP8 backup weight compression precision through full quantization: during weight
+            # compression step some weighted layers are kept in original precision and later are compressed to FP8
+            # during full precision quantization step.
+            # The issue with current approach is that if one provides an ignored scope for the full quantization step,
+            # then the weights of the layers under this ignored scope won't be compressed to FP8.
             # TODO: remove once there is support for FP8 weight compression in NNCF
             wqc.backup_precision = "none"
 
@@ -931,6 +930,21 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         )
 
         self.post_init()
+
+    @staticmethod
+    def _initialize_quantization_config(
+        config: Union[dict, OVWeightQuantizationConfig, OVQuantizationConfig],
+        config_type: Type[Union[OVWeightQuantizationConfig, OVQuantizationConfig]],
+    ):
+        if isinstance(config, dict):
+            return config_type.from_dict(config)
+        elif isinstance(config, config_type):
+            return config.clone()
+        else:
+            raise ValueError(
+                f"Unsupported type of quantization config. Expected either a dictionary or an instance of "
+                f"{config_type}, but found: {type(config)}."
+            )
 
     def to_dict(self):
         result = super().to_dict()
