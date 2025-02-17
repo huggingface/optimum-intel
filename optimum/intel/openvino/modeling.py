@@ -174,9 +174,9 @@ class OVModelForSequenceClassification(OVModel):
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
-            input_ids = np.array(input_ids)
-            attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+            input_ids = input_ids.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy()
+            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -239,9 +239,9 @@ class OVModelForQuestionAnswering(OVModel):
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
-            input_ids = np.array(input_ids)
-            attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+            input_ids = input_ids.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy()
+            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -308,9 +308,9 @@ class OVModelForTokenClassification(OVModel):
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
-            input_ids = np.array(input_ids)
-            attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+            input_ids = input_ids.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy()
+            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -379,9 +379,9 @@ class OVModelForFeatureExtraction(OVModel):
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
-            input_ids = np.array(input_ids)
-            attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+            input_ids = input_ids.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy()
+            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -448,9 +448,9 @@ class OVModelForMaskedLM(OVModel):
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
-            input_ids = np.array(input_ids)
-            attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+            input_ids = input_ids.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy()
+            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -581,7 +581,7 @@ class OVModelForImageClassification(OVModel):
 
         np_inputs = isinstance(pixel_values, np.ndarray)
         if not np_inputs:
-            pixel_values = np.array(pixel_values)
+            pixel_values = pixel_values.cpu().numpy()
 
         inputs = {
             "pixel_values": pixel_values,
@@ -640,8 +640,8 @@ class OVModelForAudioClassification(OVModel):
 
         np_inputs = isinstance(input_values, np.ndarray)
         if not np_inputs:
-            input_values = np.array(input_values)
-            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+            input_values = input_values.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
 
         inputs = {
             "input_values": input_values,
@@ -711,8 +711,8 @@ class OVModelForCTC(OVModel):
     ):
         np_inputs = isinstance(input_values, np.ndarray)
         if not np_inputs:
-            input_values = np.array(input_values)
-            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+            input_values = input_values.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
 
         inputs = {
             "input_values": input_values,
@@ -791,8 +791,8 @@ class OVModelForAudioXVector(OVModel):
     ):
         np_inputs = isinstance(input_values, np.ndarray)
         if not np_inputs:
-            input_values = np.array(input_values)
-            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+            input_values = input_values.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
 
         inputs = {
             "input_values": input_values,
@@ -867,8 +867,8 @@ class OVModelForAudioFrameClassification(OVModel):
     ):
         np_inputs = isinstance(input_values, np.ndarray)
         if not np_inputs:
-            input_values = np.array(input_values)
-            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+            input_values = input_values.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
 
         inputs = {
             "input_values": input_values,
@@ -929,7 +929,7 @@ class OVModelForCustomTasks(OVModel):
         np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
         inputs = {}
         for input_name in self.input_names:
-            inputs[input_name] = np.array(kwargs.pop(input_name)) if not np_inputs else kwargs.pop(input_name)
+            inputs[input_name] = kwargs.pop(input_name).cpu().numpy() if not np_inputs else kwargs.pop(input_name)
 
         outputs = self._inference(inputs)
         model_outputs = {}

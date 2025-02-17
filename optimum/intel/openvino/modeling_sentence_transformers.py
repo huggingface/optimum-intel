@@ -43,9 +43,9 @@ class OVSentenceTransformer(OVModel):
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
-            input_ids = np.array(input_ids)
-            attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+            input_ids = input_ids.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy()
+            token_type_ids = token_type_ids.cpu().numpy() if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
