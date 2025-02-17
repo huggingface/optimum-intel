@@ -132,10 +132,11 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
-        "transformers",
-        "Qwen2_5_VLForConditionalGeneration",
-    )
+    if is_transformers_version(">", "4.48.99"):
+        TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
+            "transformers",
+            "Qwen2_5_VLForConditionalGeneration",
+        )
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]

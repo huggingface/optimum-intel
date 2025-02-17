@@ -2134,7 +2134,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
-
+    
+    if is_transformers_version(">=", "4.49.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
