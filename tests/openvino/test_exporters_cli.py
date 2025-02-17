@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -26,6 +26,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
     OVFluxFillPipeline,
     OVFluxPipeline,
@@ -109,6 +110,65 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+    }
+
+    TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
+        "gpt2": {  # transformers, no chat template, no processor
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": False,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": False,
+        },
+        "stable-diffusion": {  # diffusers, no chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-to-image",
+            "processor_chat_template": False,
+            "remote_code": False,
+            "expected_chat_template": False,
+            "simplified_chat_template": False,
+        },
+        "llava": {  # transformers, chat template in processor, simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "image-text-to-text",
+            "processor_chat_template": True,
+            "remote_code": False,
+            "expected_chat_template": True,
+            "simplified_chat_template": True,
+        },
+        "llava_next": {  # transformers, chat template in processor overrides tokinizer chat template, simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "image-text-to-text",
+            "processor_chat_template": True,
+            "simplified_chat_template": True,
+            "expected_chat_template": True,
+            "remote_code": False,
+        },
+        "minicpm3": {  # transformers, no processor, simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": True,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
+        "phi3_v": {  # transformers, no processor chat template, no simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "image-text-to-text",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
+        "glm": {  # transformers, no processor, no simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -324,6 +384,143 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
+
+    # some testing models required transformers at least 4.45 for conversion
+    @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45.0") or not is_openvino_tokenizers_available(),
+        reason="test required openvino tokenizers and transformers >= 4.45",
+    )
+    def test_exporters_cli_tokenizers_chat_template(self, model_type):
+        import openvino as ov
+
+        core = ov.Core()
+        with TemporaryDirectory() as tmpdir:
+            model_test_config = self.TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS[model_type]
+            task = model_test_config["task"]
+            model_id = MODEL_NAMES[model_type]
+            remote_code = model_test_config.get("remote_code", False)
+            cmd = f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {model_id} --task {task} {tmpdir}"
+            if remote_code:
+                cmd += " --trust-remote-code"
+            output = subprocess.check_output(
+                cmd,
+                shell=True,
+                stderr=subprocess.STDOUT,
+            ).decode()
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
+            expected_num_tokenizers = model_test_config["num_tokenizers"]
+            self.assertEqual(expected_num_tokenizers, number_of_tokenizers, output)
+            tokenizer_path = (
+                Path(tmpdir) / "openvino_tokenizer.xml"
+                if "diffusion" not in model_type
+                else Path(tmpdir) / "tokenizer/openvino_tokenizer.xml"
+            )
+            tokenizer_model = core.read_model(tokenizer_path)
+            if not model_test_config.get("expected_chat_template", False):
+                self.assertFalse(tokenizer_model.has_rt_info("chat_template"))
+            else:
+                rt_info_chat_template = tokenizer_model.get_rt_info("chat_template")
+                if not model_test_config.get("processor_chat_template"):
+                    tokenizer = AutoTokenizer.from_pretrained(tmpdir, trust_remote_code=remote_code)
+                else:
+                    tokenizer = AutoProcessor.from_pretrained(tmpdir, trust_remote_code=remote_code)
+                ref_chat_template = tokenizer.chat_template
+                self.assertEqual(rt_info_chat_template.value, ref_chat_template)
+                if not model_test_config.get("simplified_chat_template", False):
+                    self.assertFalse(tokenizer_model.has_rt_info("simplified_chat_template"))
+                else:
+                    simplified_rt_chat_template = tokenizer_model.get_rt_info("simplified_chat_template").value
+                    self.assertTrue(rt_info_chat_template in COMPLEX_CHAT_TEMPLATES)
+                    self.assertEqual(simplified_rt_chat_template, COMPLEX_CHAT_TEMPLATES[rt_info_chat_template.value])
+                    # there are some difference in content key for conversation templates, simplified templates align to use common
+                    if "llava" not in model_type:
+                        origin_history_messages = [
+                            {
+                                "role": "system",
+                                "content": "You are a friendly chatbot who always responds in the style of a pirate",
+                            },
+                            {"role": "user", "content": "How many helicopters can a human eat in one sitting?"},
+                            {
+                                "role": "assistant",
+                                "content": " There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                            },
+                            {"role": "user", "content": "Why is it not recommended?"},
+                        ]
+                    else:
+                        origin_history_messages = [
+                            {
+                                "role": "system",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "You are a friendly chatbot who always responds in the style of a pirate",
+                                    }
+                                ],
+                            },
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "How many helicopters can a human eat in one sitting?"}
+                                ],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                                    }
+                                ],
+                            },
+                            {"role": "user", "content": [{"type": "text", "text": "Why is it not recommended?"}]},
+                        ]
+                    history_messages = [
+                        {
+                            "role": "system",
+                            "content": "You are a friendly chatbot who always responds in the style of a pirate",
+                        },
+                        {"role": "user", "content": "How many helicopters can a human eat in one sitting?"},
+                        {
+                            "role": "assistant",
+                            "content": "There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                        },
+                        {"role": "user", "content": "Why is it not recommended?"},
+                    ]
+                    reference_input_text_no_gen_prompt = tokenizer.apply_chat_template(
+                        origin_history_messages,
+                        add_generation_prompt=False,
+                        chat_template=ref_chat_template,
+                        tokenize=False,
+                    )
+                    simplified_input_text_no_gen_prompt = tokenizer.apply_chat_template(
+                        history_messages,
+                        add_generation_prompt=False,
+                        chat_template=simplified_rt_chat_template,
+                        tokenize=False,
+                    )
+                    self.assertEqual(
+                        reference_input_text_no_gen_prompt,
+                        simplified_input_text_no_gen_prompt,
+                        f"Expected text:\n{reference_input_text_no_gen_prompt}\nSimplified text:\n{simplified_input_text_no_gen_prompt}",
+                    )
+                    reference_input_text_gen_prompt = tokenizer.apply_chat_template(
+                        origin_history_messages,
+                        chat_template=ref_chat_template,
+                        add_generation_prompt=True,
+                        tokenize=False,
+                    )
+                    simplified_input_text_gen_prompt = tokenizer.apply_chat_template(
+                        history_messages,
+                        add_generation_prompt=True,
+                        chat_template=simplified_rt_chat_template,
+                        tokenize=False,
+                    )
+                    self.assertEqual(
+                        reference_input_text_gen_prompt,
+                        simplified_input_text_gen_prompt,
+                        f"Expected text:\n{reference_input_text_gen_prompt}\nSimplified text:\n{simplified_input_text_gen_prompt}",
+                    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):

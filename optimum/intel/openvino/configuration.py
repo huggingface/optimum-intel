@@ -210,6 +210,14 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
 }
 
 _DEFAULT_4BIT_CONFIG = {

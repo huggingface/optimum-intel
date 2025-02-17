@@ -150,7 +150,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                attention_mask = np.array(attention_mask)
+                attention_mask = attention_mask.cpu().numpy()
             else:
                 attention_mask = np.ones((inputs_embeds.shape[0], inputs_embeds.shape[1] + past_len), dtype=int)
 
@@ -159,7 +159,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "position_ids" in self.input_names:
             if position_ids is not None:
-                position_ids = np.array(position_ids)
+                position_ids = position_ids.cpu().numpy()
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1

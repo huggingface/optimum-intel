@@ -21,8 +21,8 @@ import numpy as np
 import openvino
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from openvino import Core, Tensor, Type
 from openvino.preprocess import PrePostProcessor
-from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
@@ -492,11 +492,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
                 self._past_length = 0
         past_len = self._get_past_length(past_key_values)
-        inputs["input_ids"] = np.array(input_ids)
+        inputs["input_ids"] = input_ids.cpu().numpy()
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                attention_mask = np.array(attention_mask)
+                attention_mask = attention_mask.cpu().numpy()
             else:
                 attention_mask = np.ones(
                     (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
@@ -507,7 +507,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if "position_ids" in self.input_names:
             if position_ids is not None:
-                position_ids = np.array(position_ids)
+                position_ids = position_ids.cpu().numpy()
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
