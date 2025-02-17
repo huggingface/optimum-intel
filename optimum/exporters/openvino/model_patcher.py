@@ -3909,29 +3909,8 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
-    def __init__(
-        self,
-        config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Dict[str, Any] = None,
-    ):
-        model.__orig_forward = model.forward
-
-        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
-        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
-        # separated patch_embed and rot_pos_emb calls for performing as part of another model
-        def image_embed_forward(
-            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
-        ) -> torch.Tensor:
-            for blk in self.blocks:
-                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
-            return self.merger(hidden_states)
-
-        model.forward = types.MethodType(image_embed_forward, model)
-        super().__init__(config, model, model_kwargs)
-
-    def __enter__(self):
+def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
+    if not force_new_behaviour and is_transformers_version("<=", "4.48.99"):
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
         # added attention_mask input instead of internal calculation (unsupported by tracing due to cycle with dynamic len)
         def sdpa_attn_forward(
@@ -3976,11 +3955,161 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
             hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
             return hidden_states
 
+    else:
+
+        def sdpa_attn_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rotary_pos_emb: torch.Tensor = None,
+            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        ):
+            def rotate_half(x):
+                """Rotates half the hidden dims of the input."""
+                x1 = x[..., : x.shape[-1] // 2]
+                x2 = x[..., x.shape[-1] // 2 :]
+                return torch.cat((-x2, x1), dim=-1)
+
+            def apply_rotary_pos_emb_vision(
+                q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+            ) -> Tuple[torch.Tensor, torch.Tensor]:
+                orig_q_dtype = q.dtype
+                orig_k_dtype = k.dtype
+                q, k = q.float(), k.float()
+                cos, sin = cos.unsqueeze(-2), sin.unsqueeze(-2)
+                q_embed = (q * cos) + (rotate_half(q) * sin)
+                k_embed = (k * cos) + (rotate_half(k) * sin)
+                q_embed = q_embed.to(orig_q_dtype)
+                k_embed = k_embed.to(orig_k_dtype)
+                return q_embed, k_embed
+
+            seq_length = hidden_states.shape[0]
+            q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+            if position_embeddings is None:
+                emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+                cos = emb.cos().float()
+                sin = emb.sin().float()
+            else:
+                cos, sin = position_embeddings
+            q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+            q = q.transpose(0, 1)
+            k = k.transpose(0, 1)
+            v = v.transpose(0, 1)
+            attn_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attention_mask, dropout_p=0.0)
+            attn_output = attn_output.transpose(0, 1)
+            attn_output = attn_output.reshape(seq_length, -1)
+            attn_output = self.proj(attn_output)
+            return attn_output
+
+        def block_forward(
+            self,
+            hidden_states,
+            attention_mask,
+            rotary_pos_emb: Optional[torch.Tensor] = None,
+            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        ) -> torch.Tensor:
+            hidden_states = hidden_states + self.attn(
+                self.norm1(hidden_states),
+                attention_mask=attention_mask,
+                rotary_pos_emb=rotary_pos_emb,
+                position_embeddings=position_embeddings,
+            )
+            hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+            return hidden_states
+
+    for block in model.blocks:
+        block._orig_forward = block.forward
+        block.forward = types.MethodType(block_forward, block)
+        block.attn._orig_forward = block.attn.forward
+        block.attn.forward = types.MethodType(sdpa_attn_forward, block.attn)
+
+
+class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        def image_embed_forward(
+            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor
+        ) -> torch.Tensor:
+            for blk in self.blocks:
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+            return self.merger(hidden_states)
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
         for block in self._model.blocks:
-            block._orig_forward = block.forward
-            block.forward = types.MethodType(block_forward, block)
-            block.attn._orig_forward = block.attn.forward
-            block.attn.forward = types.MethodType(sdpa_attn_forward, block.attn)
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
+
+
+class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
+        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            window_attention_mask: torch.Tensor,
+            window_index: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+        ) -> torch.Tensor:
+            seq_len = hidden_states.shape[0]
+            hidden_states = hidden_states.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
+            hidden_states = hidden_states[window_index, :, :]
+            hidden_states = hidden_states.reshape(seq_len, -1)
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
+            rotary_pos_emb = rotary_pos_emb[window_index, :, :]
+            rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            position_embeddings = (emb.cos(), emb.sin())
+            for layer_num, blk in enumerate(self.blocks):
+                if layer_num in self.fullatt_block_indexes:
+                    attention_mask_now = attention_mask
+                else:
+                    attention_mask_now = window_attention_mask
+                hidden_states = blk(
+                    hidden_states, attention_mask=attention_mask_now, position_embeddings=position_embeddings
+                )
+
+            hidden_states = self.merger(hidden_states)
+            reverse_indices = torch.argsort(window_index)
+            hidden_states = hidden_states[reverse_indices, :]
+
+            return hidden_states
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model, force_new_behaviour=True)
+        super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
