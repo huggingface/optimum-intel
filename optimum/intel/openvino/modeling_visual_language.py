@@ -2658,8 +2658,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         window_index, cu_window_seqlens = self.get_window_index(grid_thw)
         cu_window_seqlens = torch.tensor(
             cu_window_seqlens,
-            device=hidden_states.device,
-            dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
+            dtype=torch.int32,
         )
         cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
