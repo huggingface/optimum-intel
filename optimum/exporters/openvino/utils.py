@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import importlib
 import inspect
 import logging
 from collections import namedtuple
@@ -28,7 +29,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
-from optimum.utils.save_utils import maybe_save_preprocessors
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 
 logger = logging.getLogger(__name__)
@@ -226,6 +227,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmv",
     "phi3-v",
     "qwen2-vl",
+    "multi-modality",
 ]
 
 
@@ -311,3 +313,23 @@ def save_preprocessors(
                 logger.error(f"Saving {type(processor)} failed with {ex}")
     else:
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
+
+
+def load_preprocessors(
+    src_name_or_path: Union[str, Path], subfolder: str = "", trust_remote_code: bool = False, model_type: str = None
+):
+    preprocessors = maybe_load_preprocessors(
+        src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+    )
+    if model_type == "janus":
+        if importlib.util.find_spec("janus") is not None:
+            from janus.models import VLChatProcessor
+
+            try:
+                processor = VLChatProcessor.from_pretrained(
+                    src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+                )
+                preprocessors.append(processor)
+            except Exception:
+                pass
+    return preprocessors
