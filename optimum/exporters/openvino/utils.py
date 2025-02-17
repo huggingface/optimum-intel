@@ -26,7 +26,7 @@ from openvino.runtime.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
-from optimum.intel.utils.import_utils import is_safetensors_available
+from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -350,7 +350,11 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
 SKIP_CHECK_TRACE_MODELS = ("deepseek", "deepseek-v2", "deepseek-v3")
 
 
-def allow_skip_tracing_check(model):
+def allow_skip_tracing_check(library_name, model):
+    if is_openvino_version("<", "2025.0.0"):
+        return False
+    if library_name == "diffusers":
+        return True
     config = getattr(model, "config", {})
     model_type = getattr(config, "model_type", "").replace("_", "-")
     return model_type in SKIP_CHECK_TRACE_MODELS
