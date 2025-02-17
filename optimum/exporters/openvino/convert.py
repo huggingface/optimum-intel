@@ -1025,6 +1025,9 @@ def get_diffusion_models_for_export_ext(
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
     if is_sd or is_sdxl or is_lcm:
+        tokenizer = pipeline.tokenizer_2 if is_sdxl else pipeline.tokenizer
+        model_max_length = getattr(tokenizer, "model_max_length", None)
+        pipeline.unet.config.model_max_length = model_max_length
         models_for_export = get_diffusion_models_for_export(pipeline, int_dtype, float_dtype, exporter)
         if is_sdxl and pipeline.vae.config.force_upcast:
             models_for_export["vae_encoder"][1].runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "128.0"}
