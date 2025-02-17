@@ -437,7 +437,9 @@ def export_pytorch(
             patcher.patched_forward = ts_patched_forward
 
             ts_decoder_kwargs = {}
-            if allow_skip_tracing_check(library_name, model):
+            model_config = getattr(model, "config", {})
+            model_type = getattr(model_config, "model_type", "").replace("_", "-")
+            if allow_skip_tracing_check(library_name, model_type):
                 ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
             with patcher:
