@@ -46,7 +46,7 @@ class IPEXPagedCache(Cache):
         super().__init__()
         self.max_batch_size = max_batch_size
         self.device = device
-        self.flash_decoding = (
+        self._supports_flash_decoding = (
             is_ipex_version(">", "2.4.99") if device.type == "cpu" else is_ipex_version(">", "2.5.99")
         )
         # Used in `generate` to keep tally of how many tokens the cache has seen
@@ -76,7 +76,7 @@ class IPEXPagedCache(Cache):
             key_cache_shape = (self.num_blocks, self.num_kv_heads, self.block_size, head_size)
             value_cache_shape = (self.num_blocks, self.num_kv_heads, self.block_size, head_size)
         elif device.type == "xpu":
-            if self.flash_decoding:
+            if self._supports_flash_decoding:
                 key_cache_shape = (self.num_blocks, self.block_size, self.num_kv_heads, head_size)
                 value_cache_shape = (self.num_blocks, self.block_size, self.num_kv_heads, head_size)
             else:
@@ -96,7 +96,8 @@ class IPEXPagedCache(Cache):
         value_cache: torch.Tensor,
         slots: torch.Tensor,
     ):
-        if self.device.type == "xpu" and self.flash_decoding:
+        # TODO: unify API definition between CPU and XPU in IPEX version > 2.6
+        if self.device.type == "xpu" and self._supports_flash_decoding:
             PagedAttention.reshape_and_cache_flash(
                 key,
                 value,
