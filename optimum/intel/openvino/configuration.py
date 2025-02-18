@@ -444,6 +444,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.gptq = gptq
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
+        if kwargs.get("weight_format") is not None:
+            logger.warning(
+                "The `weight_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
+                "Please use `dtype` instead."
+            )
+            dtype = kwargs.get("weight_format")
         self.dtype = dtype
         self.post_init()
 
@@ -484,7 +490,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             )
 
         if self.dtype in ["int4", "int8"]:
-            self.bits = 4 if self.dtype == "int4" else 8
+            bits = 4 if self.dtype == "int4" else 8
+            if self.bits is not None and self.bits != bits:
+                logger.warning(
+                    f"Overriding `bits` parameter to the value `bits`={bits} to match the given {self.dtype} `dtype`."
+                )
+            self.bits = bits
 
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
@@ -690,6 +701,12 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
         self.smooth_quant_alpha = smooth_quant_alpha
+        if kwargs.get("activation_format") is not None:
+            logger.warning(
+                "The `activation_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
+                "Please use `dtype` instead."
+            )
+            dtype = kwargs.get("activation_format")
         self.dtype = dtype
 
         f8_dtypes = ["f8e4m3", "f8e5m2"]
@@ -778,9 +795,7 @@ class OVConfig(BaseConfig):
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, OVWeightQuantizationConfig) or isinstance(
-                self.quantization_config, OVQuantizationConfig
-            ):
+            if isinstance(self.quantization_config, (OVWeightQuantizationConfig, OVQuantizationConfig)):
                 self.dtype = self.quantization_config.dtype
             elif isinstance(self.quantization_config, OVMixedQuantizationConfig):
                 wc_dtype = self.quantization_config.weight_quantization_config.dtype

@@ -250,11 +250,9 @@ class OVBaseModel(OptimizedModel):
 
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
-            if not isinstance(quantization_config, dict) and not isinstance(
-                quantization_config, OVWeightQuantizationConfig
-            ):
-                raise RuntimeError(
-                    "Expected quantization_config to be a dictionary or OVWeightQuantizationConfig object."
+            if not isinstance(quantization_config, (dict, OVWeightQuantizationConfig)):
+                raise TypeError(
+                    f"Expected `quantization_config` to be either a dictionary or OVWeightQuantizationConfig object, got {type(quantization_config)}."
                 )
 
             model = _weight_only_quantization(model, quantization_config)
