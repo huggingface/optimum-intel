@@ -63,6 +63,7 @@ from optimum.intel import (
     OVSanaPipeline,
     OVTrainer,
     OVQuantizationConfig,
+    OVMixedQuantizationConfig,
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
     OVModelOpenCLIPForZeroShotImageClassification,
@@ -105,29 +106,131 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForSpeechSeq2Seq,
             "whisper",
-            OVQuantizationConfig(
+            dict(
                 dataset="librispeech",
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
                 trust_remote_code=True,
-                weight_only=False,
                 smooth_quant_alpha=0.95,
             ),
-            (14, 22, 21) if is_transformers_version("<=", "4.42.4") else (14, 22, 25),
-            (14, 21, 17) if is_transformers_version("<=", "4.42.4") else (14, 22, 18),
+            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+            if is_transformers_version("<=", "4.36.0")
+            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
         ),
         (
             OVModelForCausalLM,
             "llama",
-            OVQuantizationConfig(
+            dict(
                 dataset="wikitext2",
                 num_samples=1,
+                dtype="f8e4m3",
                 weight_only=False,
-                weight_format="f8e4m3",
-                activation_format="f8e4m3",
             ),
-            (13,),
-            (16,),
+            [
+                13,
+            ],
+            [
+                {"f8e4m3": 16},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            dict(
+                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, weight_only=True, ratio=0.5),
+                full_quantization_config=dict(dtype="f8e4m3", weight_only=False),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                14,
+            ],
+            [
+                {"f8e4m3": 11, "nf4": 5},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    bits=4,
+                    dtype="nf4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e4m3", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                7,
+            ],
+            [
+                {"f8e4m3": 8, "nf4": 2},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    bits=4,
+                    dtype="nf4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e5m2", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                7,
+            ],
+            [
+                {"f8e5m2": 8, "nf4": 2},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16, ratio=0.5),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e4m3"),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                14,
+            ],
+            [
+                {"f8e4m3": 11, "int4": 10},
+            ],
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e5m2"),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                13,
+            ],
+            [
+                {"f8e5m2": 2, "int4": 28},
+            ],
         ),
     ]
 
@@ -222,35 +325,31 @@ class OVQuantizerTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
     def test_ov_model_static_quantization_with_auto_dataset(
-        self, model_cls, model_name, quantization_config, expected_fake_nodes, expected_low_precision_nodes
+        self,
+        model_cls,
+        model_name,
+        quantization_config,
+        expected_fake_nodes_per_model,
+        expected_num_weight_nodes_per_model,
     ):
         model_id = MODEL_NAMES[model_name]
-        quant_mode = quantization_config.activation_format
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
             if model_cls == OVModelForSpeechSeq2Seq:
-                models = [ov_model.encoder.model, ov_model.decoder.model]
-
+                submodels = [ov_model.encoder.model, ov_model.decoder.model]
                 if ov_model.decoder_with_past is not None:
-                    models.append(ov_model.decoder_with_past.model)
-                for model, expected_fake_nodes, expected_lp_nodes in zip(
-                    models,
-                    expected_fake_nodes,
-                    expected_low_precision_nodes,
-                ):
-                    num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-                    self.assertEqual(expected_fake_nodes, num_fake_nodes)
-                    self.assertEqual(expected_lp_nodes, num_weight_nodes[quant_mode])
+                    submodels.append(ov_model.decoder_with_past.model)
+                else:
+                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
+                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
 
                 input_features = torch.randn((1, 128, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
             elif model_cls == OVModelForCausalLM:
-                num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model.model)
-                self.assertEqual(expected_fake_nodes[0], num_fake_nodes)
-                self.assertEqual(expected_low_precision_nodes[0], num_weight_nodes[quant_mode])
+                submodels = [ov_model]
 
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
@@ -260,6 +359,13 @@ class OVQuantizerTest(unittest.TestCase):
                 self.assertTrue("logits" in outputs)
             else:
                 raise Exception("Unexpected model class.")
+
+            check_compression_state_per_model(
+                self,
+                submodels,
+                expected_num_weight_nodes_per_model,
+                expected_fake_nodes_per_model,
+            )
 
 
 class OVWeightCompressionTest(unittest.TestCase):
@@ -284,14 +390,14 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             False,
-            dict(bits=4, weight_format="mxfp4", group_size=32),
+            dict(bits=4, dtype="mxfp4", group_size=32),
             [{"int8": 4, "f4e2m1": 20, "f8e8m0": 20}],
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
-            dict(bits=4, weight_format="nf4", group_size=32),
+            dict(bits=4, dtype="nf4", group_size=32),
             [
                 {
                     "int8": 4,
@@ -854,7 +960,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
+            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -1011,7 +1117,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
+            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
 
 class OVQuantizerQATest(unittest.TestCase):
@@ -1284,7 +1390,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
     @parameterized.expand(DEFAULT_CONFIGURATIONS)
     def test_named_default_configurations(self, config_id: str):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
-        prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
+        prepared_config = OVModelForCausalLM._prepare_quantization_config(custom_configuration)
         for field_name, reference_value in custom_configuration.items():
             value = prepared_config.__getattribute__(field_name)
             self.assertEqual(value, reference_value)

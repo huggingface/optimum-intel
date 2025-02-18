@@ -13,7 +13,7 @@
 #  limitations under the License.
 import unittest
 from contextlib import contextmanager
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import openvino as ov
@@ -294,14 +294,25 @@ def patch_awq_for_inference(to_patch):
 def check_compression_state_per_model(
     test_case: unittest.TestCase,
     models: List[Union[ov.Model, OVBaseModel]],
-    expected_num_weight_nodes_per_model: List[Dict],
+    expected_num_weight_nodes_per_model: List[Dict[str, int]],
+    expected_num_fake_nodes_per_model: Optional[List[int]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
-    actual_num_weights_per_model = []
-    for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
+    actual_num_weights_per_model = [{}] * len(models)
+    actual_num_fake_nodes_per_model = [0] * len(models)
+    for i, (submodel, expected_num_weight_nodes) in enumerate(zip(models, expected_num_weight_nodes_per_model)):
         ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
-        _, num_weight_nodes = get_num_quantized_nodes(ov_model)
+        num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
         expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
-        actual_num_weights_per_model.append(num_weight_nodes)
+
+        actual_num_weights_per_model[i] = num_weight_nodes
+        actual_num_fake_nodes_per_model[i] = num_fake_nodes
+
         test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+
+    # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
+
+    # Check fake nodes
+    if expected_num_fake_nodes_per_model is not None:
+        test_case.assertEqual(expected_num_fake_nodes_per_model, actual_num_fake_nodes_per_model)
