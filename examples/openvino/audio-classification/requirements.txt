@@ -1,6 +1,0 @@
-transformers>=4.36.0,<4.46.0
-datasets>=1.14.0,<2.20.0
-evaluate
-librosa
-torchaudio
-accelerate

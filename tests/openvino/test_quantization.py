@@ -61,7 +61,6 @@ from optimum.intel import (
     OVStableDiffusion3Pipeline,
     OVQuantizer,
     OVSanaPipeline,
-    OVTrainer,
     OVQuantizationConfig,
     OVMixedQuantizationConfig,
     OVWeightQuantizationConfig,
@@ -1204,54 +1203,6 @@ class OVQuantizerQATest(unittest.TestCase):
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
-
-
-class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 61, 39),)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    @unittest.skip(reason="Not supported on hosts running pre-commit jobs since OpenVINO 2025.0 relase.")
-    def test_aware_training_quantization(self, model_name, expected_fake_nodes, expected_int8_nodes):
-        model_id = MODEL_NAMES[model_name]
-        model = AutoModelForSequenceClassification.from_pretrained(model_id, attn_implementation="eager")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        ov_config = OVConfig()
-        dataset = load_dataset("glue", "sst2")
-        dataset = dataset.map(
-            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
-        )
-        train_dataset = dataset["train"].select(range(16))
-        eval_dataset = dataset["validation"].select(range(16))
-        metric = evaluate.load("glue", "sst2")
-
-        def compute_metrics(p):
-            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
-
-        with TemporaryDirectory() as tmp_dir:
-            trainer = OVTrainer(
-                model=model,
-                ov_config=ov_config,
-                task="sequence-classification",
-                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                compute_metrics=compute_metrics,
-                tokenizer=tokenizer,
-                data_collator=default_data_collator,
-            )
-            self.assertEqual(trainer.task, "text-classification")
-            trainer.train()
-            trainer.evaluate()
-            trainer.save_model()
-
-            model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_fake_nodes, num_fake_nodes)
-            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
-
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
 
 
 class OVQuantizationConfigTest(unittest.TestCase):
