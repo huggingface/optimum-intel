@@ -1864,18 +1864,49 @@ class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
         return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
 
 
+class DummyUnetEncoderInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        num_choices: int = DEFAULT_DUMMY_SHAPES["num_choices"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        random_num_choices_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task,
+            normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            num_choices=num_choices,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            random_num_choices_range=random_num_choices_range,
+            **kwargs,
+        )
+        if hasattr(normalized_config.config, "model_max_length"):
+            self.sequence_length = normalized_config.config.model_max_length
+
+
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("unet-2d-condition", *["semantic-segmentation"], library_name="diffusers")
 class UNetOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyUnetVisionInputGenerator,
         DummyUnetTimestepInputGenerator,
-    ) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[2:]
+        DummyUnetEncoderInputGenerator,
+    )
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
         common_inputs["timestep"] = {0: "batch_size"}
+        if hasattr(self._normalized_config.config, "model_max_length"):
+            common_inputs["encoder_hidden_states"] = {0: "batch_size"}
         return common_inputs
 
 
