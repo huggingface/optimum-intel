@@ -653,6 +653,7 @@ def _qwen2_model_forward(
         inputs_embeds = self.embed_tokens(input_ids)
 
     batch_size, seq_length = inputs_embeds.shape[:2]
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
 
     past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
     if cache_position is None:
@@ -677,6 +678,9 @@ def _qwen2_model_forward(
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
+    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
+    max_input_lens = input_lens.max().item()
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -712,6 +716,9 @@ def _qwen2_model_forward(
             cache_position=cache_position,
             position_embeddings=position_embeddings,
             input_lens=input_lens,
+            max_input_lens=max_input_lens,
+            seq_len_tensor=seq_len_tensor,
+            query_len_tensor=query_len_tensor,
             **kwargs,
         )
 
