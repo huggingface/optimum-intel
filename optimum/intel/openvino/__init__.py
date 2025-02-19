@@ -16,7 +16,6 @@ import logging
 import warnings
 
 from ..utils.import_utils import (
-    is_accelerate_available,
     is_diffusers_available,
     is_nncf_available,
     is_sentence_transformers_available,
@@ -49,10 +48,6 @@ if is_nncf_available():
     patch_torch_operators()
 
     from .quantization import OVQuantizer
-    from .training_args import OVTrainingArguments
-
-    if is_accelerate_available():
-        from .trainer import OVTrainer
 
 
 from .configuration import (
