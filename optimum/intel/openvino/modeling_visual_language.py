@@ -150,7 +150,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                attention_mask = np.array(attention_mask)
+                attention_mask = attention_mask.cpu().numpy()
             else:
                 attention_mask = np.ones((inputs_embeds.shape[0], inputs_embeds.shape[1] + past_len), dtype=int)
 
@@ -159,7 +159,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         if "position_ids" in self.input_names:
             if position_ids is not None:
-                position_ids = np.array(position_ids)
+                position_ids = position_ids.cpu().numpy()
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
@@ -545,7 +545,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = model_cls._prepare_quantization_config(quantization_config, load_in_8bit)
         to_quantize = not compile_only and quantization_config is not None
         if to_quantize:
             kwargs["compile"] = False
@@ -615,6 +615,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config = OVConfig(dtype="fp32" if load_in_8bit is False else "auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+        variant = kwargs.pop("variant", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -629,6 +630,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             stateful=stateful,
+            variant=variant,
         )
         config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
         return cls._from_pretrained(
@@ -695,8 +697,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         image_grid_thw=None,
         video_grid_thw=None,
         rope_deltas=None,
+        images=None,
         **kwargs,
     ):
+        pixel_values = pixel_values if pixel_values is not None else images
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -793,6 +797,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_inputs = {"inputs_embeds": inputs_embeds}
         else:
             model_inputs = {"input_ids": input_ids}
+
+        if pixel_values is None:
+            pixel_values = kwargs.get("images")
 
         model_inputs.update(
             {
@@ -1013,6 +1020,18 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
                 prompt = "<image>\n" + text
             else:
                 prompt = text
+
+        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
+            if (
+                getattr(config, "vision_config", None) is not None
+                and getattr(config.vision_config, "patch_size", None) is not None
+            ):
+                processor.patch_size = config.vision_config.patch_size
+            else:
+                raise ValueError(
+                    "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
+                )
+
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         return inputs
 
@@ -1733,6 +1752,8 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         vision_embeds = None
         IGNORE_INDEX = -100
         IMAGE_TOKEN_INDEX = -200
+        if pixel_values is None and "images" in kwargs:
+            pixel_values = kwargs["images"]
         if pixel_values is not None:
             vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
         if vision_embeds is None:
@@ -1906,8 +1927,9 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
             input_ids = tokenizer(text, return_tensors="pt").input_ids
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
         result = {"input_ids": input_ids, "attention_mask": attention_mask}
+
         if image is not None:
-            result["pixel_values"] = processor(images=[image], return_tensors="pt")["pixel_values"]
+            result["images"] = processor(images=[image], return_tensors="pt")["pixel_values"]
         return result
 
 
@@ -2309,11 +2331,33 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if image is None:
+            return processor(text=text, return_tensors="pt")
+        processed_inputs = processor.format_and_preprocess_phrase_grounding_input(
+            frontal_image=image,
+            phrase=text,
+            return_tensors="pt",
+        )
+        return processed_inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
+    "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,

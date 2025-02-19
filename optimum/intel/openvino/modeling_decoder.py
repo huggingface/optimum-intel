@@ -21,8 +21,8 @@ import numpy as np
 import openvino
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from openvino import Core, Tensor, Type
 from openvino.preprocess import PrePostProcessor
-from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
@@ -56,7 +56,11 @@ from .utils import (
 
 
 if TYPE_CHECKING:
-    from transformers.generation.streamers import BaseStreamer
+    try:
+        from transformers.generation.streamers import BaseStreamer
+    except Exception:
+        from typing import Generator as BaseStreamer
+
     from transformers.modeling_utils import PreTrainedModel
 
 
@@ -310,6 +314,8 @@ class OVBaseDecoderModel(OVModel):
         if torch_dtype is not None:
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
+        variant = kwargs.pop("variant", None)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -325,6 +331,7 @@ class OVBaseDecoderModel(OVModel):
             stateful=stateful,
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
+            variant=variant,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(
@@ -485,11 +492,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
                 self._past_length = 0
         past_len = self._get_past_length(past_key_values)
-        inputs["input_ids"] = np.array(input_ids)
+        inputs["input_ids"] = input_ids.cpu().numpy()
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                attention_mask = np.array(attention_mask)
+                attention_mask = attention_mask.cpu().numpy()
             else:
                 attention_mask = np.ones(
                     (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
@@ -500,7 +507,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if "position_ids" in self.input_names:
             if position_ids is not None:
-                position_ids = np.array(position_ids)
+                position_ids = position_ids.cpu().numpy()
             else:
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
@@ -840,7 +847,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if quantization_config.get("dataset", None) is not None:
                 quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
 
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
 

@@ -13,7 +13,7 @@
 #  limitations under the License.
 import unittest
 from contextlib import contextmanager
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import openvino as ov
@@ -91,6 +91,7 @@ MODEL_NAMES = {
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",
     "opt_gptq": "ybelkada/opt-125m-gptq-4bit",
+    "maira2": "katuni4ka/tiny-random-maira2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
@@ -168,6 +169,7 @@ MODEL_NAMES = {
     "open-clip-ov": "zofinka/tiny-open-clip-model",
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
+    "sana": "katuni4ka/tiny-random-sana",
 }
 
 
@@ -195,11 +197,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-3": (66, 42, 58, 30),
     "flux": (56, 24, 28, 64),
     "flux-fill": (56, 24, 28, 64),
-    "llava": (30, 9, 1),
-    "llava_next": (30, 9, 1),
-    "minicpmv": (30, 26, 1, 6),
-    "nanollava": (30, 15, 1),
+    "llava": (30, 1, 9),
+    "llava_next": (30, 1, 9),
+    "minicpmv": (30, 1, 26, 6),
+    "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
+    "sana": (58, 28, 28, 18),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -288,15 +291,28 @@ def patch_awq_for_inference(to_patch):
             WQLinearMMFunction.forward = orig_gemm_forward
 
 
-def compare_num_quantized_nodes_per_model(
+def check_compression_state_per_model(
     test_case: unittest.TestCase,
     models: List[Union[ov.Model, OVBaseModel]],
-    expected_num_weight_nodes_per_model: List[Dict],
+    expected_num_weight_nodes_per_model: List[Dict[str, int]],
+    expected_num_fake_nodes_per_model: Optional[List[int]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
-    actual_num_weights_per_model = []
-    for submodel, expected_num_weight_nodes in zip(models, expected_num_weight_nodes_per_model):
-        _, num_weight_nodes = get_num_quantized_nodes(submodel)
+    actual_num_weights_per_model = [{}] * len(models)
+    actual_num_fake_nodes_per_model = [0] * len(models)
+    for i, (submodel, expected_num_weight_nodes) in enumerate(zip(models, expected_num_weight_nodes_per_model)):
+        ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+        num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
         expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
-        actual_num_weights_per_model.append(num_weight_nodes)
+
+        actual_num_weights_per_model[i] = num_weight_nodes
+        actual_num_fake_nodes_per_model[i] = num_fake_nodes
+
+        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+
+    # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
+
+    # Check fake nodes
+    if expected_num_fake_nodes_per_model is not None:
+        test_case.assertEqual(expected_num_fake_nodes_per_model, actual_num_fake_nodes_per_model)

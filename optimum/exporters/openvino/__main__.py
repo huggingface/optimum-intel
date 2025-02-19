@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Core, Type, save_model
@@ -122,6 +122,7 @@ def main_export(
     convert_tokenizer: bool = False,
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
+    variant: Optional[str] = None,
     **kwargs_shapes,
 ):
     """
@@ -237,6 +238,8 @@ def main_export(
     custom_architecture = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
+    if variant is not None:
+        loading_kwargs["variant"] = variant
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -347,6 +350,7 @@ def main_export(
 
                 GPTQQuantizer.post_init_model = post_init_model
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+        _loading_kwargs = {} if variant is None else {"variant": variant}
         dtype = deduce_diffusers_dtype(
             model_name_or_path,
             revision=revision,
@@ -355,6 +359,7 @@ def main_export(
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
+            **_loading_kwargs,
         )
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
@@ -526,10 +531,15 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
 
     if is_openvino_tokenizers_available():
         if library_name != "diffusers" and preprocessors:
+            processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
+            if len(preprocessors) > 1:
+                for processor in preprocessors:
+                    if isinstance(processor, ProcessorMixin) and hasattr(processor, "chat_template"):
+                        processor_chat_template = processor.chat_template
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output, task=task)
+                    export_tokenizer(tokenizer, output, task=task, processor_chat_template=processor_chat_template)
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "

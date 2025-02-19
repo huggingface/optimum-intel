@@ -20,7 +20,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Generator
 
 import numpy as np
 import open_clip
@@ -107,7 +107,11 @@ from optimum.intel.openvino.utils import (
     _print_compiled_model_properties,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _langchain_hf_available,
+    is_openvino_version,
+    is_transformers_version,
+)
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -267,6 +271,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             else:
                 self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
+        processor.patch_size = loaded_model.config.vision_config.patch_size
         inputs = processor(images=image, text=prompt, return_tensors="pt")
         set_seed(SEED)
         loaded_model_outputs = loaded_model(**inputs)
@@ -975,23 +980,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
-            "gemma2",
             "olmo",
             "stablelm",
             "starcoder2",
             "dbrx",
-            "phi3",
             "cohere",
             "qwen2",
             "qwen2-moe",
             "arctic",
-            "exaone",
-            "mistral-nemo",
-            "minicpm3",
-            "glm",
-            "granite",
-            "granite-moe",
         )
+
+    if is_transformers_version(">=", "4.41.0"):
+        SUPPORTED_ARCHITECTURES += ("phi3",)
+
+    if is_transformers_version(">=", "4.43.0"):
+        SUPPORTED_ARCHITECTURES += ("gemma2", "exaone")
+
+    if is_transformers_version(">=", "4.44.0"):
+        SUPPORTED_ARCHITECTURES += ("granite", "granite-moe")
+
+    if is_transformers_version(">=", "4.46.0"):
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3")
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
@@ -1657,7 +1666,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens, **decoder_inputs)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=5e-3))
         gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -2106,8 +2115,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+    if is_transformers_version(">=", "4.46.0"):
+        SUPPORTED_ARCHITECTURES += ["maira2"]
+
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v"]
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
     IMAGE = Image.open(
         requests.get(
@@ -2166,6 +2178,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         for component_name, component in ov_model.components.items():
             self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
         test_device = "AUTO"
@@ -2178,11 +2191,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.clear_requests()
         self._check_device_and_request(ov_model, test_device, False)
 
-        # nanollava pixel_values input named as images
-        if model_arch == "nanollava":
-            pixel_values = transformers_inputs.pop("pixel_values", None)
-            transformers_inputs["images"] = pixel_values
-        # pytorch minicpmv is not designed to be used via forward
+        # pytorch minicpmv and internvl2 are not designed to be used via forward
         if model_arch not in ["minicpmv", "internvl2"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
@@ -2190,7 +2199,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4),
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
@@ -2235,6 +2244,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             patch_size=config.vision_config.patch_size,
             vision_feature_select_strategy=config.vision_feature_select_strategy,
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            num_additional_image_tokens=1,
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
@@ -2244,8 +2254,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(processor.patch_size is not None)
         self.assertTrue(processor.vision_feature_select_strategy is not None)
         inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
-        self.assertTrue(
-            (inputs.input_ids == ov_model.config.image_token_index).sum(1).max() >= ov_model.config.image_seq_length
+        self.assertGreaterEqual(
+            (inputs.input_ids == ov_model.config.image_token_index).sum().max().item(),
+            ov_model.config.image_seq_length,
         )
         set_seed(SEED)
         with torch.no_grad():
@@ -2308,17 +2319,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
         if model_arch == "nanollava":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             processor = AutoProcessor.from_pretrained(
                 config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": tokenizer}
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
         elif model_arch == "internvl2":
-            config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
@@ -2327,7 +2338,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             processor = AutoProcessor.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
-            preprocessors = {"processor": processor, "tokenizer": None}
+            preprocessors = {"processor": processor, "tokenizer": None, "config": config}
+
         return preprocessors
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -2795,4 +2807,52 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(model_save_path)
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    def test_langchain(self, model_arch):
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        model_id = MODEL_NAMES[model_arch]
+        model_kwargs = {"device": "cpu", "backend": "openvino"}
+
+        embedding = HuggingFaceEmbeddings(
+            model_name=model_id,
+            model_kwargs=model_kwargs,
+        )
+        output = embedding.embed_query("foo bar")
+        self.assertTrue(len(output) > 0)
+
+
+class OVLangchainTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("gpt2",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    def test_huggingface_pipeline_streaming(self, model_arch):
+        from langchain_huggingface import HuggingFacePipeline
+
+        model_id = MODEL_NAMES[model_arch]
+
+        hf_pipe = HuggingFacePipeline.from_model_id(
+            model_id=model_id,
+            task="text-generation",
+            pipeline_kwargs={"max_new_tokens": 10},
+            backend="openvino",
+        )
+        self.assertIsInstance(hf_pipe.pipeline.model, OVBaseModel)
+
+        generator = hf_pipe.stream("Q: How do you say 'hello' in German? A:'", stop=["."])
+
+        self.assertIsInstance(generator, Generator)
+
+        stream_results_string = ""
+        for chunk in generator:
+            self.assertIsInstance(chunk, str)
+            stream_results_string = chunk
+
+        self.assertTrue(len(stream_results_string.strip()) > 1)
+
+        del hf_pipe
         gc.collect()

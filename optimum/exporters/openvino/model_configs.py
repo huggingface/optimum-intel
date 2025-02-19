@@ -41,6 +41,7 @@ from optimum.exporters.onnx.model_configs import (
     PhiOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
+    VaeEncoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
@@ -87,12 +88,14 @@ from .model_patcher import (
     InputEmbeddingPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
+    InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MiniCPM3Patcher,
+    MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     MistralModelPatcher,
@@ -105,6 +108,7 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
     RotaryEmbPatcher,
+    SanaTextEncoderModelPatcher,
     StatefulSeq2SeqDecoderPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
@@ -133,6 +137,8 @@ def init_model_configs():
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image", "SanaPipeline")
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -215,6 +221,11 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MiniCPMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 class OVMiniCPM3DummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
@@ -1477,6 +1488,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
         float_dtype: str = "fp32",
         behavior: LlavaConfigBehavior = LlavaConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
+        **kwargs,
     ):
         super().__init__(
             config=config,
@@ -1573,6 +1585,14 @@ class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
 
 
+@register_in_tasks_manager(
+    "maira2", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class MairaOpenVINOConfig(LlavaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.46.0")
+    SUPPORTS_PAST = True
+
+
 class InternVLChatConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
@@ -1642,7 +1662,11 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         if behavior == InternVLChatConfigBehavior.LANGUAGE:
             model_type = self._orig_config.llm_config.model_type
             return get_vlm_text_generation_config(
-                model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
+                model_type,
+                self._orig_config.llm_config,
+                self.int_dtype,
+                self.float_dtype,
+                InternVL2ChatLangModelPatcher,
             )
 
         if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
@@ -1840,18 +1864,49 @@ class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
         return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
 
 
+class DummyUnetEncoderInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        num_choices: int = DEFAULT_DUMMY_SHAPES["num_choices"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        random_num_choices_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task,
+            normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            num_choices=num_choices,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            random_num_choices_range=random_num_choices_range,
+            **kwargs,
+        )
+        if hasattr(normalized_config.config, "model_max_length"):
+            self.sequence_length = normalized_config.config.model_max_length
+
+
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
 @register_in_tasks_manager("unet-2d-condition", *["semantic-segmentation"], library_name="diffusers")
 class UNetOpenVINOConfig(UNetOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyUnetVisionInputGenerator,
         DummyUnetTimestepInputGenerator,
-    ) + UNetOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES[2:]
+        DummyUnetEncoderInputGenerator,
+    )
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
         common_inputs["timestep"] = {0: "batch_size"}
+        if hasattr(self._normalized_config.config, "model_max_length"):
+            common_inputs["encoder_hidden_states"] = {0: "batch_size"}
         return common_inputs
 
 
@@ -1889,6 +1944,83 @@ class SD3TransformerOpenVINOConfig(UNetOpenVINOConfig):
 @register_in_tasks_manager("t5-encoder", *["feature-extraction"], library_name="diffusers")
 class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager("gemma2-text-encoder", *["feature-extraction"], library_name="diffusers")
+class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        return SanaTextEncoderModelPatcher(self, model, model_kwargs)
+
+
+class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+        "encoder_attention_mask",
+    )
+
+
+class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 8,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 8,
+        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+
+
+@register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
+class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="caption_channels",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummySanaTransformerVisionInputGenerator,
+        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+    ) + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:-1]
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        return common_inputs
+
+    def rename_ambiguous_inputs(self, inputs):
+        #  The input name in the model signature is `x, hence the export input name is updated.
+        hidden_states = inputs.pop("sample", None)
+        if hidden_states is not None:
+            inputs["hidden_states"] = hidden_states
+        return inputs
+
+
+@register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class DcaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
 
 
 class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):

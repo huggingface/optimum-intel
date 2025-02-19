@@ -55,7 +55,13 @@ if is_nncf_available():
         from .trainer import OVTrainer
 
 
-from .configuration import OVConfig, OVDynamicQuantizationConfig, OVQuantizationConfig, OVWeightQuantizationConfig
+from .configuration import (
+    OVConfig,
+    OVDynamicQuantizationConfig,
+    OVMixedQuantizationConfig,
+    OVQuantizationConfig,
+    OVWeightQuantizationConfig,
+)
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -91,6 +97,7 @@ if is_diffusers_available():
         OVPipelineForImage2Image,
         OVPipelineForInpainting,
         OVPipelineForText2Image,
+        OVSanaPipeline,
         OVStableDiffusion3Img2ImgPipeline,
         OVStableDiffusion3InpaintPipeline,
         OVStableDiffusion3Pipeline,

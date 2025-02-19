@@ -103,9 +103,10 @@ else:
     FluxInpaintPipeline = object
 
 if is_diffusers_version(">=", "0.32.0"):
-    from diffusers import FluxFillPipeline
+    from diffusers import FluxFillPipeline, SanaPipeline
 else:
     FluxFillPipeline = object
+    SanaPipeline = object
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
@@ -293,8 +294,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 dst_path = save_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.save_model(model.model, dst_path, compress_to_fp16=False)
-                model_dir = model.config.get("_name_or_path", None) or model.model_save_dir
-                config_path = Path(model_dir) / CONFIG_NAME
+                model_dir = (
+                    self.model_save_dir
+                    if not isinstance(self.model_save_dir, TemporaryDirectory)
+                    else self.model_save_dir.name
+                )
+                config_path = Path(model_dir) / save_path.name / CONFIG_NAME
                 if config_path.is_file():
                     config_save_path = save_path / CONFIG_NAME
                     shutil.copyfile(config_path, config_save_path)
@@ -474,7 +479,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 kwargs[config_key] = value
 
         compile_only = kwargs.get("compile_only", False)
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
             for name, path in models.items():
                 if name in kwargs:
@@ -574,6 +579,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         model_save_dir = TemporaryDirectory()
         model_save_path = Path(model_save_dir.name)
+        variant = kwargs.pop("variant", None)
 
         main_export(
             model_name_or_path=model_id,
@@ -588,6 +594,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             force_download=force_download,
             ov_config=ov_config,
             library_name=cls._library_name,
+            variant=variant,
         )
 
         return cls._from_pretrained(
@@ -764,7 +771,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         self, model: openvino.runtime.Model, batch_size: int = -1, tokenizer_max_length: int = -1
     ):
         if batch_size != -1:
-            shapes = {model.inputs[0]: [batch_size, tokenizer_max_length]}
+            shapes = {input_tensor: [batch_size, tokenizer_max_length] for input_tensor in model.inputs}
             model.reshape(shapes)
         return model
 
@@ -817,9 +824,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if self.tokenizer is None and self.tokenizer_2 is None:
             tokenizer_max_len = -1
         else:
-            tokenizer_max_len = (
-                self.tokenizer.model_max_length if self.tokenizer is not None else self.tokenizer_2.model_max_length
-            )
+            if self.tokenizer is not None and "Gemma" in self.tokenizer.__class__.__name__:
+                tokenizer_max_len = -1
+            else:
+                tokenizer_max_len = (
+                    getattr(self.tokenizer, "model_max_length", -1)
+                    if self.tokenizer is not None
+                    else getattr(self.tokenizer_2, "model_max_length", -1)
+                )
 
         if self.unet is not None:
             self.unet.model = self._reshape_unet(
@@ -838,17 +850,21 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
-                self.text_encoder.model, batch_size, self.tokenizer.model_max_length
+                self.text_encoder.model,
+                batch_size,
+                getattr(self.tokenizer, "model_max_length", -1)
+                if "Gemma" not in self.tokenizer.__class__.__name__
+                else -1,
             )
 
         if self.text_encoder_2 is not None:
             self.text_encoder_2.model = self._reshape_text_encoder(
-                self.text_encoder_2.model, batch_size, self.tokenizer_2.model_max_length
+                self.text_encoder_2.model, batch_size, getattr(self.tokenizer_2, "model_max_length", -1)
             )
 
         if self.text_encoder_3 is not None:
             self.text_encoder_3.model = self._reshape_text_encoder(
-                self.text_encoder_3.model, batch_size, self.tokenizer_3.model_max_length
+                self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1)
             )
 
         self.clear_requests()
@@ -1041,6 +1057,7 @@ class OVModelTextEncoder(OVPipelinePart):
         self.hidden_states_output_names = [
             name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")
         ]
+        self.input_names = [inp.get_any_name() for inp in self.model.inputs]
 
     def forward(
         self,
@@ -1051,6 +1068,9 @@ class OVModelTextEncoder(OVPipelinePart):
     ):
         self._compile()
         model_inputs = {"input_ids": input_ids}
+
+        if "attention_mask" in self.input_names:
+            model_inputs["attention_mask"] = attention_mask
 
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]
@@ -1139,6 +1159,8 @@ class OVModelTransformer(OVPipelinePart):
         guidance: torch.Tensor = None,
         block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        encoder_attention_mask: torch.LongTensor = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ):
         self._compile()
@@ -1147,15 +1169,19 @@ class OVModelTransformer(OVPipelinePart):
             "hidden_states": hidden_states,
             "timestep": timestep,
             "encoder_hidden_states": encoder_hidden_states,
-            "pooled_projections": pooled_projections,
         }
 
+        if pooled_projections is not None:
+            model_inputs["pooled_projections"] = pooled_projections
         if img_ids is not None:
             model_inputs["img_ids"] = img_ids
         if txt_ids is not None:
             model_inputs["txt_ids"] = txt_ids
         if guidance is not None:
             model_inputs["guidance"] = guidance
+
+        if encoder_attention_mask is not None:
+            model_inputs["encoder_attention_mask"] = encoder_attention_mask
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -1498,6 +1524,12 @@ class OVFluxFillPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Flu
     auto_model_class = FluxFillPipeline
 
 
+class OVSanaPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaPipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = SanaPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1569,6 +1601,8 @@ if is_diffusers_version(">=", "0.31.0"):
 if is_diffusers_version(">=", "0.32.0"):
     OV_INPAINT_PIPELINES_MAPPING["flux-fill"] = OVFluxFillPipeline
     SUPPORTED_OV_PIPELINES.append(OVFluxFillPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["sana"] = OVSanaPipeline
+    SUPPORTED_OV_PIPELINES.append(OVSanaPipeline)
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

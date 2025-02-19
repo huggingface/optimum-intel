@@ -250,6 +250,11 @@ class OVBaseModel(OptimizedModel):
 
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
+            if not isinstance(quantization_config, (dict, OVWeightQuantizationConfig)):
+                raise TypeError(
+                    f"Expected `quantization_config` to be either a dictionary or OVWeightQuantizationConfig object, got {type(quantization_config)}."
+                )
+
             model = _weight_only_quantization(model, quantization_config)
 
         return model
@@ -378,7 +383,7 @@ class OVBaseModel(OptimizedModel):
 
         compile_only = kwargs.get("compile_only", False)
 
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
 
         model = None
         if not compile_only:
@@ -481,14 +486,14 @@ class OVBaseModel(OptimizedModel):
         )
 
     @staticmethod
-    def _prepare_weight_quantization_config(
+    def _prepare_quantization_config(
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit: bool = False
     ):
         # Give default quantization config if not provided and load_in_8bit=True
         if not quantization_config and load_in_8bit:
             quantization_config = OVWeightQuantizationConfig(bits=8)
         elif isinstance(quantization_config, dict):
-            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+            quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
 
         return quantization_config
 
@@ -594,6 +599,8 @@ class OVBaseModel(OptimizedModel):
         else:
             ov_config = OVConfig(dtype="fp32")
 
+        variant = kwargs.pop("variant", None)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -607,6 +614,7 @@ class OVBaseModel(OptimizedModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             library_name=cls._library_name,
+            variant=variant,
         )
 
         return cls._from_pretrained(

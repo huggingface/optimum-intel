@@ -14,18 +14,19 @@
 import subprocess
 import unittest
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
-    compare_num_quantized_nodes_per_model,
+    check_compression_state_per_model,
     get_num_quantized_nodes,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
     OVFluxFillPipeline,
     OVFluxPipeline,
@@ -44,6 +45,7 @@ from optimum.intel import (  # noqa
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
+    OVSanaPipeline,
     OVSentenceTransformer,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -84,17 +86,22 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
-            [("text-to-image", "stable-diffusion-3"), ("text-to-image", "flux"), ("inpainting", "flux-fill")]
+            [
+                ("text-to-image", "stable-diffusion-3"),
+                ("text-to-image", "flux"),
+                ("inpainting", "flux-fill"),
+                ("text-to-image", "sana"),
+            ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
-        "distilbert": 1,  # no detokenizer
+        "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
-        "bert": 1,  # no detokenizer
+        "bert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
@@ -102,6 +109,66 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+    }
+
+    TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
+        "gpt2": {  # transformers, no chat template, no processor
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": False,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": False,
+        },
+        "stable-diffusion": {  # diffusers, no chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-to-image",
+            "processor_chat_template": False,
+            "remote_code": False,
+            "expected_chat_template": False,
+            "simplified_chat_template": False,
+        },
+        "llava": {  # transformers, chat template in processor, simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "image-text-to-text",
+            "processor_chat_template": True,
+            "remote_code": False,
+            "expected_chat_template": True,
+            "simplified_chat_template": True,
+        },
+        "llava_next": {  # transformers, chat template in processor overrides tokinizer chat template, simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "image-text-to-text",
+            "processor_chat_template": True,
+            "simplified_chat_template": True,
+            "expected_chat_template": True,
+            "remote_code": False,
+        },
+        "minicpm3": {  # transformers, no processor, simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": True,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
+        "phi3_v": {  # transformers, no processor chat template, no simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "image-text-to-text",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
+        "glm": {  # transformers, no processor, no simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
@@ -113,6 +180,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
         SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
+        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 19, 53))
 
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         (
@@ -120,16 +188,70 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            (14, 22, 21) if is_transformers_version("<=", "4.36.0") else (14, 22, 25),
-            (14, 21, 17) if is_transformers_version("<=", "4.36.0") else (14, 22, 18),
+            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+            if is_transformers_version("<=", "4.36.0")
+            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
         ),
         (
             "text-generation",
             "llama",
             "f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            (13,),
-            (16,),
+            "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
+            [
+                13,
+            ],
+            [
+                {"f8e4m3": 16},
+            ],
+        ),
+        (
+            "text-generation",
+            "llama",
+            "nf4_f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
+            [
+                14,
+            ],
+            [
+                {"f8e4m3": 11, "nf4": 5},
+            ],
+        ),
+        (
+            "text-generation",
+            "llama",
+            "nf4_f8e5m2",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
+            [
+                14,
+            ],
+            [
+                {"f8e5m2": 11, "nf4": 5},
+            ],
+        ),
+        (
+            "text-generation",
+            "llama",
+            "int4_f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
+            [
+                14,
+            ],
+            [
+                {"f8e4m3": 11, "int4": 5},
+            ],
+        ),
+        (
+            "text-generation",
+            "llama",
+            "int4_f8e5m2",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
+            [
+                13,
+            ],
+            [
+                {"f8e5m2": 2, "int4": 28},
+            ],
         ),
     ]
 
@@ -184,27 +306,27 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "llava_next",
                     "int4 --group-size 16 --ratio 0.8",
-                    [{"int8": 14, "int4": 16}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 14, "int4": 16}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     "image-text-to-text",
                     "llava_next",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
                     "--dataset contextual --num-samples 1",
-                    [{"int8": 6, "int4": 24}, {"int8": 9}, {"int8": 1}],
+                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 9}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 15}, {"int8": 1}],
+                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
                 ),
             ]
         )
@@ -216,40 +338,40 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "minicpmv",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 10, "int4": 20}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     "image-text-to-text",
                     "minicpmv",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 26}, {"int8": 1}, {"int8": 6}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 11}, {"int8": 1}],
+                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 10}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 8, "int4": 10}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 4, "int4": 14}, {"int8": 7}, {"int8": 1}, {"int8": 2}],
+                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
                 ),
                 (
                     "image-text-to-text",
@@ -317,6 +439,143 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
 
+    # some testing models required transformers at least 4.45 for conversion
+    @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45.0") or not is_openvino_tokenizers_available(),
+        reason="test required openvino tokenizers and transformers >= 4.45",
+    )
+    def test_exporters_cli_tokenizers_chat_template(self, model_type):
+        import openvino as ov
+
+        core = ov.Core()
+        with TemporaryDirectory() as tmpdir:
+            model_test_config = self.TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS[model_type]
+            task = model_test_config["task"]
+            model_id = MODEL_NAMES[model_type]
+            remote_code = model_test_config.get("remote_code", False)
+            cmd = f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {model_id} --task {task} {tmpdir}"
+            if remote_code:
+                cmd += " --trust-remote-code"
+            output = subprocess.check_output(
+                cmd,
+                shell=True,
+                stderr=subprocess.STDOUT,
+            ).decode()
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
+            expected_num_tokenizers = model_test_config["num_tokenizers"]
+            self.assertEqual(expected_num_tokenizers, number_of_tokenizers, output)
+            tokenizer_path = (
+                Path(tmpdir) / "openvino_tokenizer.xml"
+                if "diffusion" not in model_type
+                else Path(tmpdir) / "tokenizer/openvino_tokenizer.xml"
+            )
+            tokenizer_model = core.read_model(tokenizer_path)
+            if not model_test_config.get("expected_chat_template", False):
+                self.assertFalse(tokenizer_model.has_rt_info("chat_template"))
+            else:
+                rt_info_chat_template = tokenizer_model.get_rt_info("chat_template")
+                if not model_test_config.get("processor_chat_template"):
+                    tokenizer = AutoTokenizer.from_pretrained(tmpdir, trust_remote_code=remote_code)
+                else:
+                    tokenizer = AutoProcessor.from_pretrained(tmpdir, trust_remote_code=remote_code)
+                ref_chat_template = tokenizer.chat_template
+                self.assertEqual(rt_info_chat_template.value, ref_chat_template)
+                if not model_test_config.get("simplified_chat_template", False):
+                    self.assertFalse(tokenizer_model.has_rt_info("simplified_chat_template"))
+                else:
+                    simplified_rt_chat_template = tokenizer_model.get_rt_info("simplified_chat_template").value
+                    self.assertTrue(rt_info_chat_template in COMPLEX_CHAT_TEMPLATES)
+                    self.assertEqual(simplified_rt_chat_template, COMPLEX_CHAT_TEMPLATES[rt_info_chat_template.value])
+                    # there are some difference in content key for conversation templates, simplified templates align to use common
+                    if "llava" not in model_type:
+                        origin_history_messages = [
+                            {
+                                "role": "system",
+                                "content": "You are a friendly chatbot who always responds in the style of a pirate",
+                            },
+                            {"role": "user", "content": "How many helicopters can a human eat in one sitting?"},
+                            {
+                                "role": "assistant",
+                                "content": " There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                            },
+                            {"role": "user", "content": "Why is it not recommended?"},
+                        ]
+                    else:
+                        origin_history_messages = [
+                            {
+                                "role": "system",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "You are a friendly chatbot who always responds in the style of a pirate",
+                                    }
+                                ],
+                            },
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "How many helicopters can a human eat in one sitting?"}
+                                ],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                                    }
+                                ],
+                            },
+                            {"role": "user", "content": [{"type": "text", "text": "Why is it not recommended?"}]},
+                        ]
+                    history_messages = [
+                        {
+                            "role": "system",
+                            "content": "You are a friendly chatbot who always responds in the style of a pirate",
+                        },
+                        {"role": "user", "content": "How many helicopters can a human eat in one sitting?"},
+                        {
+                            "role": "assistant",
+                            "content": "There is no specific limit for how many helicopters a human can eat in one sitting, but it is not recommended to consume large quantities of helicopters.",
+                        },
+                        {"role": "user", "content": "Why is it not recommended?"},
+                    ]
+                    reference_input_text_no_gen_prompt = tokenizer.apply_chat_template(
+                        origin_history_messages,
+                        add_generation_prompt=False,
+                        chat_template=ref_chat_template,
+                        tokenize=False,
+                    )
+                    simplified_input_text_no_gen_prompt = tokenizer.apply_chat_template(
+                        history_messages,
+                        add_generation_prompt=False,
+                        chat_template=simplified_rt_chat_template,
+                        tokenize=False,
+                    )
+                    self.assertEqual(
+                        reference_input_text_no_gen_prompt,
+                        simplified_input_text_no_gen_prompt,
+                        f"Expected text:\n{reference_input_text_no_gen_prompt}\nSimplified text:\n{simplified_input_text_no_gen_prompt}",
+                    )
+                    reference_input_text_gen_prompt = tokenizer.apply_chat_template(
+                        origin_history_messages,
+                        chat_template=ref_chat_template,
+                        add_generation_prompt=True,
+                        tokenize=False,
+                    )
+                    simplified_input_text_gen_prompt = tokenizer.apply_chat_template(
+                        history_messages,
+                        add_generation_prompt=True,
+                        chat_template=simplified_rt_chat_template,
+                        tokenize=False,
+                    )
+                    self.assertEqual(
+                        reference_input_text_gen_prompt,
+                        simplified_input_text_gen_prompt,
+                        f"Expected text:\n{reference_input_text_gen_prompt}\nSimplified text:\n{simplified_input_text_gen_prompt}",
+                    )
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
@@ -351,18 +610,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past") and not model.decoder.stateful:
                     models.append(model.decoder_with_past)
-            elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
+            elif (
+                model_type.startswith("stable-diffusion")
+                or model_type.startswith("flux")
+                or model_type.startswith("sana")
+            ):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
-                models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
+                models.append(
+                    model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2
+                )
             elif task.startswith("image-text-to-text"):
-                models = [model.language_model, model.vision_embeddings]
+                models = list(model.submodels.values())
             else:
                 models = [model]
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-            for i, model in enumerate(models):
-                _, num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_int8[i], num_weight_nodes["int8"])
+            expected_int8 = [{"int8": it} for it in expected_int8]
+            if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
+                expected_int8 = expected_int8[:2]
+            check_compression_state_per_model(self, models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -375,11 +641,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
-            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
-                model.unet if model.unet is not None else model.transformer
-            )
+            vision_model = model.unet.model if model.unet is not None else model.transformer.model
+            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(vision_model)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
+            self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
@@ -405,10 +671,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-generation-with-past":
                 submodels = [model]
             elif task == "image-text-to-text":
-                submodels = [model.lm_model, model.vision_embeddings_model, model.text_embeddings_model]
-                submodels += [getattr(model, part) for part in model.additional_parts]
+                submodels = list(model.submodels.values())
 
-            compare_num_quantized_nodes_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
@@ -424,8 +689,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_type: str,
         quant_mode: str,
         option: str,
-        expected_fake_nodes: Tuple[int],
-        expected_low_precision_nodes: Tuple[int],
+        expected_fake_nodes_per_model: List[int],
+        expected_num_weight_nodes_per_model: List[Dict[str, int]],
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
@@ -435,18 +700,24 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
 
-            models = [model]
             if task == "automatic-speech-recognition":
-                models = [model.encoder, model.decoder]
+                submodels = [model.encoder, model.decoder]
                 if model.decoder_with_past is not None:
-                    models.append(model.decoder_with_past)
+                    submodels.append(model.decoder_with_past)
                 else:
-                    expected_fake_nodes = expected_fake_nodes[:-1]
-            self.assertEqual(len(expected_fake_nodes), len(models))
-            for i, model in enumerate(models):
-                num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-                self.assertEqual(expected_fake_nodes[i], num_fake_nodes)
-                self.assertEqual(expected_low_precision_nodes[i], num_weight_nodes[quant_mode])
+                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
+                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
+            elif "text-generation" in task:
+                submodels = [model]
+            else:
+                raise Exception("Unexpected task.")
+
+            check_compression_state_per_model(
+                self,
+                submodels,
+                expected_num_weight_nodes_per_model,
+                expected_fake_nodes_per_model,
+            )
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
@@ -556,3 +827,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "Some compression parameters are provided, but the weight format is not specified.",
                 str(exc_info.exception.stderr),
             )
+
+    def test_export_openvino_with_custom_variant(self):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model katuni4ka/tiny-stable-diffusion-torch-custom-variant --variant custom {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
+            for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
+                self.assertIsNotNone(getattr(model, component))

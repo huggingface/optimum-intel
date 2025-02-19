@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
-from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
@@ -78,7 +78,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -104,6 +104,12 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
         ),
+    )
+    optional_group.add_argument(
+        "--variant",
+        type=str,
+        default=None,
+        help=("If specified load weights from variant filename."),
     )
     optional_group.add_argument(
         "--ratio",
@@ -337,49 +343,44 @@ class OVExportCommand(BaseOptimumCLICommand):
                 )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
-        elif self.args.weight_format is not None:
-            # For int4 quantization if no parameter is provided, then use the default config if exists
-            if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
-                quantization_config = get_default_int4_config(self.args.model)
-            else:
-                is_int8 = self.args.weight_format == "int8"
-                quantization_config = {
-                    "bits": 8 if is_int8 else 4,
-                    "ratio": 1 if is_int8 else (self.args.ratio or _DEFAULT_4BIT_CONFIG["ratio"]),
-                    "sym": self.args.sym or False,
-                    "group_size": -1 if is_int8 else self.args.group_size,
-                    "all_layers": None if is_int8 else self.args.all_layers,
-                    "dataset": self.args.dataset,
-                    "num_samples": self.args.num_samples,
-                    "quant_method": "awq" if self.args.awq else "default",
-                    "sensitivity_metric": self.args.sensitivity_metric,
-                    "scale_estimation": self.args.scale_estimation,
-                    "gptq": self.args.gptq,
-                    "lora_correction": self.args.lora_correction,
-                    "weight_format": self.args.weight_format,
-                    "backup_precision": self.args.backup_precision,
-                }
-
-            if quantization_config.get("dataset", None) is not None:
-                quantization_config["trust_remote_code"] = self.args.trust_remote_code
-            ov_config = OVConfig(quantization_config=quantization_config)
         else:
-            if self.args.dataset is None:
-                raise ValueError(
-                    "Dataset is required for full quantization. Please provide it with --dataset argument."
-                )
+            if not is_nncf_available():
+                raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
 
-            quantization_config = {
-                "weight_format": self.args.quant_mode,
-                "activation_format": self.args.quant_mode,
-                "bits": 8,
-                "sym": self.args.sym or False,
-                "dataset": self.args.dataset,
-                "num_samples": self.args.num_samples,
-                "smooth_quant_alpha": self.args.smooth_quant_alpha,
-                "trust_remote_code": self.args.trust_remote_code,
-            }
-            ov_config = OVConfig(quantization_config=quantization_config)
+            if self.args.weight_format is not None:
+                # For int4 quantization if no parameter is provided, then use the default config if exists
+                if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
+                    quantization_config = get_default_int4_config(self.args.model)
+                else:
+                    quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
+
+                if quantization_config.get("dataset", None) is not None:
+                    quantization_config["trust_remote_code"] = self.args.trust_remote_code
+                ov_config = OVConfig(quantization_config=quantization_config)
+            else:
+                if self.args.dataset is None:
+                    raise ValueError(
+                        "Dataset is required for full quantization. Please provide it with --dataset argument."
+                    )
+
+                if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
+                    wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
+                    wc_dtype, q_dtype = self.args.quant_mode.split("_")
+                    wc_config["dtype"] = wc_dtype
+
+                    q_config = prepare_q_config(self.args)
+                    q_config["dtype"] = q_dtype
+
+                    quantization_config = {
+                        "weight_quantization_config": wc_config,
+                        "full_quantization_config": q_config,
+                        "num_samples": self.args.num_samples,
+                        "dataset": self.args.dataset,
+                        "trust_remote_code": self.args.trust_remote_code,
+                    }
+                else:
+                    quantization_config = prepare_q_config(self.args)
+                ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
@@ -415,6 +416,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVFluxPipeline
 
                 model_cls = OVFluxPipeline
+            elif class_name == "SanaPipeline":
+                from optimum.intel import OVSanaPipeline
+
+                model_cls = OVSanaPipeline
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
@@ -447,6 +452,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config=quantization_config,
                 stateful=not self.args.disable_stateful,
                 trust_remote_code=self.args.trust_remote_code,
+                variant=self.args.variant,
+                cache_dir=self.args.cache_dir,
             )
             model.save_pretrained(self.args.output)
 
@@ -468,5 +475,38 @@ class OVExportCommand(BaseOptimumCLICommand):
                 stateful=not self.args.disable_stateful,
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
+                variant=self.args.variant,
                 # **input_shapes,
             )
+
+
+def prepare_wc_config(args, default_configs):
+    is_int8 = args.weight_format == "int8"
+    return {
+        "bits": 8 if is_int8 else 4,
+        "ratio": 1.0 if is_int8 else (args.ratio or default_configs["ratio"]),
+        "sym": args.sym or False,
+        "group_size": -1 if is_int8 else args.group_size,
+        "all_layers": None if is_int8 else args.all_layers,
+        "dataset": args.dataset,
+        "num_samples": args.num_samples,
+        "quant_method": "awq" if args.awq else "default",
+        "sensitivity_metric": args.sensitivity_metric,
+        "scale_estimation": args.scale_estimation,
+        "gptq": args.gptq,
+        "lora_correction": args.lora_correction,
+        "dtype": args.weight_format,
+        "backup_precision": args.backup_precision,
+    }
+
+
+def prepare_q_config(args):
+    return {
+        "dtype": args.quant_mode,
+        "bits": 8,
+        "sym": args.sym or False,
+        "dataset": args.dataset,
+        "num_samples": args.num_samples,
+        "smooth_quant_alpha": args.smooth_quant_alpha,
+        "trust_remote_code": args.trust_remote_code,
+    }

@@ -84,6 +84,7 @@ except OptionalDependencyNotAvailable:
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
+            "OVMixedQuantizationConfig",
         ]
     )
 else:
@@ -94,6 +95,7 @@ else:
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
+            "OVMixedQuantizationConfig",
         ]
     )
 
@@ -127,6 +129,7 @@ except OptionalDependencyNotAvailable:
         "OVFluxImg2ImgPipeline",
         "OVFluxInpaintPipeline",
         "OVFluxFillPipeline",
+        "OVSanaPipeline",
         "OVPipelineForImage2Image",
         "OVPipelineForText2Image",
         "OVPipelineForInpainting",
@@ -150,6 +153,7 @@ else:
             "OVFluxImg2ImgPipeline",
             "OVFluxInpaintPipeline",
             "OVFluxFillPipeline",
+            "OVSanaPipeline",
             "OVPipelineForImage2Image",
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
@@ -270,6 +274,7 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import (
             OVDynamicQuantizationConfig,
+            OVMixedQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVTrainingArguments,
@@ -278,6 +283,7 @@ if TYPE_CHECKING:
     else:
         from .openvino import (
             OVDynamicQuantizationConfig,
+            OVMixedQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVTrainingArguments,
@@ -303,6 +309,7 @@ if TYPE_CHECKING:
             OVPipelineForImage2Image,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
+            OVSanaPipeline,
             OVStableDiffusion3Img2ImgPipeline,
             OVStableDiffusion3InpaintPipeline,
             OVStableDiffusion3Pipeline,
@@ -321,6 +328,7 @@ if TYPE_CHECKING:
             OVPipelineForImage2Image,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
+            OVSanaPipeline,
             OVStableDiffusion3Img2ImgPipeline,
             OVStableDiffusion3InpaintPipeline,
             OVStableDiffusion3Pipeline,

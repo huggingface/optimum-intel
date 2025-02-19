@@ -30,8 +30,7 @@ import requests
 import torch
 import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf import CompressWeightsMode, SensitivityMetric
-from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
+from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
@@ -60,6 +59,7 @@ from ..utils.import_utils import (
 from ..utils.modeling_utils import get_model_device
 from .configuration import (
     OVConfig,
+    OVMixedQuantizationConfig,
     OVQuantizationConfig,
     OVQuantizationConfigBase,
     OVQuantizationMethod,
@@ -394,7 +394,7 @@ class OVQuantizer(OptimumQuantizer):
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     # Apply weight-only quantization to all SD submodels except UNet
-                    quantization_config_copy = copy.deepcopy(quantization_config)
+                    quantization_config_copy = quantization_config.clone()
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
                     sub_model_names = [
@@ -451,10 +451,7 @@ class OVQuantizer(OptimumQuantizer):
                 else:
                     _weight_only_quantization(self.model.model, quantization_config, calibration_dataset, **kwargs)
                     self.model.request = None
-        else:
-            if not isinstance(quantization_config, OVQuantizationConfig):
-                raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
-
+        elif isinstance(quantization_config, OVQuantizationConfig):
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
 
@@ -467,6 +464,15 @@ class OVQuantizer(OptimumQuantizer):
                 )
                 self.model.model = quantized_model
                 self.model.request = None
+        elif isinstance(quantization_config, OVMixedQuantizationConfig):
+            if calibration_dataset is None:
+                raise ValueError("Calibration dataset is required to run quantization.")
+
+            quantized_model = _mixed_quantization(self.model.model, quantization_config, calibration_dataset, **kwargs)
+            self.model.model = quantized_model
+            self.model.request = None
+        else:
+            raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
         if save_directory is not None:
             self.model.save_pretrained(save_directory)
@@ -973,7 +979,7 @@ class OVQuantizer(OptimumQuantizer):
     def _quantize_whisper_model(self, quantization_config, calibration_dataset, **kwargs):
         # Quantize encoder model
         # quantization_config.num_samples of audio samples result in more actual model inputs
-        config = copy.deepcopy(quantization_config)
+        config = quantization_config.clone()
         config.num_samples = calibration_dataset[0].get_length()
         quantized_encoder_model = _full_quantization(
             self.model.encoder_model, config, calibration_dataset[0], **kwargs
@@ -983,7 +989,7 @@ class OVQuantizer(OptimumQuantizer):
         self.model.encoder.request = None
 
         # Quantize decoder model
-        config = copy.deepcopy(quantization_config)
+        config = quantization_config.clone()
         config.num_samples = calibration_dataset[1].get_length()
         quantized_decoder_model = _full_quantization(
             self.model.decoder_model, config, calibration_dataset[1], **kwargs
@@ -994,7 +1000,7 @@ class OVQuantizer(OptimumQuantizer):
 
         if self.model.decoder_with_past_model is not None:
             # Quantize decoder with past model
-            config = copy.deepcopy(quantization_config)
+            config = quantization_config.clone()
             config.num_samples = calibration_dataset[2].get_length()
             quantized_decoder_w_p_model = _full_quantization(
                 self.model.decoder_with_past_model, config, calibration_dataset[2], **kwargs
@@ -1010,6 +1016,7 @@ def _weight_only_quantization(
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
     **kwargs,
 ) -> openvino.runtime.Model:
+    _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -1027,73 +1034,33 @@ def _weight_only_quantization(
         else:
             dataset = nncf.Dataset(calibration_dataset)
 
-    sensitivity_metric = None
-    if isinstance(config.sensitivity_metric, str):
-        sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
-
-    if config.weight_format == "mxfp4":
-        mode = CompressWeightsMode.E2M1
-    elif config.weight_format == "nf4":
-        mode = CompressWeightsMode.NF4
-    else:
-        if config.bits == 8:
-            mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
-        else:
-            mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
-
-    return nncf.compress_weights(
+    wc_kwargs = copy.deepcopy(kwargs)
+    wc_kwargs.update(config.to_nncf_dict())
+    compressed_model = nncf.compress_weights(
         model,
-        mode=mode,
-        ratio=config.ratio,
-        group_size=config.group_size,
-        all_layers=config.all_layers,
-        sensitivity_metric=sensitivity_metric,
-        awq=getattr(config.quant_method, "name", "") == "AWQ" or None,
-        ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
-        subset_size=config.num_samples if config.num_samples else 128,
-        scale_estimation=config.scale_estimation,
-        gptq=config.gptq,
-        lora_correction=config.lora_correction,
-        backup_mode=None if config.backup_precision is None else nncf.BackupMode(config.backup_precision),
-        **kwargs,
+        **wc_kwargs,
     )
+
+    _remove_f16_kv_cache_precision_flag(compressed_model)
+
+    return compressed_model
 
 
 def _full_quantization(
     model: openvino.runtime.Model,
     quantization_config: OVQuantizationConfig,
     calibration_dataset: nncf.Dataset,
+    verify_not_optimized: bool = True,
     **kwargs,
 ):
-    advanced_parameters_kwargs = {}
-    if quantization_config.smooth_quant_alpha is not None:
-        advanced_parameters_kwargs["smooth_quant_alphas"] = AdvancedSmoothQuantParameters(
-            matmul=quantization_config.smooth_quant_alpha
-        )
+    if verify_not_optimized:
+        _verify_not_optimized(model)
+    q_kwargs = copy.deepcopy(kwargs)
+    q_kwargs.update(quantization_config.to_nncf_dict())
+    quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
 
-    q_mode_map = {
-        "f8e4m3": nncf.QuantizationMode.FP8_E4M3,
-        "f8e5m2": nncf.QuantizationMode.FP8_E5M2,
-    }
-
-    if quantization_config.activation_format in q_mode_map:
-        kwargs.update({"mode": q_mode_map[quantization_config.activation_format]})
-
-    quantized_model = nncf.quantize(
-        model,
-        calibration_dataset,
-        subset_size=quantization_config.num_samples,
-        ignored_scope=quantization_config.get_ignored_scope_instance(),
-        model_type=nncf.ModelType(quantization_config.model_type),
-        preset=nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED,
-        fast_bias_correction=quantization_config.fast_bias_correction,
-        advanced_parameters=nncf.AdvancedQuantizationParameters(
-            overflow_fix=OverflowFix(quantization_config.overflow_fix),
-            **advanced_parameters_kwargs,
-        ),
-        **kwargs,
-    )
+    _remove_f16_kv_cache_precision_flag(quantized_model)
 
     return quantized_model
 
@@ -1161,29 +1128,103 @@ def _hybrid_quantization(
     Returns:
         The OpenVINO Runtime model with applied hybrid quantization.
     """
-    ops_to_compress = _collect_ops_with_weights(model)
 
-    wc_config = copy.deepcopy(quantization_config)
-    wc_config.ignored_scope = wc_config.ignored_scope or {}
+    wc_config = quantization_config.clone()
+    wc_config.ignored_scope = {}
+    if any(op.get_type_name() == "Convolution" for op in model.get_ops()):
+        wc_config.ignored_scope["types"] = ["Convolution"]
 
-    wc_ignored_types = ["Convolution"] if any(op.get_type_name() == "Convolution" for op in model.get_ops()) else []
-    wc_config.ignored_scope["types"] = wc_config.ignored_scope.get("types", []) + wc_ignored_types
-    compressed_model = _weight_only_quantization(model, wc_config, **kwargs)
-
-    ptq_ignored_scope = quantization_config.get_ignored_scope_instance()
-    ptq_ignored_scope.names += ops_to_compress
-
-    subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
-    quantized_model = nncf.quantize(
-        model=compressed_model,
-        calibration_dataset=dataset,
-        model_type=nncf.ModelType.TRANSFORMER,
-        ignored_scope=ptq_ignored_scope,
-        # SQ algo should be disabled for MatMul nodes because their weights are already compressed
-        advanced_parameters=nncf.AdvancedQuantizationParameters(
-            smooth_quant_alphas=AdvancedSmoothQuantParameters(matmul=-1)
-        ),
-        subset_size=subset_size,
+    q_config_ignored_scope = {"names": _collect_ops_with_weights(model)}
+    q_config = OVQuantizationConfig(
+        ignored_scope=q_config_ignored_scope,
+        num_samples=quantization_config.num_samples or 200,
+        smooth_quant_alpha=-1,
         **kwargs,
     )
+
+    mixed_quantization_config = OVMixedQuantizationConfig(
+        weight_quantization_config=wc_config,
+        full_quantization_config=q_config,
+        ignored_scope=quantization_config.ignored_scope,
+        **kwargs,
+    )
+
+    return _mixed_quantization(model, mixed_quantization_config, dataset, **kwargs)
+
+
+def _mixed_quantization(
+    model: openvino.Model,
+    quantization_config: OVMixedQuantizationConfig,
+    dataset: nncf.Dataset,
+    **kwargs,
+) -> openvino.Model:
+    """
+    Perform mixed precision quantization where we separately quantize:
+        (1) weights of weighted layers to the precision given in the `quantization_config.weight_quantization_config`, and
+        (2) weights and activations of other possible layers; precision is given in the `quantization_config.full_quantization_config`.
+
+    By default, weights of all weighted layers are quantized in the first step. In the second step activations of
+    weighted and non-weighted layers are quantized. If some layers are instructed to be ignored in the first step
+    with `weight_quantization_config.ignored_scope` parameter, both weights and activations of these layers are
+    quantized to the precision given in the `full_quantization_config`.
+
+    Args:
+        model (`openvino.runtime.Model`):
+            The OpenVINO Runtime model for applying quantization.
+        quantization_config (`OVMixedQuantizationConfig`):
+            The configuration containing the parameters related to quantization.
+        dataset (`nncf.Dataset`):
+            The dataset used for quantization.
+    Returns:
+        The OpenVINO Runtime model with applied quantization.
+    """
+
+    def merge_ignored_scopes(
+        ignored_scope_1: Union[Dict[str, List[str]], None], ignored_scope_2: Union[Dict[str, List[str]], None]
+    ) -> Dict[str, List[str]]:
+        if ignored_scope_1 is None:
+            return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
+        if ignored_scope_2 is None:
+            return copy.deepcopy(ignored_scope_1)
+        merged_ignored_scope = {}
+        for key in set(ignored_scope_1) | set(ignored_scope_2):
+            merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
+        return merged_ignored_scope
+
+    wc_config = quantization_config.weight_quantization_config.clone()
+    wc_config.ignored_scope = merge_ignored_scopes(wc_config.ignored_scope, quantization_config.ignored_scope)
+    wc_dataset = dataset if wc_config.bits != 8 else None
+    compressed_model = _weight_only_quantization(model, wc_config, wc_dataset, **kwargs)
+
+    q_config = quantization_config.full_quantization_config.clone()
+    q_config.ignored_scope = merge_ignored_scopes(q_config.ignored_scope, quantization_config.ignored_scope)
+    quantized_model = _full_quantization(compressed_model, q_config, dataset, verify_not_optimized=False, **kwargs)
+
     return quantized_model
+
+
+def _verify_not_optimized(ov_model):
+    message_template = (
+        "Cannot apply optimization to the model because it was already optimized with the following config: {}. "
+        "To avoid this issue, check that you set load_in_8bit=False or not using quantization_config at export in the .from_pretrained(), "
+        "or explicitly specify weight format with --weight_format fp16/fp32 when using CLI."
+    )
+
+    rt_info = ov_model.get_rt_info()
+    if "nncf" in rt_info:
+        model_weight_compression_config = rt_info["nncf"].get("weight_compression", None)
+        model_quantization_config = rt_info["nncf"].get("quantization", None)
+        if model_weight_compression_config is not None:
+            raise RuntimeError(message_template.format(model_weight_compression_config))
+        elif model_quantization_config is not None:
+            raise RuntimeError(message_template.format(model_quantization_config))
+
+
+def _remove_f16_kv_cache_precision_flag(model: openvino.Model) -> openvino.Model:
+    # Remove the KV cache compression disabling flag from the model
+    if model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]):
+        prev_rt_info = model.get_rt_info("runtime_options").value
+        if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
+            prev_rt_info.pop("KV_CACHE_PRECISION")
+            model.set_rt_info(prev_rt_info, "runtime_options")
+    return model
