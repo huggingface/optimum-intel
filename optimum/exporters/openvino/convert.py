@@ -47,7 +47,6 @@ from optimum.intel.utils.import_utils import (
     _transformers_version,
     compare_versions,
     is_openvino_tokenizers_version,
-    is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
 )
@@ -67,6 +66,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
+    allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
     save_config,
@@ -437,7 +437,9 @@ def export_pytorch(
             patcher.patched_forward = ts_patched_forward
 
             ts_decoder_kwargs = {}
-            if library_name == "diffusers" and is_openvino_version(">=", "2025.0"):
+            model_config = getattr(model, "config", {})
+            model_type = getattr(model_config, "model_type", "").replace("_", "-")
+            if allow_skip_tracing_check(library_name, model_type):
                 ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
             with patcher:

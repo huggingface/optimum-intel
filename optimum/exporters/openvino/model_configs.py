@@ -75,6 +75,7 @@ from .model_patcher import (
     CodeGenModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
+    DeepseekPatcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
@@ -2813,3 +2814,17 @@ class MT5OpenVINOConfig(T5OpenVINOConfig):
 )
 class LongT5OpenVINOConfig(T5OpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "deepseek-v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+@register_in_tasks_manager(
+    "deepseek-v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+@register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
