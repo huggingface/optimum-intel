@@ -427,6 +427,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
             - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
+        statistics_path (`str`, *optional*):
+            The directory to save/load NNCF data-aware statistics to/from. Such caching is useful for speeding up
+            running many data-aware compression experiments on the same model and dataset.
     """
 
     def __init__(
@@ -449,6 +452,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
+        statistics_path: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(
@@ -470,6 +474,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.gptq = gptq
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
+        self.statistics_path = statistics_path
         if kwargs.get("weight_format") is not None:
             logger.warning(
                 "The `weight_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
@@ -611,6 +616,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
+        advanced_parameters = None
+        if self.statistics_path is not None:
+            advanced_parameters = nncf.AdvancedCompressionParameters(statistics_path=self.statistics_path)
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -624,6 +632,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
+            "advanced_parameters": advanced_parameters,
         }
         return result
 
