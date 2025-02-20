@@ -264,6 +264,24 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if compile and not self._compile_only:
             self.compile()
 
+    @property
+    def ov_submodels(self) -> Dict[str, openvino.runtime.Model]:
+        return {name: getattr(getattr(self, name), "model") for name in self._ov_submodel_names}
+
+    @property
+    def _ov_submodel_names(self) -> List[str]:
+        submodel_name_candidates = [
+            "unet",
+            "transformer",
+            "vae_decoder",
+            "vae_encoder",
+            "text_encoder",
+            "text_encoder_2",
+            "text_encoder_3",
+        ]
+        submodel_names = [name for name in submodel_name_candidates if getattr(self, name) is not None]
+        return submodel_names
+
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
@@ -879,17 +897,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`half()` is not supported with `compile_only` mode, please intialize model without this option"
             )
 
-        for component in {
-            self.unet,
-            self.transformer,
-            self.vae_encoder,
-            self.vae_decoder,
-            self.text_encoder,
-            self.text_encoder_2,
-            self.text_encoder_3,
-        }:
-            if component is not None:
-                compress_model_transformation(component.model)
+        for submodel in self.ov_submodels.values():
+            compress_model_transformation(submodel)
 
         self.clear_requests()
 

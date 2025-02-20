@@ -606,29 +606,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            if task.startswith("text2text-generation"):
-                models = [model.encoder, model.decoder]
-                if task.endswith("with-past") and not model.decoder.stateful:
-                    models.append(model.decoder_with_past)
-            elif (
-                model_type.startswith("stable-diffusion")
-                or model_type.startswith("flux")
-                or model_type.startswith("sana")
-            ):
-                models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
-                models.append(
-                    model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2
-                )
-            elif task.startswith("image-text-to-text"):
-                models = list(model.submodels.values())
-            else:
-                models = [model]
-
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = [{"int8": it} for it in expected_int8]
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 expected_int8 = expected_int8[:2]
-            check_compression_state_per_model(self, models, expected_int8)
+            check_compression_state_per_model(self, model.ov_submodels.values(), expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -667,13 +649,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            submodels = []
-            if task == "text-generation-with-past":
-                submodels = [model]
-            elif task == "image-text-to-text":
-                submodels = list(model.submodels.values())
-
-            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_submodels.values(), expected_num_weight_nodes_per_model)
 
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
