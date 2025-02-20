@@ -393,30 +393,23 @@ class OVQuantizer(OptimumQuantizer):
                 if calibration_dataset is None:
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    # Apply weight-only quantization to all SD submodels except UNet
+                    # Apply weight-only quantization to all SD submodels except UNet/Transformer
                     quantization_config_copy = quantization_config.clone()
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    sub_model_names = [
-                        "vae_encoder",
-                        "vae_decoder",
-                        "text_encoder",
-                        "text_encoder_2",
-                        "text_encoder_3",
-                    ]
-                    sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
+                    sub_models = [v for (k, v) in self.model.ov_submodels.items() if k not in ("unet", "transformer")]
                     for sub_model in sub_models:
-                        _weight_only_quantization(sub_model.model, quantization_config_copy, **kwargs)
+                        _weight_only_quantization(sub_model, quantization_config_copy, **kwargs)
 
-                    if self.model.unet is not None:
-                        # Apply hybrid quantization to UNet
-                        self.model.unet.model = _hybrid_quantization(
-                            self.model.unet.model, quantization_config, calibration_dataset, **kwargs
-                        )
+                    unet_is_present = self.model.unet is not None
+                    vision_model = (self.model.unet if unet_is_present else self.model.transformer).model
+                    quantized_vision_model = _hybrid_quantization(
+                        vision_model, quantization_config, calibration_dataset, **kwargs
+                    )
+                    if unet_is_present:
+                        self.model.unet.model = quantized_vision_model
                     else:
-                        self.model.transformer.model = _hybrid_quantization(
-                            self.model.transformer.model, quantization_config, calibration_dataset, **kwargs
-                        )
+                        self.model.transformer.model = quantized_vision_model
 
                     self.model.clear_requests()
                 else:
@@ -427,24 +420,13 @@ class OVQuantizer(OptimumQuantizer):
                     self.model.request = None
             else:
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    sub_model_names = [
-                        "vae_encoder",
-                        "vae_decoder",
-                        "text_encoder",
-                        "text_encoder_2",
-                        "unet",
-                        "transformer",
-                        "text_encoder_3",
-                    ]
-                    sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
-                    for sub_model in sub_models:
-                        _weight_only_quantization(sub_model.model, quantization_config, **kwargs)
+                    for submodel in self.model.ov_submodels.values():
+                        _weight_only_quantization(submodel, quantization_config, **kwargs)
                     self.model.clear_requests()
                 elif isinstance(self.model, OVModelForVisualCausalLM):
                     language_model = self.model.language_model
                     _weight_only_quantization(language_model.model, quantization_config, calibration_dataset, **kwargs)
-                    sub_model_names = ["vision_embeddings", "text_embeddings"] + self.model.additional_parts
-                    sub_models = [getattr(self.model, f"{name}_model") for name in sub_model_names]
+                    sub_models = [v for (k, v) in self.model.ov_submodels.items() if k != "lm_model"]
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8, sym=True), **kwargs)
                     self.model.clear_requests()
