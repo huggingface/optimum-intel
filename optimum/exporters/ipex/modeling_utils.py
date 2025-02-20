@@ -811,6 +811,7 @@ class _IPEXAttention(nn.Module):
             self.use_sdpa = True
         elif self.has_flash_attn():
             attn_output = torch.empty_like(query)
+            query_len_tensor = seq_len_tensor if past_len == 0 else query_len_tensor
             query_max_len = max_input_lens if past_len == 0 else 1
             PagedAttention.flash_attn_varlen_func(
                 attn_output,
