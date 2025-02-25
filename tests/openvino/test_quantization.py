@@ -435,7 +435,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            [{"int8": 14, "int4": 25}],
+            [{"int8": 18, "int4": 23}],
         ),
         (
             OVModelForCausalLM,
