@@ -1117,6 +1117,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"minicpm", "minicpm3", "arctic", "deepseek"}:
+            pass
+
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
@@ -2220,6 +2225,15 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
+
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-maira2/discussions/1 merged as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"maira2"}:
+            pass
+
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged for all models as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"phi3_v"}:
+            pass
+
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
 
