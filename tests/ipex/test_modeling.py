@@ -239,10 +239,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mistral",
         "llama",
         "llama2",
-        "phi",
         "distilgpt2",
         "mpt",
         "opt",
+        "phi",
         "qwen2",
     )
     IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "falcon", "gpt2", "qwen2")
