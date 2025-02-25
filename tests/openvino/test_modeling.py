@@ -1039,6 +1039,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+
+        # TODO: add back once dtype fixed everywhere
+        # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L720
+        # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L759
+        if model_arch in {"chatglm", "glm4"} and is_transformers_version(">=", "4.49"):
+            pass
+
         not_stateful = []
         if is_openvino_version("<", "2024.0"):
             not_stateful.append("mixtral")
