@@ -1044,7 +1044,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L720
         # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L759
         if model_arch in {"chatglm", "glm4"} and is_transformers_version(">=", "4.49"):
-            pass
+            self.skipTest("Incompatible modeling code")
 
         not_stateful = []
         if is_openvino_version("<", "2024.0"):
@@ -1127,7 +1127,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
         if model_arch in {"minicpm", "minicpm3", "arctic", "deepseek"} and is_transformers_version(">=", "4.49"):
-            pass
+            self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
@@ -2235,11 +2235,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-maira2/discussions/1 merged as current mdoeling incompatible with transformers >= v4.49
         if model_arch in {"maira2"} and is_transformers_version(">=", "4.49"):
-            pass
+            self.skipTest("Incompatible modeling code")
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged for all models as current mdoeling incompatible with transformers >= v4.49
         if model_arch in {"phi3_v"} and is_transformers_version(">=", "4.49"):
-            pass
+            self.skipTest("Incompatible modeling code")
 
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
