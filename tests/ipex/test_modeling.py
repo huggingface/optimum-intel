@@ -239,7 +239,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mistral",
         "llama",
         "llama2",
-        # "phi",
+        "phi",
         "distilgpt2",
         "mpt",
         "opt",
