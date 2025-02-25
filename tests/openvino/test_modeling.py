@@ -2238,7 +2238,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.skipTest("Incompatible modeling code")
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged for all models as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"phi3_v"} and is_transformers_version(">=", "4.49"):
+        if model_arch in {"phi3_v", "nanollava"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
         with torch.no_grad():
