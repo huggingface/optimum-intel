@@ -92,6 +92,8 @@ _TASK_TO_DATASET = {
 }
 
 pattern_prefix = "^__module.model.model" if is_transformers_version(">=", "4.49") else "^__module.model"
+
+
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
