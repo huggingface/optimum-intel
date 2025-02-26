@@ -91,7 +91,7 @@ _TASK_TO_DATASET = {
     "text-classification": ("glue", "sst2", "sentence"),
 }
 
-
+pattern_prefix = "^__module.model.model" if is_transformers_version(">=", "4.49") else "^__module.model"
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -158,12 +158,12 @@ class OVQuantizerTest(unittest.TestCase):
                     dtype="nf4",
                     group_size=16,
                     ratio=0.5,
-                    ignored_scope={"patterns": ["^__module.model.model.layers.0.self_attn"]},
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
                 ),
                 full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e4m3", ignored_scope={"patterns": ["^__module.model.model.layers.0.mlp"]}
+                    dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
-                ignored_scope={"patterns": ["^__module.model.model.layers.1.self_attn"]},
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -183,12 +183,12 @@ class OVQuantizerTest(unittest.TestCase):
                     dtype="nf4",
                     group_size=16,
                     ratio=0.5,
-                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
                 ),
                 full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e5m2", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                    dtype="f8e5m2", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
-                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
                 dataset="wikitext2",
                 num_samples=1,
             ),
