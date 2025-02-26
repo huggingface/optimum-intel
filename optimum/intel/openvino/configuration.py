@@ -210,6 +210,24 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 32,
+        "ratio": 0.7,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "bits": 4,
         "sym": False,
@@ -799,9 +817,6 @@ class OVConfig(BaseConfig):
         if isinstance(quantization_config, dict):
             quantization_config = self.quantization_config_from_dict(quantization_config)
         self.quantization_config = quantization_config
-        self.compression = kwargs.get(
-            "compression", None
-        )  # A field for backward-compatability of training-time compression parameters
         if self.quantization_config is not None:
             if isinstance(self.quantization_config, (OVWeightQuantizationConfig, OVQuantizationConfig)):
                 self.dtype = self.quantization_config.dtype

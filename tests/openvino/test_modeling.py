@@ -1001,6 +1001,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3")
+        # openvino 2025.0 required for disabling check_trace
+        if is_openvino_version(">=", "2025.0"):
+            SUPPORTED_ARCHITECTURES += ("deepseek",)
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
@@ -1030,6 +1033,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "exaone",
         "decilm",
         "minicpm3",
+        "deepseek",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
