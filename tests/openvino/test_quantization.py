@@ -583,22 +583,23 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.45.0"):
         LOAD_IN_4_BITS_SCOPE.extend(
             [
-                (
-                    OVModelForVisualCausalLM,
-                    "minicpmv",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        processor=MODEL_NAMES["minicpmv"],
-                        trust_remote_code=True,
-                    ),
-                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
-                ),
+                # TODO: add back when https://huggingface.co/katuni4ka/tiny-random-minicpmv-2_6/discussions/1 merged
+                # (
+                #     OVModelForVisualCausalLM,
+                #     "minicpmv",
+                #     True,
+                #     dict(
+                #         bits=4,
+                #         group_size=16,
+                #         dataset="contextual",
+                #         ratio=0.8,
+                #         sensitivity_metric="mean_activation_magnitude",
+                #         num_samples=1,
+                #         processor=MODEL_NAMES["minicpmv"],
+                #         trust_remote_code=True,
+                #     ),
+                #     [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
+                # ),
                 (
                     OVModelForVisualCausalLM,
                     "internvl2",
