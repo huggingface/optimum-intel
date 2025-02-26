@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
+# Page attention model cannot use torch.compile for now. 
 _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 
 
