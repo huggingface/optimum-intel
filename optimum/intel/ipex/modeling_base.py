@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
+_COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
@@ -185,6 +186,7 @@ class IPEXModel(OptimizedModel):
     def maybe_apply_torch_compile(self):
         if (
             self.model.device.type != "cpu"
+            or self.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
             or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
             or getattr(self.config, "quantization_config", None)
         ):
