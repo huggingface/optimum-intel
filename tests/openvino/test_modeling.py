@@ -2233,10 +2233,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
 
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-maira2/discussions/1 merged as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"maira2"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
-
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged for all models as current mdoeling incompatible with transformers >= v4.49
         if model_arch in {"phi3_v", "nanollava"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
