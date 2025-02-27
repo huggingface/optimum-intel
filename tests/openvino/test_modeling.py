@@ -1039,6 +1039,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+
+        # TODO: add back once dtype fixed everywhere
+        # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L720
+        # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L759
+        if model_arch in {"chatglm", "glm4"} and is_transformers_version(">=", "4.49"):
+            self.skipTest("Incompatible modeling code")
+
         not_stateful = []
         if is_openvino_version("<", "2024.0"):
             not_stateful.append("mixtral")
@@ -1117,6 +1124,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"minicpm", "minicpm3", "arctic", "deepseek"} and is_transformers_version(">=", "4.49"):
+            self.skipTest("Incompatible modeling code")
+
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
@@ -2119,6 +2131,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
 
@@ -2220,6 +2233,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
+
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged for all models as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"phi3_v", "nanollava"} and is_transformers_version(">=", "4.49"):
+            self.skipTest("Incompatible modeling code")
+
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
 

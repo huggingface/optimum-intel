@@ -3935,14 +3935,28 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
         # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L390
         # added attention_mask input instead of internal calculation (unsupported by tracing due to cycle with dynamic len)
         def sdpa_attn_forward(
-            self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, rotary_pos_emb: torch.Tensor = None
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            rotary_pos_emb: torch.Tensor = None,
+            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         ) -> torch.Tensor:
             from transformers.models.qwen2_vl.modeling_qwen2_vl import apply_rotary_pos_emb_vision
 
             seq_length = hidden_states.shape[0]
             q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
-            q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
-            k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+
+            if is_transformers_version(">=", "4.49"):
+                if position_embeddings is None:
+                    emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+                    cos = emb.cos().float()
+                    sin = emb.sin().float()
+                else:
+                    cos, sin = position_embeddings
+                q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+            else:
+                q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
+                k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
 
             q = q.transpose(0, 1)
             k = k.transpose(0, 1)

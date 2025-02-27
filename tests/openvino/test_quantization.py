@@ -91,6 +91,8 @@ _TASK_TO_DATASET = {
     "text-classification": ("glue", "sst2", "sentence"),
 }
 
+pattern_prefix = "^__module.model.model" if is_transformers_version(">=", "4.49") else "^__module.model"
+
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
@@ -158,12 +160,12 @@ class OVQuantizerTest(unittest.TestCase):
                     dtype="nf4",
                     group_size=16,
                     ratio=0.5,
-                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
                 ),
                 full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e4m3", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                    dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
-                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -183,12 +185,12 @@ class OVQuantizerTest(unittest.TestCase):
                     dtype="nf4",
                     group_size=16,
                     ratio=0.5,
-                    ignored_scope={"patterns": ["^__module.model.layers.0.self_attn"]},
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
                 ),
                 full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e5m2", ignored_scope={"patterns": ["^__module.model.layers.0.mlp"]}
+                    dtype="f8e5m2", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
-                ignored_scope={"patterns": ["^__module.model.layers.1.self_attn"]},
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
                 dataset="wikitext2",
                 num_samples=1,
             ),
@@ -435,7 +437,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            [{"int8": 14, "int4": 25}],
+            [{"int8": 18, "int4": 23}] if is_transformers_version(">=", "4.49") else [{"int8": 14, "int4": 25}],
         ),
         (
             OVModelForCausalLM,
@@ -449,7 +451,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            [{"int8": 16, "int4": 24}],
+            [{"int8": 18, "int4": 23}] if is_transformers_version(">=", "4.49") else [{"int8": 16, "int4": 24}],
         ),
         (
             OVModelForCausalLM,
@@ -612,21 +614,23 @@ class OVWeightCompressionTest(unittest.TestCase):
                     ),
                     [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
-                (
-                    OVModelForVisualCausalLM,
-                    "phi3_v",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
-                ),
+                # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-phi3-vision/blob/main/processing_phi3_v.py#L313 modified to add chat_template
+                # currently incompatible with transformers >= v4.49
+                # (
+                #     OVModelForVisualCausalLM,
+                #     "phi3_v",
+                #     True,
+                #     dict(
+                #         bits=4,
+                #         group_size=16,
+                #         dataset="contextual",
+                #         ratio=0.8,
+                #         sensitivity_metric="mean_activation_magnitude",
+                #         num_samples=1,
+                #         trust_remote_code=True,
+                #     ),
+                #     [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
+                # ),
                 (
                     OVModelForVisualCausalLM,
                     "qwen2_vl",

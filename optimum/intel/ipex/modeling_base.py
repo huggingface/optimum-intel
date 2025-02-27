@@ -36,12 +36,14 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    PreTrainedModel,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
+from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -51,8 +53,9 @@ from ...exporters.ipex.model_patcher import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
-from ..generation.modeling import prepare_jit_inputs
-from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
+from ..utils.constant import _TASK_ALIASES
+from ..utils.import_utils import is_ipex_version, is_transformers_version
+from ..utils.modeling_utils import recursive_to_device
 
 
 logger = logging.getLogger(__name__)
@@ -74,6 +77,36 @@ def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if not use_cache and task in _IPEX_EXPORTED_GENERATION_TASKS:
         return False
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
+
+
+def get_float_type(model_dtype: torch.dtype):
+    if model_dtype == torch.bfloat16:
+        return "bf16"
+    elif model_dtype == torch.float16:
+        return "fp16"
+    else:
+        return "fp32"
+
+
+def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = False):
+    task = _TASK_ALIASES.get(task, task)
+    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
+    onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+    float_dtype = get_float_type(model.dtype)
+    if "text-generation" in task:
+        onnx_config = onnx_config_class(
+            model.config, use_past=use_cache, use_past_in_inputs=use_cache, float_dtype=float_dtype
+        )
+    else:
+        onnx_config = onnx_config_class(model.config)
+
+    dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+
+    return {
+        key: recursive_to_device(dummy_inputs[key], model.device)
+        for key in signature.parameters
+        if dummy_inputs.get(key, None) is not None
+    }
 
 
 class IPEXModel(OptimizedModel):
