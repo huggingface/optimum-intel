@@ -295,7 +295,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
         trust_remote_code: Optional[bool] = False,
-        init_kwargs: Optional[dict] = None,
         **kwargs,
     ):
         """
@@ -315,8 +314,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 Allows to use custom code for the modeling hosted in the model repository. This option should only be
                 set for repositories you trust and in which you have read the code, as it will execute on your local
                 machine arbitrary code present in the model repository.
-            init_kwargs ('dict', *optional*):
-                Additional parameters for NNCF calls. This explicit argument is needed for deserialization from dict.
         """
         self.num_samples = num_samples
         self.dataset = dataset
@@ -326,7 +323,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
-        self.init_kwargs = (init_kwargs or {}) | kwargs
+        self.init_kwargs = kwargs
 
     def post_init(self):
         try:
@@ -345,6 +342,12 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 
     def clone(self):
         return copy.deepcopy(self)
+
+    def to_dict(self) -> Dict[str, Any]:
+        # Unpack init kwargs back into kwargs
+        result = super().to_dict()
+        result = result | result.pop("init_kwargs", {})
+        return result
 
 
 @dataclass
@@ -431,8 +434,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
             - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
-        init_kwargs ('dict', *optional*):
-            Additional parameters for nncf.compress_weights() call. This explicit argument is needed for deserialization from dict.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -456,7 +457,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
-        init_kwargs: Optional[dict] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -473,7 +473,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
-            init_kwargs=init_kwargs,
             **kwargs,
         )
         self.bits = bits
@@ -678,7 +677,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         trust_remote_code: bool = False,
         smooth_quant_alpha: Optional[float] = None,
         dtype: Optional[str] = "int8",
-        init_kwargs: Optional[dict] = None,
         **kwargs,
     ):
         """
@@ -725,8 +723,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 reduces quantization error.
             dtype (`str`, defaults to "int8"):
                 Data type activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
-            init_kwargs ('dict', *optional*):
-                Additional parameters for nncf.quantize() call. This explicit argument is needed for deserialization from dict.
             kwargs: Additional parameters for nncf.quantize() call.
         """
         activation_format = kwargs.pop("activation_format", None)
@@ -743,7 +739,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
-            init_kwargs=init_kwargs,
             **kwargs,
         )
         self.bits = bits
@@ -946,6 +941,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
                 Allows to use custom code for the modeling hosted in the model repository. This option should only be
                 set for repositories you trust and in which you have read the code, as it will execute on your local
                 machine arbitrary code present in the model repository.
+            **kwargs:
         """
         self.weight_quantization_config = self._initialize_quantization_config(
             weight_quantization_config, OVWeightQuantizationConfig
@@ -980,6 +976,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
+            **kwargs,
         )
 
         self.post_init()
