@@ -1034,8 +1034,17 @@ def _weight_only_quantization(
         else:
             dataset = nncf.Dataset(calibration_dataset)
 
-    wc_kwargs = copy.deepcopy(kwargs)
-    wc_kwargs.update(config.to_nncf_dict())
+    wc_kwargs = config.to_nncf_dict()
+
+    # Arguments provided in kwargs override the ones from the config
+    kwargs_intersection = set(wc_kwargs.keys()) & set(kwargs.keys())
+    if kwargs_intersection:
+        logger.warning(
+            f"The following nncf.compress_weights() arguments from the OVWeightQuantizationConfig will be overridden "
+            f"by the ones given in _weight_only_quantization call kwargs: {kwargs_intersection}."
+        )
+    wc_kwargs.update(kwargs)
+
     compressed_model = nncf.compress_weights(
         model,
         dataset=dataset,
@@ -1056,8 +1065,18 @@ def _full_quantization(
 ):
     if verify_not_optimized:
         _verify_not_optimized(model)
-    q_kwargs = copy.deepcopy(kwargs)
-    q_kwargs.update(quantization_config.to_nncf_dict())
+
+    q_kwargs = quantization_config.to_nncf_dict()
+
+    # Arguments provided in kwargs override the ones from the config
+    kwargs_intersection = set(q_kwargs.keys()) & set(kwargs.keys())
+    if kwargs_intersection:
+        logger.warning(
+            f"The following nncf.quantize() arguments from the OVQuantizationConfig will be overridden "
+            f"by the ones given in _full_quantization call kwargs: {kwargs_intersection}."
+        )
+    q_kwargs.update(kwargs)
+
     quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
 
     _remove_f16_kv_cache_precision_flag(quantized_model)
