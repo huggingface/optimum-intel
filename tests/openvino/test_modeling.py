@@ -2134,7 +2134,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
-    
+
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
     TASK = "image-text-to-text"
@@ -2160,7 +2160,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
-        if model_arch == "qwen_25_vl":
+        if model_arch == "qwen2_5_vl":
             from transformers import Qwen2_5_VLForConditionalGeneration
 
             return Qwen2_5_VLForConditionalGeneration

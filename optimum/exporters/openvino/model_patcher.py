@@ -3956,7 +3956,8 @@ def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
             return hidden_states
 
     else:
-
+        # Modified from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L391
+        # added attention_mask input instead of internal calculation (unsupported by tracing due to cycle with dynamic len)
         def sdpa_attn_forward(
             self,
             hidden_states: torch.Tensor,
@@ -4001,6 +4002,8 @@ def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
             attn_output = self.proj(attn_output)
             return attn_output
 
+        # Modified from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L446
+        # added attention_mask input propagation to self.attn
         def block_forward(
             self,
             hidden_states,
@@ -4069,8 +4072,9 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
 
         model.__orig_forward = model.forward
 
-        # Modified from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1118
-        # added attention_mask input instead cu_lens for its internal calculation model (unsupported by tracing due to cycle with dynamic len)
+        # Modified from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L405
+        # added attention_mask and window_attention_mask inputs instead cu_lens and window_cu_lens processing for its internal calculation model
+        # (unsupported by tracing due to cycle with dynamic len)
         # separated patch_embed and rot_pos_emb calls for performing as part of another model
         def image_embed_forward(
             self,

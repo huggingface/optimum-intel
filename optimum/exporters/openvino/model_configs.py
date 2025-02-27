@@ -132,11 +132,10 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    if is_transformers_version(">", "4.48.99"):
-        TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
-            "transformers",
-            "Qwen2_5_VLForConditionalGeneration",
-        )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
+        "transformers",
+        "Qwen2_5_VLForConditionalGeneration",
+    )
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
@@ -2716,6 +2715,8 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
 
 @register_in_tasks_manager("qwen2-5-vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
