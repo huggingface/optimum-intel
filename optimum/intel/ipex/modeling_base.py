@@ -54,7 +54,7 @@ from ...exporters.ipex.model_patcher import (
     _patch_model,
 )
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_ipex_version, is_transformers_version
+from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import recursive_to_device
 
 
@@ -64,8 +64,11 @@ logger = logging.getLogger(__name__)
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
-# TODO: Some models are already fixed in torch 2.6, will enable them when torch upgrading to 2.6
-_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
+# Page attention model cannot use torch.compile for now.
+if is_torch_version("<", "2.6"):
+    _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
+else:
+    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
