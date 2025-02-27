@@ -194,6 +194,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
         ),
         (
+            "automatic-speech-recognition-with-past",
+            "whisper",
+            "int8",
+            "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
+            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+            if is_transformers_version("<=", "4.36.0")
+            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
+        ),
+        (
             "text-generation",
             "llama",
             "f8e4m3",
@@ -694,13 +704,14 @@ class OVCLIExportTestCase(unittest.TestCase):
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --quant-mode {quant_mode} {option} {tmpdir}",
+                f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
+                f"--quant-mode {quant_mode} {option} {tmpdir}",
                 shell=True,
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
 
-            if task == "automatic-speech-recognition":
+            if "automatic-speech-recognition" in task:
                 submodels = [model.encoder, model.decoder]
                 if model.decoder_with_past is not None:
                     submodels.append(model.decoder_with_past)
