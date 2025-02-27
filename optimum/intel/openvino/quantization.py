@@ -1044,6 +1044,7 @@ def _weight_only_quantization(
             f"by the ones given in _weight_only_quantization call kwargs: {kwargs_intersection}."
         )
     wc_kwargs.update(kwargs)
+    wc_kwargs.pop("weight_only", None)
 
     compressed_model = nncf.compress_weights(
         model,
@@ -1076,6 +1077,7 @@ def _full_quantization(
             f"by the ones given in _full_quantization call kwargs: {kwargs_intersection}."
         )
     q_kwargs.update(kwargs)
+    q_kwargs.pop("weight_only", None)
 
     quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
 

@@ -87,6 +87,8 @@ quantization_config = OVWeightQuantizationConfig(
 )
 ```
 
+Note: `OVWeightQuantizationConfig` also accepts key word arguments not listed in its constructor. In this case such arguments will be passed directly to `nncf.compress_weights()` call. This is useful for passing additional parameters to the quantization algorithm.
+
 By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#symmetric-quantization) you can add `sym=True`.
 
 For 4-bit quantization you can also specify the following arguments in the quantization configuration :
