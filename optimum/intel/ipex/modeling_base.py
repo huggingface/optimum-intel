@@ -54,7 +54,7 @@ from ...exporters.ipex.model_patcher import (
     _patch_model,
 )
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_ipex_version, is_transformers_version
+from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import recursive_to_device
 
 
