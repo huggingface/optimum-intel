@@ -1021,6 +1021,11 @@ def _weight_only_quantization(
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
+    if not isinstance(config, OVWeightQuantizationConfig):
+        raise ValueError(
+            f"Expected quantization config to be an instance of `OVWeightQuantizationConfig`, but got {type(config)}."
+        )
+
     dataset = None
     if calibration_dataset is not None:
         if is_datasets_available() and isinstance(calibration_dataset, Dataset):
@@ -1054,6 +1059,11 @@ def _full_quantization(
     verify_not_optimized: bool = True,
     **kwargs,
 ):
+    if not isinstance(quantization_config, OVQuantizationConfig):
+        raise ValueError(
+            f"Expected quantization config to be an instance of `OVQuantizationConfig`, but got {type(quantization_config)}."
+        )
+
     if verify_not_optimized:
         _verify_not_optimized(model)
     q_kwargs = copy.deepcopy(kwargs)
