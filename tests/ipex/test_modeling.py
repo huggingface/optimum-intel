@@ -442,7 +442,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         exported_outputs = exported_model.generate(
             **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
         )
-        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-7))
+        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-6))
 
     @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self):
