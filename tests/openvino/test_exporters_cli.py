@@ -194,6 +194,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
         ),
         (
+            "automatic-speech-recognition-with-past",
+            "whisper",
+            "f8e4m3",
+            "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
+            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
+            if is_transformers_version("<=", "4.36.0")
+            else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}],
+        ),
+        (
             "text-generation",
             "llama",
             "f8e4m3",
@@ -606,29 +616,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            if task.startswith("text2text-generation"):
-                models = [model.encoder, model.decoder]
-                if task.endswith("with-past") and not model.decoder.stateful:
-                    models.append(model.decoder_with_past)
-            elif (
-                model_type.startswith("stable-diffusion")
-                or model_type.startswith("flux")
-                or model_type.startswith("sana")
-            ):
-                models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]
-                models.append(
-                    model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2
-                )
-            elif task.startswith("image-text-to-text"):
-                models = list(model.submodels.values())
-            else:
-                models = [model]
-
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             expected_int8 = [{"int8": it} for it in expected_int8]
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 expected_int8 = expected_int8[:2]
-            check_compression_state_per_model(self, models, expected_int8)
+            check_compression_state_per_model(self, model.ov_submodels.values(), expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -667,13 +659,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            submodels = []
-            if task == "text-generation-with-past":
-                submodels = [model]
-            elif task == "image-text-to-text":
-                submodels = list(model.submodels.values())
-
-            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_submodels.values(), expected_num_weight_nodes_per_model)
 
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
@@ -694,13 +680,14 @@ class OVCLIExportTestCase(unittest.TestCase):
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --quant-mode {quant_mode} {option} {tmpdir}",
+                f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
+                f"--quant-mode {quant_mode} {option} {tmpdir}",
                 shell=True,
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
 
-            if task == "automatic-speech-recognition":
+            if "automatic-speech-recognition" in task:
                 submodels = [model.encoder, model.decoder]
                 if model.decoder_with_past is not None:
                     submodels.append(model.decoder_with_past)

@@ -429,7 +429,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
         elif (
             quantize_with_dataset
-            and (task.startswith("text-generation") or task == "automatic-speech-recognition")
+            and (task.startswith("text-generation") or "automatic-speech-recognition" in task)
             or (task == "image-text-to-text" and quantization_config is not None)
         ):
             if task.startswith("text-generation"):

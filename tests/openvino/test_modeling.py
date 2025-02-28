@@ -290,7 +290,7 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
             model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
             compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
-            for _, submodel in compile_only_model.submodels.items():
+            for _, submodel in compile_only_model.ov_submodels.items():
                 self.assertIsInstance(submodel, ov.runtime.CompiledModel)
             for component_name, component in compile_only_model.components.items():
                 self.assertIsInstance(component.model, ov.runtime.CompiledModel)
@@ -2135,6 +2135,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
 
+    if is_transformers_version(">=", "4.49.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2146,7 +2148,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     )
 
     def get_transformer_model_class(self, model_arch):
-        if model_arch == "llava":
+        if is_transformers_version(">=", "4.46") and model_arch in ["llava", "llava_next", "qwen2_vl", "qwen2_5_vl"]:
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
+        if model_arch in "llava":
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration

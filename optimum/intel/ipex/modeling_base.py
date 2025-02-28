@@ -54,7 +54,7 @@ from ...exporters.ipex.model_patcher import (
     _patch_model,
 )
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_ipex_version, is_transformers_version
+from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import recursive_to_device
 
 
@@ -64,8 +64,11 @@ logger = logging.getLogger(__name__)
 _IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
-# TODO: Some models are already fixed in torch 2.6, will enable them when torch upgrading to 2.6
-_COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
+# Page attention model cannot use torch.compile for now.
+if is_torch_version("<", "2.6"):
+    _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
+else:
+    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 
 
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
@@ -350,6 +353,13 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     def prepare_inputs_for_generation(self, *args, **kwargs):
         return self.model.prepare_inputs_for_generation(*args, **kwargs)
 
+    def _supports_num_logits_to_keep(self) -> bool:
+        """
+        Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
+        to save memory. Checking it in this way allows to avoid using a new model attribute.
+        """
+        return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
+
     def generate(self, *args, **kwargs):
         if self._add_patch and kwargs.get("assistant_model", None):
             raise ValueError(
@@ -459,6 +469,13 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
     def get_encoder(self, *args, **kwargs):
         return self.model.get_encoder(*args, **kwargs)
+
+    def _supports_num_logits_to_keep(self) -> bool:
+        """
+        Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
+        to save memory. Checking it in this way allows to avoid using a new model attribute.
+        """
+        return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
 
     def _init_warmup(self):
         inputs = prepare_jit_inputs(self.model, self.export_feature, False)
