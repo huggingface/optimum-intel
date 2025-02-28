@@ -822,20 +822,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model._openvino_config.quantization_config.bits, 8)
             self.assertEqual(model._openvino_config.dtype, "int8")
 
-        if model.export_feature.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder]
-            if model.decoder_with_past is not None:
-                models.append(model.decoder_with_past)
-        elif model.export_feature == "text-to-image":
-            models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2)
-        elif model_type == "open-clip":
-            models = [model.text_model, model.visual_model]
-        elif model.export_feature == "image-text-to-text":
-            models = list(model.submodels.values())
-        else:
-            models = [model]
-
         if model_type == "open-clip":
             pytest.skip(reason="ticket 161043")
         elif model_type == "t5":
@@ -843,9 +829,12 @@ class OVWeightCompressionTest(unittest.TestCase):
         else:
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
+        submodels = (
+            [model.text_model, model.visual_model] if model_type == "open-clip" else model.ov_submodels.values()
+        )
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_ov_int8 = [{"int8": it} for it in expected_ov_int8]
-        check_compression_state_per_model(self, models, expected_ov_int8)
+        check_compression_state_per_model(self, submodels, expected_ov_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
@@ -942,11 +931,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            submodels = []
-            if isinstance(model, OVModelForCausalLM):
-                submodels = [model.model]
-            elif isinstance(model, OVModelForVisualCausalLM):
-                submodels = list(model.submodels.values())
+            submodels = list(model.ov_submodels.values())
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
@@ -980,21 +965,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             MODEL_NAMES[model_type], export=True, load_in_8bit=False, trust_remote_code=trust_remote_code
         )
-        if model.export_feature.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder]
-            if model.decoder_with_past is not None:
-                models.append(model.decoder_with_past)
-        elif model.export_feature == "text-to-image":
-            models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model_type in ["stable-diffusion", "sana"] else model.text_encoder_2)
-        elif model_type == "open-clip":
-            models = [model.text_model, model.visual_model]
-        elif model.export_feature == "image-text-to-text":
-            models = list(model.submodels.values())
-        else:
-            models = [model]
 
-        for i, submodel in enumerate(models):
+        submodels = (
+            [model.text_model, model.visual_model] if model_type == "open-clip" else model.ov_submodels.values()
+        )
+        for i, submodel in enumerate(submodels):
             ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
             _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             self.assertEqual(0, num_weight_nodes["int8"])
@@ -1110,12 +1085,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
-            submodels = []
-            if isinstance(model, OVModelForCausalLM):
-                submodels = [model.model]
-            elif isinstance(model, OVModelForVisualCausalLM):
-                submodels = list(model.submodels.values())
-            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_submodels.values(), expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir)

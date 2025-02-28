@@ -17,7 +17,7 @@ import os
 import warnings
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import openvino
 import torch
@@ -203,6 +203,17 @@ class OVBaseModel(OptimizedModel):
                 return torch_dtype
 
         return None
+
+    @property
+    def ov_submodels(self) -> Dict[str, openvino.runtime.Model]:
+        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._ov_submodel_names}
+
+    @property
+    def _ov_submodel_names(self) -> List[str]:
+        """
+        List of openvino submodel names. Used as keys for a dictionary returned by `.ov_submodels` property.
+        """
+        return ["model"]
 
     @staticmethod
     def load_model(

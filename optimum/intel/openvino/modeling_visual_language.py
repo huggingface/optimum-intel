@@ -385,17 +385,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_models = self.submodels
+        src_models = self.ov_submodels
         dst_file_names = {
             "lm_model": OV_LANGUAGE_MODEL_NAME,
             "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
             "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
         }
-        for name in self._submodel_names:
+        for name in self._ov_submodel_names:
             if name not in dst_file_names:
                 dst_file_names[name] = f"openvino_{name}.xml"
 
-        for name in self._submodel_names:
+        for name in self._ov_submodel_names:
             model = src_models[name]
             dst_file_name = dst_file_names[name]
             dst_path = os.path.join(save_directory, dst_file_name)
@@ -653,16 +653,12 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         return {component_name: getattr(self, component_name) for component_name in self._component_names}
 
     @property
-    def _submodel_names(self):
+    def _ov_submodel_names(self):
         model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
         for part in self.additional_parts:
             if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
-
-    @property
-    def submodels(self):
-        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._submodel_names}
 
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
@@ -672,7 +668,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        for _, submodel in self.submodels.items():
+        for submodel in self.ov_submodels.values():
             apply_moc_transformations(submodel, cf=False)
             compress_model_transformation(submodel)
         return self

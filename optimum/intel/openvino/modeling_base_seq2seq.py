@@ -15,7 +15,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
@@ -105,6 +105,13 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
+
+    @property
+    def _ov_submodel_names(self) -> List[str]:
+        submodel_names = ["encoder", "decoder"]
+        if self.decoder_with_past_model is not None:
+            submodel_names.append("decoder_with_past")
+        return submodel_names
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -482,13 +489,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             raise ValueError(
                 "`half()` is not supported with `compile_only` mode, please intialize model without this option"
             )
-        apply_moc_transformations(self.encoder_model, cf=False)
-        apply_moc_transformations(self.decoder_model, cf=False)
-        compress_model_transformation(self.encoder_model)
-        compress_model_transformation(self.decoder_model)
-        if self.decoder_with_past_model is not None:
-            apply_moc_transformations(self.decoder_with_past_model, cf=False)
-            compress_model_transformation(self.decoder_with_past_model)
+        for submodel in self.ov_submodels.values():
+            apply_moc_transformations(submodel, cf=False)
+            compress_model_transformation(submodel)
         return self
 
     def forward(self, *args, **kwargs):
