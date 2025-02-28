@@ -294,7 +294,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: bool = False,
+        trust_remote_code: Optional[bool] = False,
         **kwargs,
     ):
         """
@@ -323,6 +323,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
+        self.kwargs = kwargs
 
     def post_init(self):
         try:
@@ -341,6 +342,12 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 
     def clone(self):
         return copy.deepcopy(self)
+
+    def to_dict(self) -> Dict[str, Any]:
+        # Unpack kwargs dict
+        result = super().to_dict()
+        result = result | result.pop("kwargs", {})
+        return result
 
 
 @dataclass
@@ -427,6 +434,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
             - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
+        kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
     def __init__(
@@ -451,6 +459,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         backup_precision: Optional[str] = None,
         **kwargs,
     ):
+        weight_format = kwargs.pop("weight_format", None)
+        if weight_format is not None:
+            logger.warning(
+                "The `weight_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
+                "Please use `dtype` instead."
+            )
+            dtype = weight_format
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -458,6 +473,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
+            **kwargs,
         )
         self.bits = bits
         self.sym = sym
@@ -470,12 +486,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.gptq = gptq
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
-        if kwargs.get("weight_format") is not None:
-            logger.warning(
-                "The `weight_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
-                "Please use `dtype` instead."
-            )
-            dtype = kwargs.get("weight_format")
         self.dtype = dtype
         self.post_init()
 
@@ -624,6 +634,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
+            **self.kwargs,
         }
         return result
 
@@ -712,7 +723,15 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 reduces quantization error.
             dtype (`str`, defaults to "int8"):
                 Data type activations are compressed to. Possible values: ['int8', 'f8e4m3', 'f8e5m2'].
+            kwargs: Additional parameters for nncf.quantize() call.
         """
+        activation_format = kwargs.pop("activation_format", None)
+        if activation_format is not None:
+            logger.warning(
+                "The `activation_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
+                "Please use `dtype` instead."
+            )
+            dtype = activation_format
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -720,6 +739,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
+            **kwargs,
         )
         self.bits = bits
         self.sym = sym
@@ -727,12 +747,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
         self.smooth_quant_alpha = smooth_quant_alpha
-        if kwargs.get("activation_format") is not None:
-            logger.warning(
-                "The `activation_format` parameter is deprecated and will be removed in optimum-intel v1.24.0. "
-                "Please use `dtype` instead."
-            )
-            dtype = kwargs.get("activation_format")
         self.dtype = dtype
 
         f8_dtypes = ["f8e4m3", "f8e5m2"]
@@ -769,23 +783,19 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         Returns a dictionary with the variables that are ready to use for nncf.compress_weights() call.
         """
 
-        preset = "performance" if self.sym else "mixed"
-        advanced_parameters_dict = {"overflow_fix": self.overflow_fix}
+        # Merge advanced parameters from kwargs if they were provided
+        kwargs_copy = copy.deepcopy(self.kwargs)
+        advanced_parameters = kwargs_copy.pop("advanced_parameters", nncf.AdvancedQuantizationParameters())
+        advanced_parameters.overflow_fix = nncf.OverflowFix(self.overflow_fix)
         if self.smooth_quant_alpha:
-            advanced_parameters_dict["smooth_quant_alphas"] = {"matmul": self.smooth_quant_alpha}
+            advanced_parameters.smooth_quant_alphas.matmul = self.smooth_quant_alpha
 
         mode_map = {"f8e4m3": "fp8_e4m3", "f8e5m2": "fp8_e5m2"}
         mode = mode_map.get(self.dtype)
 
+        preset = "performance" if self.sym else "mixed"
         preset = nncf.QuantizationPreset(preset)
         model_type = nncf.ModelType(self.model_type)
-        advanced_parameters = nncf.AdvancedQuantizationParameters(
-            overflow_fix=advanced_parameters_dict["overflow_fix"],
-        )
-        if "smooth_quant_alphas" in advanced_parameters_dict:
-            advanced_parameters.smooth_quant_alphas = nncf.AdvancedSmoothQuantParameters(
-                **advanced_parameters_dict["smooth_quant_alphas"]
-            )
 
         return {
             "mode": mode,
@@ -795,6 +805,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             "model_type": model_type,
             "ignored_scope": self.get_ignored_scope_instance(),
             "advanced_parameters": advanced_parameters,
+            **kwargs_copy,
         }
 
 
@@ -965,6 +976,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             tokenizer=tokenizer,
             processor=processor,
             trust_remote_code=trust_remote_code,
+            **kwargs,
         )
 
         self.post_init()

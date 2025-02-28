@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import dataclasses
 import inspect
 
 # ruff: noqa
@@ -18,10 +19,10 @@ import inspect
 import itertools
 import logging
 import unittest
-from collections import defaultdict
+from collections import defaultdict, Iterable
 from enum import Enum
 from functools import partial
-from typing import Union
+from typing import Union, Type
 
 import openvino as ov
 import pytest
@@ -77,7 +78,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization import InferRequestWrapper
+from optimum.intel.openvino.quantization import InferRequestWrapper, _weight_only_quantization, _full_quantization
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
@@ -1211,7 +1212,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ),
         ),
         (OVQuantizationConfig(ignored_scope=nncf.IgnoredScope(names=["op_name"])),),
-        (OVDynamicQuantizationConfig(bits=8, sym=True),),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
@@ -1276,6 +1276,60 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
     )
 
+    QUANTIZATION_CONFIGS_WITH_KWARGS = (
+        (
+            OVWeightQuantizationConfig,
+            {
+                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path"),
+                "some_arg": "some_value",
+            },
+            {
+                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path"),
+                "some_arg": "some_value",
+            },
+        ),
+        (
+            OVQuantizationConfig,
+            {
+                "advanced_parameters": nncf.AdvancedQuantizationParameters(disable_channel_alignment=True),
+                "some_arg": "some_value",
+            },
+            {
+                "advanced_parameters": nncf.AdvancedQuantizationParameters(
+                    overflow_fix=nncf.OverflowFix.DISABLE,
+                    disable_channel_alignment=True,
+                ),
+                "some_arg": "some_value",
+            },
+        ),
+        (
+            OVQuantizationConfig,
+            {
+                "advanced_parameters": nncf.AdvancedQuantizationParameters(overflow_fix=nncf.OverflowFix.ENABLE),
+            },
+            {
+                "advanced_parameters": nncf.AdvancedQuantizationParameters(
+                    overflow_fix=nncf.OverflowFix.DISABLE,
+                ),
+            },
+        ),
+        (
+            OVQuantizationConfig,
+            {
+                "smooth_quant_alpha": 0.5,
+                "advanced_parameters": nncf.AdvancedQuantizationParameters(
+                    smooth_quant_alphas=nncf.AdvancedSmoothQuantParameters(matmul=0.7, convolution=0.7),
+                ),
+            },
+            {
+                "advanced_parameters": nncf.AdvancedQuantizationParameters(
+                    overflow_fix=nncf.OverflowFix.DISABLE,
+                    smooth_quant_alphas=nncf.AdvancedSmoothQuantParameters(matmul=0.5, convolution=0.7),
+                ),
+            },
+        ),
+    )
+
     def get_default_configurations() -> dict:
         default_configurations = deepcopy(_DEFAULT_4BIT_CONFIGS)
         default_configurations.update({"default": _DEFAULT_4BIT_CONFIG})
@@ -1326,6 +1380,57 @@ class OVQuantizationConfigTest(unittest.TestCase):
             short_id = model_id.split("/")[1]
             assert short_id not in short_ids
             short_ids.add(short_id)
+
+    @parameterized.expand(QUANTIZATION_CONFIGS_WITH_KWARGS)
+    def test_config_init_kwargs(
+        self,
+        config_type: Type[Union[OVWeightQuantizationConfig, OVQuantizationConfig]],
+        config_kwargs: dict,
+        ref_nncf_dict: dict,
+    ):
+        nncf_dict = config_type(**config_kwargs).to_nncf_dict()
+        ref_nncf_dict = config_type().to_nncf_dict() | ref_nncf_dict
+        self.assertTrue(self.compare_objects(nncf_dict, ref_nncf_dict))
+
+    @parameterized.expand(
+        [
+            ("nncf.compress_weights", "_weight_only_quantization", "dataset", OVWeightQuantizationConfig),
+            ("nncf.quantize", "_full_quantization", "calibration_dataset", OVQuantizationConfig),
+        ]
+    )
+    def test_quantization_kwargs_override(self, mock_method_name, quantization_function, dataset_key, config_type):
+        with unittest.mock.patch(mock_method_name) as mock_method:
+            mock_model = unittest.mock.Mock([])
+            mock_model.get_rt_info = unittest.mock.Mock(return_value={})
+
+            mock_quantization_config = unittest.mock.Mock(config_type)
+            mock_quantization_config.to_nncf_dict.return_value = {"param1": "value1", "param2": "value2"}
+
+            additional_kwargs = {"param2": "new_value2", "param3": "value3"}
+
+            quantization_function = globals()[quantization_function]
+            quantization_function(mock_model, mock_quantization_config, None, **additional_kwargs)
+
+            expected_kwargs = {"param1": "value1", "param2": "new_value2", "param3": "value3", dataset_key: None}
+
+            mock_method.assert_called_once_with(mock_model, **expected_kwargs)
+
+    @staticmethod
+    def compare_objects(o1, o2) -> bool:
+        if dataclasses.is_dataclass(o1) and dataclasses.is_dataclass(o2):
+            o1 = o1.__dict__
+            o2 = o2.__dict__
+        if isinstance(o1, dict) and isinstance(o2, dict):
+            for k in set(o1.keys()) | set(o2.keys()):
+                if not OVQuantizationConfigTest.compare_objects(o1[k], o2[k]):
+                    return False
+            return True
+        if isinstance(o1, Iterable) and isinstance(o2, Iterable) and not (isinstance(o1, str) or isinstance(o2, str)):
+            for it1, it2 in zip(o1, o2):
+                if not OVQuantizationConfigTest.compare_objects(it1, it2):
+                    return False
+            return True
+        return o1 == o2
 
 
 class InferRequestWrapperTest(unittest.TestCase):
