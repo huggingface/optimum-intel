@@ -1394,16 +1394,16 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("nncf.compress_weights", "_weight_only_quantization", "dataset"),
-            ("nncf.quantize", "_full_quantization", "calibration_dataset"),
+            ("nncf.compress_weights", "_weight_only_quantization", "dataset", OVWeightQuantizationConfig),
+            ("nncf.quantize", "_full_quantization", "calibration_dataset", OVQuantizationConfig),
         ]
     )
-    def test_quantization_kwargs_override(self, mock_method_name, quantization_function, dataset_key):
+    def test_quantization_kwargs_override(self, mock_method_name, quantization_function, dataset_key, config_type):
         with unittest.mock.patch(mock_method_name) as mock_method:
             mock_model = unittest.mock.Mock([])
             mock_model.get_rt_info = unittest.mock.Mock(return_value={})
 
-            mock_quantization_config = unittest.mock.Mock()
+            mock_quantization_config = unittest.mock.Mock(config_type)
             mock_quantization_config.to_nncf_dict.return_value = {"param1": "value1", "param2": "value2"}
 
             additional_kwargs = {"param2": "new_value2", "param3": "value3"}
