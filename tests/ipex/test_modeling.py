@@ -294,7 +294,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        input_ids = torch.Tensor([[1, 2, 3], [4, 5, 6]]).to(torch.long)
+        input_ids = torch.Tensor([[1, 2, 3], [4, 5, 6]]).to(torch.long).to(DEVICE)
         outputs = ipex_model(input_ids)
 
         self.assertIsInstance(outputs.logits, torch.Tensor)
