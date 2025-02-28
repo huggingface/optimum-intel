@@ -105,6 +105,7 @@ from .model_patcher import (
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
+    Qwen2_5_VLVisionEmbMergerPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
@@ -131,10 +132,14 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
-
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -2510,7 +2515,13 @@ class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
 
 
 class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("hidden_states", "attention_mask", "rotary_pos_emb")
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "attention_mask",
+        "window_attention_mask",
+        "window_index",
+        "rotary_pos_emb",
+    )
 
     def __init__(
         self,
@@ -2529,10 +2540,17 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
         self.temporal_patch_size = normalized_config.config.temporal_patch_size
         self.patch_size = normalized_config.config.patch_size
         if normalized_config.use_embed_dim:
-            self.embed_dim = normalized_config.config.embed_dim
+            self.embed_dim = (
+                normalized_config.config.embed_dim
+                if hasattr(normalized_config.config, "embed_dim")
+                else normalized_config.hidden_size
+            )
         else:
             self.embed_dim = self.num_channels * self.temporal_patch_size * self.patch_size * self.patch_size
         self.num_heads = normalized_config.config.num_heads
+        self.spatial_merge_size = None
+        if hasattr(normalized_config.config, "spatial_merge_size"):
+            self.spatial_merge_size = normalized_config.config.spatial_merge_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
@@ -2543,7 +2561,7 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
                 [grid_t * grid_h * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
             )
 
-        if input_name == "attention_mask":
+        if input_name in ["attention_mask", "window_attention_mask"]:
             return self.random_mask_tensor(
                 [1, grid_t * grid_h * grid_w, grid_t * grid_h * grid_w], framework=framework, dtype=float_dtype
             )
@@ -2551,6 +2569,15 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
         if input_name == "rotary_pos_emb":
             dim = self.embed_dim // self.num_heads // 2
             return self.random_float_tensor([grid_h * grid_t * grid_w, dim], framework=framework, dtype=float_dtype)
+
+        if input_name == "window_index":
+            if self.spatial_merge_size is None:
+                raise ValueError(
+                    "`spatial_merge_size` parameter is not found in model config. Can not generate dummy input data for `window_index` input"
+                )
+            spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
+            hidden_size = (grid_t * grid_h * grid_w) // spatial_merge_unit
+            return self.random_int_tensor([hidden_size], max_value=hidden_size)
 
 
 class Qwen2VLConfigBehavior(str, enum.Enum):
@@ -2674,7 +2701,7 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
             return {"hidden_states": {0: "patch_thw_grid", 1: "patch_temporal_channels"}}
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return {
@@ -2688,6 +2715,31 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         if self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
             return {"last_hidden_state": {0: "seq_len"}}
         return {}
+
+
+@register_in_tasks_manager("qwen2-5-vl", *["image-text-to-text"], library_name="transformers")
+class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return {
+                "hidden_states": {0: "sequence_length"},
+                "attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_attention_mask": {1: "sequence_length", 2: "sequence_length"},
+                "window_index": {0: "unit_sequence_length"},
+                "rotary_pos_emb": {0: "sequence_length"},
+            }
+        return super().inputs
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 @register_in_tasks_manager(
