@@ -323,7 +323,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
-        self.init_kwargs = kwargs
+        self.kwargs = kwargs
 
     def post_init(self):
         try:
@@ -344,9 +344,9 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         return copy.deepcopy(self)
 
     def to_dict(self) -> Dict[str, Any]:
-        # Unpack init kwargs back into kwargs
+        # Unpack kwargs dict
         result = super().to_dict()
-        result = result | result.pop("init_kwargs", {})
+        result = result | result.pop("kwargs", {})
         return result
 
 
@@ -634,7 +634,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
-            **self.init_kwargs,
+            **self.kwargs,
         }
         return result
 
@@ -783,9 +783,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         Returns a dictionary with the variables that are ready to use for nncf.compress_weights() call.
         """
 
-        # Merge advanced parameters from init_kwargs if they were provided
-        init_kwargs_copy = copy.deepcopy(self.init_kwargs)
-        advanced_parameters = init_kwargs_copy.pop("advanced_parameters", nncf.AdvancedQuantizationParameters())
+        # Merge advanced parameters from kwargs if they were provided
+        kwargs_copy = copy.deepcopy(self.kwargs)
+        advanced_parameters = kwargs_copy.pop("advanced_parameters", nncf.AdvancedQuantizationParameters())
         advanced_parameters.overflow_fix = nncf.OverflowFix(self.overflow_fix)
         if self.smooth_quant_alpha:
             advanced_parameters.smooth_quant_alphas.matmul = self.smooth_quant_alpha
@@ -805,7 +805,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             "model_type": model_type,
             "ignored_scope": self.get_ignored_scope_instance(),
             "advanced_parameters": advanced_parameters,
-            **init_kwargs_copy,
+            **kwargs_copy,
         }
 
 
