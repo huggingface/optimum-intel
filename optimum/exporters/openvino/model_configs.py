@@ -132,16 +132,14 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = (
-        (
-            "AutoModelForImageTextToText",
-            "AutoModelForCausalLM",
-        )
-        if is_transformers_version(">=", "4.46")
-        else TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
     )
 
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
+        "image-text-to-text"
+    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -2573,7 +2571,7 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor([grid_h * grid_t * grid_w, dim], framework=framework, dtype=float_dtype)
 
         if input_name == "window_index":
-            if self.spatial_merge_size:
+            if self.spatial_merge_size is None:
                 raise ValueError(
                     "`spatial_merge_size` parameter is not found in model config. Can not generate dummy input data for `window_index` input"
                 )
