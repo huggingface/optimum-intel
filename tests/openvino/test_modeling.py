@@ -2148,7 +2148,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     )
 
     def get_transformer_model_class(self, model_arch):
-        if model_arch == "llava":
+        if is_transformers_version(">=", "4.46") and model_arch in ["llava", "llava_next", "qwen2_vl", "qwen2_5_vl"]:
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
+        if model_arch in "llava":
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration
@@ -2160,10 +2164,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
-        if model_arch == "qwen2_5_vl":
-            from transformers import Qwen2_5_VLForConditionalGeneration
-
-            return Qwen2_5_VLForConditionalGeneration
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):

@@ -2386,6 +2386,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         second_per_grid_ts: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # modified from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L1546
         """
         Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
         """
@@ -2597,6 +2598,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         second_per_grid_ts: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L1791-L1861
         inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
         if pixel_values is not None and input_ids.shape[1] != 1:
             image_embeds = torch.from_numpy(self.get_vision_embeddings(pixel_values, image_grid_thw))

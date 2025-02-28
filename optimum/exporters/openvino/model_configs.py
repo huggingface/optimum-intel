@@ -132,13 +132,15 @@ def init_model_configs():
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
-        "transformers",
-        "Qwen2_5_VLForConditionalGeneration",
+
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = (
+        (
+            "AutoModelForImageTextToText",
+            "AutoModelForCausalLM",
+        )
+        if is_transformers_version(">=", "4.46")
+        else TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
     )
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
-        "image-text-to-text"
-    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -2571,6 +2573,10 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor([grid_h * grid_t * grid_w, dim], framework=framework, dtype=float_dtype)
 
         if input_name == "window_index":
+            if self.spatial_merge_size:
+                raise ValueError(
+                    "`spatial_merge_size` parameter is not found in model config. Can not generate dummy input data for `window_index` input"
+                )
             spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
             hidden_size = (grid_t * grid_h * grid_w) // spatial_merge_unit
             return self.random_int_tensor([hidden_size], max_value=hidden_size)
