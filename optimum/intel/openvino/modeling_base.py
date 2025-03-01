@@ -36,7 +36,7 @@ from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedMode
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
+from .quantization import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -259,7 +259,7 @@ class OVBaseModel(OptimizedModel):
                     "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
                 )
 
-            from optimum.intel.openvino.quantization import _weight_only_quantization
+            from optimum.intel.openvino.quantization.ov_quantizer import _weight_only_quantization
 
             if not isinstance(quantization_config, (dict, OVWeightQuantizationConfig)):
                 raise TypeError(

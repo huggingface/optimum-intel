@@ -52,7 +52,7 @@ from .utils import (
 FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager", "gemma2": "sdpa"}
 
 if TYPE_CHECKING:
-    from optimum.intel.openvino.configuration import OVConfig
+    from optimum.intel.openvino.quantization.configuration import OVConfig
 
 
 if is_torch_available():
@@ -501,7 +501,7 @@ def main_export(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
 
-            from optimum.intel.openvino.quantization import _weight_only_quantization
+            from optimum.intel.openvino.quantization.ov_quantizer import _weight_only_quantization
 
             _weight_only_quantization(submodel, quantization_config)
             compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"

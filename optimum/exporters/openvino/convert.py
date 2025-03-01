@@ -90,7 +90,7 @@ if is_tf_available():
 
 if TYPE_CHECKING:
     from optimum.exporters.onnx.base import OnnxConfig
-    from optimum.intel.openvino.configuration import OVConfig
+    from optimum.intel.openvino.quantization.configuration import OVConfig
 
 
 def _set_runtime_options(

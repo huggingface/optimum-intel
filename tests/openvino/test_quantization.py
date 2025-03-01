@@ -69,7 +69,7 @@ from optimum.intel import (
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelForVisualCausalLM,
 )
-from optimum.intel.openvino.configuration import (
+from optimum.intel.openvino.quantization.configuration import (
     OVQuantizationMethod,
     OVQuantizationConfigBase,
     _DEFAULT_4BIT_CONFIGS,
@@ -78,7 +78,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization import InferRequestWrapper, _weight_only_quantization, _full_quantization
+from optimum.intel.openvino.quantization.ov_quantizer import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
@@ -1351,7 +1351,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)
     def test_config_from_dict(self, quantization_config: dict, config_type: type, warning_log: Union[str, None]):
-        from optimum.intel.openvino.configuration import logger as configuration_logger
+        from optimum.intel.openvino.quantization.configuration import logger as configuration_logger
 
         if warning_log is not None:
             with self.assertLogs(configuration_logger, logging.WARN) as cm:

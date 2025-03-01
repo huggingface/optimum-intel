@@ -30,9 +30,9 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from .quantization import OVConfig, OVWeightQuantizationConfig
 from .utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -561,7 +561,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
+            from optimum.intel.openvino.quantization.ov_quantizer import OVQuantizer
 
             quantization_config_copy = copy.deepcopy(quantization_config)
             quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id

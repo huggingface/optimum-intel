@@ -313,7 +313,11 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
+        from ...intel.openvino.quantization.configuration import (
+            _DEFAULT_4BIT_CONFIG,
+            OVConfig,
+            get_default_int4_config,
+        )
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args

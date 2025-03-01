@@ -36,10 +36,9 @@ from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
 from ...exporters.openvino.stateful import model_has_state
-from .. import OVConfig, OVQuantizer
 from ..utils import is_transformers_version
-from .configuration import OVQuantizationConfig, OVQuantizationConfigBase
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
+from .quantization import OVConfig, OVQuantizationConfig, OVQuantizationConfigBase, OVQuantizer
 from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
 
 

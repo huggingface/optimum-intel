@@ -46,27 +46,19 @@ from transformers.utils import is_accelerate_available
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
-from ...exporters.openvino import export, export_pytorch_via_onnx
-from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
-from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
-from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import (
+from ....exporters.openvino import export, export_pytorch_via_onnx
+from ....exporters.openvino.model_patcher import patch_model_with_bettertransformer
+from ....exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
+from ...utils.constant import _TASK_ALIASES
+from ...utils.import_utils import (
     DATASETS_IMPORT_ERROR,
     is_datasets_available,
     is_datasets_version,
     is_diffusers_available,
 )
-from ..utils.modeling_utils import get_model_device
-from .configuration import (
-    OVConfig,
-    OVMixedQuantizationConfig,
-    OVQuantizationConfig,
-    OVQuantizationConfigBase,
-    OVQuantizationMethod,
-    OVWeightQuantizationConfig,
-)
-from .modeling_base import OVBaseModel
-from .utils import (
+from ...utils.modeling_utils import get_model_device
+from ..modeling_base import OVBaseModel
+from ..utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
@@ -74,6 +66,14 @@ from .utils import (
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
+)
+from .configuration import (
+    OVConfig,
+    OVMixedQuantizationConfig,
+    OVQuantizationConfig,
+    OVQuantizationConfigBase,
+    OVQuantizationMethod,
+    OVWeightQuantizationConfig,
 )
 
 
