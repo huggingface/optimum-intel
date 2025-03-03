@@ -203,6 +203,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "llava": (30, 1, 9),
     "llava_next": (30, 1, 9),
     "minicpmv": (30, 1, 26, 6),
+    "llava_next_video": (30, 1, 7, 0, 2),
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),

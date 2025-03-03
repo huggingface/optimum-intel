@@ -1551,9 +1551,13 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
     ):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L732-L751
         video_features = self.get_video_features(pixel_values_videos, input_ids)
-        if video_features is not None:
+        if video_features is not None and len(video_features) != 0:
+            video_features = [feature.flatten(0, 1) for feature in video_features]
+            video_feature_lens = [feature.size(0) for feature in video_features]
+            video_features = torch.cat(video_features, dim=0)
+            video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
+
             if legacy_processing:
-                video_feature_lens = [feature.size(0) for feature in video_features]
                 inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
                     video_features,
                     inputs_embeds,
@@ -1568,11 +1572,6 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
                 inputs_embeds = (
                     torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
                 )
-                video_features = [feature.flatten(0, 1) for feature in video_features]
-                video_feature_lens = [feature.size(0) for feature in video_features]
-                video_features = torch.cat(video_features, dim=0)
-                video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
-
                 special_image_mask = (input_ids == self.config.video_token_index).unsqueeze(-1)
                 special_image_mask = special_image_mask.expand_as(inputs_embeds)
                 if inputs_embeds[special_image_mask].numel() != video_features.numel():
