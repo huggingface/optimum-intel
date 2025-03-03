@@ -55,6 +55,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from PIL.Image import Image
+    from transformers.image_utils import VideoInput
 
 
 logger = logging.getLogger(__name__)
@@ -839,6 +840,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         """
         Preprocess input instruction and an image.
@@ -1016,9 +1018,12 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
             if image is not None:
@@ -1354,6 +1359,48 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         image_features = self.multi_modal_projector(image_features)
         return image_features
 
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if getattr(processor, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+            if image is not None:
+                chat_prompt[0]["content"].append({"type": "image"})
+            if video is not None:
+                chat_prompt[0]["content"].append({"type": "video"})
+            prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        else:
+            if image is not None and "<image>" not in text:
+                prompt = "<image>\n" + text
+            else:
+                prompt = text
+            if video is not None and "<video>" not in text:
+                prompt = "<video>\n" + text
+            else:
+                prompt = text
+
+        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
+            if (
+                getattr(config, "vision_config", None) is not None
+                and getattr(config.vision_config, "patch_size", None) is not None
+            ):
+                processor.patch_size = config.vision_config.patch_size
+            else:
+                raise ValueError(
+                    "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
+                )
+
+        inputs = processor(images=image, text=prompt, videos=video, return_tensors="pt")
+        return inputs
+
     def get_multimodal_embeddings(
         self,
         input_ids,
@@ -1511,9 +1558,12 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
         import torchvision.transforms as T
         from torchvision.transforms.functional import InterpolationMode
 
@@ -1886,9 +1936,12 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
             prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -2083,9 +2136,12 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if image is not None and processor is None:
             raise ValueError("Processor is required.")
         text = f"<image>\n{text}" if image is not None else text
@@ -2244,9 +2300,12 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if image is not None and "<|image_1|>" not in text:
             text = "<|image_1|>\n" + text
         if getattr(processor.tokenizer, "chat_template", None) is not None:
@@ -2474,33 +2533,26 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
         if image is not None:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                        },
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
-        else:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
 
@@ -2917,33 +2969,26 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
         if image is not None:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                        },
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
-        else:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
     # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
@@ -2975,9 +3020,12 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
     ):
         if processor is None:
             raise ValueError("processor is required")
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if image is None:
             return processor(text=text, return_tensors="pt")
         processed_inputs = processor.format_and_preprocess_phrase_grounding_input(
