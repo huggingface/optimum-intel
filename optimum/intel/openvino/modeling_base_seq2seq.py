@@ -108,9 +108,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
     @property
     def _ov_submodel_names(self) -> List[str]:
-        submodel_names = ["encoder", "decoder"]
+        submodel_names = ["encoder_model", "decoder_model"]
         if self.decoder_with_past_model is not None:
-            submodel_names.append("decoder_with_past")
+            submodel_names.append("decoder_with_past_model")
         return submodel_names
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
