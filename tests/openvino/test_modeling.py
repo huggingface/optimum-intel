@@ -2362,7 +2362,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test", filename="sample_demo_1.mp4", repo_type="dataset"
             )
-            input_video = load_video(video_path, num_frames=4)
+            input_video, _ = load_video(video_path, num_frames=2)
             question = "Why is this video funny?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             outputs = model.generate(**inputs, max_new_tokens=10)

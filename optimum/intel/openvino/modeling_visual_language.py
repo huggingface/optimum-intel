@@ -1402,7 +1402,7 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
                     "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
                 )
 
-        inputs = processor(images=image, text=prompt, videos=video, return_tensors="pt")
+        inputs = processor(images=image, text=prompt, videos=[video], return_tensors="pt")
         return inputs
 
     def get_multimodal_embeddings(
@@ -2556,7 +2556,7 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=[video], return_tensors="pt")
         return inputs
 
 
@@ -2992,7 +2992,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=[video], return_tensors="pt")
         return inputs
 
     # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
