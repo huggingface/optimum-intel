@@ -6,7 +6,7 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino as ov
@@ -55,7 +55,11 @@ except ImportError:
 
 if TYPE_CHECKING:
     from PIL.Image import Image
-    from transformers.image_utils import VideoInput
+
+    if is_transformers_version(">=", "4.42.0"):
+        from transformers.image_utils import VideoInput
+    else:
+        VideoInput = List[Image]
 
 
 logger = logging.getLogger(__name__)
