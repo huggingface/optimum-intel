@@ -88,6 +88,7 @@ MODEL_NAMES = {
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
+    "llava_next_video": "katuni4ka/tiny-random-llava-next-video",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",

@@ -2127,16 +2127,20 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["llava"]
 
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+    # if is_transformers_version(">=", "4.40.0"):
+    #     SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
 
-    if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2"]
+    if is_transformers_version(">=", "4.42.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next_video"]
 
-    if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
+    # if is_transformers_version(">=", "4.45.0"):
+    #     SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+
+    # if is_transformers_version(">=", "4.46.0"):
+    #     SUPPORTED_ARCHITECTURES += ["maira2"]
+
+    # if is_transformers_version(">=", "4.49.0"):
+    #     SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2148,11 +2152,16 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     )
 
     def get_transformer_model_class(self, model_arch):
+        print(model_arch)
         if is_transformers_version(">=", "4.46") and model_arch in ["llava", "llava_next", "qwen2_vl", "qwen2_5_vl"]:
             from transformers import AutoModelForImageTextToText
 
             return AutoModelForImageTextToText
-        if model_arch in "llava":
+        if model_arch == "llava_next_video":
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+        if model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration
@@ -2259,7 +2268,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    @parameterized.expand(["llava", "llava_next"])
+    @parameterized.expand(["llava", "llava_next", "llava_next_video"])
     @unittest.skipIf(
         is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
     )

@@ -1204,9 +1204,10 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         attention_mask,
         position_ids=None,
         legacy_processing=False,
+        image_token_index=None,
         **kwargs,
     ):
-        image_token_index = self.config.image_token_index
+        image_token_index = self.config.image_token_index if image_token_index is None else image_token_index
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
 
@@ -1235,7 +1236,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
                 # Whether to turn off right padding
                 # 1. Create a mask to know where special image tokens are
-                special_image_token_mask = input_ids == image_token_index
+                special_image_token_mask = torch.tensor(input_ids == image_token_index)
                 # special_image_token_mask: [bsz, seqlen]
                 num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
                 # num_special_image_tokens: [bsz]
@@ -1328,7 +1329,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             final_attention_mask |= image_to_overwrite
             position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
         else:
-            special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
+            special_image_mask = torch.tensor((input_ids == image_token_index)).unsqueeze(-1).expand_as(inputs_embeds)
             image_features = image_features.to(inputs_embeds.dtype)
             final_embedding = inputs_embeds.masked_scatter(special_image_mask, image_features)
             final_attention_mask = attention_mask
@@ -1432,28 +1433,43 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         legacy_processing,
         **kwargs,
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L732-L751
         video_features = self.get_video_features(pixel_values_videos, input_ids)
         if video_features is not None:
             if legacy_processing:
-                raise ValueError("Video processing supported only for transformers>=4.45 preprocessing.")
-            inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-            video_features = [feature.flatten(0, 1) for feature in video_features]
-            video_feature_lens = [feature.size(0) for feature in video_features]
-            video_features = torch.cat(video_features, dim=0)
-            video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
-
-            special_image_mask = (input_ids == self.config.video_token_index).unsqueeze(-1)
-            special_image_mask = special_image_mask.expand_as(inputs_embeds)
-            if inputs_embeds[special_image_mask].numel() != video_features.numel():
-                n_video_tokens = (input_ids == self.config.video_token_index).sum().item()
-                n_video_features = video_features.shape[0]
-                raise ValueError(
-                    f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                video_feature_lens = [feature.size(0) for feature in video_features]
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    video_features,
+                    inputs_embeds,
+                    video_feature_lens,
+                    input_ids,
+                    attention_mask,
+                    position_ids,
+                    legacy_processing,
+                    self.config.video_token_index,
                 )
-            inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, video_features)
+            else:
+                inputs_embeds = (
+                    torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+                )
+                video_features = [feature.flatten(0, 1) for feature in video_features]
+                video_feature_lens = [feature.size(0) for feature in video_features]
+                video_features = torch.cat(video_features, dim=0)
+                video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
+
+                special_image_mask = (input_ids == self.config.video_token_index).unsqueeze(-1)
+                special_image_mask = special_image_mask.expand_as(inputs_embeds)
+                if inputs_embeds[special_image_mask].numel() != video_features.numel():
+                    n_video_tokens = (input_ids == self.config.video_token_index).sum().item()
+                    n_video_features = video_features.shape[0]
+                    raise ValueError(
+                        f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                    )
+                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, video_features)
         return inputs_embeds, attention_mask, position_ids
 
     def get_video_features(self, pixel_values, input_ids=None, **kwargs):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L835
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         batch_size, frames, channels, height, width = pixel_values.shape

@@ -138,6 +138,11 @@ def init_model_configs():
         "AutoModelForImageTextToText",
     )
 
+    TasksManager._CUSTOM_CLASSES[("pt", "llava-next-video", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForVision2Seq",
+    )
+
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]

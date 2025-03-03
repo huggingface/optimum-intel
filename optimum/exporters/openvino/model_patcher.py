@@ -3112,11 +3112,10 @@ def llava_vision_embed_forward(self, pixel_values):
 
 
 def llava_next_video_vision_embed_forward(self, pixel_values):
-    # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
+    # copied from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L519
     # these changes does not bring any difference from original, it only packs model subcomponent inference together
     # that allow us avoid memory overheads and their inference results handling on code-level
     image_features = self.vision_tower(pixel_values, output_hidden_states=True)
-    # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
     vision_feature_layer = self.config.vision_feature_layer
     if isinstance(vision_feature_layer, int):
         selected_image_feature = image_features.hidden_states[vision_feature_layer]
