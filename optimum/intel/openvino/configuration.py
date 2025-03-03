@@ -238,6 +238,15 @@ _DEFAULT_4BIT_CONFIGS = {
     },
 }
 
+# Add configs for model id aliases
+# The list below contains pairs of model ids: config for the second model id will be copied from the first model id.
+model_id_aliases = [
+    ("meta-llama/Meta-Llama-3.1-8B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"),
+    ("meta-llama/Meta-Llama-3.1-8B", "meta-llama/Llama-3.1-8B"),
+]
+for m_id_1, m_id_2 in model_id_aliases:
+    _DEFAULT_4BIT_CONFIGS[m_id_2] = _DEFAULT_4BIT_CONFIGS[m_id_1]
+
 _DEFAULT_4BIT_CONFIG = {
     "bits": 4,
     "ratio": 1.0,
