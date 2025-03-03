@@ -18,6 +18,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModelForCausalLM,
+    AutoModelForVision2Seq,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -275,11 +276,21 @@ class OVVisionProjection(OVModelPart):
         return self.request(img_features)[0]
 
 
+class OVVisionResampler(OVVisionProjection):
+    _model_name = "vision_resampler"
+
+
+class OVMultiModalProjector(OVVisionProjection):
+    _model_name = "multi_modal_projector"
+
+
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
     "vision_embeddings": OVVisionEmbedding,
     "vision_projection": OVVisionProjection,
+    "vision_resampler": OVVisionResampler,
+    "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
 }
 
@@ -1094,6 +1105,58 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         feature_lens = torch.tensor(feature_lens, dtype=torch.long, device=image_features.device)
         return image_features, feature_lens
 
+    def add_image_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        pixel_values,
+        attention_mask,
+        position_ids,
+        past_key_values,
+        image_sizes,
+        legacy_processing,
+        **kwargs,
+    ):
+        from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
+
+        # ! infer image_num_patches from image_sizes
+        image_num_patches = [
+            image_size_to_num_patches(
+                image_size=imsize,
+                grid_pinpoints=self.config.image_grid_pinpoints,
+                patch_size=self.config.vision_config.image_size,
+            )
+            for imsize in image_sizes
+        ]
+        # figure out if pixel_values is concatenated or stacked
+        if pixel_values.dim() == 5:
+            # stacking when input is (batch_size, num_patches, num_channels, height, width)
+            _pixel_values_list = [pix_val[:num_patch] for pix_val, num_patch in zip(pixel_values, image_num_patches)]
+            pixel_values = torch.cat(_pixel_values_list, dim=0)
+        elif pixel_values.dim() != 4:
+            # otherwise has to be stacked from list of (num_patches, num_channels, height, width)
+            raise ValueError(f"pixel_values of shape {pixel_values.shape}, expect to be of 4 or 5 dimensions")
+        vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
+        if vision_embeds is not None:
+            image_newline = torch.tensor(self.config.image_newline)
+            image_features = torch.split(torch.from_numpy(vision_embeds), image_num_patches, dim=0)
+            image_features, feature_lens = self.pack_image_features(
+                image_features,
+                image_sizes,
+                image_newline=image_newline,
+            )
+            inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                image_features,
+                inputs_embeds,
+                feature_lens=feature_lens,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                legacy_processing=legacy_processing,
+                **kwargs,
+            )
+        return inputs_embeds, attention_mask, position_ids
+
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L416
     def get_multimodal_embeddings(
         self,
@@ -1105,8 +1168,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         image_sizes=None,
         **kwargs,
     ):
-        from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
-
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
         if pixel_values is not None and self._support_new_processing and past_key_values is None:
@@ -1117,44 +1178,17 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             legacy_processing = True
 
         if pixel_values is not None and pixel_values.size(0) > 0:
-            # ! infer image_num_patches from image_sizes
-            image_num_patches = [
-                image_size_to_num_patches(
-                    image_size=imsize,
-                    grid_pinpoints=self.config.image_grid_pinpoints,
-                    patch_size=self.config.vision_config.image_size,
-                )
-                for imsize in image_sizes
-            ]
-            # figure out if pixel_values is concatenated or stacked
-            if pixel_values.dim() == 5:
-                # stacking when input is (batch_size, num_patches, num_channels, height, width)
-                _pixel_values_list = [
-                    pix_val[:num_patch] for pix_val, num_patch in zip(pixel_values, image_num_patches)
-                ]
-                pixel_values = torch.cat(_pixel_values_list, dim=0)
-            elif pixel_values.dim() != 4:
-                # otherwise has to be stacked from list of (num_patches, num_channels, height, width)
-                raise ValueError(f"pixel_values of shape {pixel_values.shape}, expect to be of 4 or 5 dimensions")
-            vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
-            if vision_embeds is not None:
-                image_newline = torch.tensor(self.config.image_newline)
-                image_features = torch.split(torch.from_numpy(vision_embeds), image_num_patches, dim=0)
-                image_features, feature_lens = self.pack_image_features(
-                    image_features,
-                    image_sizes,
-                    image_newline=image_newline,
-                )
-                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
-                    image_features,
-                    inputs_embeds,
-                    feature_lens=feature_lens,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    legacy_processing=legacy_processing,
-                    **kwargs,
-                )
+            inputs_embeds, attention_mask, position_ids = self.add_image_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                image_sizes,
+                legacy_processing,
+                **kwargs,
+            )
 
         if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
@@ -1305,6 +1339,130 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         for_inputs_embeds_ids = input_ids.clone()
         for_inputs_embeds_ids[(input_ids == self.config.image_token_index)] = 0
         return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
+
+
+class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
+    additional_parts = ["vision_resampler", "multi_modal_projector"]
+    export_feature = "video-text-to-text"
+    auto_model_class = AutoModelForVision2Seq
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        image_features = self.multi_modal_projector(image_features)
+        return image_features
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        image_sizes=None,
+        pixel_values_videos=None,
+        **kwargs,
+    ):
+        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+
+        if (
+            pixel_values is not None
+            and pixel_values.size(0) > 0
+            and self._support_new_processing
+            and past_key_values is None
+        ):
+            legacy_processing = (
+                (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
+            ).item()
+        elif (
+            pixel_values_videos is not None
+            and pixel_values_videos.size(0) > 0
+            and self._support_new_processing
+            and past_key_values is None
+        ):
+            legacy_processing = (
+                (input_ids == self.config.video_token_index).sum(1).max() < self.config.video_seq_length
+            ).item()
+        else:
+            legacy_processing = True
+
+        legacy_processing = (
+            legacy_processing.item() if isinstance(legacy_processing, torch.Tensor) else legacy_processing
+        )
+
+        if pixel_values is not None and pixel_values.size(0) > 0:
+            inputs_embeds, attention_mask, position_ids = self.add_image_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                image_sizes,
+                legacy_processing,
+                **kwargs,
+            )
+
+        if pixel_values_videos is not None and pixel_values_videos.size(0) > 0:
+            inputs_embeds, attention_mask, position_ids = self.add_video_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values_videos,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                legacy_processing=legacy_processing,
+                **kwargs,
+            )
+
+        if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
+            attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def add_video_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        pixel_values_videos,
+        attention_mask,
+        position_ids,
+        past_key_values,
+        legacy_processing,
+        **kwargs,
+    ):
+        video_features = self.get_video_features(pixel_values_videos, input_ids)
+        if video_features is not None:
+            if legacy_processing:
+                raise ValueError("Video processing supported only for transformers>=4.45 preprocessing.")
+            inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+            video_features = [feature.flatten(0, 1) for feature in video_features]
+            video_feature_lens = [feature.size(0) for feature in video_features]
+            video_features = torch.cat(video_features, dim=0)
+            video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
+
+            special_image_mask = (input_ids == self.config.video_token_index).unsqueeze(-1)
+            special_image_mask = special_image_mask.expand_as(inputs_embeds)
+            if inputs_embeds[special_image_mask].numel() != video_features.numel():
+                n_video_tokens = (input_ids == self.config.video_token_index).sum().item()
+                n_video_features = video_features.shape[0]
+                raise ValueError(
+                    f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                )
+            inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, video_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    def get_video_features(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        batch_size, frames, channels, height, width = pixel_values.shape
+        pixel_values = pixel_values.reshape(batch_size * frames, channels, height, width)
+        selected_video_features = self.vision_embeddings(pixel_values).last_hidden_state
+        video_features = self.vision_resampler(selected_video_features)
+        video_features = self.multi_modal_projector(video_features)
+        video_features = torch.split(torch.from_numpy(video_features), frames, dim=0)
+        return video_features
 
 
 class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
@@ -2817,6 +2975,7 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
+    "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,

@@ -220,6 +220,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava-next",
+    "llava-next-video",
     "llava-qwen2",
     "internvl-chat",
     "maira2",
@@ -299,7 +300,7 @@ def save_preprocessors(
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
         if (
             is_transformers_version(">=", "4.45")
-            and model_type in ["llava", "llava-next"]
+            and model_type in ["llava", "llava-next", "llava-next-video"]
             and preprocessors is not None
         ):
             if getattr(preprocessors[1], "patch_size", None) is None:

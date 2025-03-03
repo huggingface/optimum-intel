@@ -3111,6 +3111,28 @@ def llava_vision_embed_forward(self, pixel_values):
     return image_features
 
 
+def llava_next_video_vision_embed_forward(self, pixel_values):
+    # copied from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llava/modeling_llava.py#L428-L441
+    # these changes does not bring any difference from original, it only packs model subcomponent inference together
+    # that allow us avoid memory overheads and their inference results handling on code-level
+    image_features = self.vision_tower(pixel_values, output_hidden_states=True)
+    # this is not memory efficient at all (output_hidden_states=True) will save all the hidden stated.
+    vision_feature_layer = self.config.vision_feature_layer
+    if isinstance(vision_feature_layer, int):
+        selected_image_feature = image_features.hidden_states[vision_feature_layer]
+    else:
+        hs_pool = [image_features.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+        selected_image_feature = torch.cat(hs_pool, dim=-1)
+
+    if self.config.vision_feature_select_strategy == "default":
+        selected_image_feature = selected_image_feature[:, 1:]
+    elif self.config.vision_feature_select_strategy == "full":
+        selected_image_feature = selected_image_feature
+    else:
+        raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
+    return selected_image_feature
+
+
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -3120,6 +3142,23 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(llava_next_video_vision_embed_forward, model)
 
         super().__init__(config, model, model_kwargs)
 
