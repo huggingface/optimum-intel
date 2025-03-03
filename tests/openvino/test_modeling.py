@@ -2156,7 +2156,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     )
 
     def get_transformer_model_class(self, model_arch):
-        print(model_arch)
         if is_transformers_version(">=", "4.46") and model_arch in ["llava", "llava_next", "qwen2_vl", "qwen2_5_vl"]:
             from transformers import AutoModelForImageTextToText
 
@@ -2355,7 +2354,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # video laoder helper only available for transformers >= 4.49
+        # video loader helper only available for transformers >= 4.49
         if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
             from transformers.image_utils import load_video
 

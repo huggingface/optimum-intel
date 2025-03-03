@@ -1121,7 +1121,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         pixel_values,
         attention_mask,
         position_ids,
-        past_key_values,
         image_sizes,
         legacy_processing,
         **kwargs,
@@ -1193,7 +1192,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                 pixel_values,
                 attention_mask,
                 position_ids,
-                past_key_values,
                 image_sizes,
                 legacy_processing,
                 **kwargs,
@@ -1353,7 +1351,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
 class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
     additional_parts = ["vision_resampler", "multi_modal_projector"]
-    export_feature = "video-text-to-text"
     auto_model_class = AutoModelForVision2Seq
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
@@ -1382,14 +1379,11 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
                 chat_prompt[0]["content"].append({"type": "video"})
             prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
         else:
-            if image is not None and "<image>" not in text:
-                prompt = "<image>\n" + text
-            else:
-                prompt = text
-            if video is not None and "<video>" not in text:
-                prompt = "<video>\n" + text
-            else:
-                prompt = text
+            prompt = text
+            if image is not None and "<image>" not in prompt:
+                prompt = "<image>\n" + prompt
+            if video is not None and "<video>" not in prompt:
+                prompt = "<video>\n" + prompt
 
         if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
             if (
@@ -1402,7 +1396,7 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
                     "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
                 )
 
-        inputs = processor(images=image, text=prompt, videos=[video], return_tensors="pt")
+        inputs = processor(images=image, text=prompt, videos=video, return_tensors="pt")
         return inputs
 
     def get_multimodal_embeddings(
@@ -1450,7 +1444,6 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
                 pixel_values,
                 attention_mask,
                 position_ids,
-                past_key_values,
                 image_sizes,
                 legacy_processing,
                 **kwargs,
@@ -1463,7 +1456,6 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
                 pixel_values_videos,
                 attention_mask,
                 position_ids,
-                past_key_values,
                 legacy_processing=legacy_processing,
                 **kwargs,
             )
@@ -1480,7 +1472,6 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         pixel_values_videos,
         attention_mask,
         position_ids,
-        past_key_values,
         legacy_processing,
         **kwargs,
     ):
@@ -2556,7 +2547,7 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, videos=[video], return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
 
@@ -2992,7 +2983,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, videos=[video], return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
     # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
