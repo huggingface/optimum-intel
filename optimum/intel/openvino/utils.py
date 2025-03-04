@@ -142,7 +142,11 @@ LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
 
 PREDEFINED_DIFFUSION_DATASETS = {
     "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}, "streaming": True},
-    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}, "streaming": True},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {
+        "split": "train",
+        "inputs": {"prompt": "caption"},
+        "streaming": True,
+    },
     "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}, "streaming": True},
 }
 
