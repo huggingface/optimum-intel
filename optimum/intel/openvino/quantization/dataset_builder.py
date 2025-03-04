@@ -162,13 +162,13 @@ class OVCalibrationDatasetBuilder:
         dataloader = self._get_calibration_dataloader(dataset, batch_size, data_collator, remove_unused_columns)
 
         if isinstance(self.model, OVBaseDecoderModel):
-            return self._prepare_decoder_calibration_data(dataloader, quantization_config.num_samples)
+            return self._prepare_decoder_calibration_data(quantization_config, dataloader)
         elif isinstance(self.model, OVModelForVisualCausalLM):
-            return self._prepare_visual_causal_lm_calibration_data(dataloader)
+            return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataloader)
         elif isinstance(self.model, OVModelForSpeechSeq2Seq):
-            return self._prepare_speech_to_text_calibration_data(dataloader, quantization_config.num_samples)
+            return self._prepare_speech_to_text_calibration_data(quantization_config, dataloader)
         elif isinstance(self.model, OVDiffusionPipeline):
-            return self._prepare_diffusion_calibration_data(dataloader=dataloader, num_samples=quantization_config.num_samples)
+            return self._prepare_diffusion_calibration_data(quantization_config, dataloader)
         else:
             raise Exception
 
@@ -176,7 +176,6 @@ class OVCalibrationDatasetBuilder:
         self,
         quantization_config: OVQuantizationConfigBase,
         dataset_name: str,
-        num_samples: int = 100,
         dataset_config_name: Optional[str] = None,
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
@@ -196,8 +195,6 @@ class OVCalibrationDatasetBuilder:
             dataset_name (`str`):
                 The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
                 in generic formats and optionally a dataset script, if it requires some code to read the data files.
-            num_samples (`int`, defaults to 100):
-                The maximum number of samples composing the calibration dataset.
             dataset_config_name (`str`, *optional*):
                 The name of the dataset configuration.
             dataset_split (`str`, defaults to `"train"`):
@@ -222,7 +219,6 @@ class OVCalibrationDatasetBuilder:
         
         dataset = self._load_dataset(
             dataset_name,
-            num_samples,
             dataset_config_name,
             dataset_split,
             preprocess_function,
@@ -278,7 +274,6 @@ class OVCalibrationDatasetBuilder:
                 return self.build_from_dataset_name(
                     config,
                     config.dataset,
-                    config.num_samples or 32,
                     dataset_split=dataset_metadata["split"],
                     preprocess_function=preprocess_function,
                     trust_remote_code=trc,
@@ -302,7 +297,6 @@ class OVCalibrationDatasetBuilder:
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
-                    config.num_samples or 128,
                     dataset_metadata["name"],
                     dataset_metadata["split"],
                     preprocess_function=preprocess_function,
@@ -334,7 +328,6 @@ class OVCalibrationDatasetBuilder:
     def _load_dataset(
         self,
         dataset_name: str,
-        num_samples: int = 100,
         dataset_config_name: Optional[str] = None,
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
@@ -351,8 +344,6 @@ class OVCalibrationDatasetBuilder:
             dataset_name (`str`):
                 The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
                 in generic formats and optionally a dataset script, if it requires some code to read the data files.
-            num_samples (`int`, defaults to 100):
-                The maximum number of samples composing the calibration dataset.
             dataset_config_name (`str`, *optional*):
                 The name of the dataset configuration.
             dataset_split (`str`, defaults to `"train"`):
@@ -386,9 +377,6 @@ class OVCalibrationDatasetBuilder:
 
         dataset = load_dataset(dataset_name, **datasets_kwargs)
         dataset = dataset.shuffle(seed=self.seed)
-
-        if num_samples is not None:
-            dataset = dataset.select(range(min(num_samples, len(dataset))))
 
         if preprocess_function is not None:
             dataset = dataset.map(preprocess_function, batched=preprocess_batch)
@@ -426,16 +414,17 @@ class OVCalibrationDatasetBuilder:
         return dataset.remove_columns(ignored_columns)
 
     def _prepare_decoder_calibration_data(
-        self, dataloader: OVDataLoader, num_samples: int = 200
+        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
     ) -> Dict[str, nncf.Dataset]:
         # Prefetch past_key_values
         self.model.update_pkv_precision(True)
         self.model.compile()
         collected_inputs = []
 
+        num_samples = quantization_config.num_samples or 200
         self.model.request = InferRequestWrapper(self.model.request, collected_inputs)
         try:
-            for data in dataloader:
+            for data in tqdm(dataloader, desc="Collecting calibration data"):
                 self.model.generate(**data, max_new_tokens=1)
                 if len(collected_inputs) >= num_samples:
                     break
@@ -464,9 +453,10 @@ class OVCalibrationDatasetBuilder:
 
         return {"model": calibration_dataset}
 
-    def _prepare_visual_causal_lm_calibration_data(self, dataloader: OVDataLoader) -> Dict[str, nncf.Dataset]:
+    def _prepare_visual_causal_lm_calibration_data(self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader) -> Dict[str, nncf.Dataset]:
         calibration_data = []
-        for inputs in tqdm(dataloader, desc="Collecting calibration dataset"):
+        num_samples = quantization_config.num_samples or 32
+        for inputs in tqdm(dataloader, desc="Collecting calibration dataset", total=num_samples):
             input_ids = inputs.get("input_ids")
             position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
 
@@ -484,9 +474,12 @@ class OVCalibrationDatasetBuilder:
 
             calibration_data.append(language_model_inputs)
 
+            if len(calibration_data) >= num_samples:
+                break
+
         return {"language_model": nncf.Dataset(calibration_data)}
 
-    def _prepare_speech_to_text_calibration_data(self, dataloader: OVDataLoader, num_samples: int) -> Dict[str, nncf.Dataset]:
+    def _prepare_speech_to_text_calibration_data(self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader) -> Dict[str, nncf.Dataset]:
         encoder_calibration_data = []
         encoder_model = self.model.encoder
         encoder_model._compile()
@@ -512,6 +505,7 @@ class OVCalibrationDatasetBuilder:
 
         try:
             # Download audio inputs beforehand to avoid possible connection issues
+            num_samples = quantization_config.num_samples or 32
             audio_inputs = list(tqdm(dataloader, desc="Downloading audio inputs", total=num_samples))
 
             for input_features in tqdm(audio_inputs, desc="Collecting calibration data"):
@@ -531,7 +525,7 @@ class OVCalibrationDatasetBuilder:
         return datasets
 
     def _prepare_diffusion_calibration_data(
-        self, dataloader: OVDataLoader, num_samples: int = 200
+        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
     ) -> Dict[str, nncf.Dataset]:
         self.model.compile()
 
@@ -551,6 +545,7 @@ class OVCalibrationDatasetBuilder:
         #     def transform_fn(data_item):
         #         return data_item if isinstance(data_item, (list, dict)) else [data_item]
 
+        num_samples = quantization_config.num_samples or 200
         calibration_data = []
         try:
             diffuser.request = InferRequestWrapper(diffuser.request, calibration_data)
