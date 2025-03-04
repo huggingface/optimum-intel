@@ -29,10 +29,12 @@ from torch.utils.data import RandomSampler, DataLoader
 from tqdm import tqdm
 from transformers import DataCollator, default_data_collator, AutoTokenizer, AutoProcessor
 
-from optimum.intel import is_accelerate_available, OVBaseDecoderModel, OVModelForCausalLM, OVModelForVisualCausalLM, \
+from optimum.intel import is_accelerate_available, OVModelForCausalLM, OVModelForVisualCausalLM, \
     OVModelForSpeechSeq2Seq, OVDiffusionPipeline
+from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
 from optimum.intel.openvino.quantization import OVQuantizationConfigBase
-from optimum.intel.openvino.utils import PREDEFINED_VISUAL_LM_DATASETS, PREDEFINED_SPEECH_TO_TEXT_DATASETS
+from optimum.intel.openvino.utils import PREDEFINED_VISUAL_LM_DATASETS, PREDEFINED_SPEECH_TO_TEXT_DATASETS, \
+    PREDEFINED_DIFFUSION_DATASETS
 from optimum.intel.utils.import_utils import is_datasets_available, DATASETS_IMPORT_ERROR, is_datasets_version
 
 if is_datasets_available():
@@ -149,8 +151,8 @@ class OVCalibrationDatasetBuilder:
 
     def build_from_dataset(
         self,
+        quantization_config: OVQuantizationConfigBase,
         dataset: Union["Dataset", Sized],
-        num_samples: Optional[int],
         batch_size: Optional[int] = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
@@ -160,16 +162,19 @@ class OVCalibrationDatasetBuilder:
         dataloader = self._get_calibration_dataloader(dataset, batch_size, data_collator, remove_unused_columns)
 
         if isinstance(self.model, OVBaseDecoderModel):
-            calibration_datasets = self._prepare_decoder_calibration_data(dataloader, num_samples)
+            return self._prepare_decoder_calibration_data(dataloader, quantization_config.num_samples)
+        elif isinstance(self.model, OVModelForVisualCausalLM):
+            return self._prepare_visual_causal_lm_calibration_data(dataloader)
+        elif isinstance(self.model, OVModelForSpeechSeq2Seq):
+            return self._prepare_speech_to_text_calibration_data(dataloader, quantization_config.num_samples)
         elif isinstance(self.model, OVDiffusionPipeline):
-            calibration_datasets = self._prepare_diffusion_calibration_data(dataloader=dataloader, num_samples=num_samples)
+            return self._prepare_diffusion_calibration_data(dataloader=dataloader, num_samples=quantization_config.num_samples)
         else:
             raise Exception
 
-        return calibration_datasets
-
     def build_from_dataset_name(
         self,
+        quantization_config: OVQuantizationConfigBase,
         dataset_name: str,
         num_samples: int = 100,
         dataset_config_name: Optional[str] = None,
@@ -228,29 +233,103 @@ class OVCalibrationDatasetBuilder:
             streaming,
         )
         
-        return self.build_from_dataset(dataset, batch_size, data_collator, remove_unused_columns)
+        return self.build_from_dataset(quantization_config, dataset, batch_size, data_collator, remove_unused_columns)
 
-    def build_from_quantization_config(
-        self,
-        quantization_config: OVQuantizationConfigBase,
-    ) -> Dict[str, nncf.Dataset]:
+    def build_from_quantization_config(self, config: OVQuantizationConfigBase) -> Dict[str, nncf.Dataset]:
         if isinstance(self, OVModelForCausalLM):
-            return self._prepare_causal_lm_calibration_data(self, quantization_config)
+            return self._prepare_causal_lm_calibration_data(self, config)
         elif isinstance(self, (OVModelForVisualCausalLM, OVModelForSpeechSeq2Seq)):
-            if quantization_config.processor is None:
+            if config.processor is None:
                 raise ValueError(
                     "`processor` must be specified in order to run data-aware quantization. Please provide it as a"
                     "model id, or a path to a directory containing all the required configuration files."
                 )
 
+            trc = config.trust_remote_code
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=trc)
             if isinstance(self, OVModelForVisualCausalLM):
-                return self._prepare_visual_causal_lm_calibration_data(self, quantization_config)
-            elif isinstance(self, OVModelForSpeechSeq2Seq):
-                return self._prepare_speech_to_text_calibration_data(self, quantization_config)
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=trc)
+                    tokenizer_error = None
+                except Exception as tokenizer_error:  # noqa: F841
+                    tokenizer = None
+
+                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
+
+                def preprocess_function(item):
+                    inputs_metadata = dataset_metadata["inputs"]
+                    instruction = item[inputs_metadata["instruction"]]
+                    image_url = item[inputs_metadata["image_url"]]
+
+                    image = Image.open(requests.get(image_url, stream=True).raw)
+
+                    try:
+                        inputs = self.model.preprocess_inputs(
+                            text=instruction, image=image, processor=processor, tokenizer=tokenizer,
+                            config=self.model.config
+                        )
+                    except ValueError as value_error:
+                        if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
+                            raise tokenizer_error
+                        raise value_error
+
+                    return inputs
+
+                return self.build_from_dataset_name(
+                    config,
+                    config.dataset,
+                    config.num_samples or 32,
+                    dataset_split=dataset_metadata["split"],
+                    preprocess_function=preprocess_function,
+                    trust_remote_code=trc,
+                )
+            elif isinstance(self.model, OVModelForSpeechSeq2Seq):
+                dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
+
+                def preprocess_function(item):
+                    audio = item
+                    for key_name in dataset_metadata["inputs"]["audio"]:
+                        audio = audio[key_name]
+
+                    sampling_rate = item
+                    for key_name in dataset_metadata["inputs"]["sampling_rate"]:
+                        sampling_rate = sampling_rate[key_name]
+
+                    input_features = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features
+
+                    return input_features
+
+                return self.build_from_dataset_name(
+                    config,
+                    dataset_metadata["id"],
+                    config.num_samples or 128,
+                    dataset_metadata["name"],
+                    dataset_metadata["split"],
+                    preprocess_function=preprocess_function,
+                    trust_remote_code=trc,
+                    streaming=dataset_metadata["streaming"],
+                )
+            else:
+                raise Exception
         elif isinstance(self, OVDiffusionPipeline):
-            dataset = quantization_config.dataset
+            dataset = config.dataset
             if isinstance(dataset, str):
-                return self._prepare_diffusion_calibration_data(self, dataset_name=quantization_config.dataset, num_samples=quantization_config.num_samples)
+                dataset_name = dataset
+                dataset_metadata = PREDEFINED_DIFFUSION_DATASETS[dataset_name]
+
+                def preprocess_function(item):
+                    return {inp_name: item[column] for inp_name, column in dataset_metadata["inputs"].items()}
+
+                dataset = self._load_dataset(
+                    dataset_name,
+                    dataset_split=dataset_metadata["split"],
+                    preprocess_function=preprocess_function,
+                    streaming=dataset_metadata["streaming"],
+                )
+            elif not(isinstance(dataset, list) and all(isinstance(it, str) for it in dataset)):
+                raise Exception
+
+            return self.build_from_dataset(config, dataset)
 
     def _load_dataset(
         self,
@@ -306,10 +385,10 @@ class OVCalibrationDatasetBuilder:
             datasets_kwargs["trust_remote_code"] = trust_remote_code
 
         dataset = load_dataset(dataset_name, **datasets_kwargs)
+        dataset = dataset.shuffle(seed=self.seed)
 
         if num_samples is not None:
-            num_samples = min(num_samples, len(dataset))
-            dataset = dataset.shuffle(seed=self.seed).select(range(num_samples))
+            dataset = dataset.select(range(min(num_samples, len(dataset))))
 
         if preprocess_function is not None:
             dataset = dataset.map(preprocess_function, batched=preprocess_batch)
@@ -347,7 +426,7 @@ class OVCalibrationDatasetBuilder:
         return dataset.remove_columns(ignored_columns)
 
     def _prepare_decoder_calibration_data(
-        self, dataloader: OVDataLoader, num_samples: Optional[int] = 200
+        self, dataloader: OVDataLoader, num_samples: int = 200
     ) -> Dict[str, nncf.Dataset]:
         # Prefetch past_key_values
         self.model.update_pkv_precision(True)
@@ -385,43 +464,9 @@ class OVCalibrationDatasetBuilder:
 
         return {"model": calibration_dataset}
 
-    def _prepare_visual_causal_lm_calibration_data(self, config: OVQuantizationConfigBase) -> Dict[str, nncf.Dataset]:
-        dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
-
-        def preprocess_function(item):
-            inputs_metadata = dataset_metadata["inputs"]
-            return item[inputs_metadata["instruction"]], item[inputs_metadata["image_url"]]
-
-        num_samples = config.num_samples or 32
-        dataset = self._load_dataset(
-            config.dataset,
-            num_samples,
-            dataset_split=dataset_metadata["split"],
-            preprocess_function=preprocess_function,
-            trust_remote_code=config.trust_remote_code,
-        )
-        dataloader = self._get_calibration_dataloader(dataset)
-
-        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
-            tokenizer_error = None
-        except Exception as tokenizer_error:  # noqa: F841
-            tokenizer = None
-
-        calibration_dataset = []
-        for instruction, image_url in tqdm(dataloader, desc="Collecting calibration dataset", total=num_samples):
-            image = Image.open(requests.get(image_url, stream=True).raw)
-
-            try:
-                inputs = self.model.preprocess_inputs(
-                    text=instruction, image=image, processor=processor, tokenizer=tokenizer, config=self.model.config
-                )
-            except ValueError as value_error:
-                if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
-                    raise tokenizer_error
-                raise value_error
-
+    def _prepare_visual_causal_lm_calibration_data(self, dataloader: OVDataLoader) -> Dict[str, nncf.Dataset]:
+        calibration_data = []
+        for inputs in tqdm(dataloader, desc="Collecting calibration dataset"):
             input_ids = inputs.get("input_ids")
             position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
 
@@ -437,35 +482,11 @@ class OVCalibrationDatasetBuilder:
                 inputs_embeds=inputs_embeds,
             )
 
-            calibration_dataset.append(language_model_inputs)
+            calibration_data.append(language_model_inputs)
 
-        return {"language_model": nncf.Dataset(calibration_dataset)}
+        return {"language_model": nncf.Dataset(calibration_data)}
 
-    def _prepare_speech_to_text_calibration_data(self, config: OVQuantizationConfigBase) -> Dict[str, nncf.Dataset]:
-        dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
-
-        def preprocess_function(item):
-            audio = item
-            for key_name in dataset_metadata["inputs"]["audio"]:
-                audio = audio[key_name]
-
-            sampling_rate = item
-            for key_name in dataset_metadata["inputs"]["sampling_rate"]:
-                sampling_rate = sampling_rate[key_name]
-
-            return audio, sampling_rate
-
-        num_samples = config.num_samples or 128
-        dataloader = self._get_calibration_dataloader(
-            dataset_metadata["id"],
-            num_samples,
-            dataset_metadata["name"],
-            dataset_metadata["split"],
-            preprocess_function=preprocess_function,
-            trust_remote_code=config.trust_remote_code,
-            streaming=True,
-        )
-
+    def _prepare_speech_to_text_calibration_data(self, dataloader: OVDataLoader, num_samples: int) -> Dict[str, nncf.Dataset]:
         encoder_calibration_data = []
         encoder_model = self.model.encoder
         encoder_model._compile()
@@ -489,13 +510,11 @@ class OVCalibrationDatasetBuilder:
                 decoder_w_p_model.request, decoder_w_p_calibration_data, apply_caching=True
             )
 
-        processor = AutoProcessor.from_pretrained(config.processor)
         try:
             # Download audio inputs beforehand to avoid possible connection issues
             audio_inputs = list(tqdm(dataloader, desc="Downloading audio inputs", total=num_samples))
 
-            for audio, sampling_rate in tqdm(audio_inputs, desc="Collecting calibration data"):
-                input_features = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features
+            for input_features in tqdm(audio_inputs, desc="Collecting calibration data"):
                 self.model.generate(input_features)
         finally:
             encoder_model.request = encoder_model.request.request
@@ -512,62 +531,35 @@ class OVCalibrationDatasetBuilder:
         return datasets
 
     def _prepare_diffusion_calibration_data(
-        self,
-        dataloader: Optional[OVDataLoader] = None,
-        dataset_name: Optional[str] = None,
-        num_samples: Optional[int] = None,
+        self, dataloader: OVDataLoader, num_samples: int = 200
     ) -> Dict[str, nncf.Dataset]:
         self.model.compile()
 
-        diffuser = self.model.unet if self.model.unet is not None else self.model.transformer
+        diffuser_model_name = "unet" if self.model.unet is not None else "transformer"
+        diffuser = getattr(self, diffuser_model_name)
 
         size = diffuser.config.get("sample_size", 64) * self.model.vae_scale_factor
         height, width = 2 * (min(size, 512),)
-        num_samples = num_samples or 200
 
-        if dataset is not None:
-            if isinstance(dataset, nncf.Dataset):
-                return dataset
-            if is_datasets_available() and isinstance(dataset, Dataset):
-                dataset = dataset.select_columns(["caption"])
-
-            def transform_fn(data_item):
-                return data_item if isinstance(data_item, (list, dict)) else [data_item]
-
-        elif isinstance(dataset_name, str):
-            available_datasets = PREDEFINED_SD_DATASETS.keys()
-            if dataset_name not in available_datasets:
-                raise ValueError(
-                    f"""You have entered a string value for dataset. You can only choose between
-                    {list(available_datasets)}, but the {dataset_name} was found"""
-                )
-
-            from datasets import load_dataset
-
-            dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
-            datasets_kwargs = {"split": dataset_metadata["split"], "streaming": True}
-            dataset = load_dataset(dataset_name, **datasets_kwargs).shuffle(seed=self.seed)
-
-            input_names = dataset_metadata["inputs"]
-            dataset = dataset.select_columns(list(input_names.values()))
-
-            def transform_fn(data_item):
-                return {inp_name: data_item[column] for inp_name, column in input_names.items()}
-
-        else:
-            raise ValueError(
-                "For UNet inputs collection either quantization_config.dataset or custom "
-                "calibration_dataset must be provided."
-            )
+        # TODO: move the logic below to ov_quantizer
+        # if dataset is not None:
+        #     if isinstance(dataset, nncf.Dataset):
+        #         return dataset
+        #     if is_datasets_available() and isinstance(dataset, Dataset):
+        #         dataset = dataset.select_columns(["caption"])
+        #
+        #     def transform_fn(data_item):
+        #         return data_item if isinstance(data_item, (list, dict)) else [data_item]
 
         calibration_data = []
         try:
             diffuser.request = InferRequestWrapper(diffuser.request, calibration_data)
 
-            for inputs in dataset:
-                inputs = transform_fn(inputs)
+            for inputs in tqdm(dataloader, desc="Collecting calibration data"):
                 if isinstance(inputs, dict):
                     self.model(**inputs, height=height, width=width)
+                elif isinstance(inputs, str):
+                    self.model(inputs, height=height, width=width)
                 else:
                     self.model(*inputs, height=height, width=width)
                 if len(calibration_data) >= num_samples:
@@ -575,5 +567,4 @@ class OVCalibrationDatasetBuilder:
         finally:
             diffuser.request = diffuser.request.request
 
-        calibration_dataset = nncf.Dataset(calibration_data[:num_samples])
-        return calibration_dataset
+        return {diffuser_model_name: nncf.Dataset(calibration_data[:num_samples])}

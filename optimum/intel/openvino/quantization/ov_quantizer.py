@@ -63,7 +63,7 @@ from ..utils import (
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
-    PREDEFINED_SD_DATASETS,
+    PREDEFINED_DIFFUSION_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
 )
@@ -915,7 +915,7 @@ class OVQuantizer(OptimumQuantizer):
                 return data_item if isinstance(data_item, (list, dict)) else [data_item]
 
         elif isinstance(dataset_name, str):
-            available_datasets = PREDEFINED_SD_DATASETS.keys()
+            available_datasets = PREDEFINED_DIFFUSION_DATASETS.keys()
             if dataset_name not in available_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
@@ -924,7 +924,7 @@ class OVQuantizer(OptimumQuantizer):
 
             from datasets import load_dataset
 
-            dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
+            dataset_metadata = PREDEFINED_DIFFUSION_DATASETS[dataset_name]
             datasets_kwargs = {"split": dataset_metadata["split"], "streaming": True}
             dataset = load_dataset(dataset_name, **datasets_kwargs).shuffle(seed=self.seed)
 
