@@ -1243,7 +1243,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
                 # Whether to turn off right padding
                 # 1. Create a mask to know where special image tokens are
-                special_image_token_mask = torch.tensor(input_ids == image_token_index)
+                special_image_token_mask = input_ids == image_token_index
                 # special_image_token_mask: [bsz, seqlen]
                 num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
                 # num_special_image_tokens: [bsz]
@@ -1336,7 +1336,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             final_attention_mask |= image_to_overwrite
             position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
         else:
-            special_image_mask = torch.tensor((input_ids == image_token_index)).unsqueeze(-1).expand_as(inputs_embeds)
+            special_image_mask = (input_ids == image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
             image_features = image_features.to(inputs_embeds.dtype)
             final_embedding = inputs_embeds.masked_scatter(special_image_mask, image_features)
             final_attention_mask = attention_mask
