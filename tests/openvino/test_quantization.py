@@ -615,23 +615,21 @@ class OVWeightCompressionTest(unittest.TestCase):
                     ),
                     [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
                 ),
-                # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-phi3-vision/blob/main/processing_phi3_v.py#L313 modified to add chat_template
-                # currently incompatible with transformers >= v4.49
-                # (
-                #     OVModelForVisualCausalLM,
-                #     "phi3_v",
-                #     True,
-                #     dict(
-                #         bits=4,
-                #         group_size=16,
-                #         dataset="contextual",
-                #         ratio=0.8,
-                #         sensitivity_metric="mean_activation_magnitude",
-                #         num_samples=1,
-                #         trust_remote_code=True,
-                #     ),
-                #     [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
-                # ),
+                (
+                    OVModelForVisualCausalLM,
+                    "phi3_v",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        trust_remote_code=True,
+                    ),
+                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
+                ),
                 (
                     OVModelForVisualCausalLM,
                     "qwen2_vl",
