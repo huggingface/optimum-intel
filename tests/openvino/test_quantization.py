@@ -875,6 +875,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes
     ):
         model_id = MODEL_NAMES[model_type]
+        # TODO: provide list-of-strings-dataset through quantization config instead
         dataset = [
             "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
         ]
