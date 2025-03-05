@@ -240,6 +240,9 @@ def main_export(
     loading_kwargs = model_loading_kwargs or {}
     if variant is not None:
         loading_kwargs["variant"] = variant
+    dtype = loading_kwargs.get("torch_dtype", None)
+    if isinstance(dtype, str):
+        dtype = getattr(torch, dtype) if dtype != "auto" else dtype
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -302,9 +305,8 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
-        dtype = loading_kwargs.get("torch_dtype")
-        if isinstance(dtype, str):
-            dtype = getattr(config, "torch_dtype") if dtype == "auto" else getattr(torch, dtype)
+        if dtype == "auto":
+            dtype = getattr(config, "torch_dtype")
 
         if (
             dtype is None
@@ -351,19 +353,28 @@ def main_export(
                 GPTQQuantizer.post_init_model = post_init_model
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
         _loading_kwargs = {} if variant is None else {"variant": variant}
-        dtype = deduce_diffusers_dtype(
-            model_name_or_path,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            **_loading_kwargs,
-        )
+        if dtype == "auto" or dtype is None:
+            dtype = deduce_diffusers_dtype(
+                model_name_or_path,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                trust_remote_code=trust_remote_code,
+                **_loading_kwargs,
+            )
+            if (
+                dtype in {torch.bfloat16, torch.float16}
+                and ov_config is not None
+                and ov_config.dtype in {"fp16", "fp32"}
+            ):
+                dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+        if loading_kwargs.get("torch_dtype") == "auto":
+            loading_kwargs["torch_dtype"] = dtype
 
     try:
         if library_name == "open_clip":

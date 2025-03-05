@@ -593,7 +593,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if load_in_8bit is None and not quantization_config:
             ov_config = None
         else:
-            ov_config = OVConfig(dtype="fp32")
+            ov_config = OVConfig(dtype="auto")
+
+        torch_dtype = kwargs.pop("torch_dtype", None)
+
+        model_loading_kwargs = {}
+
+        if torch_dtype is not None:
+            model_loading_kwargs["torch_dtype"] = torch_dtype
 
         model_save_dir = TemporaryDirectory()
         model_save_path = Path(model_save_dir.name)
@@ -613,6 +620,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             ov_config=ov_config,
             library_name=cls._library_name,
             variant=variant,
+            model_loading_kwargs=model_loading_kwargs,
         )
 
         return cls._from_pretrained(
