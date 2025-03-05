@@ -44,7 +44,6 @@ from ...utils.import_utils import (
     is_diffusers_available,
 )
 from ...utils.modeling_utils import get_model_device
-from ..modeling_base import OVBaseModel
 from ..utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -193,7 +192,8 @@ class OVQuantizer(OptimumQuantizer):
                 calibration_dataset = calibration_dataset.select_columns(["caption"])
 
             if (
-                isinstance(self.model, OVDiffusionPipeline)
+                is_diffusers_available()
+                and isinstance(self.model, OVDiffusionPipeline)
                 and isinstance(calibration_dataset, list)
                 and all(isinstance(it, str) for it in calibration_dataset)
             ):
@@ -203,6 +203,8 @@ class OVQuantizer(OptimumQuantizer):
             calibration_dataset = self.dataset_builder.build_from_dataset(
                 quantization_config, calibration_dataset, batch_size, data_collator, remove_unused_columns
             )
+
+        from ..modeling_base import OVBaseModel
 
         if isinstance(self.model, OVBaseModel):
             if self.model._compile_only:
@@ -284,7 +286,11 @@ class OVQuantizer(OptimumQuantizer):
             if calibration_datasets is None:
                 raise ValueError("Calibration dataset is required to run data-aware quantization.")
             if (
-                not isinstance(self.model, (OVDiffusionPipeline, _OVModelForWhisper))
+                not (
+                    is_diffusers_available()
+                    and isinstance(self.model, OVDiffusionPipeline)
+                    or isinstance(self.model, _OVModelForWhisper)
+                )
                 and "model" not in calibration_datasets
             ):
                 raise RuntimeError("Calibration datasets should contain a key 'model' with a dataset.")

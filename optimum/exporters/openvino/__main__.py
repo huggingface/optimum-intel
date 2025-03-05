@@ -52,7 +52,7 @@ from .utils import (
 FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager", "gemma2": "sdpa"}
 
 if TYPE_CHECKING:
-    from optimum.intel.openvino.quantization.configuration import OVConfig
+    from optimum.intel.openvino.quantization import OVConfig
 
 
 if is_torch_available():

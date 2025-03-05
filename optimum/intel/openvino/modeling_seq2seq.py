@@ -38,7 +38,7 @@ from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from ...exporters.openvino.stateful import model_has_state
 from ..utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
-from .quantization import OVConfig, OVQuantizationConfig, OVQuantizationConfigBase, OVQuantizer
+from .quantization import OVConfig, OVQuantizationConfig, OVQuantizationConfigBase
 from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
 
 
@@ -1030,6 +1030,8 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         if not compile_only and isinstance(quantization_config, OVQuantizationConfig):
+            from .quantization import OVQuantizer
+
             model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
                 model_id, config, load_in_8bit=False, **kwargs
             )

@@ -28,7 +28,6 @@ from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
 
-from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
 from optimum.intel.openvino.utils import (
     PREDEFINED_DIFFUSION_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
@@ -168,6 +167,7 @@ class OVCalibrationDatasetBuilder:
         # TODO: deprecate remove_unused_columns ?
 
         from optimum.intel import OVModelForVisualCausalLM
+        from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
 
         if is_diffusers_available():
@@ -181,7 +181,7 @@ class OVCalibrationDatasetBuilder:
             return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataloader)
         elif isinstance(self.model, _OVModelForWhisper):
             return self._prepare_speech_to_text_calibration_data(quantization_config, dataloader)
-        elif isinstance(self.model, OVDiffusionPipeline):
+        elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
             return self._prepare_diffusion_calibration_data(quantization_config, dataloader)
         else:
             # Torch model quantization scenario
@@ -334,7 +334,7 @@ class OVCalibrationDatasetBuilder:
                 )
             else:
                 raise Exception
-        elif isinstance(self.model, OVDiffusionPipeline):
+        elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
             dataset = config.dataset
 
             dataset_metadata = None

@@ -13,6 +13,8 @@
 #  limitations under the License.
 
 
+from optimum.intel.utils.import_utils import is_nncf_available
+
 from .configuration import (
     OVConfig,
     OVDynamicQuantizationConfig,
@@ -22,4 +24,7 @@ from .configuration import (
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
 )
-from .quantizer import OVQuantizer
+
+
+if is_nncf_available():
+    from .quantizer import OVQuantizer
