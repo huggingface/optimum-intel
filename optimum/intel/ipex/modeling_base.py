@@ -240,11 +240,14 @@ class IPEXModel(OptimizedModel):
         self.compiled = True
 
     def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        with torch.no_grad():
-            self.model(**inputs)
-            self.model(**inputs)
-        logger.info("Warm up end")
+        if self.compiled:
+            logger.info("Detected torch.compile is applied, please warm-up by your own case")
+        else:
+            inputs = prepare_jit_inputs(self.model, self.export_feature, False)
+            with torch.no_grad():
+                self.model(**inputs)
+                self.model(**inputs)
+            logger.info("Warm up end")
 
 
 class IPEXModelForSequenceClassification(IPEXModel):
@@ -400,10 +403,13 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return result
 
     def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        logger.info("Warm up end")
+        if self.compiled:
+            logger.info("Detected torch.compile is applied, please warm-up by your own case")
+        else:
+            inputs = prepare_jit_inputs(self.model, self.export_feature, False)
+            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+            logger.info("Warm up end")
 
 
 class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
@@ -478,10 +484,13 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
 
     def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        logger.info("Warm up end")
+        if self.compiled:
+            logger.info("Detected torch.compile is applied, please warm-up by your own case")
+        else:
+            inputs = prepare_jit_inputs(self.model, self.export_feature, False)
+            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+            logger.info("Warm up end")
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
