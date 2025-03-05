@@ -1315,6 +1315,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen", "chatglm", "glm4"]:
             return
 
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
+            self.skipTest("Incompatible modeling code")
+
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
             tokenizer.pad_token_id = tokenizer.bos_token_id
