@@ -51,6 +51,7 @@ from ..utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
+from .calibration_dataset_builder import OVCalibrationDatasetBuilder
 from .configuration import (
     OVConfig,
     OVMixedQuantizationConfig,
@@ -58,14 +59,10 @@ from .configuration import (
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
 )
-from .dataset_builder import OVCalibrationDatasetBuilder
 
 
 if is_datasets_available():
     from datasets import Dataset
-
-if is_diffusers_available():
-    from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -177,6 +174,9 @@ class OVQuantizer(OptimumQuantizer):
                 "quantization. Will rely on `calibration_dataset`."
             )
 
+        if is_diffusers_available():
+            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
+
         if calibration_dataset is not None and isinstance(calibration_dataset, nncf.Dataset):
             # TODO: add a warning that calibration dataset should be a dictionary in this case
             calibration_dataset = {"model": calibration_dataset}
@@ -191,6 +191,14 @@ class OVQuantizer(OptimumQuantizer):
             ):
                 # TODO: analyze this execution path
                 calibration_dataset = calibration_dataset.select_columns(["caption"])
+
+            if (
+                isinstance(self.model, OVDiffusionPipeline)
+                and isinstance(calibration_dataset, list)
+                and all(isinstance(it, str) for it in calibration_dataset)
+            ):
+                # TODO: deprecate this way of providing calibration dataset
+                data_collator = data_collator or (lambda x: x)
 
             calibration_dataset = self.dataset_builder.build_from_dataset(
                 quantization_config, calibration_dataset, batch_size, data_collator, remove_unused_columns
@@ -232,6 +240,9 @@ class OVQuantizer(OptimumQuantizer):
     ):
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
         from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM
+
+        if is_diffusers_available():
+            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         quantization_config = ov_config.quantization_config
         if calibration_datasets is None and quantization_config.dataset is not None:
@@ -290,7 +301,7 @@ class OVQuantizer(OptimumQuantizer):
                         raise ValueError("Calibration datasets for Diffusion models should contain only one value.")
                     # Apply hybrid quantization to diffusion model
                     diffusion_model_name, calibration_dataset = next(iter(calibration_datasets.items()))
-                    diffusion_model = getattr(self.model, diffusion_model_name)
+                    diffusion_model = getattr(self.model, diffusion_model_name).model
                     getattr(self.model, diffusion_model_name).model = _hybrid_quantization(
                         diffusion_model, quantization_config, calibration_dataset, **kwargs
                     )
@@ -476,7 +487,7 @@ class OVQuantizer(OptimumQuantizer):
     def get_calibration_dataset(
         self,
         dataset_name: str,
-        num_samples: int = 100,
+        num_samples: Optional[int] = None,
         dataset_config_name: Optional[str] = None,
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
@@ -492,7 +503,7 @@ class OVQuantizer(OptimumQuantizer):
             dataset_name (`str`):
                 The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
                 in generic formats and optionally a dataset script, if it requires some code to read the data files.
-            num_samples (`int`, defaults to 100):
+            num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             dataset_config_name (`str`, *optional*):
                 The name of the dataset configuration.
@@ -518,6 +529,7 @@ class OVQuantizer(OptimumQuantizer):
 
         return self.dataset_builder.load_dataset(
             dataset_name,
+            num_samples,
             dataset_config_name,
             dataset_split,
             preprocess_function,
@@ -531,11 +543,7 @@ class OVQuantizer(OptimumQuantizer):
 def _quantize_whisper_model(
     model, quantization_config: OVQuantizationConfig, calibration_dataset: Dict[str, nncf.Dataset], **kwargs
 ):
-    for submodel_name in ["encoder_model", "decoder_model", "decoder_with_past_model"]:
-        submodel = getattr(model, submodel_name, None)
-        if submodel_name == "decoder_with_past_model" and submodel is None:
-            continue
-
+    for submodel_name, submodel in model.ov_submodels.items():
         config = quantization_config.clone()
         # quantization_config.num_samples of audio samples result in more actual model inputs
         config.num_samples = calibration_dataset[submodel_name].get_length()

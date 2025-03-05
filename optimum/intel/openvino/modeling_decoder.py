@@ -891,7 +891,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     "quantization is not supported with `compile_only` mode, please intialize model without this option"
                 )
 
-            from optimum.intel.openvino.quantization.ov_quantizer import OVQuantizer
+            from optimum.intel.openvino.quantization.quantizer import OVQuantizer
 
             default_config = _check_default_4bit_configs(config.name_or_path)
 

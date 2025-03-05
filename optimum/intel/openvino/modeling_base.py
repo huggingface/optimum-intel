@@ -259,7 +259,7 @@ class OVBaseModel(OptimizedModel):
                     "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
                 )
 
-            from optimum.intel.openvino.quantization.ov_quantizer import _weight_only_quantization
+            from optimum.intel.openvino.quantization.quantizer import _weight_only_quantization
 
             if not isinstance(quantization_config, (dict, OVWeightQuantizationConfig)):
                 raise TypeError(

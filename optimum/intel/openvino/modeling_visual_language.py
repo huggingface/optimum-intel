@@ -561,7 +561,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if to_quantize:
-            from optimum.intel.openvino.quantization.ov_quantizer import OVQuantizer
+            from optimum.intel.openvino.quantization.quantizer import OVQuantizer
 
             quantization_config_copy = copy.deepcopy(quantization_config)
             quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id

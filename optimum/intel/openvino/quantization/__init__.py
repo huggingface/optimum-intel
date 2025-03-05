@@ -19,6 +19,7 @@ from .configuration import (
     OVMixedQuantizationConfig,
     OVQuantizationConfig,
     OVQuantizationConfigBase,
+    OVQuantizationMethod,
     OVWeightQuantizationConfig,
 )
-from .ov_quantizer import OVQuantizer
+from .quantizer import OVQuantizer

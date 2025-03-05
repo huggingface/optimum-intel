@@ -25,10 +25,10 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available
-from .utils import (
+from ...utils.import_utils import is_nncf_available
+from ..utils import (
     LANGUAGE_DATASETS,
-    PREDEFINED_SD_DATASETS,
+    PREDEFINED_DIFFUSION_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
 )
@@ -514,7 +514,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             )
         if self.dataset is not None and isinstance(self.dataset, str):
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
-            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
+            stable_diffusion_datasets = list(PREDEFINED_DIFFUSION_DATASETS.keys())
             if self.dataset not in LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
@@ -523,7 +523,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 )
 
         if self.dataset is not None and not (
-            self.quant_method == OVQuantizationMethod.AWQ
+            self.quant_method in [OVQuantizationMethod.AWQ, OVQuantizationMethod.HYBRID]
             or self.scale_estimation
             or self.gptq
             or self.lora_correction

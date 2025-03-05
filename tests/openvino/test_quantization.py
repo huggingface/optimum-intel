@@ -78,7 +78,7 @@ from optimum.intel.openvino.quantization.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization.ov_quantizer import InferRequestWrapper
+from optimum.intel.openvino.quantization.calibration_dataset_builder import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
@@ -1398,6 +1398,8 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ]
     )
     def test_quantization_kwargs_override(self, mock_method_name, quantization_function, dataset_key, config_type):
+        from optimum.intel.openvino.quantization.quantizer import _weight_only_quantization, _full_quantization
+
         with unittest.mock.patch(mock_method_name) as mock_method:
             mock_model = unittest.mock.Mock([])
             mock_model.get_rt_info = unittest.mock.Mock(return_value={})
@@ -1407,7 +1409,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
             additional_kwargs = {"param2": "new_value2", "param3": "value3"}
 
-            quantization_function = globals()[quantization_function]
+            quantization_function = (
+                _weight_only_quantization
+                if quantization_function == "_weight_only_quantization"
+                else _full_quantization
+            )
             quantization_function(mock_model, mock_quantization_config, None, **additional_kwargs)
 
             expected_kwargs = {"param1": "value1", "param2": "new_value2", "param3": "value3", dataset_key: None}
