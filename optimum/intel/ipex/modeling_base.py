@@ -489,7 +489,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     def _supports_num_logits_to_keep(self) -> bool:
         """
         Will be deprecated after we no longer support transformers < 4.49
-    
+
         Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
