@@ -358,8 +358,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         Return True if the current model supports the keyword argument `logits_to_keep` in forward()
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
-        logits_to_keep_name = "logits_to_keep" if is_transformers_version(">", "4.49") else "num_logits_to_keep"
-        return logits_to_keep_name in set(inspect.signature(self.model.forward).parameters.keys())
+        return "logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
+
+    def _supports_num_logits_to_keep(self) -> bool:
+        """
+        Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
+        to save memory. Checking it in this way allows to avoid using a new model attribute.
+        """
+        return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
 
     def generate(self, *args, **kwargs):
         if self._add_patch and kwargs.get("assistant_model", None):
@@ -477,6 +483,13 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
         return "logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
+
+    def _supports_num_logits_to_keep(self) -> bool:
+        """
+        Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
+        to save memory. Checking it in this way allows to avoid using a new model attribute.
+        """
+        return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
 
     def _init_warmup(self):
         inputs = prepare_jit_inputs(self.model, self.export_feature, False)
