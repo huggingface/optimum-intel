@@ -33,6 +33,6 @@ from .quantization.configuration import (
 logger = logging.getLogger(__name__)
 
 logger.warning(
-    "`optimum.intel.configuration` import path is deprecated and will be removed in optimum-intel v1.25."
+    "`optimum.intel.configuration` import path is deprecated and will be removed in optimum-intel v1.24. "
     "Please use `optimum.intel.quantization.configuration` instead."
 )

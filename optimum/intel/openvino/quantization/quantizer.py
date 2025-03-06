@@ -17,7 +17,7 @@ import logging
 import os
 from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sized, Union
+from typing import Callable, Dict, Iterable, List, Optional, Union
 
 import nncf
 import openvino
@@ -96,13 +96,13 @@ class OVQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        calibration_dataset: Optional[Union["Dataset", Dict[str, nncf.Dataset], Sized]] = None,
+        calibration_dataset: Optional[Union["Dataset", nncf.Dataset, Dict[str, nncf.Dataset], List]] = None,
         save_directory: Optional[Union[str, Path]] = None,
         ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
-        remove_unused_columns: bool = True,
+        remove_unused_columns: bool = False,
         **kwargs,
     ):
         """
@@ -123,7 +123,7 @@ class OVQuantizer(OptimumQuantizer):
                 The number of calibration samples to load per batch.
             data_collator (`DataCollator`, *optional*):
                 The function to use to form a batch from a list of elements of the calibration dataset.
-            remove_unused_columns (`bool`, defaults to `True`):
+            remove_unused_columns (`bool`, defaults to `False`):
                 Whether to remove the columns unused by the model forward method.
 
         Examples:
@@ -149,6 +149,15 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
+        if remove_unused_columns:
+            logger.warning("`remove_unused_columns` is deprecated and will be removed in optimum-intel v1.24.")
+
+        if isinstance(calibration_dataset, list):
+            logger.warning(
+                "Providing calibration dataset as a list is deprecated and will be removed in optimum-intel v1.24. "
+                "Please provide it as `datasets.Dataset` or as dictionary of `nncf.Dataset` instances."
+            )
+
         if ov_config is None:
             ov_config = OVConfig()
         if not isinstance(ov_config, OVConfig):
@@ -164,8 +173,6 @@ class OVQuantizer(OptimumQuantizer):
                 logger.warning("Calibration dataset was provided, assuming static quantization.")
                 ov_config.quantization_config = OVQuantizationConfig()
 
-        # TODO: add deprecation warning for Sized dataset
-
         quantization_config = ov_config.quantization_config
         if quantization_config.dataset is not None and calibration_dataset is not None:
             logger.info(
@@ -177,7 +184,7 @@ class OVQuantizer(OptimumQuantizer):
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         if calibration_dataset is not None and isinstance(calibration_dataset, nncf.Dataset):
-            # TODO: add a warning that calibration dataset should be a dictionary in this case
+            logger.info("Assuming nncf calibration dataset is provided for a pipeline component named `model`.")
             calibration_dataset = {"model": calibration_dataset}
         if calibration_dataset is not None and not isinstance(calibration_dataset, dict):
             # Process custom calibration dataset
@@ -188,7 +195,10 @@ class OVQuantizer(OptimumQuantizer):
                 and isinstance(calibration_dataset, Dataset)
                 and "caption" in calibration_dataset.column_names
             ):
-                # TODO: deprecate this path
+                logger.warning(
+                    "Assuming `caption` column should be used for calibration. This behavior will be deprecated in "
+                    "optimum-intel v1.24. Please filter the required columns before passing the dataset."
+                )
                 calibration_dataset = calibration_dataset.select_columns(["caption"])
 
             if (
@@ -197,9 +207,17 @@ class OVQuantizer(OptimumQuantizer):
                 and isinstance(calibration_dataset, list)
                 and all(isinstance(it, str) for it in calibration_dataset)
             ):
-                # TODO: deprecate this way of providing calibration dataset
+                # To be deprecated
                 if quantization_config.dataset is not None:
-                    raise Exception()
+                    raise ValueError(
+                        "Both `calibration_dataset` and `quantization_config.dataset` are provided and the latter is "
+                        "a list of strings. This behavior is ambiguous."
+                    )
+                logger.warning(
+                    "Providing calibration dataset for diffusion models a list of string will be deprecated "
+                    "in optimum-intel v1.24. Please provide the list inside `quantization_config.dataset`"
+                    "property instead."
+                )
                 quantization_config.dataset = calibration_dataset
 
             calibration_dataset = self.dataset_builder.build_from_dataset(
@@ -495,7 +513,7 @@ class OVQuantizer(OptimumQuantizer):
     def get_calibration_dataset(
         self,
         dataset_name: str,
-        num_samples: Optional[int] = None,
+        num_samples: Optional[int] = 100,
         dataset_config_name: Optional[str] = None,
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
@@ -503,6 +521,7 @@ class OVQuantizer(OptimumQuantizer):
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         trust_remote_code: bool = False,
+        streaming: bool = False,
     ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -511,7 +530,7 @@ class OVQuantizer(OptimumQuantizer):
             dataset_name (`str`):
                 The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
                 in generic formats and optionally a dataset script, if it requires some code to read the data files.
-            num_samples (`int`, *optional*):
+            num_samples (`int`, defaults to 100):
                 The maximum number of samples composing the calibration dataset.
             dataset_config_name (`str`, *optional*):
                 The name of the dataset configuration.
@@ -530,10 +549,19 @@ class OVQuantizer(OptimumQuantizer):
                 Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
                 should only be set to `True` for repositories you trust and in which you have read the code, as it will
                 execute code present on the Hub on your local machine.
+            streaming (`bool`, defaults to `False`):
+                Whether to load dataset in streaming mode.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
-        # TODO: num_samples is deprecated
+
+        # TODO: consider in the future for this method to return nncf.Datasets from either datasets.Dataset instance or its name as input.
+        #  This way OVQuantizer.quantize() will accept fully ready nncf.Dataset instances and `batch_size` and `data_collator` arguments can be removed.
+        #  Example usage in such scenario:
+        #  ```
+        #  calibration_dataset: Dict[str, nncf.Dataset] = ov_quantizer.get_calibration_dataset(ov_config, dataset_name, ..., batch_size, data_collator)
+        #  ov_quantizer.quantize(calibration_dataset, ov_config)
+        #  ```
 
         return self.dataset_builder.load_dataset(
             dataset_name,
@@ -545,6 +573,7 @@ class OVQuantizer(OptimumQuantizer):
             token,
             cache_dir,
             trust_remote_code,
+            streaming,
         )
 
 
