@@ -27,4 +27,5 @@ from .configuration import (
 
 
 if is_nncf_available():
+    # Quantization is possible only if nncf is installed
     from .quantizer import OVQuantizer

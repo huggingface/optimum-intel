@@ -1604,7 +1604,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
     def _set_2d_pos_cache(self, max_size):
         pos_embed = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
-        self._pos_embed = pos_embed
+        self._pos_embeds = pos_embed
 
     def _adjust_pos_cache(self, tgt_sizes):
         max_h = torch.max(tgt_sizes[:, 0])

@@ -153,8 +153,7 @@ class OVQuantizer(OptimumQuantizer):
             ov_config = OVConfig()
         if not isinstance(ov_config, OVConfig):
             raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
-        quantization_config = ov_config.quantization_config
-        if quantization_config is None:
+        if ov_config.quantization_config is None:
             logger.warning(
                 "`quantization_config` was not provided. In the future, please provide `quantization_config`"
             )
@@ -167,6 +166,7 @@ class OVQuantizer(OptimumQuantizer):
 
         # TODO: add deprecation warning for Sized dataset
 
+        quantization_config = ov_config.quantization_config
         if quantization_config.dataset is not None and calibration_dataset is not None:
             logger.info(
                 "Both `quantization_config.dataset` and `calibration_dataset` were provided for weight only "
@@ -188,7 +188,7 @@ class OVQuantizer(OptimumQuantizer):
                 and isinstance(calibration_dataset, Dataset)
                 and "caption" in calibration_dataset.column_names
             ):
-                # TODO: analyze this execution path
+                # TODO: deprecate this path
                 calibration_dataset = calibration_dataset.select_columns(["caption"])
 
             if (
@@ -198,10 +198,12 @@ class OVQuantizer(OptimumQuantizer):
                 and all(isinstance(it, str) for it in calibration_dataset)
             ):
                 # TODO: deprecate this way of providing calibration dataset
-                data_collator = data_collator or (lambda x: x)
+                if quantization_config.dataset is not None:
+                    raise Exception()
+                quantization_config.dataset = calibration_dataset
 
             calibration_dataset = self.dataset_builder.build_from_dataset(
-                quantization_config, calibration_dataset, batch_size, data_collator, remove_unused_columns
+                quantization_config, calibration_dataset, batch_size, remove_unused_columns
             )
 
         from ..modeling_base import OVBaseModel

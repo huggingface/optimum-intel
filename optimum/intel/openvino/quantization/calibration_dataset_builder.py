@@ -173,19 +173,32 @@ class OVCalibrationDatasetBuilder:
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
-        dataloader = self._get_calibration_dataloader(dataset, batch_size, data_collator, remove_unused_columns)
+        if isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)) or (
+            is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)
+        ):
+            # Prepare from raw dataset avoiding dataloader creation
+            if batch_size != 1 or data_collator is not None or remove_unused_columns:
+                logger.warning(
+                    "`batch_size`, `data_collator` and `remove_unused_columns` are not supported for this type of model."
+                )
 
-        if isinstance(self.model, OVBaseDecoderModel):
-            return self._prepare_decoder_calibration_data(quantization_config, dataloader)
-        elif isinstance(self.model, OVModelForVisualCausalLM):
-            return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataloader)
-        elif isinstance(self.model, _OVModelForWhisper):
-            return self._prepare_speech_to_text_calibration_data(quantization_config, dataloader)
-        elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-            return self._prepare_diffusion_calibration_data(quantization_config, dataloader)
+            if isinstance(self.model, OVModelForVisualCausalLM):
+                return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, _OVModelForWhisper):
+                return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
+            elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                return self._prepare_diffusion_calibration_data(quantization_config, dataset)
+            else:
+                # TODO
+                raise Exception()
         else:
-            # Torch model quantization scenario
-            return {"model": nncf.Dataset(dataloader)}
+            # Prepare from dataloader
+            dataloader = self._get_calibration_dataloader(dataset, batch_size, data_collator, remove_unused_columns)
+            if isinstance(self.model, OVBaseDecoderModel):
+                return self._prepare_decoder_calibration_data(quantization_config, dataloader)
+            else:
+                # Torch model quantization scenario
+                return {"model": nncf.Dataset(dataloader)}
 
     def build_from_dataset_name(
         self,
@@ -257,6 +270,9 @@ class OVCalibrationDatasetBuilder:
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
+        if config.dataset is None:
+            raise ValueError("Please provide a dataset for calibration.")
+
         if isinstance(self.model, OVModelForCausalLM):
             return self._prepare_causal_lm_calibration_data(config)
         elif isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)):
@@ -266,108 +282,46 @@ class OVCalibrationDatasetBuilder:
                     "model id, or a path to a directory containing all the required configuration files."
                 )
 
-            trc = config.trust_remote_code
-            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=trc)
             if isinstance(self.model, OVModelForVisualCausalLM):
-                try:
-                    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=trc)
-                    tokenizer_error = None
-                except Exception as tokenizer_error:  # noqa: F841
-                    tokenizer = None
-
                 dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
-
-                def preprocess_function(item):
-                    inputs_metadata = dataset_metadata["inputs"]
-                    instruction = item[inputs_metadata["instruction"]]
-                    image_url = item[inputs_metadata["image_url"]]
-
-                    image = Image.open(requests.get(image_url, stream=True).raw)
-
-                    try:
-                        inputs = self.model.preprocess_inputs(
-                            text=instruction,
-                            image=image,
-                            processor=processor,
-                            tokenizer=tokenizer,
-                            config=self.model.config,
-                        )
-                        # Remove batch dimension
-                        for key in inputs.keys():
-                            inputs[key] = inputs[key][0]
-                    except ValueError as value_error:
-                        if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
-                            raise tokenizer_error
-                        raise value_error
-
-                    return inputs
-
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
                     num_samples=config.num_samples,
                     dataset_split=dataset_metadata["split"],
-                    preprocess_function=preprocess_function,
-                    preprocess_batch=False,
-                    trust_remote_code=trc,
+                    trust_remote_code=config.trust_remote_code,
                 )
             elif isinstance(self.model, _OVModelForWhisper):
                 dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
-
-                def preprocess_function(item):
-                    audio = item["audio"]["array"]
-                    sampling_rate = item["audio"]["sampling_rate"]
-                    inputs = processor(audio, sampling_rate=sampling_rate, return_tensors="pt")
-                    # This way key "audio" in the original dict will be overridden and not cause problems
-                    return {"audio": inputs.input_features[0]}
-
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
                     num_samples=config.num_samples,  # This is an upper bound on how many audios are needed
                     dataset_config_name=dataset_metadata["name"],
                     dataset_split=dataset_metadata["split"],
-                    preprocess_function=preprocess_function,
-                    preprocess_batch=False,
-                    trust_remote_code=trc,
+                    trust_remote_code=config.trust_remote_code,
                     streaming=dataset_metadata["streaming"],
                 )
             else:
                 raise Exception
         elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-            dataset = config.dataset
-
-            dataset_metadata = None
-            if isinstance(dataset, str):
-                dataset_name = dataset
+            if isinstance(config.dataset, str):
+                dataset_name = config.dataset
                 dataset_metadata = PREDEFINED_DIFFUSION_DATASETS[dataset_name]
-
-                def preprocess_function(item):
-                    return {"prompt": item[dataset_metadata["prompt_column_name"]]}
 
                 dataset = self.load_dataset(
                     dataset_name,
                     num_samples=config.num_samples,  # This is an upper bound on how many prompts are needed
                     dataset_split=dataset_metadata["split"],
-                    preprocess_function=preprocess_function,
-                    preprocess_batch=False,
                     streaming=dataset_metadata["streaming"],
                 )
-            elif not (isinstance(dataset, list) and all(isinstance(it, str) for it in dataset)):
-                raise Exception
+            elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
+                dataset = config.dataset
+            else:
+                # TODO
+                raise Exception()
 
-            def collate_fn(features):
-                first = features[0]
-                if isinstance(first, dict) and dataset_metadata is not None:
-                    # List of dicts case
-                    batch = [it["prompt"] for it in features]
-                else:
-                    # List of strings case
-                    # TODO: ?
-                    batch = features
-                return batch
-
-            return self.build_from_dataset(config, dataset, data_collator=collate_fn)
+            return self.build_from_dataset(config, dataset)
 
     def load_dataset(
         self,
@@ -514,11 +468,33 @@ class OVCalibrationDatasetBuilder:
         return {"model": calibration_dataset}
 
     def _prepare_visual_causal_lm_calibration_data(
-        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
+        self, config: OVQuantizationConfigBase, dataset: "Dataset"
     ) -> Dict[str, nncf.Dataset]:
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
+            tokenizer_error = None
+        except Exception as tokenizer_error:  # noqa: F841
+            tokenizer = None
+
+        dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
+
         calibration_data = []
-        num_samples = quantization_config.num_samples or 32
-        for inputs in tqdm(dataloader, desc="Collecting calibration dataset", total=num_samples):
+        num_samples = config.num_samples or 32
+        for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
+            instruction = item[dataset_metadata["inputs"]["instruction"]]
+            image_url = item[dataset_metadata["inputs"]["image_url"]]
+            image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+
+            try:
+                inputs = self.model.preprocess_inputs(
+                    text=instruction, image=image, processor=processor, tokenizer=tokenizer, config=self.model.config
+                )
+            except ValueError as value_error:
+                if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
+                    raise tokenizer_error
+                raise value_error
+
             input_ids = inputs.get("input_ids")
             position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
 
@@ -542,7 +518,7 @@ class OVCalibrationDatasetBuilder:
         return {"lm_model": nncf.Dataset(calibration_data)}
 
     def _prepare_speech_to_text_calibration_data(
-        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
+        self, config: OVQuantizationConfigBase, dataset: "Dataset"
     ) -> Dict[str, nncf.Dataset]:
         from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 
@@ -559,12 +535,17 @@ class OVCalibrationDatasetBuilder:
             )
 
         try:
-            # Download audio inputs beforehand to avoid possible connection issues
-            num_samples = quantization_config.num_samples or 32
-            audio_inputs = list(tqdm(dataloader, desc="Downloading audio inputs", total=num_samples))
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
 
-            for inputs in tqdm(audio_inputs, desc="Collecting calibration data"):
-                self.model.generate(inputs["audio"])
+            # Download audio inputs beforehand to avoid possible connection issues
+            num_samples = config.num_samples or 32
+            downloaded_dataset = list(tqdm(dataset, desc="Downloading audio inputs", total=num_samples))
+
+            for item in tqdm(downloaded_dataset, desc="Collecting calibration data"):
+                audio = item["audio"]["array"]
+                sampling_rate = item["audio"]["sampling_rate"]
+                input_features = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features
+                self.model.generate(input_features)
         finally:
             for model in models.values():
                 model.request = model.request.request
@@ -575,7 +556,7 @@ class OVCalibrationDatasetBuilder:
         return calibration_data
 
     def _prepare_diffusion_calibration_data(
-        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
+        self, config: OVQuantizationConfigBase, dataset: "Dataset"
     ) -> Dict[str, nncf.Dataset]:
         self.model.compile()
 
@@ -585,16 +566,18 @@ class OVCalibrationDatasetBuilder:
         size = diffuser.config.get("sample_size", 64) * self.model.vae_scale_factor
         height, width = 2 * (min(size, 512),)
 
-        num_samples = quantization_config.num_samples or 200
+        num_samples = config.num_samples or 200
         calibration_data = []
         try:
             diffuser.request = InferRequestWrapper(diffuser.request, calibration_data)
 
-            for inputs in tqdm(dataloader, desc="Collecting calibration data"):
-                if isinstance(inputs, dict):
-                    self.model(**inputs, height=height, width=width)
-                else:
-                    self.model(inputs, height=height, width=width)
+            for item in tqdm(dataset, desc="Collecting calibration data"):
+                prompt = (
+                    item[PREDEFINED_DIFFUSION_DATASETS[config.dataset]["prompt_column_name"]]
+                    if isinstance(item, dict)
+                    else item
+                )
+                self.model(prompt, height=height, width=width)
                 if len(calibration_data) >= num_samples:
                     break
         finally:
