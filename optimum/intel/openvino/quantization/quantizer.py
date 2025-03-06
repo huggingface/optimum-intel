@@ -203,7 +203,7 @@ class OVQuantizer(OptimumQuantizer):
                 quantization_config.dataset = calibration_dataset
 
             calibration_dataset = self.dataset_builder.build_from_dataset(
-                quantization_config, calibration_dataset, batch_size, remove_unused_columns
+                quantization_config, calibration_dataset, batch_size, data_collator, remove_unused_columns
             )
 
         from ..modeling_base import OVBaseModel
