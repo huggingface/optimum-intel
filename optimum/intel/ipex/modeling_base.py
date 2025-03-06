@@ -149,7 +149,7 @@ class IPEXModel(OptimizedModel):
 
         self.maybe_apply_torch_compile()
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @classmethod
@@ -240,14 +240,11 @@ class IPEXModel(OptimizedModel):
         self.compiled = True
 
     def _init_warmup(self):
-        if self.compiled:
-            logger.info("Detected torch.compile is applied, please warm-up by your own case")
-        else:
-            inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-            with torch.no_grad():
-                self.model(**inputs)
-                self.model(**inputs)
-            logger.info("Warm up end")
+        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
+        with torch.no_grad():
+            self.model(**inputs)
+            self.model(**inputs)
+        logger.info("Warm up end")
 
 
 class IPEXModelForSequenceClassification(IPEXModel):
@@ -320,7 +317,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @torch.no_grad()
@@ -403,13 +400,10 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return result
 
     def _init_warmup(self):
-        if self.compiled:
-            logger.info("Detected torch.compile is applied, please warm-up by your own case")
-        else:
-            inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-            logger.info("Warm up end")
+        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
+        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+        logger.info("Warm up end")
 
 
 class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
@@ -445,7 +439,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @torch.no_grad()
@@ -484,13 +478,10 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
 
     def _init_warmup(self):
-        if self.compiled:
-            logger.info("Detected torch.compile is applied, please warm-up by your own case")
-        else:
-            inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-            self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-            logger.info("Warm up end")
+        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
+        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
+        logger.info("Warm up end")
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
