@@ -27,5 +27,6 @@ from .configuration import (
 
 
 if is_nncf_available():
-    # Quantization is possible only if nncf is installed
+    # Running quantization is possible only if nncf is installed
+    from .calibration_dataset_builder import CalibrationDataset
     from .quantizer import OVQuantizer
