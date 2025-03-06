@@ -1427,11 +1427,19 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
             pixel_values = torch.stack(pixel_values)
             return pixel_values
 
+        if image is not None and "<image>" not in text:
+            text = "<image>\n" + text
+
+        if tokenizer.chat_template is not None:
+            text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}], add_generation_prompt=True, tokenize=False
+            )
+
+        inputs = {}
+
         if image is not None:
             if config is None:
                 raise ValueError("Config is required.")
-            if "<image>" not in text:
-                text = "<image>\n" + text
             pixel_values = load_image(image, input_size=config.vision_config.image_size)
             num_patches = pixel_values.shape[0]
             num_image_token = int(
@@ -1440,11 +1448,8 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
             )
             image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_token * num_patches + IMG_END_TOKEN
             text = text.replace("<image>", image_tokens, 1)
-            text_inputs = tokenizer(text, return_tensors="pt")
-            inputs = dict(text_inputs)
             inputs.update({"pixel_values": pixel_values})
-        else:
-            inputs = tokenizer(text, return_tensors="pt")
+        inputs.update(tokenizer(text, return_tensors="pt"))
         return inputs
 
     # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config

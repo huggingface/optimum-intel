@@ -1040,12 +1040,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
 
-        # TODO: add back once dtype fixed everywhere
-        # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L720
-        # https://huggingface.co/katuni4ka/tiny-random-chatglm2/blob/main/modeling_chatglm.py#L759
-        if model_arch in {"chatglm", "glm4"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
-
         not_stateful = []
         if is_openvino_version("<", "2024.0"):
             not_stateful.append("mixtral")
@@ -1126,7 +1120,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"minicpm", "minicpm3", "arctic", "deepseek"} and is_transformers_version(">=", "4.49"):
+        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
@@ -1320,6 +1314,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "glm4"]:
             return
+
+        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
+        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
+            self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
@@ -2239,10 +2237,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged for all models as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"phi3_v", "nanollava"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
