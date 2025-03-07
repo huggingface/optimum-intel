@@ -36,8 +36,8 @@ from optimum.exporters.tasks import TasksManager
 
 from ...exporters.openvino import main_export
 from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
+from .quantization import OVConfig, OVWeightQuantizationConfig
 from .utils import TemporaryDirectory
 
 

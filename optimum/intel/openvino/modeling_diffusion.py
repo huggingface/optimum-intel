@@ -64,9 +64,9 @@ from optimum.utils import (
 
 from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version, is_openvino_version
-from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
+from .quantization import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,

@@ -50,13 +50,6 @@ if is_nncf_available():
     from .quantization import OVQuantizer
 
 
-from .configuration import (
-    OVConfig,
-    OVDynamicQuantizationConfig,
-    OVMixedQuantizationConfig,
-    OVQuantizationConfig,
-    OVWeightQuantizationConfig,
-)
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -78,6 +71,13 @@ from .modeling_open_clip import (
 )
 from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
 from .modeling_visual_language import OVModelForVisualCausalLM
+from .quantization import (
+    OVConfig,
+    OVDynamicQuantizationConfig,
+    OVMixedQuantizationConfig,
+    OVQuantizationConfig,
+    OVWeightQuantizationConfig,
+)
 
 
 if is_diffusers_available():
