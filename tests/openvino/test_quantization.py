@@ -962,7 +962,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     self.assertEqual(value, getattr(openvino_config.quantization_config, key))
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
-    @parameterized.expand(LOAD_IN_4_BITS_SCOPE[::3])
+    @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
