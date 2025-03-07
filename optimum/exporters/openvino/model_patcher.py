@@ -4510,6 +4510,75 @@ def mamba_mixer_forward(
     return contextualized_states
 
 
+def falcon_mamba_mixer_forward(
+    self,
+    input_states,
+    cache_params=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: Optional[torch.LongTensor] = None,
+):
+    from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
+
+    batch_size, seq_len, _ = input_states.shape
+    dtype = input_states.dtype
+    # 1. Gated MLP's linear projection
+    projected_states = self.in_proj(input_states).transpose(1, 2)  # [batch, 2 * intermediate_size, seq_len]
+    hidden_states, gate = projected_states.chunk(2, dim=1)
+
+    if attention_mask is not None:
+        hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
+    # 2. Convolution sequence transformation
+    if cache_params is not None:
+        ssm_state = cache_params.ssm_states[self.layer_idx].clone()
+        ssm_state = ssm_state.to(hidden_states.device)
+        # use `cache_position.shape[0]` to check whether we are in prefill
+        # stage, it's equivalent to check `cache_position[0] == 0`, which
+        # breaks dynamo fullgraph constraints
+        hidden_states, conv_state = self.conv_sequence_transform(
+            hidden_states, cache_position, cache_params.conv_states[self.layer_idx]
+        )
+        cache_params.conv_states[self.layer_idx] = conv_state
+    else:
+        ssm_state = torch.zeros(
+            (batch_size, self.intermediate_size, self.ssm_state_size), device=hidden_states.device, dtype=dtype
+        )
+        hidden_states = self.act(self.conv1d(hidden_states)[..., :seq_len])  # [batch, intermediate_size, seq_len]
+
+    if attention_mask is not None:
+        hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
+    # 3. State Space Model sequence transformation
+    # 3.a. Selection:  [batch, seq_len, self.time_step_rank + self.ssm_state_size * 2]
+    ssm_parameters = self.x_proj(hidden_states.transpose(1, 2))
+    time_step, B, C = torch.split(
+        ssm_parameters, [self.time_step_rank, self.ssm_state_size, self.ssm_state_size], dim=-1
+    )
+
+    B = rms_forward(B, variance_epsilon=self.rms_eps)
+    C = rms_forward(C, variance_epsilon=self.rms_eps)
+    time_step = rms_forward(time_step, variance_epsilon=self.rms_eps)
+    discrete_time_step = self.dt_proj(time_step)  # [batch, seq_len, intermediate_size]
+
+    discrete_time_step = torch.nn.functional.softplus(discrete_time_step)  # [batch, intermediate_size, seq_len]
+    A = -torch.exp(self.A_log.float())
+    B = B.float()
+    D = self.D.float()
+
+    scan_output, ssm_state = self.selective_scan(
+        ssm_state, hidden_states.float().transpose(1, 2), discrete_time_step, A, B, C, D
+    )
+    scan_output = scan_output.transpose(1, 2)
+    scan_output = scan_output * self.act(gate)
+
+    if cache_params is not None:
+        cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+
+    # 4. Final linear projection
+    contextualized_states = self.out_proj(scan_output.transpose(1, 2))  # [batch, seq_len, hidden_size]
+    return contextualized_states
+
+
 class MambaPatcher(ModelPatcher):
     def __init__(
         self,
@@ -4684,3 +4753,22 @@ class MambaPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
         for layer in self._model.backbone.layers:
             layer.mixer.forward = layer.mixer._orig_forward
+
+
+class FalconMambaPatcher(MambaPatcher):
+    def __enter__(self):
+        super().__enter__()
+        selective_scan = SelectiveScan()
+
+        for layer in self._model.backbone.layers:
+            layer.mixer.selective_scan = selective_scan
+            layer.mixer._orig_forward = layer.mixer.forward
+            layer.mixer.forward = types.MethodType(falcon_mamba_mixer_forward, layer.mixer)
+            conv_transform = ConvSequenceTransform(
+                layer.mixer.conv_kernel_size,
+                layer.mixer.use_conv_bias,
+                layer.mixer.conv1d,
+                layer.mixer.act,
+                layer.mixer.conv1d.bias,
+            )
+            layer.mixer.conv_sequence_transform = torch.jit.script(conv_transform)

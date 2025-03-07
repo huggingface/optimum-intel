@@ -77,6 +77,7 @@ from .model_patcher import (
     DeciLMModelPatcher,
     DeepseekPatcher,
     FalconModelPatcher,
+    FalconMambaPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     GptBigCodeModelPatcher,
@@ -3010,3 +3011,13 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
                 )
 
         return dummy_inputs
+
+
+@register_in_tasks_manager(
+    "falcon-mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class FalconMambaOpenVINOConfig(MambaOpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        return FalconMambaPatcher(self, model, model_kwargs)

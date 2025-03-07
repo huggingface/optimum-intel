@@ -14,9 +14,9 @@
 import copy
 import logging
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
 
 import numpy as np
 import openvino
@@ -37,6 +37,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
+from ...exporters.openvino.utils import SSM_MODELS
 from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
@@ -59,7 +60,7 @@ from .utils import (
 if is_transformers_version(">=", "4.43"):
     from transformers.cache_utils import MambaCache
 else:
-    MambaCache = object()
+    MambaCache = object
 
 if TYPE_CHECKING:
     try:
@@ -858,7 +859,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
-        elif model_type == "mamba":
+        elif model_type in SSM_MODELS:
             init_cls = OVMambaForCausalLM
         else:
             init_cls = cls
@@ -1138,8 +1139,6 @@ class OVMambaForCausalLM(OVModelForCausalLM):
                 self._past_length = 0
 
         ssm_states, conv_states = [], []
-        print(inputs.keys())
-
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
@@ -1147,8 +1146,6 @@ class OVMambaForCausalLM(OVModelForCausalLM):
         if self.stateful:
             self._past_length += input_ids.shape[1]
         else:
-            print(self.ssm_cache_output_names)
-            print(self.conv_cache_output_names)
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
         cache_params = OVMambaCache(self.config, input_ids.shape[0], conv_states=conv_states, ssm_states=ssm_states)
@@ -1159,7 +1156,6 @@ class OVMambaForCausalLM(OVModelForCausalLM):
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
     ) -> Dict[str, Any]:
         model_kwargs["cache_params"] = outputs.get("cache_params", None)
-        print(model_kwargs["cache_params"])
         if (
             model_kwargs.get("use_cache", True)
             and "cache_position" in model_kwargs
