@@ -31,7 +31,7 @@ import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
@@ -2124,17 +2124,25 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["llava"]
+    SUPPORT_VIDEO = []
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
+
+    if is_transformers_version(">=", "4.42.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next_video"]
+        SUPPORT_VIDEO.append("llava_next_video")
+
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
 
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
+        SUPPORT_VIDEO.append("qwen2_5_vl")
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2150,7 +2158,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import AutoModelForImageTextToText
 
             return AutoModelForImageTextToText
-        if model_arch in "llava":
+        if model_arch == "llava_next_video":
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+        if model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration
@@ -2253,7 +2265,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    @parameterized.expand(["llava", "llava_next"])
+    @parameterized.expand(["llava", "llava_next", "llava_next_video"])
     @unittest.skipIf(
         is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
     )
@@ -2335,6 +2347,22 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         outputs = outputs[:, inputs["input_ids"].shape[1] :]
         outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
+
+        # video loader helper only available for transformers >= 4.49
+        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+            from transformers.image_utils import load_video
+
+            video_path = hf_hub_download(
+                repo_id="raushan-testing-hf/videos-test", filename="sample_demo_1.mp4", repo_type="dataset"
+            )
+            input_video, _ = load_video(video_path, num_frames=2)
+            question = "Why is this video funny?"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
         del model
 
         gc.collect()

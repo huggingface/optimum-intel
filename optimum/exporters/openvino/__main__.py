@@ -313,7 +313,7 @@ def main_export(
             and framework == "pt"
             and (
                 task.startswith("text-generation")
-                or getattr(config, "model_type", None) in MULTI_MODAL_TEXT_GENERATION_MODELS
+                or getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
             )
             and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
         ):

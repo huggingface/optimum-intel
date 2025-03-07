@@ -581,6 +581,27 @@ class OVWeightCompressionTest(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.42.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "llava_next_video",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="hessian_input_activation",
+                        num_samples=1,
+                        processor=MODEL_NAMES["llava_next_video"],
+                    ),
+                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 7}, {}, {"int8": 2}],
+                ),
+            ]
+        )
+
     if is_transformers_version(">=", "4.45.0"):
         LOAD_IN_4_BITS_SCOPE.extend(
             [
@@ -665,6 +686,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "nanollava", True))
+
+    if is_transformers_version(">=", "4.42.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava_next_video", False))
 
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))

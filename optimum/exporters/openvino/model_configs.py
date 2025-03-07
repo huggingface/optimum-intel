@@ -94,6 +94,7 @@ from .model_patcher import (
     JaisModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
+    LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
@@ -137,9 +138,17 @@ def init_model_configs():
         "AutoModelForImageTextToText",
     )
 
+    TasksManager._CUSTOM_CLASSES[("pt", "llava-next-video", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForVision2Seq",
+    )
+
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
     ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["video-text-to-text"] = "AutoModelForVision2Seq"
+
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
@@ -1591,6 +1600,118 @@ class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
 
 
+class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["image_features"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+
+        self.batch_size = batch_size
+        self.hidden_size = normalized_config.hidden_size
+        self.num_patches = (normalized_config.image_size // normalized_config.patch_size) ** 2
+        self.normalized_config = normalized_config
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        shape = [self.batch_size, self.num_patches, self.hidden_size]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class LLavaMultimodalProjectorOpenVINOConfig(OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLLavaMultiModalProjectorInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"image_features": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"hidden_states": {0: "batch_size", 1: "sequence_length"}}
+
+
+class LlavaNextVideoConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_RESAMPLER = "vision_resampler"
+    MULTI_MODAL_PROJECTOR = "multi_modal_projector"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager(
+    "llava-next-video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
+)
+class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.42.0")
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaNextVideoConfigBehavior]
+
+    def with_behavior(
+        self,
+        behavior: Union[str, LlavaNextVideoConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaNextVideoConfigBehavior):
+            behavior = LlavaNextVideoConfigBehavior(behavior)
+
+        if behavior == LlavaNextVideoConfigBehavior.MULTI_MODAL_PROJECTOR:
+            export_config = LLavaMultimodalProjectorOpenVINOConfig(
+                self._orig_config.vision_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        if behavior == LlavaNextVideoConfigBehavior.VISION_RESAMPLER:
+            export_config = LLavaMultimodalProjectorOpenVINOConfig(
+                self._orig_config.vision_config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+            )
+            return export_config
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, LlavaNextVideoConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaNextVideoConfigBehavior):
+            behavior = LlavaNextVideoConfigBehavior(behavior)
+
+        if behavior == LlavaNextVideoConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return model.multi_modal_projector
+
+        if behavior == LlavaNextVideoConfigBehavior.VISION_RESAMPLER:
+            return model.vision_resampler
+
+        return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return LlavaNextVideoImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+
 @register_in_tasks_manager(
     "maira2", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
 )
@@ -2587,7 +2708,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2-vl", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -2717,7 +2838,7 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2-5-vl", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2-5-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 

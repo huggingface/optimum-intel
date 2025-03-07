@@ -341,6 +341,19 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.42.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "llava_next_video",
+                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
+                    "--dataset contextual --num-samples 1",
+                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 7}, {}, {"int8": 2}],
+                ),
+            ]
+        )
+
     if is_transformers_version(">=", "4.45.0"):
         TEST_4BIT_CONFIGURATIONS.extend(
             [
