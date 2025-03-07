@@ -205,71 +205,76 @@ class OVCalibrationDatasetBuilder:
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
 
-    def build_from_dataset(
-        self,
-        quantization_config: OVQuantizationConfigBase,
-        dataset: Union["Dataset", List],
-        batch_size: Optional[int] = 1,
-        data_collator: Optional[DataCollator] = None,
-        remove_unused_columns: bool = False,
-    ) -> CalibrationDataset:
+    def build_from_quantization_config(self, config: OVQuantizationConfigBase) -> CalibrationDataset:
         """
+        Builds a calibration dataset from a quantization config object. Namely, `quantization_config.dataset` property
+        is used to infer dataset name.
 
         Args:
-            quantization_config (`OVQuantizationConfigBase`):
+            config (`OVQuantizationConfigBase`):
                 The quantization configuration object.
-            dataset (`Union[datasets.Dataset, List]`):
-                The dataset to collect calibration data from.
-            batch_size (`int`, defaults to 1):
-                The number of calibration samples to load per batch. Not always used.
-            data_collator (`DataCollator`, *optional*):
-                The function to use to form a batch from a list of elements of the calibration dataset. Not always used.
-            remove_unused_columns (`bool`, defaults to `False`):
-                Whether to remove the columns unused by the model forward method. Not always used.
         Returns:
             A calibration dataset as an instance of `CalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import OVModelForVisualCausalLM
-        from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
+        from optimum.intel import OVModelForCausalLM, OVModelForVisualCausalLM
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
 
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
-        if isinstance(dataset, list):
-            logger.warning(
-                "Providing dataset as a list is deprecated and will be removed in optimum-intel v1.25. "
-                "Please provide it as `datasets.Dataset`."
-            )
+        if config.dataset is None:
+            raise ValueError("Please provide a dataset for calibration.")
 
-        if isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)) or (
-            is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)
-        ):
-            # Prepare from raw dataset avoiding dataloader creation
-            if batch_size != 1 or data_collator is not None or remove_unused_columns:
-                logger.warning(
-                    "`batch_size`, `data_collator` and `remove_unused_columns` are not supported for this type of model."
+        if isinstance(self.model, OVModelForCausalLM):
+            return self._prepare_causal_lm_calibration_data(config)
+        elif isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)):
+            if config.processor is None:
+                raise ValueError(
+                    "`processor` must be specified in order to run data-aware quantization. Please provide it as a"
+                    "model id, or a path to a directory containing all the required configuration files."
                 )
 
             if isinstance(self.model, OVModelForVisualCausalLM):
-                return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataset)
+                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
+                return self.build_from_dataset_name(
+                    config,
+                    dataset_metadata["id"],
+                    num_samples=config.num_samples,
+                    dataset_split=dataset_metadata["split"],
+                    trust_remote_code=config.trust_remote_code,
+                )
             elif isinstance(self.model, _OVModelForWhisper):
-                return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
-            elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                return self._prepare_diffusion_calibration_data(quantization_config, dataset)
+                dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
+                return self.build_from_dataset_name(
+                    config,
+                    dataset_metadata["id"],
+                    num_samples=config.num_samples,  # This is an upper bound on how many audios are needed
+                    dataset_config_name=dataset_metadata["name"],
+                    dataset_split=dataset_metadata["split"],
+                    trust_remote_code=config.trust_remote_code,
+                    streaming=dataset_metadata["streaming"],
+                )
             else:
-                raise RuntimeError("Unsupported model type for calibration dataset collection.")
-        else:
-            # Prepare from dataloader
-            # Setting `remove_unused_columns=True` until it is not deprecated
-            dataloader = self._get_calibration_dataloader(
-                dataset, batch_size, data_collator, remove_unused_columns=True
-            )
-            if isinstance(self.model, OVBaseDecoderModel):
-                return self._prepare_decoder_calibration_data(quantization_config, dataloader)
+                raise Exception
+        elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+            if isinstance(config.dataset, str):
+                dataset_name = config.dataset
+                dataset_metadata = PREDEFINED_DIFFUSION_DATASETS[dataset_name]
+
+                dataset = self.load_dataset(
+                    dataset_name,
+                    num_samples=config.num_samples,  # This is an upper bound on how many prompts are needed
+                    dataset_split=dataset_metadata["split"],
+                    streaming=dataset_metadata["streaming"],
+                )
+            elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
+                dataset = config.dataset
             else:
-                # Assuming this is the torch model quantization scenario
-                return CalibrationDataset({"model": nncf.Dataset(dataloader)})
+                raise RuntimeError(
+                    "Please provide dataset as one of the accepted dataset labels or as a list of string prompts."
+                )
+
+            return self.build_from_dataset(config, dataset)
 
     def build_from_dataset_name(
         self,
@@ -346,76 +351,71 @@ class OVCalibrationDatasetBuilder:
 
         return self.build_from_dataset(quantization_config, dataset, batch_size, data_collator, remove_unused_columns)
 
-    def build_from_quantization_config(self, config: OVQuantizationConfigBase) -> CalibrationDataset:
+    def build_from_dataset(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        dataset: Union["Dataset", List],
+        batch_size: Optional[int] = 1,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = False,
+    ) -> CalibrationDataset:
         """
-        Builds a calibration dataset from a quantization config object. Namely, `quantization_config.dataset` property
-        is used to infer dataset name.
 
         Args:
-            config (`OVQuantizationConfigBase`):
+            quantization_config (`OVQuantizationConfigBase`):
                 The quantization configuration object.
+            dataset (`Union[datasets.Dataset, List]`):
+                The dataset to collect calibration data from.
+            batch_size (`int`, defaults to 1):
+                The number of calibration samples to load per batch. Not always used.
+            data_collator (`DataCollator`, *optional*):
+                The function to use to form a batch from a list of elements of the calibration dataset. Not always used.
+            remove_unused_columns (`bool`, defaults to `False`):
+                Whether to remove the columns unused by the model forward method. Not always used.
         Returns:
             A calibration dataset as an instance of `CalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import OVModelForCausalLM, OVModelForVisualCausalLM
+        from optimum.intel import OVModelForVisualCausalLM
+        from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
 
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
-        if config.dataset is None:
-            raise ValueError("Please provide a dataset for calibration.")
+        if isinstance(dataset, list):
+            logger.warning(
+                "Providing dataset as a list is deprecated and will be removed in optimum-intel v1.25. "
+                "Please provide it as `datasets.Dataset`."
+            )
 
-        if isinstance(self.model, OVModelForCausalLM):
-            return self._prepare_causal_lm_calibration_data(config)
-        elif isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)):
-            if config.processor is None:
-                raise ValueError(
-                    "`processor` must be specified in order to run data-aware quantization. Please provide it as a"
-                    "model id, or a path to a directory containing all the required configuration files."
+        if isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)) or (
+            is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)
+        ):
+            # Prepare from raw dataset avoiding dataloader creation
+            if batch_size != 1 or data_collator is not None or remove_unused_columns:
+                logger.warning(
+                    "`batch_size`, `data_collator` and `remove_unused_columns` are not supported for this type of model."
                 )
 
             if isinstance(self.model, OVModelForVisualCausalLM):
-                dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
-                return self.build_from_dataset_name(
-                    config,
-                    dataset_metadata["id"],
-                    num_samples=config.num_samples,
-                    dataset_split=dataset_metadata["split"],
-                    trust_remote_code=config.trust_remote_code,
-                )
+                return self._prepare_visual_causal_lm_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, _OVModelForWhisper):
-                dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
-                return self.build_from_dataset_name(
-                    config,
-                    dataset_metadata["id"],
-                    num_samples=config.num_samples,  # This is an upper bound on how many audios are needed
-                    dataset_config_name=dataset_metadata["name"],
-                    dataset_split=dataset_metadata["split"],
-                    trust_remote_code=config.trust_remote_code,
-                    streaming=dataset_metadata["streaming"],
-                )
+                return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
+            elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                return self._prepare_diffusion_calibration_data(quantization_config, dataset)
             else:
-                raise Exception
-        elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-            if isinstance(config.dataset, str):
-                dataset_name = config.dataset
-                dataset_metadata = PREDEFINED_DIFFUSION_DATASETS[dataset_name]
-
-                dataset = self.load_dataset(
-                    dataset_name,
-                    num_samples=config.num_samples,  # This is an upper bound on how many prompts are needed
-                    dataset_split=dataset_metadata["split"],
-                    streaming=dataset_metadata["streaming"],
-                )
-            elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
-                dataset = config.dataset
+                raise RuntimeError("Unsupported model type for calibration dataset collection.")
+        else:
+            # Prepare from dataloader
+            # Setting `remove_unused_columns=True` until it is not deprecated
+            dataloader = self._get_calibration_dataloader(
+                dataset, batch_size, data_collator, remove_unused_columns=True
+            )
+            if isinstance(self.model, OVBaseDecoderModel):
+                return self._prepare_decoder_calibration_data(quantization_config, dataloader)
             else:
-                raise RuntimeError(
-                    "Please provide dataset as one of the accepted dataset labels or as a list of string prompts."
-                )
-
-            return self.build_from_dataset(config, dataset)
+                # Assuming this is the torch model quantization scenario
+                return CalibrationDataset({"model": nncf.Dataset(dataloader)})
 
     def load_dataset(
         self,
