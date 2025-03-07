@@ -534,7 +534,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         else:
             # why is this quantization not performed in __init__?
             if ov_pipeline_class.export_feature != "text-to-image":
-                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
+                raise NotImplementedError(f"Quantization is not supported for {cls.__name__}")
 
             from optimum.intel import OVQuantizer
 
@@ -548,10 +548,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             # same as in DiffusionPipeline.from_pretrained, we save where the model was instantiated from
             ov_pipeline.register_to_config(_name_or_path=config.get("_name_or_path", str(model_id)))
 
-            hybrid_quantization_config = deepcopy(quantization_config)
-            hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
             quantizer = OVQuantizer(ov_pipeline)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
+            if isinstance(quantization_config, OVWeightQuantizationConfig):
+                hybrid_quantization_config = deepcopy(quantization_config)
+                hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
+                quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
+            else:
+                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
             return ov_pipeline
         ov_pipeline = ov_pipeline_class(
