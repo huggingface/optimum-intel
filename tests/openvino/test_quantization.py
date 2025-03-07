@@ -100,16 +100,12 @@ pattern_prefix = "^__module.model.model" if is_transformers_version(">=", "4.49"
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32, 35, False),
-        (OVModelForSequenceClassification, "bert", 32, 35, True),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22, False),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22, True),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32, 35, False),
-        (OVModelForSequenceClassification, "bert", 32, 35, True),
-        (OVModelForCausalLM, "gpt2", 31, 22, False),
-        (OVModelForCausalLM, "gpt2", 31, 22, True),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 31, 22),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
         (
@@ -275,7 +271,9 @@ class OVQuantizerTest(unittest.TestCase):
             )
         return calibration_dataset
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
+    @parameterized.expand(
+        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_TORCH_MODEL, [False, True])]
+    )
     def test_automodel_static_quantization(
         self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
     ):
@@ -323,7 +321,9 @@ class OVQuantizerTest(unittest.TestCase):
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL)
+    @parameterized.expand(
+        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_OV_MODEL, [False, True])]
+    )
     def test_ovmodel_static_quantization(
         self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
     ):
@@ -915,12 +915,22 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
         check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
+    @parameterized.expand(
+        [
+            (*it[0], it[1])
+            for it in itertools.product(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:], [False, True])
+        ]
+    )
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
-        self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes
+        self,
+        model_cls,
+        model_type,
+        expected_fake_nodes,
+        expected_int8_nodes,
+        dataset_via_config,
     ):
         model_id = MODEL_NAMES[model_type]
-        # TODO: provide list-of-strings-dataset through quantization config instead
+        # TODO: Run only dataset_via_config=True after v1.25
         dataset = [
             "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
         ]
@@ -929,6 +939,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method="hybrid")
         self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
 
+        quantization_config.dataset = dataset if dataset_via_config else None
+        dataset = None if dataset_via_config else dataset
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
             model.unet if model.unet is not None else model.transformer
