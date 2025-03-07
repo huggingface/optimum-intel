@@ -4367,3 +4367,320 @@ class MiniCPMModelPatcher(DecoderModelPatcher):
                 layer.mlp.down_proj.to(torch.float32)
 
         super().__init__(config, model, model_kwargs)
+
+
+class ConvSequenceTransform(torch.nn.Module):
+    def __init__(self, conv_kernel_size, use_conv_bias, conv1, act, conv_bias):
+        super().__init__()
+        self.conv_kernel_size = conv_kernel_size
+        self.use_conv_bias = use_conv_bias
+        self.conv1d = conv1
+        self.act = act
+        self.conv_bias = conv_bias
+
+    def update_conv_state(
+        self, conv_state, new_conv_state: torch.Tensor, cache_position: torch.LongTensor
+    ) -> torch.Tensor:
+        conv_state_1 = conv_state.roll(shifts=-1, dims=-1)
+        upd_conv_state = conv_state_1.scatter(2, cache_position, new_conv_state)
+        return upd_conv_state
+
+    def get_positions(self, conv_state, cache_position):
+        cache_position_clamped = cache_position.clamp(0, self.conv_kernel_size - 1)
+        positions = cache_position_clamped.expand(conv_state.shape[0], conv_state.shape[1], -1)
+        return positions
+
+    def forward(self, hidden_states, cache_position, conv_state):
+        pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (
+            cache_position.shape[0] == self.conv_kernel_size
+        )
+        new_conv_state = torch.nn.functional.pad(hidden_states, (pad_value, 0))
+        upd_cache_position = self.get_positions(conv_state, cache_position)
+        upd_conv_state = self.update_conv_state(conv_state, new_conv_state, upd_cache_position)
+        if cache_position.shape[0] == self.conv_kernel_size:
+            hidden_states = self.conv1d(hidden_states)[:, :, : hidden_states.shape[-1]]
+        else:
+            hidden_states = torch.sum(upd_conv_state * self.conv1d.weight[:, 0, :], dim=-1)
+            hidden_states += self.conv_bias
+            hidden_states = hidden_states.unsqueeze(-1)
+        hidden_states = self.act(hidden_states)  # [batch, intermediate_size, seq_len]
+        return hidden_states, upd_conv_state
+
+
+class SelectiveScan(torch.nn.Module):
+    def forward(self, ssm, u, dt, A, B, C, D):
+        dA = torch.einsum("bld,dn->bldn", dt, A)
+        dB_u = torch.einsum("bld,bld,bln->bldn", dt, u, B)
+        dA_cumsum = torch.nn.functional.pad(dA[:, 1:], (0, 0, 0, 0, 0, 1)).flip(1).cumsum(1).exp().flip(1)
+        x = dB_u * dA_cumsum + (ssm.unsqueeze(1) * dA[:, :1].exp())
+        x = x.cumsum(1) / (dA_cumsum + 1e-12)
+        y = torch.einsum("bldn,bln->bld", x, C)
+        return y + u * D, x[:, -1, :, :]
+
+
+def mamba_mixer_forward(
+    self,
+    input_states,
+    cache_params=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: Optional[torch.LongTensor] = None,
+):
+    batch_size, seq_len, _ = input_states.shape
+    dtype = input_states.dtype
+    # 1. Gated MLP's linear projection
+    projected_states = self.in_proj(input_states).transpose(1, 2)  # [batch, 2 * intermediate_size, seq_len]
+    hidden_states, gate = projected_states.chunk(2, dim=1)
+
+    if attention_mask is not None:
+        hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
+    # 2. Convolution sequence transformation
+    if cache_params is not None:
+        ssm_state = cache_params.ssm_states[self.layer_idx].clone()
+        ssm_state = ssm_state.to(hidden_states.device)
+        # use `cache_position.shape[0]` to check whether we are in prefill
+        # stage, it's equivalent to check `cache_position[0] == 0`, which
+        # breaks dynamo fullgraph constraints
+        hidden_states, conv_state = self.conv_sequence_transform(
+            hidden_states, cache_position, cache_params.conv_states[self.layer_idx]
+        )
+        cache_params.conv_states[self.layer_idx] = conv_state
+    else:
+        ssm_state = torch.zeros(
+            (batch_size, self.intermediate_size, self.ssm_state_size), device=hidden_states.device, dtype=dtype
+        )
+        hidden_states = self.act(self.conv1d(hidden_states)[..., :seq_len])  # [batch, intermediate_size, seq_len]
+
+    if attention_mask is not None:
+        hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
+    # 3. State Space Model sequence transformation
+    # 3.a. Selection:  [batch, seq_len, self.time_step_rank + self.ssm_state_size * 2]
+    ssm_parameters = self.x_proj(hidden_states.transpose(1, 2))
+    time_step, B, C = torch.split(
+        ssm_parameters, [self.time_step_rank, self.ssm_state_size, self.ssm_state_size], dim=-1
+    )
+    discrete_time_step = self.dt_proj(time_step)  # [batch, seq_len, intermediate_size]
+
+    # DIFF
+    # discrete_time_step = nn.functional.softplus(discrete_time_step).transpose(1, 2) # [batch, intermediate_size, seq_len]
+
+    # # 3.b. Discretization: B and C to [batch, seq_len, intermediate_size, ssm_state_size] (SRAM)
+    # A = -torch.exp(self.A_log.float())                                              # [intermediate_size, ssm_state_size]
+    # discrete_A = torch.exp(A[None, :, None, :] * discrete_time_step[:, :, :, None]) # [batch, intermediate_size, seq_len, ssm_state_size]
+    # discrete_B = discrete_time_step[:, :, :, None] * B[:, None, :, :].float()       # [batch, intermediate_size, seq_len, ssm_state_size]
+    # deltaB_u = discrete_B * hidden_states[:, :, :, None].float()
+
+    # # 3.c perform the recurrence y ← SSM(A, B, C)(x)
+    # if self.use_mambapy and self.training and cache_params is None:
+    #     hs = pscan(discrete_A.transpose(1, 2), deltaB_u.transpose(1, 2)) # [batch, seq_len, intermediate_size, ssm_state_size]
+
+    #     scan_output = (hs @ C.unsqueeze(-1)).squeeze(3).transpose(1, 2) # [batch, intermediate_size, seq_len]
+    #     scan_output = scan_output + hidden_states * self.D[None, :, None]
+    #     scan_output = scan_output * self.act(gate)
+    # else:
+    #     scan_outputs = []
+    #     for i in range(seq_len):
+    #         ssm_state = discrete_A[:, :, i, :] * ssm_state + deltaB_u[:, :, i, :]      # [batch, intermediade_size, ssm_state]
+    #         scan_output = torch.matmul(ssm_state.to(dtype), C[:, i, :].unsqueeze(-1))  # [batch, intermediade_size, 1]
+    #         scan_outputs.append(scan_output[:, :, 0])
+    #     scan_output = torch.stack(scan_outputs, dim=-1)                                # [batch, seq_len, intermediade_size]
+    #     scan_output = scan_output + (hidden_states * self.D[None, :, None])
+    #     scan_output = (scan_output * self.act(gate))
+
+    #     if cache_params is not None:
+    #         cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+
+    discrete_time_step = torch.nn.functional.softplus(discrete_time_step)  # [batch, intermediate_size, seq_len]
+    A = -torch.exp(self.A_log.float())
+    B = B.float()
+    D = self.D.float()
+
+    scan_output, ssm_state = self.selective_scan(
+        ssm_state, hidden_states.float().transpose(1, 2), discrete_time_step, A, B, C, D
+    )
+    scan_output = scan_output.transpose(1, 2)
+    scan_output = scan_output * self.act(gate)
+
+    if cache_params is not None:
+        cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+
+    # 4. Final linear projection
+    contextualized_states = self.out_proj(scan_output.transpose(1, 2))  # [batch, seq_len, hidden_size]
+    return contextualized_states
+
+
+class MambaPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        self._patching_specs = []
+        from transformers.cache_utils import MambaCache
+
+        class MambaCacheWrap(MambaCache):
+            def __init__(
+                self,
+                config: "PretrainedConfig",
+                batch_size: int = None,
+                dtype: torch.dtype = torch.float32,
+                device: Optional[Union[torch.device, str]] = None,
+                max_batch_size: Optional[int] = None,
+                conv_states: Optional[List[torch.Tensor]] = None,
+                ssm_states: Optional[List[torch.Tensor]] = None,
+            ):
+                self.dtype = dtype
+                self.max_batch_size = batch_size or max_batch_size
+                self.intermediate_size = config.intermediate_size
+                self.ssm_state_size = config.state_size
+                self.conv_kernel_size = config.conv_kernel
+                self.device = torch.device(device) if device is not None else torch.device("cpu")
+                # print(config.num_hidden_layers)
+
+                if conv_states is not None:
+                    self.conv_states = conv_states
+                else:
+                    self.conv_states = []
+                    for _ in range(config.num_hidden_layers):
+                        conv_state: torch.Tensor = torch.zeros(
+                            self.max_batch_size,
+                            self.intermediate_size,
+                            self.conv_kernel_size,
+                            device=self.device,
+                            dtype=dtype,
+                        )
+                        self.conv_states.append(conv_state)
+
+                if ssm_states is not None:
+                    self.ssm_states = ssm_states
+                else:
+                    self.ssm_states: List[torch.Tensor] = []
+                    for _ in range(config.num_hidden_layers):
+                        ssm_state: torch.Tensor = torch.zeros(
+                            self.max_batch_size,
+                            self.intermediate_size,
+                            self.ssm_state_size,
+                            device=self.device,
+                            dtype=dtype,
+                        )
+
+                        self.ssm_states.append(ssm_state)
+
+            def update_conv_state(
+                self, layer_idx: int, new_conv_state: torch.Tensor, cache_position: torch.LongTensor
+            ) -> torch.Tensor:
+                conv_state = self.conv_states[layer_idx]
+                cache_position = cache_position.clamp(0, self.conv_kernel_size - 1)
+
+                conv_state = conv_state.roll(shifts=-1, dims=-1)
+                conv_state = conv_state.scatter(
+                    2, cache_position.expand(conv_state.shape[0], conv_state.shape[1], -1), new_conv_state
+                )
+                self.conv_states[layer_idx] = conv_state
+                return self.conv_states[layer_idx]
+
+        def forward_wrap(
+            self, input_ids, attention_mask=None, cache_position=None, past_ssm_states=None, past_conv_states=None
+        ):
+            use_cache = False
+            cache_params = None
+            if past_ssm_states is not None and past_conv_states is not None:
+                use_cache = True
+                cache_params = MambaCacheWrap(
+                    self.config,
+                    input_ids.shape[0],
+                    conv_states=list(past_conv_states),
+                    ssm_states=list(past_ssm_states),
+                )
+            result = self.__orig_forward(
+                input_ids=input_ids, cache_position=cache_position, cache_params=cache_params, use_cache=use_cache
+            )
+            if use_cache:
+                return {
+                    "logits": result.logits,
+                    "ssm_states": result.cache_params.ssm_states,
+                    "conv_states": result.cache_params.conv_states,
+                }
+            return result
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward_wrap, model)
+        self._model = model
+
+        self.orig_forward_name = "forward" if hasattr(self._model, "forward") else "call"
+        self.orig_forward = getattr(self._model, self.orig_forward_name)
+
+        self.model_kwargs = model_kwargs if model_kwargs is not None else {}
+        self.real_config = config
+
+        allow_past_in_outputs = hasattr(self.real_config, "use_past") and self.real_config.use_past
+
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            signature = inspect.signature(self.orig_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            outputs = self.orig_forward(*args, **kwargs)
+
+            # This code block handles different cases of the filterd_outputs input to align it with the expected
+            # format of outputs. It is common for the output type of a model to vary, such as tensor, list,
+            # tuple, etc. For Transformers models, the output is encapsulated in a ModelOutput object that
+            # contains the output names of the model. In the case of Timm classification models, the output
+            # is of type tensor. By default, it is assumed that the output names mentioned in the ONNX config
+            # match the outputs in order.
+            filterd_outputs = {}
+            if isinstance(outputs, dict):
+                for name, value in outputs.items():
+                    output_name = config.torch_to_onnx_output_map.get(name, name)
+                    if (
+                        output_name in config.outputs
+                        or (
+                            allow_past_in_outputs and (name.startswith("ssm_states") or name.startswith("conv_states"))
+                        )
+                        or any(key.startswith(output_name) for key in config.outputs.keys())
+                    ):
+                        filterd_outputs[name] = value
+            elif isinstance(outputs, (list, tuple)):
+                outputs_list = list(config.outputs.keys())
+                filterd_outputs = dict(zip(outputs_list, outputs))
+            else:
+                if len(config.outputs) > 1:
+                    num_outputs = len(config.outputs)
+                    outputs_str = ", ".join(config.outputs.keys())
+                    raise ValueError(
+                        f"config.outputs should have only one outputs, but it has {num_outputs} keys: {outputs_str}"
+                    )
+                else:
+                    name = list(config.outputs.keys())[0]
+                    filterd_outputs[name] = outputs
+                name = list(config.outputs.keys())[0]
+                filterd_outputs[name] = outputs
+
+            return filterd_outputs
+
+        self.patched_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        selective_scan = SelectiveScan()
+
+        for layer in self._model.backbone.layers:
+            layer.mixer.selective_scan = selective_scan
+            layer.mixer._orig_forward = layer.mixer.forward
+            layer.mixer.forward = types.MethodType(mamba_mixer_forward, layer.mixer)
+            conv_transform = ConvSequenceTransform(
+                layer.mixer.conv_kernel_size,
+                layer.mixer.use_conv_bias,
+                layer.mixer.conv1d,
+                layer.mixer.act,
+                layer.mixer.conv1d.bias,
+            )
+            layer.mixer.conv_sequence_transform = torch.jit.script(conv_transform)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.backbone.layers:
+            layer.mixer.forward = layer.mixer._orig_forward

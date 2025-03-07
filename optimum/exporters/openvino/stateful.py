@@ -272,9 +272,36 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
+def patch_stateful_ssm(config, ov_model):
+    cache_input_names = [key_name for key in ov_model.inputs for key_name in key.get_names() if "past_" in key_name]
+    cache_output_names = [
+        key_name for key in ov_model.outputs for key_name in key.get_names() if "present" in key_name
+    ]
+
+    print(cache_output_names)
+    print(ov_model.outputs)
+    if not cache_input_names or not cache_output_names:
+        return
+
+    batch_dim = 0
+
+    from openvino._offline_transformations import apply_make_stateful_transformation
+
+    input_output_map = {}
+    for cache_name_pair in zip(cache_input_names, cache_output_names):
+        input_output_map[cache_name_pair[0]] = cache_name_pair[1]
+
+    print(input_output_map)
+
+    apply_make_stateful_transformation(ov_model, input_output_map)
+    build_state_initializer(ov_model, batch_dim)
+
+
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
+    if config.model_type == "mamba":
+        return patch_stateful_ssm(config, ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 
