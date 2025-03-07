@@ -440,6 +440,16 @@ class OVQuantizer(OptimumQuantizer):
             # Quantize model(s)
             if isinstance(self.model, _OVModelForWhisper):
                 self._quantize_whisper_model(quantization_config, calibration_dataset, **kwargs)
+            elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                for name, sub_model in self.model.ov_submodels.items():
+                    if name not in ("unet", "transformer"):
+                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8), **kwargs)
+                    else:
+                        quantized_vision_model = _full_quantization(
+                            sub_model, quantization_config, calibration_dataset, **kwargs
+                        )
+                        getattr(self.model, name).model = quantized_vision_model
+                self.model.clear_requests()
             else:
                 quantized_model = _full_quantization(
                     self.model.model, quantization_config, calibration_dataset, **kwargs
