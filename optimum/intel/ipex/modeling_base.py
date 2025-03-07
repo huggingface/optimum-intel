@@ -149,7 +149,7 @@ class IPEXModel(OptimizedModel):
 
         self.maybe_apply_torch_compile()
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @classmethod
@@ -317,7 +317,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @torch.no_grad()
@@ -448,7 +448,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @torch.no_grad()
