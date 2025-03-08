@@ -789,10 +789,12 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
         if self.dataset is not None:
             speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
-            if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets:
+            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
+            if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets + stable_diffusion_datasets:
                 raise ValueError(
-                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs or
-                    {speech_to_text_datasets} for speech-to-text models, but we found {self.dataset}."""
+                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs,
+                    {speech_to_text_datasets} for speech-to-text models or
+                    {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."""
                 )
 
         if self.bits != 8:
