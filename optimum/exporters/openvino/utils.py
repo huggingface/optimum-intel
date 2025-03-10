@@ -230,6 +230,8 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen2-5-vl",
 ]
 
+SSM_MODELS = ["mamba", "falcon-mamba"]
+
 
 def save_config(config, save_dir):
     try:
