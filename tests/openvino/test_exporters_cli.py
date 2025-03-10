@@ -263,6 +263,42 @@ class OVCLIExportTestCase(unittest.TestCase):
                 {"f8e5m2": 2, "int4": 28},
             ],
         ),
+        (
+            "stable-diffusion",
+            "stable-diffusion",
+            "int8",
+            "--dataset conceptual_captions --num-samples 1 --trust-remote-code",
+            [
+                0, 0, 0, 112
+            ],
+            [
+                {"int8": 34}, {"int8": 42}, {"int8": 64}, {"int8": 121},
+            ],
+        ),
+        (
+            "stable-diffusion-xl",
+            "stable-diffusion-xl",
+            "f8e5m2",
+            "--dataset laion/220k-GPT4Vision-captions-from-LIVIS --num-samples 1 --trust-remote-code",
+            [
+                0, 0, 0, 174
+            ],
+            [
+                {"int8": 34}, {"int8": 42}, {"int8": 64}, {"f8e5m2": 183},
+            ],
+        ),
+        (
+            "latent-consistency",
+            "latent-consistency",
+            "f8e4m3",
+            "--dataset laion/filtered-wit --num-samples 1 --trust-remote-code",
+            [
+                0, 0, 0, 79
+            ],
+            [
+                {"int8": 34}, {"int8": 42}, {"int8": 40}, {"f8e4m3": 84},
+            ],
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [
@@ -709,6 +745,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                     expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
             elif "text-generation" in task:
                 submodels = [model]
+            elif any(x in task for x in ("stable-diffusion", "latent-consistency")):
+                submodels = [model.vae_encoder, model.vae_decoder, model.text_encoder, model.unet]
             else:
                 raise Exception("Unexpected task.")
 
