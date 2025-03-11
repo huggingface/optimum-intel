@@ -269,10 +269,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset conceptual_captions --num-samples 1 --trust-remote-code",
             [
-                0, 0, 0, 112
+                112, 0, 0, 0,
             ],
             [
-                {"int8": 34}, {"int8": 42}, {"int8": 64}, {"int8": 121},
+                {"int8": 121}, {"int8": 42}, {"int8": 34}, {"int8": 64},
             ],
         ),
         (
@@ -281,10 +281,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e5m2",
             "--dataset laion/220k-GPT4Vision-captions-from-LIVIS --num-samples 1 --trust-remote-code",
             [
-                0, 0, 0, 174
+                174, 0, 0, 0, 0,
             ],
             [
-                {"int8": 34}, {"int8": 42}, {"int8": 64}, {"f8e5m2": 183},
+                {"f8e5m2": 183}, {"int8": 42}, {"int8": 34}, {"int8": 64}, {"int8": 66},
             ],
         ),
         (
@@ -293,10 +293,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset laion/filtered-wit --num-samples 1 --trust-remote-code",
             [
-                0, 0, 0, 79
+                79, 0, 0, 0,
             ],
             [
-                {"int8": 34}, {"int8": 42}, {"int8": 40}, {"f8e4m3": 84},
+                {"f8e4m3": 84}, {"int8": 42}, {"int8": 34}, {"int8": 40},
             ],
         ),
     ]
@@ -746,7 +746,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             elif "text-generation" in task:
                 submodels = [model]
             elif any(x in task for x in ("stable-diffusion", "latent-consistency")):
-                submodels = [model.vae_encoder, model.vae_decoder, model.text_encoder, model.unet]
+                submodels = model.ov_submodels.values()
             else:
                 raise Exception("Unexpected task.")
 

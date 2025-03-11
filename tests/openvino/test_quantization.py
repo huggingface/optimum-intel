@@ -19,26 +19,22 @@ import inspect
 import itertools
 import logging
 import unittest
-from collections import defaultdict, Iterable
+from collections import defaultdict
+from collections.abc import Iterable
 from enum import Enum
 from functools import partial
 from typing import Union, Type
 
 import openvino as ov
 import pytest
-import evaluate
 import numpy as np
 import torch
-from datasets import load_dataset
 from parameterized import parameterized
 import nncf
 from transformers import (
     AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     AutoProcessor,
-    TrainingArguments,
-    default_data_collator,
 )
 from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
@@ -234,6 +230,57 @@ class OVQuantizerTest(unittest.TestCase):
                 {"f8e5m2": 2, "int4": 28},
             ],
         ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            dict(
+                weight_only=False,
+                dataset="conceptual_captions",
+                num_samples=1,
+                processor=MODEL_NAMES["stable-diffusion"],
+                trust_remote_code=True,
+            ),
+            [
+                112, 0, 0, 0,
+            ],
+            [
+                {"int8": 121}, {"int8": 42}, {"int8": 34}, {"int8": 64},
+            ],
+        ),
+        (
+            OVStableDiffusionXLPipeline,
+            "stable-diffusion-xl",
+            dict(
+                weight_only=False,
+                dtype="f8e5m2",
+                dataset="laion/220k-GPT4Vision-captions-from-LIVIS",
+                num_samples=1,
+                processor=MODEL_NAMES["stable-diffusion-xl"],
+                trust_remote_code=True,
+            ),
+            [
+                174, 0, 0, 0, 0,
+            ],
+            [
+                {"f8e5m2": 183}, {"int8": 42}, {"int8": 34}, {"int8": 64}, {"int8": 66},
+            ],
+        ),
+        (
+            OVLatentConsistencyModelPipeline,
+            "latent-consistency",
+            OVQuantizationConfig(
+                dtype="f8e4m3",
+                dataset="laion/filtered-wit",
+                num_samples=1,
+                trust_remote_code=True,
+            ),
+            [
+                79, 0, 0, 0,
+            ],
+            [
+                {"f8e4m3": 84}, {"int8": 42}, {"int8": 34}, {"int8": 40},
+            ],
+        ),
     ]
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
@@ -359,6 +406,8 @@ class OVQuantizerTest(unittest.TestCase):
                 tokens = tokenizer("This is a sample input", return_tensors="pt")
                 outputs = ov_model(**tokens)
                 self.assertTrue("logits" in outputs)
+            elif any(x == model_cls for x in (OVStableDiffusionPipeline, OVStableDiffusionXLPipeline, OVLatentConsistencyModelPipeline)):
+                submodels = ov_model.ov_submodels.values()
             else:
                 raise Exception("Unexpected model class.")
 
