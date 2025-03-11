@@ -460,6 +460,9 @@ class OVQuantizer(OptimumQuantizer):
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run quantization.")
 
+            if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                raise NotImplementedError(f"Mixed precision quantization isn't supported for diffusers.")
+
             quantized_model = _mixed_quantization(self.model.model, quantization_config, calibration_dataset, **kwargs)
             self.model.model = quantized_model
             self.model.request = None
