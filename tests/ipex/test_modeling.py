@@ -485,7 +485,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
     @unittest.skipIf(not is_auto_awq_available(), reason="Test requires autoawq")
     def test_awq(self):
-        model_id = "PrunaAI/JackFram-llama-68m-bnb-4bit-smashed"
+        model_id = "PrunaAI/JackFram-llama-68m-AWQ-4bit-smashed"
         set_seed(SEED)
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         # Test model forward do not need cache.
