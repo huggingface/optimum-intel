@@ -1,6 +1,7 @@
 import os
 from typing import List, Optional, Tuple
 
+import intel_extension_for_pytorch as ipex
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
@@ -38,13 +39,14 @@ class IPEXPagedCache(Cache):
         config: PretrainedConfig,
         max_batch_size: int,
         max_cache_len: int,
-        device,
+        device=None,
         dtype=None,
-        layer_device_map=None,
         **kwargs,
     ) -> None:
         super().__init__()
         self.max_batch_size = max_batch_size
+        default_device = torch.device("xpu") if ipex._C._has_xpu() else torch.device("cpu")
+        device = device or default_device
         self.device = device
         self._supports_flash_decoding = (
             is_ipex_version(">", "2.4.99") if device.type == "cpu" else is_ipex_version(">", "2.5.99")
