@@ -5623,7 +5623,6 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
             model.set_lora_adapter("vision")
         if hasattr(model.config, "speech_lora") and model.config.speech_lora is not None:
             model.set_lora_adapter("speech")
-
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
             from transformers.cache_utils import DynamicCache
 
@@ -5639,7 +5638,6 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
             logits = self.lm_head(hidden_states)
             return (logits, outputs.past_key_values.to_legacy_cache())
-
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
         super().__init__(config, model, model_kwargs)
@@ -5791,7 +5789,6 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
 
     def __enter__(self):
         super().__enter__()
-
         def transformer_fwd(
             self,
             pixel_values,
