@@ -3240,6 +3240,7 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
         processed_inputs = processor(image, return_tensors="pt")
         return processed_inputs
 
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,

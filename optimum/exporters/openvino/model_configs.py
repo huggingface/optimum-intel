@@ -1422,6 +1422,10 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
             inputs_embed_shape
         )
         dummy_inputs["inputs_embeds"] = inputs_embeds
+        if "token_type_ids" in self.inputs:
+            dummy_inputs["token_type_ids"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
+                0
+            ].random_int_tensor(input_ids.shape, min_value=0, max_value=2)
         return dummy_inputs
 
 
