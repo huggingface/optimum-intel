@@ -112,9 +112,11 @@ class OVQuantizerTest(unittest.TestCase):
                 smooth_quant_alpha=0.95,
             ),
             [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
-            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
-            if is_transformers_version("<=", "4.36.0")
-            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
+            (
+                [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+                if is_transformers_version("<=", "4.36.0")
+                else [{"int8": 14}, {"int8": 22}, {"int8": 18}]
+            ),
         ),
         (
             OVModelForCausalLM,
@@ -241,10 +243,16 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             [
-                112, 0, 0, 0,
+                112,
+                0,
+                0,
+                0,
             ],
             [
-                {"int8": 121}, {"int8": 42}, {"int8": 34}, {"int8": 64},
+                {"int8": 121},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 64},
             ],
         ),
         (
@@ -259,10 +267,18 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             [
-                174, 0, 0, 0, 0,
+                174,
+                0,
+                0,
+                0,
+                0,
             ],
             [
-                {"f8e5m2": 183}, {"int8": 42}, {"int8": 34}, {"int8": 64}, {"int8": 66},
+                {"f8e5m2": 183},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 64},
+                {"int8": 66},
             ],
         ),
         (
@@ -275,10 +291,16 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             [
-                79, 0, 0, 0,
+                79,
+                0,
+                0,
+                0,
             ],
             [
-                {"f8e4m3": 84}, {"int8": 42}, {"int8": 34}, {"int8": 40},
+                {"f8e4m3": 84},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 40},
             ],
         ),
     ]
@@ -406,7 +428,10 @@ class OVQuantizerTest(unittest.TestCase):
                 tokens = tokenizer("This is a sample input", return_tensors="pt")
                 outputs = ov_model(**tokens)
                 self.assertTrue("logits" in outputs)
-            elif any(x == model_cls for x in (OVStableDiffusionPipeline, OVStableDiffusionXLPipeline, OVLatentConsistencyModelPipeline)):
+            elif any(
+                x == model_cls
+                for x in (OVStableDiffusionPipeline, OVStableDiffusionXLPipeline, OVLatentConsistencyModelPipeline)
+            ):
                 submodels = ov_model.ov_submodels.values()
             else:
                 raise Exception("Unexpected model class.")

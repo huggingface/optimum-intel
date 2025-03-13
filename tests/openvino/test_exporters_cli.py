@@ -189,9 +189,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
-            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
-            if is_transformers_version("<=", "4.36.0")
-            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
+            (
+                [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+                if is_transformers_version("<=", "4.36.0")
+                else [{"int8": 14}, {"int8": 22}, {"int8": 18}]
+            ),
         ),
         (
             "automatic-speech-recognition-with-past",
@@ -199,9 +201,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
-            [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
-            if is_transformers_version("<=", "4.36.0")
-            else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}],
+            (
+                [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
+                if is_transformers_version("<=", "4.36.0")
+                else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}]
+            ),
         ),
         (
             "text-generation",
@@ -269,10 +273,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset conceptual_captions --num-samples 1 --trust-remote-code",
             [
-                112, 0, 0, 0,
+                112,
+                0,
+                0,
+                0,
             ],
             [
-                {"int8": 121}, {"int8": 42}, {"int8": 34}, {"int8": 64},
+                {"int8": 121},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 64},
             ],
         ),
         (
@@ -281,10 +291,18 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e5m2",
             "--dataset laion/220k-GPT4Vision-captions-from-LIVIS --num-samples 1 --trust-remote-code",
             [
-                174, 0, 0, 0, 0,
+                174,
+                0,
+                0,
+                0,
+                0,
             ],
             [
-                {"f8e5m2": 183}, {"int8": 42}, {"int8": 34}, {"int8": 64}, {"int8": 66},
+                {"f8e5m2": 183},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 64},
+                {"int8": 66},
             ],
         ),
         (
@@ -293,10 +311,16 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset laion/filtered-wit --num-samples 1 --trust-remote-code",
             [
-                79, 0, 0, 0,
+                79,
+                0,
+                0,
+                0,
             ],
             [
-                {"f8e4m3": 84}, {"int8": 42}, {"int8": 34}, {"int8": 40},
+                {"f8e4m3": 84},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 40},
             ],
         ),
     ]
