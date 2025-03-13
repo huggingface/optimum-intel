@@ -2803,7 +2803,6 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
 
             signature = inspect.signature(self.orig_forward)
             args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
-
             return_legacy_cache = False
             pkv_in_args = False
             legacy_pkv = None
@@ -4407,7 +4406,7 @@ class MiniCPMModelPatcher(DecoderModelPatcher):
         super().__init__(config, model, model_kwargs)
 
 
-class GotOCR2ImageEmbeddingsModelPatcher(ModelPatcher):
+class CommonImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4417,6 +4416,32 @@ class GotOCR2ImageEmbeddingsModelPatcher(ModelPatcher):
         model.__orig_forward = model.forward
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
         model.forward = model.get_image_features
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Gemma3LMModelPatcher(Gemma2ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+
+        def forward(self, attention_mask, position_ids, past_key_values, inputs_embeds):
+            return self.__orig_forward(
+                input_ids=None,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+            )
+
+        model.forward = types.MethodType(forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):

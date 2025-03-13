@@ -229,6 +229,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen2-vl",
     "qwen2-5-vl",
     "got-ocr2",
+    "gemma3",
 ]
 
 
