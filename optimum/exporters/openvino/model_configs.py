@@ -79,6 +79,8 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    Gemma3ImageEmbeddingsModelPatcher,
+    Gemma3LMModelPatcher,
     GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
@@ -141,6 +143,10 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "llava-next-video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
+        "transformers",
+        "Gemma3ForConditionalGeneration",
     )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
@@ -1138,6 +1144,21 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gemma3-text",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -3001,3 +3022,41 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
+class Gemma3OpneVINOConfig(LlavaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Gemma3ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, LlavaConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
+            behavior = LlavaConfigBehavior(behavior)
+
+        if behavior == LlavaConfigBehavior.LANGUAGE:
+            model_type = self._orig_config.text_config.model_type
+            return get_vlm_text_generation_config(
+                model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Gemma3LMModelPatcher,
+            )
+        return super().with_behavior(behavior)
