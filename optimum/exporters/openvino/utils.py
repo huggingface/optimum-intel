@@ -232,6 +232,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "gemma3",
     "idefics3",
     "smolvlm",
+    "phi4mm"
 ]
 
 

@@ -5612,3 +5612,325 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
         else:
             raise ValueError("Unknown ")
         self.orig_forward = self.patched_forward
+class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        if hasattr(model.config, "vision_lora") and model.config.vision_lora is not None:
+            model.set_lora_adapter("vision")
+        if hasattr(model.config, "speech_lora") and model.config.speech_lora is not None:
+            model.set_lora_adapter("speech")
+        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
+            from transformers.cache_utils import DynamicCache
+
+            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            outputs = self.model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, use_cache=True, past_key_values=pkv)
+            hidden_states = outputs[0]
+            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+            logits = self.lm_head(hidden_states)
+            return (logits, outputs.past_key_values.to_legacy_cache())
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+
+        def forward(self, audio_input):
+            audio_input, masks = self._forward_embeddings_core(audio_input, None)
+            return audio_input
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Phi4MMAudioEncoderPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        def forward(self, audio_feature, audio_mask):
+            relative_attention_bias = self.init_relative_attention_bias(audio_feature)
+
+            _simplified_path = self.extra_layer_output_idx == -1 and relative_attention_bias is None
+
+            if _simplified_path:
+                audio_feature, *_ = self.encoders(audio_feature, None, None, audio_mask)
+            else:
+                for layer in self.encoders:
+                    audio_feature, _, _, _ = layer(
+                        audio_feature,
+                        None,
+                        None,
+                        audio_mask,
+                        relative_attention_bias=relative_attention_bias,
+                    )
+            return audio_feature
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        def get_img_features(self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None) -> torch.FloatTensor:
+            LAYER_IDX = self.layer_idx
+            TYPE_FEATURE = self.type_feature
+
+            if self.freeze_img_processor:
+                with torch.no_grad():
+                    if patch_attention_mask is not None:
+                        img_processor_output = self.img_processor(
+                            pixel_values, output_hidden_states=True, patch_attention_mask=patch_attention_mask, position_ids=patch_position_ids
+                        )
+                    else:
+                        img_processor_output = self.img_processor(pixel_values, output_hidden_states=True, position_ids=patch_position_ids)
+                    img_feature = img_processor_output.hidden_states[LAYER_IDX]
+            else:
+                if patch_attention_mask is not None:
+                    img_processor_output = self.img_processor(
+                        pixel_values, output_hidden_states=True, patch_attention_mask=patch_attention_mask, position_ids=patch_position_ids
+                    )
+                else:
+                    img_processor_output = self.img_processor(pixel_values, output_hidden_states=True, position_ids=patch_position_ids)
+                img_feature = img_processor_output.hidden_states[LAYER_IDX]
+
+            if TYPE_FEATURE == "patch":
+                patch_feature = img_feature
+                if self.image_token_compression is not None:
+                    # reshape to 2D tensor
+                    width = int(math.sqrt(patch_feature.size(1)))
+                    patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+                    # convert to NCHW
+                    patch_feature = patch_feature.permute(0, 3, 1, 2)
+                    if getattr(self, "img_processor_padding", None) is not None:
+                        patch_feature = self.img_processor_padding(patch_feature)
+                    patch_feature = self.image_token_compression(patch_feature)
+                    # convert to NHWC
+                    patch_feature = patch_feature.permute(0, 2, 3, 1)
+                    patch_feature = patch_feature.view(-1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1))
+                elif getattr(self, "img_processor_padding", None) is not None:
+                    width = int(math.sqrt(patch_feature.size(1)))
+                    patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+                    # convert to NCHW
+                    patch_feature = patch_feature.permute(0, 3, 1, 2)
+                    patch_feature = self.img_processor_padding(patch_feature)
+                    # convert to NHWC
+                    patch_feature = patch_feature.permute(0, 2, 3, 1)
+                    patch_feature = patch_feature.view(-1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1))
+                return patch_feature
+
+            if TYPE_FEATURE == "cls_patch":
+                if self.image_token_compression is not None:
+                    # reshape to 2D tensor
+                    patch_feature = img_feature[:, 1:]
+                    cls_feature = img_feature[:, 0]
+                    width = math.sqrt(patch_feature.size(1))
+                    patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+                    patch_feature = self.image_token_compression(patch_feature)
+                    patch_feature = patch_feature.view(-1, patch_feature.size(-2) * patch_feature.size(-1))
+                    img_feature = torch.cat([cls_feature, patch_feature], dim=1)
+                return img_feature
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(get_img_features, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        def transformer_fwd(
+            self,
+            pixel_values,
+            patch_attention_mask: Optional[torch.BoolTensor] = None,
+            position_ids: Optional[torch.FloatTensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+        ) -> Union[Tuple, BaseModelOutputWithPooling]:
+            from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+
+            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+            output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+            batch_size = pixel_values.size(0)
+            if patch_attention_mask is None:
+                patch_attention_mask = torch.ones(
+                    size=(
+                        batch_size,
+                        pixel_values.size(2) // self.config.patch_size,
+                        pixel_values.size(3) // self.config.patch_size,
+                    ),
+                    dtype=torch.bool,
+                    device=pixel_values.device,
+                )
+
+            hidden_states = self.embeddings(pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, position_ids=position_ids)
+
+            patch_attention_mask = patch_attention_mask.view(batch_size, -1)
+            # The call to `_upad_input` in `_flash_attention_forward` is expensive
+            # So when the `patch_attention_mask` is full of 1s (i.e. attending to the whole sequence),
+            # avoiding passing the attention_mask, which is equivalent to attending to the full sequence
+            if not torch.any(~patch_attention_mask):
+                attention_mask = None
+            else:
+                attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
+
+            encoder_outputs = self.encoder(
+                inputs_embeds=hidden_states,
+                attention_mask=attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+
+            last_hidden_state = encoder_outputs[0]
+            last_hidden_state = self.post_layernorm(last_hidden_state)
+
+            pooled_output = self.head(
+                hidden_state=last_hidden_state,
+                attention_mask=patch_attention_mask,
+            )
+
+            if not return_dict:
+                return (last_hidden_state, pooled_output) + encoder_outputs[1:]
+
+            return BaseModelOutputWithPooling(
+                last_hidden_state=last_hidden_state,
+                pooler_output=pooled_output,
+                hidden_states=encoder_outputs.hidden_states,
+                attentions=encoder_outputs.attentions,
+            )
+
+        def attn_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = False,
+        ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+
+            if output_attentions:
+                return super().forward(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    output_attentions=output_attentions,
+                )
+
+            batch_size, q_len, _ = hidden_states.size()
+
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+            # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+            # Reference: https://github.com/pytorch/pytorch/issues/112577.
+            if query_states.device.type == "cuda" and attention_mask is not None:
+                query_states = query_states.contiguous()
+                key_states = key_states.contiguous()
+                value_states = value_states.contiguous()
+
+            # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+            # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+            is_causal = False
+
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=attention_mask,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=is_causal,
+            )
+
+            attn_output = attn_output.transpose(1, 2).contiguous()
+            attn_output = attn_output.view(batch_size, q_len, self.embed_dim)
+
+            attn_output = self.out_proj(attn_output)
+
+            return attn_output, None
+
+        def embd_forward(self, pixel_values: torch.FloatTensor, patch_attention_mask: torch.BoolTensor, position_ids: torch.FloatTensor = None) -> torch.Tensor:
+            batch_size = pixel_values.size(0)
+
+            patch_embeds = self.patch_embedding(pixel_values)
+            embeddings = patch_embeds.flatten(2).transpose(1, 2)
+
+            if position_ids is None:
+                max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+                max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+                boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
+                position_ids = torch.full(
+                    size=(
+                        batch_size,
+                        max_nb_patches_h * max_nb_patches_w,
+                    ),
+                    fill_value=0,
+                )
+
+                for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+                    nb_patches_h = p_attn_mask[:, 0].sum()
+                    nb_patches_w = p_attn_mask[0].sum()
+
+                    fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                    fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+                    bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+                    bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+                    pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
+                    position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+
+            position_ids = position_ids.to(self.position_embedding.weight.device)
+
+            embeddings = embeddings + self.position_embedding(position_ids)
+            return embeddings
+
+        for layer in self._model.img_processor.encoder.layers:
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(attn_forward, layer.self_attn)
+        self._model.img_processor._orig_forward = self._model.img_processor.forward
+        self._model.img_processor.forward = types.MethodType(transformer_fwd, self._model.img_processor)
+        self._model.img_processor.embeddings._orig_forward = self._model.img_processor.embeddings.forward
+        self._model.img_processor.embeddings.forward = types.MethodType(embd_forward, self._model.img_processor.embeddings)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.img_processor.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+        self._model.img_processor.forward = self._model.img_processor._orig_forward
+        self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward 
