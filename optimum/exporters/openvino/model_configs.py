@@ -3062,6 +3062,6 @@ class Gemma3OpenVINOConfig(LlavaOpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Gemma3LMModelPatcher,
-                inputs_update={"token_type_ids": {0: "batch_size", 1: "past_sequence_length + 1"}},
+                inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
             )
         return super().with_behavior(behavior)
