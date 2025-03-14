@@ -972,7 +972,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         for k, v in kwargs.items():
             kwargs[k] = np_to_pt_generators(v, self.device)
-        
+
         if self.height != -1:
             if height is not None and height != self.height:
                 logger.warning(f"Incompatible height argument provided {height}. Pipeline only support {self.height}.")

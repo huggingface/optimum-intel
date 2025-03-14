@@ -438,6 +438,23 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         np.testing.assert_allclose(ov_images, diffusers_images, atol=1e-4, rtol=1e-2)
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_static_shape_image_generation(self, model_arch):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False)
+        pipeline.reshape(batch_size=-1, height=40, width=32)
+        pipeline.compile()
+        # generation with incompatible size
+        height, width, batch_size = 64, 64, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        image = pipeline(**inputs, num_inference_steps=2).images[0]
+        self.assertTupleEqual(image.size, (32, 40))
+        # generation without height / width provided
+        inputs.pop("height")
+        inputs.pop("width")
+        image = pipeline(**inputs, num_inference_steps=2).images[0]
+        self.assertTupleEqual(image.size, (32, 40))
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
