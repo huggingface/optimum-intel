@@ -3029,7 +3029,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
-class Gemma3OpneVINOConfig(LlavaOpenVINOConfig):
+class Gemma3OpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
     def patch_model_for_export(
