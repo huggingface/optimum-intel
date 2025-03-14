@@ -442,18 +442,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_static_shape_image_generation(self, model_arch):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False)
-        pipeline.reshape(batch_size=-1, height=40, width=32)
+        pipeline.reshape(batch_size=1, height=64, width=32)
         pipeline.compile()
         # generation with incompatible size
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-        image = pipeline(**inputs, num_inference_steps=2).images[0]
-        self.assertTupleEqual(image.size, (32, 40))
+        inputs["output_type"] = "pil"
+        image = pipeline(**inputs).images[0]
+        self.assertTupleEqual(image.size, (32, 64))
         # generation without height / width provided
         inputs.pop("height")
         inputs.pop("width")
-        image = pipeline(**inputs, num_inference_steps=2).images[0]
-        self.assertTupleEqual(image.size, (32, 40))
+        image = pipeline(**inputs).images[0]
+        self.assertTupleEqual(image.size, (32, 64))
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
