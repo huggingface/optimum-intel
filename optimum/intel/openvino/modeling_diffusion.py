@@ -889,9 +889,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
 
         if self.text_encoder_3 is not None:
-            self.text_encoder_3.model = self._reshape_text_encoder(
-                self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1)
-            )
+            self.text_encoder_3.model = self._reshape_text_encoder(self.text_encoder_3.model, batch_size, -1)
 
         self.clear_requests()
         return self
@@ -973,6 +971,63 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         for k, v in kwargs.items():
             kwargs[k] = np_to_pt_generators(v, self.device)
 
+        height, width = None, None
+        height_idx, width_idx = None, None
+        shapes_overriden = False
+        sig = inspect.signature(self.auto_model_class.__call__)
+        sig_height_idx = list(sig.parameters).index("height") if "height" in sig.parameters else len(sig.parameters)
+        sig_width_idx = list(sig.parameters).index("width") if "width" in sig.parameters else len(sig.parameters)
+        if "height" in kwargs:
+            height = kwargs["height"]
+        elif len(args) > sig_height_idx:
+            height = args[sig_height_idx]
+            height_idx = sig_height_idx
+
+        if "width" in kwargs:
+            width = kwargs["width"]
+        elif len(args) > sig_width_idx:
+            width = args[sig_width_idx]
+            width_idx = sig_width_idx
+
+        if self.height != -1:
+            if height is not None and height != self.height:
+                logger.warning(f"Incompatible height argument provided {height}. Pipeline only support {self.height}.")
+                height = self.height
+            else:
+                height = self.height
+
+            if height_idx is not None:
+                args[height_idx] = height
+            else:
+                kwargs["height"] = height
+
+            shapes_overriden = True
+
+        if self.width != -1:
+            if width is not None and width != self.width:
+                logger.warning(f"Incompatible widtth argument provided {width}. Pipeline only support {self.width}.")
+                width = self.width
+            else:
+                width = self.width
+
+            if width_idx is not None:
+                args[width_idx] = width
+            else:
+                kwargs["width"] = width
+            shapes_overriden = True
+
+        # Sana generates images in specific resolution grid size and then resize to requested size by default, it may contradict with pipeline height / width
+        # Disable this behavior for static shape pipeline
+        if self.auto_model_class.__name__.startswith("Sana") and shapes_overriden:
+            sig_resolution_bining_idx = (
+                list(sig.parameters).index("use_resolution_binning")
+                if "use_resolution_binning" in sig.parameters
+                else len(sig.parameters)
+            )
+            if len(args) > sig_resolution_bining_idx:
+                args[sig_resolution_bining_idx] = False
+            else:
+                kwargs["use_resolution_binning"] = False
         # we use auto_model_class.__call__ here because we can't call super().__call__
         # as OptimizedModel already defines a __call__ which is the first in the MRO
         return self.auto_model_class.__call__(self, *args, **kwargs)
