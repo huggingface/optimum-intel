@@ -962,7 +962,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         components = {k: v for k, v in components.items() if v is not None}
         return components
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, height=None, width=None, **kwargs):
         # we do this to keep numpy random states support for now
         # TODO: deprecate and add warnings when a random state is passed
 
@@ -972,10 +972,24 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         for k, v in kwargs.items():
             kwargs[k] = np_to_pt_generators(v, self.device)
+        
+        if self.height != -1:
+            if height is not None and height != self.height:
+                logger.warning(f"Incompatible height argument provided {height}. Pipeline only support {self.height}.")
+                height = self.height
+            else:
+                height = self.height
+
+        if self.width != -1:
+            if width is not None and width != self.width:
+                logger.warning(f"Incompatible widtth argument provided {width}. Pipeline only support {self.width}.")
+                width = self.width
+            else:
+                width = self.width
 
         # we use auto_model_class.__call__ here because we can't call super().__call__
         # as OptimizedModel already defines a __call__ which is the first in the MRO
-        return self.auto_model_class.__call__(self, *args, **kwargs)
+        return self.auto_model_class.__call__(self, *args, height=height, width=width, **kwargs)
 
 
 class OVPipelinePart(ConfigMixin):
