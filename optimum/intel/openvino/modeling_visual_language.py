@@ -3109,6 +3109,50 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         return processed_inputs
 
 
+class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+        return self.vision_embeddings(pixel_values).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L836-L845
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        n_image_tokens = (input_ids == self.config.image_token_index).sum()
+        n_image_features = image_features.shape[0] * image_features.shape[1]
+        if n_image_tokens != n_image_features:
+            raise ValueError(
+                f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+            )
+        special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if image is None:
+            raise ValueError("Image is required")
+        processed_inputs = processor(image, return_tensors="pt")
+        return processed_inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -3120,4 +3164,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
+    "got_ocr2": _OVGotOCR2ForCausalLM,
 }

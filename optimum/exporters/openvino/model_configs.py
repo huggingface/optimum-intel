@@ -79,6 +79,7 @@ from .model_patcher import (
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
+    GotOCR2ImageEmbeddingsModelPatcher,
     GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
@@ -3001,3 +3002,16 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("got-ocr2", *["image-text-to-text"], library_name="transformers")
+class GotOCR2OpenVINOConfig(LlavaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return GotOCR2ImageEmbeddingsModelPatcher(self, model, model_kwargs)
