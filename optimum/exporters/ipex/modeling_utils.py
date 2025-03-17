@@ -346,8 +346,8 @@ def _falcon_model_forward(
 
     # Prepare head mask if needed
     # 1.0 in head_mask indicate we keep the head
-    # attention_probs has shape batch_size x num_heads x N x N
-    # head_mask has shape n_layer x batch x num_heads x N x N
+    # attention_probs has shape batch_size x num_attention_heads x N x N
+    # head_mask has shape n_layer x batch x num_attention_heads x N x N
     head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
     hidden_states = inputs_embeds
 
@@ -707,7 +707,9 @@ class _IPEXAttention(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         self.module_device = device
-        self.num_groups = self.num_heads // self.num_key_value_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_attention_heads = config.num_attention_heads
+        self.num_groups = self.num_attention_heads // self.num_key_value_heads
         self.kv_head_mapping = torch.arange(
             0, self.num_key_value_heads, dtype=torch.int32, device=self.module_device
         ).repeat_interleave(self.num_groups)
@@ -892,11 +894,11 @@ class _IPEXLlamaAttention(_IPEXAttention):
     def qkv_gemm(self, hidden_states):
         if hasattr(self, "concat_qkv"):
             qkv_out = self.concat_qkv(hidden_states)
-            query = qkv_out[:, : self.q_slice].view(-1, self.num_heads, self.head_dim)
+            query = qkv_out[:, : self.q_slice].view(-1, self.num_attention_heads, self.head_dim)
             key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
             value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
         else:
-            query = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
+            query = self.q_proj(hidden_states).view(-1, self.num_attention_heads, self.head_dim)
             key = self.k_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
             value = self.v_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
 
@@ -914,12 +916,14 @@ class _IPEXFalconAttention(_IPEXAttention):
     def qkv_gemm(self, hidden_states):
         qkv_out = self.query_key_value(hidden_states)
         if self.new_decoder_architecture:
-            qkv_out = qkv_out.view(qkv_out.shape[0], -1, self.num_heads // self.num_kv_heads + 2, self.head_dim)
+            qkv_out = qkv_out.view(
+                qkv_out.shape[0], -1, self.num_attention_heads // self.num_kv_heads + 2, self.head_dim
+            )
             query = qkv_out[:, :, :-2, :].flatten(1, 2)
             key = qkv_out[:, :, [-2], :].flatten(1, 2)
             value = qkv_out[:, :, [-1], :].flatten(1, 2)
         else:
-            query = qkv_out[:, : self.q_slice].view(-1, self.num_heads, self.head_dim)
+            query = qkv_out[:, : self.q_slice].view(-1, self.num_attention_heads, self.head_dim)
             key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
             value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
         return query, key, value
@@ -927,7 +931,6 @@ class _IPEXFalconAttention(_IPEXAttention):
 
 class _IPEXGPT2Attention(_IPEXAttention):
     def __init__(self, module, device, config) -> None:
-        self.num_key_value_heads = config.num_key_value_heads
         super().__init__(module, device, config)
         _setattr_from_module(self, module)
         if not config.compile and getattr(config, "quantization_config", None) is None:
@@ -950,9 +953,9 @@ class _IPEXGPT2Attention(_IPEXAttention):
             query, key, value = self.c_attn_linear(hidden_states).split(self.split_size, dim=-1)
         else:
             query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=-1)
-        query = query.view(-1, self.num_heads, self.head_dim)
-        key = key.view(-1, self.num_heads, self.head_dim)
-        value = value.view(-1, self.num_heads, self.head_dim)
+        query = query.view(-1, self.num_attention_heads, self.head_dim)
+        key = key.view(-1, self.num_attention_heads, self.head_dim)
+        value = value.view(-1, self.num_attention_heads, self.head_dim)
         return query, key, value
 
     def rope(self, query, key, *args, **kwargs):
