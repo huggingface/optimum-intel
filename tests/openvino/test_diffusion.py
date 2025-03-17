@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import json
+import logging
 import unittest
 from pathlib import Path
 
@@ -442,19 +443,28 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_static_shape_image_generation(self, model_arch):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False)
-        pipeline.reshape(batch_size=1, height=64, width=32)
+        pipeline.reshape(batch_size=1, height=32, width=32)
         pipeline.compile()
         # generation with incompatible size
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         inputs["output_type"] = "pil"
-        image = pipeline(**inputs).images[0]
-        self.assertTupleEqual(image.size, (32, 64))
+        from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
+
+        with self.assertLogs(diffusers_logger, logging.WARN) as warning_log:
+            image = pipeline(**inputs).images[0]
+            self.assertTrue(
+                any(
+                    "Incompatible width argument provided" in log or "Incompatible height argument provided" in log
+                    for log in warning_log.output
+                )
+            )
+        self.assertTupleEqual(image.size, (32, 32))
         # generation without height / width provided
         inputs.pop("height")
         inputs.pop("width")
         image = pipeline(**inputs).images[0]
-        self.assertTupleEqual(image.size, (32, 64))
+        self.assertTupleEqual(image.size, (32, 32))
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
