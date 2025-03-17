@@ -73,13 +73,13 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    CommonImageEmbeddingsModelPatcher,
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
-    CommonImageEmbeddingsModelPatcher,
     Gemma3LMModelPatcher,
     GptBigCodeModelPatcher,
     GptJModelPatcher,
@@ -1158,7 +1158,7 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
     library_name="transformers",
 )
 class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
+    MIN_TRANSFORMERS_VERSION = version.parse("4.50.0")
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
