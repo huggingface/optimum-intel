@@ -135,7 +135,8 @@ class IPEXModel(OptimizedModel):
         self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
         self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
-        self.compiled = False
+        self.compile = self.can_compile()
+        model.config.compile = compile
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
@@ -147,9 +148,10 @@ class IPEXModel(OptimizedModel):
         if hasattr(self.auto_model_class, "register"):
             self.auto_model_class.register(AutoConfig, self.__class__)
 
-        self.maybe_apply_torch_compile()
+        if self.compile:
+            self.apply_torch_compile()
 
-        if warmup and not self.compiled:
+        if warmup and not self.compile:
             self._init_warmup()
 
     @classmethod
@@ -220,16 +222,20 @@ class IPEXModel(OptimizedModel):
     def can_generate(self):
         return isinstance(self, GenerationMixin)
 
-    def maybe_apply_torch_compile(self):
+    def can_compile(self):
         if (
             self.model.device.type != "cpu"
             or self.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
             or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
             or getattr(self.config, "quantization_config", None)
         ):
-            return
+            return False
         if self.use_cache and not self._supports_static_cache:
-            return
+            return False
+
+        return True
+
+    def apply_torch_compile(self):
         from torch._inductor import config as inductor_config
 
         # System level optimization
@@ -237,7 +243,6 @@ class IPEXModel(OptimizedModel):
         os.environ["TORCHINDUCTOR_FREEZING"] = "1"
         logger.info("Enable torch.compile optimization")
         self.model.forward = torch.compile(self.model.forward)
-        self.compiled = True
 
     def _init_warmup(self):
         inputs = prepare_jit_inputs(self.model, self.export_feature, False)
@@ -317,7 +322,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
-        if warmup and not self.compiled:
+        if warmup and not self.compile:
             self._init_warmup()
 
     @torch.no_grad()
@@ -337,7 +342,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         kwargs["use_cache"] = self.use_cache
         generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
         generation_method = generation_config.get_generation_mode().value
-        if self.compiled and generation_config.cache_implementation != "ipex_paged" and self._supports_static_cache:
+        if self.compile and generation_config.cache_implementation != "ipex_paged" and self._supports_static_cache:
             # Use static cache for torch compile
             generation_config.cache_implementation = "static"
         if generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
@@ -448,7 +453,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
 
-        if warmup and not self.compiled:
+        if warmup and not self.compile:
             self._init_warmup()
 
     @torch.no_grad()
@@ -465,7 +470,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     ) -> Tuple[GenerationConfig, Dict]:
         generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
         # Use static cache for torch.compile
-        if self.compiled:
+        if self.compile:
             generation_config.cache_implementation = "static"
 
         return generation_config, model_kwargs
