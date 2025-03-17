@@ -136,7 +136,7 @@ class IPEXModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
         self.compile = self.can_compile()
-        model.config.compile = compile
+        model.config.compile = self.compile
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
