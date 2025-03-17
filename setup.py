@@ -30,7 +30,8 @@ INSTALL_REQUIRE = [
     "torch>=1.11",
     "optimum~=1.24",
     "transformers>=4.36,<4.50",
-    "datasets>=1.4.0",
+    # TODO: Remove the upper bound after the next datasets release (https://github.com/huggingface/datasets/issues/7458)
+    "datasets>=1.4.0,<3.4.0",
     "sentencepiece",
     "setuptools",
     "scipy",
