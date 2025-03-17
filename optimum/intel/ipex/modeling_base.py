@@ -71,6 +71,17 @@ else:
     _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 
 
+try:
+    import intel_extension_for_pytorch as ipex
+
+    if hasattr(torch, "xpu") and torch.xpu.is_available() and not ipex._C._has_xpu():
+        logger.warning(
+            "Detect you have XPU device but the ipex do not support XPU, please install a xpu version ipex by checking https://pytorch-extension.intel.com/installation?platform=gpu"
+        )
+except ImportError:
+    logger.warning("No intel_extension_for_pytorch found, please `pip install intel_extension_for_pytorch`")
+
+
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
