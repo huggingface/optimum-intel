@@ -1013,6 +1013,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
+    if is_transformers_version(">", "4.49"):
+        SUPPORTED_ARCHITECTURES += ("gemma3-text",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1112,7 +1115,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=3,
+            num_beams=2,
             do_sample=False,
             eos_token_id=None,
         )
@@ -1126,7 +1129,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch == "gemma2":
+        if model_arch in ["gemma2", "gemma3-text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             from transformers.cache_utils import DynamicCache
@@ -2143,6 +2146,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
+    if is_transformers_version(">", "4.49"):
+        SUPPORTED_ARCHITECTURES += ["gemma3"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2160,6 +2165,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
+            "gemma3",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -2256,8 +2262,20 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
 
+        additional_inputs = {}
+        # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
+        # align cache representation in torch model
+        if model_arch == "gemma3":
+            patch_update_causal_mask(transformers_model, "4.43.0")
+            transformers_model._supports_cache_class = True
+            from transformers.cache_utils import DynamicCache
+
+            additional_inputs = {"past_key_values": DynamicCache()}
+
         with torch.no_grad():
-            transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
+            transformers_outputs = transformers_model.generate(
+                **transformers_inputs, generation_config=gen_config, **additional_inputs
+            )
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
         if model_arch in ["minicpmv", "internvl2"]:

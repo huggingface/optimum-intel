@@ -2803,7 +2803,6 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
 
             signature = inspect.signature(self.orig_forward)
             args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
-
             return_legacy_cache = False
             pkv_in_args = False
             legacy_pkv = None
@@ -4407,7 +4406,7 @@ class MiniCPMModelPatcher(DecoderModelPatcher):
         super().__init__(config, model, model_kwargs)
 
 
-class GotOCR2ImageEmbeddingsModelPatcher(ModelPatcher):
+class CommonImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4416,7 +4415,105 @@ class GotOCR2ImageEmbeddingsModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
         model.forward = model.get_image_features
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1147
+def _gemma3_mm_update_causal_mask(
+    self, attention_mask, token_type_ids, past_key_values, cache_position, input_tensor, is_training: bool = False
+):
+    if attention_mask is not None and attention_mask.dim() == 4:
+        # In this case we assume that the mask comes already in inverted
+        # form and requires no inversion or slicing.
+        return attention_mask
+
+    min_dtype = torch.finfo(torch.float16).min
+    inputs_lead_dim, sequence_length = input_tensor.shape[:2]
+    target_length = (
+        attention_mask.shape[-1]
+        if isinstance(attention_mask, torch.Tensor)
+        else cache_position[0] + sequence_length + 1
+    )
+
+    causal_mask = torch.full(
+        (sequence_length, target_length), fill_value=min_dtype, dtype=self.dtype, device=cache_position.device
+    )
+
+    # Causal diagonal mask only if training, otherwise attend to the whole prefix. Training-specific attn for prefix is handled below
+    if sequence_length != 1:
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+
+    causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
+    causal_mask = causal_mask[None, None, :, :].expand(inputs_lead_dim, 1, -1, -1)
+
+    # Apply bidirectional mask on images if token type ids are provided
+    if token_type_ids is not None and sequence_length != 1:
+        token_type_mask = token_type_ids.unsqueeze(1) == token_type_ids.unsqueeze(2)
+        token_type_mask[token_type_ids == 0] = False  # if text token do not change anything
+        token_type_mask = token_type_mask.unsqueeze(1).to(causal_mask.device, dtype=torch.bool)
+        causal_mask = causal_mask.clone()
+        causal_mask[:, :, :, :sequence_length] = causal_mask[:, :, :, :sequence_length].masked_fill(
+            token_type_mask, 0.0
+        )
+
+    if attention_mask is not None:
+        causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+        mask_length = attention_mask.shape[-1]
+
+        # Then apply padding mask (will mask pad tokens)
+        padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(causal_mask.device)
+        padding_mask = padding_mask == 0
+        causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(padding_mask, min_dtype)
+
+    return causal_mask
+
+
+class Gemma3LMModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+        model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+
+        # Difference from original:
+        # uses Dynamic cache from legacy cache instead of HybridCache
+        # calculate causal mask from multimodal
+        def forward(self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds):
+            from transformers.cache_utils import DynamicCache
+
+            pkv = DynamicCache.from_legacy_cache(past_key_values)
+
+            past_seen_tokens = past_key_values[0][0].shape[-2]
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+            )
+
+            causal_mask = self._update_causal_mask_mm(
+                attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
+            )
+
+            result = self.__orig_forward(
+                input_ids=None,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                cache_position=cache_position,
+                past_key_values=pkv,
+                inputs_embeds=inputs_embeds,
+            )
+            upd_pkv = result["past_key_values"]
+            result["past_key_values"] = upd_pkv.to_legacy_cache()
+            return result
+
+        model.forward = types.MethodType(forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):

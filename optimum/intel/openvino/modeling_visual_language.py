@@ -130,6 +130,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
         batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
@@ -176,6 +177,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
+
+        if "token_type_ids" in self.input_names:
+            if token_type_ids is None:
+                token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
+            inputs["token_type_ids"] = token_type_ids
 
         if "beam_idx" in self.input_names:
             inputs["beam_idx"] = (
@@ -711,6 +717,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         rope_deltas=None,
         images=None,
         second_per_grid_ts=None,
+        token_type_ids=None,
         **kwargs,
     ):
         pixel_values = pixel_values if pixel_values is not None else images
@@ -735,6 +742,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
+            token_type_ids=token_type_ids,
             past_key_values=past_key_values,
             **kwargs,
         )
@@ -803,6 +811,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         if attention_mask is not None and position_ids is None:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
+
+            # position_ids in Gemma3 are 1-indexed
+            if self.config.model_type == "gemma3":
+                position_ids += 1
+
             if past_key_values is not None:
                 position_ids = position_ids[:, -input_ids.shape[1] :]
 
@@ -828,6 +841,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "pixel_values_videos": kwargs.get("pixel_values_videos"),
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
+                "token_type_ids": kwargs.get("token_type_ids"),
             }
         )
         return model_inputs
@@ -3109,6 +3123,80 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         return processed_inputs
 
 
+class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        return self.vision_embeddings(pixel_values).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1323-L1339
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        if input_ids is None:
+            special_image_mask = inputs_embeds == torch.from_numpy(
+                self.get_text_embeddings(torch.tensor([[self.config.image_token_index]], dtype=torch.long))[0]
+            )
+        else:
+            special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+            special_image_mask = special_image_mask.expand_as(inputs_embeds)
+
+            image_features = image_features.to(inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return inputs
+
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs: ModelOutput,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        num_new_tokens: int = 1,
+    ) -> Dict[str, Any]:
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+
+        # Token type ids used only for first inference mask generation
+        model_kwargs.pop("token_type_ids", None)
+
+        return model_kwargs
+
+
 class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
@@ -3165,4 +3253,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_vl": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
+    "gemma3": _OVGemma3ForCausalLM,
 }
