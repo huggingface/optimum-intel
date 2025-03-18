@@ -253,7 +253,7 @@ class IPEXModel(OptimizedModel):
         inductor_config.cpp_wrapper = True
         os.environ["TORCHINDUCTOR_FREEZING"] = "1"
         logger.info("Enable torch.compile optimization")
-        self.model.forward = torch.compile(self.model.forward, mode="max-autotune")
+        self.model.forward = torch.compile(self.model.forward)
 
     def _init_warmup(self):
         inputs = prepare_jit_inputs(self.model, self.export_feature, False)
