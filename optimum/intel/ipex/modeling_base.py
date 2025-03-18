@@ -71,6 +71,17 @@ else:
     _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 
 
+try:
+    import intel_extension_for_pytorch as ipex
+
+    if hasattr(torch, "xpu") and torch.xpu.is_available() and not ipex._C._has_xpu():
+        logger.warning(
+            "Detect you have XPU device but the ipex do not support XPU, please install a xpu version ipex by checking https://pytorch-extension.intel.com/installation?platform=gpu"
+        )
+except ImportError:
+    logger.warning("No intel_extension_for_pytorch found, please `pip install intel_extension_for_pytorch`")
+
+
 def _is_patched_with_ipex(model, task, use_cache: bool = True):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
@@ -149,7 +160,7 @@ class IPEXModel(OptimizedModel):
 
         self.maybe_apply_torch_compile()
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @classmethod
@@ -317,7 +328,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @torch.no_grad()
@@ -353,8 +364,17 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     def prepare_inputs_for_generation(self, *args, **kwargs):
         return self.model.prepare_inputs_for_generation(*args, **kwargs)
 
+    def _supports_logits_to_keep(self) -> bool:
+        """
+        Return True if the current model supports the keyword argument `logits_to_keep` in forward()
+        to save memory. Checking it in this way allows to avoid using a new model attribute.
+        """
+        return "logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
+
     def _supports_num_logits_to_keep(self) -> bool:
         """
+        Will be deprecated after we no longer support transformers < 4.49
+
         Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
@@ -439,7 +459,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
 
-        if warmup:
+        if warmup and not self.compiled:
             self._init_warmup()
 
     @torch.no_grad()
@@ -470,8 +490,17 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     def get_encoder(self, *args, **kwargs):
         return self.model.get_encoder(*args, **kwargs)
 
+    def _supports_logits_to_keep(self) -> bool:
+        """
+        Return True if the current model supports the keyword argument `logits_to_keep` in forward()
+        to save memory. Checking it in this way allows to avoid using a new model attribute.
+        """
+        return "logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
+
     def _supports_num_logits_to_keep(self) -> bool:
         """
+        Will be deprecated after we no longer support transformers < 4.49
+
         Return True if the current model supports the keyword argument `num_logits_to_keep` in forward()
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """

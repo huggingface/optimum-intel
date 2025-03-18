@@ -89,6 +89,15 @@ _DEFAULT_4BIT_CONFIGS = {
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "Qwen/Qwen2.5-7B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
     "openlm-research/open_llama_3b_v2": {
         "bits": 4,
@@ -202,6 +211,15 @@ _DEFAULT_4BIT_CONFIGS = {
         "scale_estimation": True,
     },
     "microsoft/Phi-3.5-mini-instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "microsoft/Phi-4-mini-instruct": {
         "bits": 4,
         "sym": False,
         "group_size": 64,

@@ -31,7 +31,7 @@ import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
@@ -1013,6 +1013,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
+    if is_transformers_version(">", "4.49"):
+        SUPPORTED_ARCHITECTURES += ("gemma3-text",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1112,7 +1115,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=3,
+            num_beams=2,
             do_sample=False,
             eos_token_id=None,
         )
@@ -1126,7 +1129,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch == "gemma2":
+        if model_arch in ["gemma2", "gemma3-text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             from transformers.cache_utils import DynamicCache
@@ -2124,17 +2127,27 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["llava"]
+    SUPPORT_VIDEO = []
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
+
+    if is_transformers_version(">=", "4.42.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next_video"]
+        SUPPORT_VIDEO.append("llava_next_video")
+
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2"]
 
     if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
+        SUPPORT_VIDEO.append("qwen2_5_vl")
+    if is_transformers_version(">", "4.49"):
+        SUPPORTED_ARCHITECTURES += ["gemma3"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2146,11 +2159,22 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     )
 
     def get_transformer_model_class(self, model_arch):
-        if is_transformers_version(">=", "4.46") and model_arch in ["llava", "llava_next", "qwen2_vl", "qwen2_5_vl"]:
+        if is_transformers_version(">=", "4.46") and model_arch in [
+            "llava",
+            "llava_next",
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "got_ocr2",
+            "gemma3",
+        ]:
             from transformers import AutoModelForImageTextToText
 
             return AutoModelForImageTextToText
-        if model_arch in "llava":
+        if model_arch == "llava_next_video":
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+        if model_arch == "llava":
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration
@@ -2238,8 +2262,20 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
         set_seed(SEED)
 
+        additional_inputs = {}
+        # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
+        # align cache representation in torch model
+        if model_arch == "gemma3":
+            patch_update_causal_mask(transformers_model, "4.43.0")
+            transformers_model._supports_cache_class = True
+            from transformers.cache_utils import DynamicCache
+
+            additional_inputs = {"past_key_values": DynamicCache()}
+
         with torch.no_grad():
-            transformers_outputs = transformers_model.generate(**transformers_inputs, generation_config=gen_config)
+            transformers_outputs = transformers_model.generate(
+                **transformers_inputs, generation_config=gen_config, **additional_inputs
+            )
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
         if model_arch in ["minicpmv", "internvl2"]:
@@ -2253,7 +2289,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    @parameterized.expand(["llava", "llava_next"])
+    @parameterized.expand(["llava", "llava_next", "llava_next_video"])
     @unittest.skipIf(
         is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
     )
@@ -2327,14 +2363,32 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # No input image case
-        question = "Hi, how are you?"
-        inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
-        outputs = model.generate(**inputs, max_new_tokens=10)
-        # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-        outputs = outputs[:, inputs["input_ids"].shape[1] :]
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
+        # GOT-OCR2 does not support text-only input
+        if model_arch != "got_ocr2":
+            # No input image case
+            question = "Hi, how are you?"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
+
+        # video loader helper only available for transformers >= 4.49
+        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+            from transformers.image_utils import load_video
+
+            video_path = hf_hub_download(
+                repo_id="raushan-testing-hf/videos-test", filename="sample_demo_1.mp4", repo_type="dataset"
+            )
+            input_video, _ = load_video(video_path, num_frames=2)
+            question = "Why is this video funny?"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
         del model
 
         gc.collect()
