@@ -4405,3 +4405,20 @@ class MiniCPMModelPatcher(DecoderModelPatcher):
                 layer.mlp.down_proj.to(torch.float32)
 
         super().__init__(config, model, model_kwargs)
+
+
+class GotOCR2ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
+        model.forward = model.get_image_features
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward

@@ -228,6 +228,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi3-v",
     "qwen2-vl",
     "qwen2-5-vl",
+    "got-ocr2",
 ]
 
 
