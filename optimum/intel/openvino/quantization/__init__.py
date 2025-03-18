@@ -28,5 +28,6 @@ from .configuration import (
 
 if is_nncf_available():
     # Running quantization is possible only if nncf is installed
-    from .calibration_dataset_builder import CalibrationDataset
+    # TODO: Remove InferRequestWrapper import after v1.25 release
+    from .calibration_dataset_builder import CalibrationDataset, InferRequestWrapper
     from .quantizer import OVQuantizer
