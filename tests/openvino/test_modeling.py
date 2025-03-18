@@ -2141,7 +2141,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["maira2"]
 
     if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl"]
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
@@ -2154,7 +2154,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     )
 
     def get_transformer_model_class(self, model_arch):
-        if is_transformers_version(">=", "4.46") and model_arch in ["llava", "llava_next", "qwen2_vl", "qwen2_5_vl"]:
+        if is_transformers_version(">=", "4.46") and model_arch in [
+            "llava",
+            "llava_next",
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "got_ocr2",
+        ]:
             from transformers import AutoModelForImageTextToText
 
             return AutoModelForImageTextToText
@@ -2339,14 +2345,16 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         self.assertIsInstance(outputs[0], str)
 
-        # No input image case
-        question = "Hi, how are you?"
-        inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
-        outputs = model.generate(**inputs, max_new_tokens=10)
-        # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-        outputs = outputs[:, inputs["input_ids"].shape[1] :]
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
+        # GOT-OCR2 does not support text-only input
+        if model_arch != "got_ocr2":
+            # No input image case
+            question = "Hi, how are you?"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
 
         # video loader helper only available for transformers >= 4.49
         if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
