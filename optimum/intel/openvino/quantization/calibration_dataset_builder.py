@@ -662,7 +662,7 @@ class OVCalibrationDatasetBuilder:
         return CalibrationDataset(calibration_data)
 
     def _prepare_diffusion_calibration_data(
-        self, config: OVQuantizationConfigBase, dataset: "Dataset"
+        self, config: OVQuantizationConfigBase, dataset: Union[List, "Dataset"]
     ) -> CalibrationDataset:
         """
         Prepares calibration data for diffusion models by inferring it on a dataset. Currently, collects data only for
@@ -679,19 +679,24 @@ class OVCalibrationDatasetBuilder:
         num_samples = config.num_samples or 200
         calibration_data = []
         try:
+            self.disable_progress_bar(disable=True)
             diffuser.request = InferRequestWrapper(diffuser.request, calibration_data)
 
-            for item in tqdm(dataset, desc="Collecting calibration data"):
+            pbar = tqdm(total=num_samples, desc="Collecting calibration data")
+            for item in dataset:
                 prompt = (
                     item[PREDEFINED_DIFFUSION_DATASETS[config.dataset]["prompt_column_name"]]
                     if isinstance(item, dict)
                     else item
                 )
                 self.model(prompt, height=height, width=width)
+                pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
+                    calibration_data = calibration_data[:num_samples]
                     break
         finally:
             diffuser.request = diffuser.request.request
+            self.disable_progress_bar(disable=False)
 
         return CalibrationDataset({diffuser_model_name: nncf.Dataset(calibration_data[:num_samples])})
 
@@ -700,3 +705,9 @@ class OVCalibrationDatasetBuilder:
         #  for example there is model.generate()
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
+
+    def disable_progress_bar(self, disable: bool = True) -> None:
+        if not hasattr(self.model, "_progress_bar_config"):
+            self.model._progress_bar_config = {"disable": disable}
+        else:
+            self.model._progress_bar_config["disable"] = disable
