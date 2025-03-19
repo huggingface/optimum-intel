@@ -149,9 +149,9 @@ def init_model_configs():
         "Gemma3ForConditionalGeneration",
     )
 
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = (
-        TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
-    )
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
+        "image-text-to-text"
+    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["video-text-to-text"] = "AutoModelForVision2Seq"
 
