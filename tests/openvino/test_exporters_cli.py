@@ -95,8 +95,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "t5": 0,  # no .model file in the repository
-        "albert": 0,  # not supported yet
+        "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
+        "albert": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
         "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
