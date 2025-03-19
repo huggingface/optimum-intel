@@ -365,7 +365,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
                 if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
                     if library_name == "diffusers":
-                        raise NotImplementedError(f"Mixed precision quantization isn't supported for diffusers.")
+                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
                     wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
                     wc_dtype, q_dtype = self.args.quant_mode.split("_")
