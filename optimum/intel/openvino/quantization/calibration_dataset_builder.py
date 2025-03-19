@@ -645,9 +645,9 @@ class OVCalibrationDatasetBuilder:
 
             # Download audio inputs beforehand to avoid possible connection issues
             num_samples = config.num_samples or 32
-            downloaded_dataset = list(tqdm(dataset, desc="Downloading audio inputs", total=num_samples))
+            dataset = list(tqdm(dataset.take(num_samples), desc="Downloading audio inputs", total=num_samples))
 
-            for item in tqdm(downloaded_dataset, desc="Collecting calibration data"):
+            for item in tqdm(dataset, desc="Collecting calibration data"):
                 audio = item["audio"]["array"]
                 sampling_rate = item["audio"]["sampling_rate"]
                 input_features = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features
