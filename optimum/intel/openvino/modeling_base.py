@@ -459,7 +459,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$",
+                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if kwargs.get("from_onnx", False) else r"model.onnx",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -477,6 +477,7 @@ class OVBaseModel(OptimizedModel):
                         f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
                         "Don't forget to save the resulting model with `.save_pretrained()`"
                     )
+                    _export = False
         except Exception as exception:
             logger.warning(
                 f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
