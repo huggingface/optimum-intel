@@ -1516,18 +1516,16 @@ def get_vlm_text_generation_config(
     return export_config
 
 
-class LlavaConfigBehavior(str, enum.Enum):
+class VLMConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
-class LlavaOpenVINOConfig(OnnxConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaConfigBehavior]
+class BaseVLMOpenVINOConfig(OnnxConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = version.parse("4.37.2")
 
     def __init__(
         self,
@@ -1535,7 +1533,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: LlavaConfigBehavior = LlavaConfigBehavior.VISION_EMBEDDINGS,
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
@@ -1547,26 +1545,22 @@ class LlavaOpenVINOConfig(OnnxConfig):
             preprocessors=preprocessors,
         )
         self._behavior = behavior
-        self._orig_config = config
-        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
-            self._config = config.vision_config
-            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {}
         return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {}
         return {"last_hidden_state": {0: "batch_size"}}
 
     def with_behavior(
         self,
-        behavior: Union[str, LlavaConfigBehavior],
+        behavior: Union[str, VLMConfigBehavior],
     ):
         """
         Creates a config for different behaviour.
@@ -1575,22 +1569,22 @@ class LlavaOpenVINOConfig(OnnxConfig):
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = LlavaConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.text_config.model_type
             return get_vlm_text_embeddings_config(
                 model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
             )
 
-        if behavior == LlavaConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             model_type = self._orig_config.text_config.model_type
             return get_vlm_text_generation_config(
                 model_type, self._orig_config.text_config, self.int_dtype, self.float_dtype
             )
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -1600,17 +1594,17 @@ class LlavaOpenVINOConfig(OnnxConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = LlavaConfigBehavior(behavior)
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             return model.language_model
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
             text_embedding.config = model.language_model.config
             return text_embedding
@@ -1619,12 +1613,49 @@ class LlavaOpenVINOConfig(OnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
         model_kwargs = model_kwargs or {}
-        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return CommonImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+class VLMOpenVINOConfig(BaseVLMOpenVINOConfig):
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+
+@register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
+class LlavaOpenVINOConfig(VLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.37.2")
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return LlavaImageEmbeddingModelPatcher(self, model, model_kwargs)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs) -> Dict:
-        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and self._config.model_type == "pixtral":
             kwargs["batch_size"] = 1
         return super().generate_dummy_inputs(framework, **kwargs)
 
@@ -1741,7 +1772,7 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
         model_kwargs = model_kwargs or {}
-        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior != LlavaNextVideoConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return LlavaNextVideoImageEmbeddingModelPatcher(self, model, model_kwargs)
 
@@ -1754,25 +1785,15 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
     SUPPORTS_PAST = True
 
 
-class InternVLChatConfigBehavior(str, enum.Enum):
-    LANGUAGE = "language"
-    VISION_EMBEDDINGS = "vision_embeddings"
-    TEXT_EMBEDDINGS = "text_embeddings"
-
-
 @register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
-class InternVLChatOpenVINOConfig(OnnxConfig):
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in InternVLChatConfigBehavior]
-    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
-
+class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
     def __init__(
         self,
         config: "PretrainedConfig",
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: InternVLChatConfigBehavior = InternVLChatConfigBehavior.VISION_EMBEDDINGS,
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -1784,25 +1805,13 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         )
         self._behavior = behavior
         self._orig_config = config
-        if self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
-            return {}
-        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
-            return {}
-        return {"last_hidden_state": {0: "batch_size"}}
-
     def with_behavior(
         self,
-        behavior: Union[str, InternVLChatConfigBehavior],
+        behavior: Union[str, VLMConfigBehavior],
     ):
         """
         Creates a config for different behaviour.
@@ -1811,16 +1820,16 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, InternVLChatConfigBehavior):
-            behavior = InternVLChatConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == InternVLChatConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.llm_config.model_type
             return get_vlm_text_embeddings_config(
                 model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
             )
 
-        if behavior == InternVLChatConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             model_type = self._orig_config.llm_config.model_type
             return get_vlm_text_generation_config(
                 model_type,
@@ -1830,7 +1839,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
                 InternVL2ChatLangModelPatcher,
             )
 
-        if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -1841,17 +1850,17 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
             )
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, LlavaConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = InternVLChatConfigBehavior(behavior)
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == InternVLChatConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             return model.language_model
 
-        if behavior == InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
-        if behavior == InternVLChatConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.language_model.get_input_embeddings()
             text_embedding.config = model.language_model.config
             return text_embedding
@@ -1860,7 +1869,7 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
         model_kwargs = model_kwargs or {}
-        if self._behavior != InternVLChatConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return InternVLChatImageEmbeddingModelPatcher(self, model, model_kwargs)
 
@@ -1868,12 +1877,9 @@ class InternVLChatOpenVINOConfig(OnnxConfig):
 @register_in_tasks_manager(
     "llava-qwen2", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
 )
-class LlavaQwen2OpenVINOConfig(OnnxConfig):
+class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTS_PAST = True
     MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaConfigBehavior]
-    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
 
     def __init__(
         self,
@@ -1881,13 +1887,13 @@ class LlavaQwen2OpenVINOConfig(OnnxConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: LlavaConfigBehavior = LlavaConfigBehavior.VISION_EMBEDDINGS,
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
         use_past: bool = False,
     ):
         self._behavior = behavior
         self._orig_config = config
-        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             config = AutoConfig.from_pretrained(config.mm_vision_tower, trust_remote_code=True)
             if hasattr(config, "vision_config"):
                 config = config.vision_config
@@ -1901,36 +1907,36 @@ class LlavaQwen2OpenVINOConfig(OnnxConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {}
         return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {}
         return {"last_hidden_state": {0: "batch_size"}}
 
     @staticmethod
-    def get_model_for_behavior(model, behavior: Union[str, LlavaConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = LlavaConfigBehavior(behavior)
+    def get_model_for_behavior(model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             model.forward = super(type(model), model).forward
             return model
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.model.embed_tokens
             text_embedding.config = model.model.config
             return text_embedding
 
     def with_behavior(
         self,
-        behavior: Union[str, LlavaConfigBehavior],
+        behavior: Union[str, VLMConfigBehavior],
     ):
         """
         Creates a config for different behaviour.
@@ -1938,18 +1944,18 @@ class LlavaQwen2OpenVINOConfig(OnnxConfig):
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = LlavaConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.model_type.replace("llava-", "")
             return get_vlm_text_embeddings_config(model_type, self._orig_config, self.int_dtype, self.float_dtype)
 
-        if behavior == LlavaConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             model_type = self._orig_config.model_type.replace("llava-", "")
             return get_vlm_text_generation_config(model_type, self._orig_config, self.int_dtype, self.float_dtype)
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
                 self._orig_config,
                 task=self.task,
@@ -1963,12 +1969,12 @@ class LlavaQwen2OpenVINOConfig(OnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
         model_kwargs = model_kwargs or {}
-        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return LlavaQwen2ImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
     def rename_ambiguous_inputs(self, inputs):
-        if self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             model_inputs = {}
             model_inputs["images"] = inputs["pixel_values"]
             return model_inputs
@@ -2379,7 +2385,7 @@ class MiniCPMVConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
-class MiniCPMVOpenVINOConfig(OnnxConfig):
+class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = ()
@@ -2543,7 +2549,7 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
 
 
 @register_in_tasks_manager("phi3-v", *["image-text-to-text"], library_name="transformers")
-class Phi3VisionOpenVINOConfig(OnnxConfig):
+class Phi3VisionOpenVINOConfig(VLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi3VisionConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
@@ -2743,7 +2749,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager("qwen2-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
-class Qwen2VLOpenVINOConfig(OnnxConfig):
+class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
@@ -2769,7 +2775,6 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         self._orig_config = config
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
-            self._config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
             self._normalized_config.use_embed_dim = False
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER and hasattr(config, "vision_config"):
@@ -2852,6 +2857,8 @@ class Qwen2VLOpenVINOConfig(OnnxConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2VLVisionEmbMergerPatcher(self, model, model_kwargs)
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+            return ModelPatcher(self, model, model_kwargs=model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
@@ -3038,33 +3045,17 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
 
 
 @register_in_tasks_manager("got-ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
-class GotOCR2OpenVINOConfig(LlavaOpenVINOConfig):
+class GotOCR2OpenVINOConfig(VLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
-        model_kwargs = model_kwargs or {}
-        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
-            return super().patch_model_for_export(model, model_kwargs)
-        return CommonImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
-class Gemma3OpenVINOConfig(LlavaOpenVINOConfig):
+class Gemma3OpenVINOConfig(VLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
-        model_kwargs = model_kwargs or {}
-        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
-            return super().patch_model_for_export(model, model_kwargs)
-        return CommonImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
     def with_behavior(
         self,
-        behavior: Union[str, LlavaConfigBehavior],
+        behavior: Union[str, VLMConfigBehavior],
     ):
         """
         Creates a config for different behaviour.
@@ -3073,10 +3064,10 @@ class Gemma3OpenVINOConfig(LlavaOpenVINOConfig):
             behavior ([`ConfigBehavior`]):
                 The behavior to use for the new instance.
         """
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = LlavaConfigBehavior(behavior)
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             model_type = self._orig_config.text_config.model_type
             return get_vlm_text_generation_config(
                 model_type,
@@ -3119,20 +3110,20 @@ class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
 
 
 @register_in_tasks_manager("idefics3", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
-class Idefics3OpenVINOConfig(LlavaOpenVINOConfig):
+class Idefics3OpenVINOConfig(VLMOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsInputGenerator)
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
         model_kwargs = model_kwargs or {}
-        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return Idefics3ImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if not self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {}
         return {
             "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
@@ -3140,17 +3131,17 @@ class Idefics3OpenVINOConfig(LlavaOpenVINOConfig):
             "patch_position_ids": {0: "batch_size", 1: "num_patches"},
         }
 
-    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
-            behavior = LlavaConfigBehavior(behavior)
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.LANGUAGE:
+        if behavior == VLMConfigBehavior.LANGUAGE:
             return model
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model.model
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.model.text_model.get_input_embeddings()
             text_embedding.config = model.model.text_model.config
             return text_embedding

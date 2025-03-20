@@ -81,6 +81,7 @@ MODEL_NAMES = {
     "granite-moe": "katuni4ka/tiny-random-granite-moe",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
+    "idefics3": "hf-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
     "internvl2": "katuni4ka/tiny-random-internvl2",

@@ -2141,7 +2141,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2"]
+        SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
@@ -2166,6 +2166,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             "qwen2_5_vl",
             "got_ocr2",
             "gemma3",
+            "idefics3"
         ]:
             from transformers import AutoModelForImageTextToText
 
