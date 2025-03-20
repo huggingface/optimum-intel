@@ -26,6 +26,13 @@ class OVQuantizer(metaclass=DummyObject):
         requires_backends(cls, ["openvino", "nncf"])
 
 
+class CalibrationDataset(metaclass=DummyObject):
+    _backends = ["openvino", "nncf"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "nncf"])
+
+
 class OVWeightQuantizationConfig(metaclass=DummyObject):
     _backends = ["openvino", "nncf"]
 
