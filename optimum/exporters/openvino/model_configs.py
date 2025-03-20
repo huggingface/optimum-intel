@@ -88,6 +88,7 @@ from .model_patcher import (
     GptNeoxModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
+    Idefics3ImageEmbeddingsModelPatcher,
     InputEmbeddingPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
@@ -147,6 +148,14 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "gemma3", "image-text-to-text")] = (
         "transformers",
         "Gemma3ForConditionalGeneration",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "idefics3", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "smolvlm", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
     )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
@@ -3078,3 +3087,75 @@ class Gemma3OpenVINOConfig(LlavaOpenVINOConfig):
                 inputs_update={"token_type_ids": {0: "batch_size", 1: "sequence_length"}},
             )
         return super().with_behavior(behavior)
+
+
+class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("patch_attention_mask", "patch_position_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.patch_size = normalized_config.config.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "patch_attention_mask":
+            shape = [self.batch_size, self.height // self.patch_size, self.width // self.patch_size]
+            return self.random_int_tensor(shape, max_value=2, framework=framework, dtype="bool")
+        if input_name == "patch_position_ids":
+            max_nb_patches_h, max_nb_patches_w = self.height // self.patch_size, self.width // self.patch_size
+            shape = [self.batch_size, max_nb_patches_h * max_nb_patches_w]
+            return self.random_int_tensor(
+                shape, max_value=min(max_nb_patches_h, max_nb_patches_w), framework=framework, dtype=int_dtype
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("idefics3", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+class Idefics3OpenVINOConfig(LlavaOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsInputGenerator)
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Idefics3ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if not self._behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {
+            "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+            "patch_attention_mask": {0: "batch_size", 1: "num_height_patches", 2: "num_width_patches"},
+            "patch_position_ids": {0: "batch_size", 1: "num_patches"},
+        }
+
+    def get_model_for_behavior(self, model, behavior: Union[str, LlavaConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
+            behavior = LlavaConfigBehavior(behavior)
+
+        if behavior == LlavaConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
+            return model.model
+
+        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.text_model.get_input_embeddings()
+            text_embedding.config = model.model.text_model.config
+            return text_embedding
+
+
+@register_in_tasks_manager("smolvlm", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
