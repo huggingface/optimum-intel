@@ -364,6 +364,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                     )
 
                 if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
+                    if library_name == "diffusers":
+                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
+
                     wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
                     wc_dtype, q_dtype = self.args.quant_mode.split("_")
                     wc_config["dtype"] = wc_dtype
@@ -421,7 +424,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
                 model_cls = OVSanaPipeline
             else:
-                raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
+                raise NotImplementedError(f"Quantization isn't supported for class {class_name}.")
 
             model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
             model.save_pretrained(self.args.output)
