@@ -29,7 +29,6 @@ from ...utils.import_utils import is_nncf_available
 from ..utils import (
     LANGUAGE_DATASETS,
     PREDEFINED_DIFFUSION_DATASETS,
-    PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
 )
@@ -790,7 +789,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
         if self.dataset is not None:
             speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
-            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
+            stable_diffusion_datasets = list(PREDEFINED_DIFFUSION_DATASETS.keys())
             if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs,
