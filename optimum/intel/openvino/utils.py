@@ -140,10 +140,14 @@ _HEAD_TO_AUTOMODELS = {
 
 LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
 
-PREDEFINED_SD_DATASETS = {
-    "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
-    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
-    "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+PREDEFINED_DIFFUSION_DATASETS = {
+    "conceptual_captions": {"split": "train", "prompt_column_name": "caption", "streaming": True},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {
+        "split": "train",
+        "prompt_column_name": "caption",
+        "streaming": True,
+    },
+    "laion/filtered-wit": {"split": "train", "prompt_column_name": "caption", "streaming": True},
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
@@ -159,7 +163,7 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
         "id": "openslr/librispeech_asr",
         "name": "clean",
         "split": "validation",
-        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
+        "streaming": True,
     }
 }
 
