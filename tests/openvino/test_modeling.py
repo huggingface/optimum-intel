@@ -149,7 +149,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_SD_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_SD_DIFFUSION_MODEL_ID = "katuni4ka/tiny-stable-diffusion-openvino"
         self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
 

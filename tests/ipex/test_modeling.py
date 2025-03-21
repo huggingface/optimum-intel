@@ -483,6 +483,45 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
+    @unittest.skipIf(not is_auto_awq_available(), reason="Test requires autoawq")
+    def test_awq(self):
+        model_id = "PrunaAI/JackFram-llama-68m-AWQ-4bit-smashed"
+        set_seed(SEED)
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        # Test model forward do not need cache.
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False,
+        ).to(DEVICE)
+        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+        outputs = ipex_model(**inputs)
+
+        self.assertIsInstance(outputs.logits, torch.Tensor)
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ipex_model.save_pretrained(tmpdirname)
+            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
+            loaded_model_outputs = loaded_model(**inputs)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**inputs)
+
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=5e-2))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
+
 
 class IPEXModelForAudioClassificationTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForAudioClassification

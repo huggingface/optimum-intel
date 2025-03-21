@@ -95,8 +95,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "t5": 0,  # no .model file in the repository
-        "albert": 0,  # not supported yet
+        "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
+        "albert": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
         "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
         "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "vit": 0,  # no tokenizer for image model
@@ -189,9 +189,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
-            [{"int8": 14}, {"int8": 21}, {"int8": 17}]
-            if is_transformers_version("<=", "4.36.0")
-            else [{"int8": 14}, {"int8": 22}, {"int8": 18}],
+            (
+                [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+                if is_transformers_version("<=", "4.36.0")
+                else [{"int8": 14}, {"int8": 22}, {"int8": 18}]
+            ),
         ),
         (
             "automatic-speech-recognition-with-past",
@@ -199,9 +201,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
             [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
-            [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
-            if is_transformers_version("<=", "4.36.0")
-            else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}],
+            (
+                [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
+                if is_transformers_version("<=", "4.36.0")
+                else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}]
+            ),
         ),
         (
             "text-generation",
@@ -261,6 +265,62 @@ class OVCLIExportTestCase(unittest.TestCase):
             ],
             [
                 {"f8e5m2": 2, "int4": 28},
+            ],
+        ),
+        (
+            "stable-diffusion",
+            "stable-diffusion",
+            "int8",
+            "--dataset conceptual_captions --num-samples 1 --trust-remote-code",
+            [
+                112,
+                0,
+                0,
+                0,
+            ],
+            [
+                {"int8": 121},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 64},
+            ],
+        ),
+        (
+            "stable-diffusion-xl",
+            "stable-diffusion-xl",
+            "f8e5m2",
+            "--dataset laion/220k-GPT4Vision-captions-from-LIVIS --num-samples 1 --trust-remote-code",
+            [
+                174,
+                0,
+                0,
+                0,
+                0,
+            ],
+            [
+                {"f8e5m2": 183},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 64},
+                {"int8": 66},
+            ],
+        ),
+        (
+            "latent-consistency",
+            "latent-consistency",
+            "f8e4m3",
+            "--dataset laion/filtered-wit --num-samples 1 --trust-remote-code",
+            [
+                79,
+                0,
+                0,
+                0,
+            ],
+            [
+                {"f8e4m3": 84},
+                {"int8": 42},
+                {"int8": 34},
+                {"int8": 40},
             ],
         ),
     ]
@@ -709,6 +769,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                     expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
             elif "text-generation" in task:
                 submodels = [model]
+            elif any(x in task for x in ("stable-diffusion", "latent-consistency")):
+                submodels = model.ov_submodels.values()
             else:
                 raise Exception("Unexpected task.")
 

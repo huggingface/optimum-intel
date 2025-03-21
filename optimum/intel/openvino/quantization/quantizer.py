@@ -345,6 +345,16 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 if isinstance(self.model, _OVModelForWhisper):
                     _quantize_whisper_model(self.model, quantization_config, calibration_dataset, **kwargs)
+                elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                    diffusion_model_name, nncf_dataset = next(iter(calibration_dataset.items()))
+                    diffusion_model = getattr(self.model, diffusion_model_name).model
+                    getattr(self.model, diffusion_model_name).model = _full_quantization(
+                        diffusion_model, quantization_config, nncf_dataset, **kwargs
+                    )
+                    sub_models = [v for (k, v) in self.model.ov_submodels.items() if k != diffusion_model_name]
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8), **kwargs)
+                    self.model.clear_requests()
                 else:
                     self.model.model = _full_quantization(
                         self.model.model, quantization_config, calibration_dataset["model"], **kwargs
@@ -353,6 +363,9 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 # Mixed quantization
                 #
+                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                    raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
+
                 self.model.model = _mixed_quantization(
                     self.model.model, quantization_config, calibration_dataset["model"], **kwargs
                 )
