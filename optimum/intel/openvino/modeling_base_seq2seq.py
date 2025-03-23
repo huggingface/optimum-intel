@@ -27,8 +27,8 @@ from transformers.file_utils import add_start_docstrings
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
+from .quantization import OVConfig, OVWeightQuantizationConfig
 from .utils import (
     ONNX_DECODER_NAME,
     ONNX_DECODER_WITH_PAST_NAME,
