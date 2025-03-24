@@ -341,10 +341,10 @@ class OVBaseDecoderModel(OVModel):
             variant=variant,
         )
 
-        if config.model_type == "phi3" and config.max_position_embeddings != getattr(
-            config, "original_max_position_embeddings", config.max_position_embeddings
-        ):
-            config.max_position_embeddings = config.original_max_position_embeddings
+        # if config.model_type == "phi3" and config.max_position_embeddings != getattr(
+        #     config, "original_max_position_embeddings", config.max_position_embeddings
+        # ):
+        #     config.max_position_embeddings = config.original_max_position_embeddings
 
         return cls._from_pretrained(
             model_id=save_dir_path,
