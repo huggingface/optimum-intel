@@ -374,7 +374,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
         )
         # It will be removed when torch 2.6 released
-        if model_arch == "opt" and not use_cache and model.compile and is_torch_version("<", "2.6.0"):
+        if (
+            model_arch == "opt"
+            and not use_cache
+            and getattr(model.config, "compile", False)
+            and is_torch_version("<", "2.6.0")
+        ):
             return
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
