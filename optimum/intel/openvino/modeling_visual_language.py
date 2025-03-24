@@ -3246,6 +3246,7 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
 
 class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/smolvlm/modeling_smolvlm.py#L899-L942
         if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
             return None
         batch_size, num_images, num_channels, height, width = pixel_values.shape
@@ -3304,6 +3305,7 @@ class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
     def merge_vision_text_embeddings(
         self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/idefics3/modeling_idefics3.py#L881
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         vision_hidden_size = image_features.shape[2]
@@ -3353,6 +3355,7 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
     def merge_vision_text_embeddings(
         self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/smolvlm/modeling_smolvlm.py#L803
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         _, patch_size, _ = image_features.shape
@@ -3377,37 +3380,6 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
         inputs_embeds = torch.where(image_mask.unsqueeze(-1), image_embeds, inputs_embeds)
 
         return inputs_embeds, attention_mask, position_ids
-
-    @staticmethod
-    def preprocess_inputs(
-        text: str,
-        image: Optional["Image"] = None,
-        processor: Optional[AutoImageProcessor] = None,
-        tokenizer: Optional[PreTrainedTokenizer] = None,
-        config: Optional[PretrainedConfig] = None,
-        video: Optional["VideoInput"] = None,
-    ):
-        if processor is None:
-            raise ValueError("Processor is required.")
-
-        conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text},
-                ],
-            }
-        ]
-        if image is not None:
-            conversation[0]["content"].insert(0, {"type": "image"})
-
-        if video is not None:
-            conversation[0]["content"].insert(0, {"type": "video"})
-
-        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-
-        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
-        return inputs
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {

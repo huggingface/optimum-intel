@@ -138,6 +138,7 @@ MODEL_NAMES = {
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
+    "smolvlm": "katuni4ka/tiny-random-smolvlm2",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",

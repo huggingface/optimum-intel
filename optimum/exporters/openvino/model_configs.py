@@ -3112,6 +3112,7 @@ class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
 @register_in_tasks_manager("idefics3", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Idefics3OpenVINOConfig(VLMOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsInputGenerator)
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None

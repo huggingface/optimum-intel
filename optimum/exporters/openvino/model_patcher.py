@@ -4528,6 +4528,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/idefics3/modeling_idefics3.py#L999-L1005
         def get_image_features(self, pixel_values, patch_attention_mask, patch_position_ids):
             image_hidden_states = self.vision_model(
                 pixel_values=pixel_values,
@@ -4646,6 +4647,57 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
             embeddings = embeddings + self.position_embedding(position_ids)
             return embeddings
 
+        def attn_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = False,
+        ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+            if output_attentions:
+                return super().forward(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    output_attentions=output_attentions,
+                )
+
+            batch_size, q_len, _ = hidden_states.size()
+
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+            # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+            # Reference: https://github.com/pytorch/pytorch/issues/112577.
+            if query_states.device.type == "cuda" and attention_mask is not None:
+                query_states = query_states.contiguous()
+                key_states = key_states.contiguous()
+                value_states = value_states.contiguous()
+
+            # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+            # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+            is_causal = False
+
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=attention_mask,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=is_causal,
+                scale=self.scale,
+            )
+
+            attn_output = attn_output.transpose(1, 2).contiguous()
+            attn_output = attn_output.view(batch_size, q_len, self.embed_dim)
+
+            attn_output = self.out_proj(attn_output)
+
+            return attn_output, None
+
         self._model.vision_model._orig_forward = self._model.vision_model.forward
         self._model.vision_model.forward = types.MethodType(transformer_forward, self._model.vision_model)
         self._model.vision_model.embeddings._orig_forward = self._model.vision_model.embeddings.forward
@@ -4653,8 +4705,14 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
             embeddings_forward, self._model.vision_model.embeddings
         )
 
+        for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(attn_forward, layer.self_attn)
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
         self._model.vision_model.forward = self._model.vision_model._orig_forward
         self._model.vision_model.embeddings.forward = self._model.vision_model.embeddings._orig_forward
+        for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
