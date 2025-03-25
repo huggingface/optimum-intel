@@ -108,6 +108,7 @@ from .model_patcher import (
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
+    PhiMoEModelPatcher,
     Qwen2_5_VLVisionEmbMergerPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
@@ -726,6 +727,24 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return Phi3ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "phimoe",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return PhiMoEModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
