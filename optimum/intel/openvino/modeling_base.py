@@ -420,7 +420,7 @@ class OVBaseModel(OptimizedModel):
     def from_pretrained(
         cls,
         model_id: Union[str, Path],
-        export: bool = False,
+        export: Optional[bool] = None,
         force_download: bool = False,
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
@@ -445,7 +445,7 @@ class OVBaseModel(OptimizedModel):
             logger.info("Offline mode: forcing local_files_only=True")
             local_files_only = True
 
-        _export = export
+        _export = export or False
         try:
             if local_files_only:
                 object_id = model_id.replace("/", "--")
@@ -459,7 +459,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if not kwargs.get("from_onnx", False) else "*.onnx",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -473,11 +473,13 @@ class OVBaseModel(OptimizedModel):
                     )
                     _export = True
                 else:
-                    logger.warning(
-                        f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
-                        "Don't forget to save the resulting model with `.save_pretrained()`"
-                    )
-                    _export = False
+                    if export is None:
+                        logger.warning(
+                            f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
+                            "Don't forget to save the resulting model with `.save_pretrained()`"
+                        )
+                    else:
+                        _export = False
         except Exception as exception:
             logger.warning(
                 f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"

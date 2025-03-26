@@ -147,7 +147,6 @@ class OVModelIntegrationTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
-        self.ONNX_DECODER_MODEL_ID = "katuni4ka/tiny-random-LlamaForCausalLM-onnx"
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_SD_DIFFUSION_MODEL_ID = "katuni4ka/tiny-stable-diffusion-openvino"
@@ -581,7 +580,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(len(ov_files) == 1)
 
     def test_load_from_hub_onnx_model_and_save(self):
-        model_id = self.ONNX_DECODER_MODEL_ID
+        model_id = "katuni4ka/tiny-random-LlamaForCausalLM-onnx"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForCausalLM.from_pretrained(model_id, from_onnx=True)
