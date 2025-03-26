@@ -147,6 +147,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        self.ONNX_DECODER_MODEL_ID = "katuni4ka/tiny-random-LlamaForCausalLM-onnx"
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_SD_DIFFUSION_MODEL_ID = "katuni4ka/tiny-stable-diffusion-openvino"
@@ -578,6 +579,38 @@ class OVModelIntegrationTest(unittest.TestCase):
             api.snapshot_download(repo_id=model_id, local_dir=local_dir)
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
             self.assertTrue(len(ov_files) == 1)
+
+    def test_load_from_hub_onnx_model_and_save(self):
+        model_id = self.ONNX_DECODER_MODEL_ID
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, from_onnx=True)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(loaded_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
+        loaded_model_outputs = loaded_model(**tokens)
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname)
+            self.assertEqual(model.use_cache, loaded_model.use_cache)
+
+            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
+            outputs = compile_only_model(**tokens)
+            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+            del compile_only_model
+
+        outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        del loaded_model
+        del model
+        gc.collect()
 
 
 class PipelineTest(unittest.TestCase):
