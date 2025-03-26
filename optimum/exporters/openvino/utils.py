@@ -348,8 +348,6 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
     if processor_chat_template is not None:
         tokenizer_chat_template = processor_chat_template
         ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
-    print(tokenizer_chat_template)
-    print(tokenizer_chat_template in COMPLEX_CHAT_TEMPLATES)
     if tokenizer_chat_template is not None and tokenizer_chat_template in COMPLEX_CHAT_TEMPLATES:
         ov_tokenizer_model.set_rt_info(COMPLEX_CHAT_TEMPLATES[tokenizer_chat_template], "simplified_chat_template")
     return ov_tokenizer_model
