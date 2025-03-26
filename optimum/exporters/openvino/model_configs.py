@@ -1618,7 +1618,10 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
         return CommonImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
-class VLMOpenVINOConfig(BaseVLMOpenVINOConfig):
+@register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
+class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.37.2")
+
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -1640,11 +1643,6 @@ class VLMOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
-
-
-@register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
-class LlavaOpenVINOConfig(VLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.37.2")
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -2549,7 +2547,7 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
 
 
 @register_in_tasks_manager("phi3-v", *["image-text-to-text"], library_name="transformers")
-class Phi3VisionOpenVINOConfig(VLMOpenVINOConfig):
+class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi3VisionConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
@@ -3045,13 +3043,57 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
 
 
 @register_in_tasks_manager("got-ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
-class GotOCR2OpenVINOConfig(VLMOpenVINOConfig):
+class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
 
 @register_in_tasks_manager("gemma3", *["image-text-to-text"], library_name="transformers")
-class Gemma3OpenVINOConfig(VLMOpenVINOConfig):
+class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     def with_behavior(
         self,
@@ -3110,9 +3152,31 @@ class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
 
 
 @register_in_tasks_manager("idefics3", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
-class Idefics3OpenVINOConfig(VLMOpenVINOConfig):
+class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsInputGenerator)
     MIN_TRANSFORMERS_VERSION = "4.46.0"
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
