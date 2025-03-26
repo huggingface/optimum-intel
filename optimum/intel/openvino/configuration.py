@@ -71,7 +71,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "bits": 4,
         "sym": True,
         "group_size": 128,
-        "ratio": 0.8,
+        "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
