@@ -68,7 +68,7 @@ jobs:
 
       - name: Install nncf develop
         if: ${{ matrix.nncf == 'nncf-develop' }}
-        run: pip install git+https://github.com/openvinotoolkit/nncf.git
+        run: pip install git+https://github.com/AlexanderDokuchaev/nncf.git@ad/json_fix
 
       - name: Install nncf release
         if: ${{ matrix.nncf == 'nncf-stable' }}
