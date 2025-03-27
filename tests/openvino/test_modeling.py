@@ -2141,13 +2141,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2"]
+        SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
+        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2166,6 +2166,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             "qwen2_5_vl",
             "got_ocr2",
             "gemma3",
+            "idefics3",
+            "smolvlm",
         ]:
             from transformers import AutoModelForImageTextToText
 
