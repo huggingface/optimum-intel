@@ -445,7 +445,7 @@ class OVBaseModel(OptimizedModel):
             logger.info("Offline mode: forcing local_files_only=True")
             local_files_only = True
 
-        _export = export or False
+        _export = export
         try:
             if local_files_only:
                 object_id = model_id.replace("/", "--")
