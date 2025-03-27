@@ -370,14 +370,13 @@ def allow_skip_tracing_check(library_name, model_type):
     return model_type in SKIP_CHECK_TRACE_MODELS
 
 
-
 def load_preprocessors(
     src_name_or_path: Union[str, Path], subfolder: str = "", trust_remote_code: bool = False, model_type: str = None
 ):
     preprocessors = maybe_load_preprocessors(
         src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
-    if model_type == "janus":
+    if model_type.replace("_", "-") == "multi-modality":
         if importlib.util.find_spec("janus") is not None:
             from janus.models import VLChatProcessor
 

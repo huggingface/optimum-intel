@@ -24,7 +24,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling, BaseModelOutputWithPast
+from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -124,7 +124,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 self.lm_head_request = self._compile_model(
                     self.lm_head_model, self._device, self.ov_config, self.model_save_dir
                 )
-
 
     def clear_requests(self):
         if self._compile_only:
@@ -235,11 +234,13 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         if self.lm_head_request is not None:
             last_hidden_state = self.request.get_tensor("last_hidden_state").data
             if include_head:
-                logits = self.lm_head_request(logits)[0]
+                logits = self.lm_head_request(last_hidden_state)[0]
             else:
-                return BaseModelOutputWithPast(torch.from_numpy(last_hidden_state).to(self.device), past_key_values=past_key_values)
+                return BaseModelOutputWithPast(
+                    torch.from_numpy(last_hidden_state).to(self.device), past_key_values=past_key_values
+                )
         else:
-            logits = self.request.get_tensor("logits" if self.lm_head_request is None else "last_hidden_state").data
+            logits = self.request.get_tensor("logits").data
         logits = torch.from_numpy(logits).to(self.device)
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
@@ -416,7 +417,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
         for part in self.additional_parts:
-            if model_part == "lm_head":
+            if part == "lm_head":
                 continue
             model_part = getattr(self, f"{part}_model", None)
             if model_part is not None:
@@ -911,7 +912,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "token_type_ids": kwargs.get("token_type_ids"),
                 "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
                 "images_seq_mask": kwargs.get("images_seq_mask"),
-                "images_emb_mask": kwargs.get("images_emb_mask")
+                "images_emb_mask": kwargs.get("images_emb_mask"),
             }
         )
         return model_inputs
@@ -3549,6 +3550,7 @@ class _OVJanusForCausalLM(OVModelForVisualCausalLM):
         img_size: int = 384,
         patch_size: int = 16,
         generator=None,
+        show_progress=True,
     ):
         from PIL import Image
 
