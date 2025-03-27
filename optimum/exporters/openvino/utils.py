@@ -230,6 +230,8 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen2-5-vl",
     "got-ocr2",
     "gemma3",
+    "idefics3",
+    "smolvlm",
 ]
 
 
