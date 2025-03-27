@@ -420,7 +420,7 @@ class OVBaseModel(OptimizedModel):
     def from_pretrained(
         cls,
         model_id: Union[str, Path],
-        export: Optional[bool] = None,
+        export: bool = False,
         force_download: bool = False,
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
@@ -473,13 +473,10 @@ class OVBaseModel(OptimizedModel):
                     )
                     _export = True
                 else:
-                    if export is None:
-                        logger.warning(
-                            f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
-                            "Don't forget to save the resulting model with `.save_pretrained()`"
-                        )
-                    else:
-                        _export = False
+                    logger.warning(
+                        f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
         except Exception as exception:
             logger.warning(
                 f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
