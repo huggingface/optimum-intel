@@ -1618,69 +1618,10 @@ class Phi3ModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-# Modified from https://huggingface.co/microsoft/Phi-3.5-MoE-instruct/blob/main/modeling_phimoe.py#L1015
-# removed usage nonfriendly for tracing operations: continue and tolist()
+# Modified from https://github.com/huggingface/transformers/blob/v4.50.2/src/transformers/models/phimoe/modeling_phimoe.py#L756
+# removed usage nonfriendly for tracing operation continue
 def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-    def sparsemixer(scores, top_k, jitter_eps, training):
-        assert top_k == 2
-
-        ################ first expert ################
-
-        with torch.no_grad():
-            # compute mask for sparsity
-            mask_logits_threshold, max_ind = scores.max(dim=-1, keepdim=True)
-            factor = scores.abs().clamp(min=mask_logits_threshold)
-            mask_logits_threshold = ((mask_logits_threshold - scores) / factor) > (2 * jitter_eps)
-
-        # apply mask
-        masked_gates = scores.masked_fill(mask_logits_threshold, float("-inf"))
-        if training:
-            selected_experts = (
-                (
-                    masked_gates
-                    - torch.empty_like(masked_gates, memory_format=torch.legacy_contiguous_format).exponential_().log()
-                )
-                .max(dim=-1)[1]
-                .unsqueeze(-1)
-            )  # gumbel sampling, more robust than than the multinomial method
-        else:
-            selected_experts = max_ind
-
-        # compute scores for gradients
-        masked_gates = torch.softmax(masked_gates, dim=-1)
-        multiplier_o = masked_gates.gather(dim=-1, index=selected_experts)
-
-        multiplier = multiplier_o
-
-        # masked out first expert
-        masked_scores = torch.scatter(
-            scores,
-            -1,
-            selected_experts,
-            float("-inf"),
-        )
-        with torch.no_grad():
-            # compute mask for sparsity
-            mask_logits_threshold, max_ind = masked_scores.max(dim=-1, keepdim=True)
-            factor = scores.abs().clamp(min=mask_logits_threshold)
-            mask_logits_threshold = ((mask_logits_threshold - scores) / factor) > (2 * jitter_eps)
-
-        # apply mask
-        masked_gates_top2 = masked_scores.masked_fill(mask_logits_threshold, float("-inf"))
-        selected_experts_top2 = max_ind
-        # compute scores for gradients
-        masked_gates_top2 = torch.softmax(masked_gates_top2, dim=-1)
-        multiplier_top2_o = masked_gates_top2.gather(dim=-1, index=selected_experts_top2)
-
-        multiplier_top2 = multiplier_top2_o
-
-        multiplier = torch.concat((multiplier, multiplier_top2), dim=-1)
-        selected_experts = torch.concat((selected_experts, selected_experts_top2), dim=-1)
-
-        return (
-            multiplier,
-            selected_experts,
-        )
+    from transformers.models.phimoe.modeling_phimoe import sparsemixer
 
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     if self.training and self.input_jitter_noise > 0:
@@ -1688,13 +1629,10 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
             1.0 - self.input_jitter_noise, 1.0 + self.input_jitter_noise
         )
     hidden_states = hidden_states.view(-1, hidden_dim)
-    # router_logits: (batch * sequence_length, n_experts)
-    # print ( 'moe', self.iter, torch.norm(hidden_states).item())
     router_logits = self.gate(hidden_states)
 
     routing_weights, selected_experts = sparsemixer(
         router_logits,
-        top_k=2,
         jitter_eps=self.router_jitter_noise,
         training=self.training,
     )
@@ -1715,15 +1653,11 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
         # if top_x.shape[0] == 0:
         #     continue
 
-        # # in torch it is faster to index using lists than torch tensors
-        top_x_list = top_x  # .tolist()
-        idx_list = idx  # .tolist()
-
         # Index the correct hidden states and compute the expert hidden state for
         # the current expert. We need to make sure to multiply the output hidden
         # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-        current_state = hidden_states[None, top_x_list].reshape(-1, hidden_dim)
-        current_hidden_states = expert_layer(current_state) * routing_weights[top_x_list, idx_list, None]
+        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
 
         # However `index_add_` only support torch tensors for indexing so we'll use
         # the `top_x` tensor here.

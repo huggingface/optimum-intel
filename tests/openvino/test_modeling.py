@@ -1037,7 +1037,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
         "minicpm3",
         "deepseek",
-        "phi3-moe",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

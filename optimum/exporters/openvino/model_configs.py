@@ -741,6 +741,8 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
     library_name="transformers",
 )
 class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
