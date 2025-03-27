@@ -1032,7 +1032,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("granite", "granite-moe")
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
         # openvino 2025.0 required for disabling check_trace
         if is_openvino_version(">=", "2025.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)

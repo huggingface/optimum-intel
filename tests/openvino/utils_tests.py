@@ -126,6 +126,7 @@ MODEL_NAMES = {
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
     "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
+    "phi3-moe": "katuni4ka/phi-3.5-moe-tiny-random",
     "phi3_v": "katuni4ka/tiny-random-phi3-vision",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
