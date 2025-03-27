@@ -4412,6 +4412,8 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
+                if isinstance(legacy_pkv, EncoderDecoderCache):
+                    legacy_pkv = legacy_pkv.to_legacy_cache()
                 only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
                 pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
                 return_legacy_cache = True
