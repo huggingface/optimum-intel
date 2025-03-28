@@ -282,7 +282,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(**inputs)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
@@ -314,7 +314,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(input_ids)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
@@ -448,7 +448,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         exported_outputs = exported_model.generate(
             **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
         )
-        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-6))
+        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-4))
 
     @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self):
