@@ -27,7 +27,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>{'
+    <style>
         table {
             border-collapse: collapse;
             width: 100%;
@@ -56,7 +56,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
             margin-left: 5px;
             display: none;
         }
-    '}</style>
+    </style>
 </head>
 <body>
 
@@ -123,18 +123,15 @@ Quantization is a technique to reduce the computational and memory costs of runn
 </table>
 
 <script>
-function copyCommand(element, command) {
-    navigator.clipboard.writeText(command).then(() => {
-        let notif = document.createElement('span');
-        notif.className = 'notification';
-        notif.textContent = 'Copied!';
-        element.parentNode.appendChild(notif);
-        notif.style.visibility = 'visible';
-        setTimeout(() => {
-            notif.remove();
-        }, 1500);
-    });
-}
+    function copyCommand(element, command) {
+        navigator.clipboard.writeText(command).then(() => {
+            let notification = element.nextElementSibling;
+            notification.style.display = 'inline';
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 1500);
+        });
+    }
 </script>
 
 </body>
