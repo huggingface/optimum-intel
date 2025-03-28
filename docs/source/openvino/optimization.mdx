@@ -21,6 +21,246 @@ limitations under the License.
 
 Quantization is a technique to reduce the computational and memory costs of running inference by representing the weights and / or the activations with lower precision data types like 8-bit or 4-bit.
 
+## Optimization Support Matrix
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+        th, td {
+            border: 1px solid #cccccc;
+            text-align: center;
+            padding: 8px;
+        }
+        th {
+            background-color: #FFD56B;
+        }
+        .sub-header {
+            background-color: #FFEBB7;
+        }
+    </style>
+</head>
+<body>
+
+<table>
+    <thead>
+        <tr>
+            <th rowspan="3">Task<br>(Class)</th>
+            <th colspan="4">Weight-only quantization</th>
+            <th colspan="2" rowspan="2">Hybrid Quantization</th>
+            <th colspan="2" rowspan="2">Full Quantization</th>
+            <th colspan="2" rowspan="2">Mixed Quantization</th>
+        </tr>
+        <tr class="sub-header">
+            <th colspan="2">Data-free</th>
+            <th colspan="2">Data-aware</th>
+        </tr>
+        <tr class="sub-header">
+            <td>CLI</td>
+            <td>Python</td>
+            <td>CLI</td>
+            <td>Python</td>
+            <td>CLI</td>
+            <td>Python</td>
+            <td>CLI</td>
+            <td>Python</td>
+            <td>CLI</td>
+            <td>Python</td>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>text-generation<br>(OVModelForCausalLM)</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 --dataset wikitext2 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4, dataset=\'wikitext2\'))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', group_size=4, dataset=\'wikitext2\'))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'wikitext2\'))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --quant-mode nf4_f8e4m3 --group-size 4 --dataset wikitext2 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\', group_size=4), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))')">
+                    +
+                </button>
+            </td>
+        </tr>
+        <tr>
+            <td>image-text-to-text<br>(OVModelForVisualCausalLM)</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m katuni4ka/tiny-random-phi3-vision --trust-remote-code --weight-format int4 --group-size 4 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'katuni4ka/tiny-random-phi3-vision\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m katuni4ka/tiny-random-phi3-vision --trust-remote-code --weight-format int4 --group-size 4 --dataset contextual --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'katuni4ka/tiny-random-phi3-vision\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4, dataset=\'contextual\', num_samples=1,  trust_remote_code=True))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+        </tr>
+        <tr>
+            <td>text-to-image<br>(OVStableDiffusionPipeline)</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m echarlaix/tiny-random-latent-consistency --weight-format int8 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'echarlaix/tiny-random-latent-consistency\', quantization_config=OVWeightQuantizationConfig(bits=8))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m echarlaix/tiny-random-latent-consistency --weight-format int8 --dataset conceptual_captions --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'echarlaix/tiny-random-latent-consistency\', quantization_config=OVWeightQuantizationConfig(bits=8, quant_method=\'hybrid\', dataset=\'conceptual_captions\', num_samples=1))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m echarlaix/tiny-random-latent-consistency --quant-mode int8 --dataset conceptual_captions --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'echarlaix/tiny-random-latent-consistency\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\', num_samples=1))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
+        </tr>
+        <tr>
+            <td>automatic-speech-recognition<br>(OVModelForSpeechSeq2Seq)</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m yujiepan/whisper-v3-tiny-random --quant-mode int8 --dataset librispeech --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'yujiepan/whisper-v3-tiny-random\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'librispeech\', num_samples=1))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
+        </tr>
+    </tbody>
+</table>
+
+</body>
+</html>
+
+
 ## Weight-only quantization
 
 Quantization can be applied on the model's Linear, Convolutional and Embedding layers, enabling the loading of large models on memory-limited devices. For example, when applying 8-bit quantization, the resulting model will be x4 smaller than its fp32 counterpart. For 4-bit quantization, the reduction in memory could theoretically reach x8, but is closer to x6 in practice.
