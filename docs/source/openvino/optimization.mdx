@@ -45,18 +45,6 @@ Quantization is a technique to reduce the computational and memory costs of runn
         .sub-header {
             background-color: #FFEBB7;
         }
-        .copy-btn {
-            cursor: pointer;
-            background: none;
-            border: none;
-            color: #007acc;
-        }
-        .notification {
-            color: green;
-            font-size: 12px;
-            margin-left: 5px;
-            display: none;
-        }
     </style>
 </head>
 <body>
@@ -91,13 +79,69 @@ Quantization is a technique to reduce the computational and memory costs of runn
         <tr>
             <td>text-generation<br>(OVModelForCausalLM)</td>
             <td>
-                <button class="copy-btn" onclick="copyCommand(this, 'command')">+</button>
-                <span class="notification">Copied!</span>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 ./save_dir')">
+                    +
+                </button>
             </td>
-            <td>+</td><td>+</td><td>+</td>
-            <td>+</td><td>-</td>
-            <td>+</td><td>-</td>
-            <td>+</td><td>+</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 --dataset wikitext2 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4, dataset=\"wikitext2\"))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\"hybrid\", group_size=4, dataset=\"wikitext2\"))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVQuantizationConfig(dtype=\"int8\", dataset=\"wikitext2\"))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --quant-mode nf4_f8e4m3 --group-size 4 --dataset wikitext2 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\"nf4\", group_size=4), OVQuantizationConfig(dtype=\"f8e4m3\", dataset=\"wikitext2\"))')">
+                    +
+                </button>
+            </td>
         </tr>
         <tr>
             <td>image-text-to-text<br>(OVModelForVisualCausalLM)</td>
@@ -122,28 +166,6 @@ Quantization is a technique to reduce the computational and memory costs of runn
         </tr>
     </tbody>
 </table>
-
-<script>
-function copyCommand(element, command) {
-    const textarea = document.createElement('textarea');
-    textarea.value = command;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = 0;
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-        document.execCommand('copy');
-        let notification = element.nextElementSibling;
-        notification.style.display = 'inline';
-        setTimeout(() => {
-            notification.style.display = 'none';
-        }, 1500);
-    } catch (err) {
-        alert('Failed to copy!');
-    }
-    document.body.removeChild(textarea);
-}
-</script>
 
 </body>
 </html>
