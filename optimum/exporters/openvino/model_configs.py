@@ -2769,16 +2769,22 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = 336,
         height: int = 336,
-        crop_size = 336,
+        crop_size=336,
         **kwargs,
     ):
         self.batch_size = batch_size
-        self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"] 
-        self.image_dim_out = normalized_config.config.img_processor["image_dim_out"] if normalized_config.config.img_processor is not None else 1152
+        self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"]
+        self.image_dim_out = (
+            normalized_config.config.img_processor["image_dim_out"]
+            if normalized_config.config.img_processor is not None
+            else 1152
+        )
         self.height = height
         self.width = width
         if "image_embd_layer" in normalized_config.config.embd_layer:
-            self.crop_size = normalized_config.config.embd_layer.get("image_embd_layer", {}).get("crop_size", crop_size)
+            self.crop_size = normalized_config.config.embd_layer.get("image_embd_layer", {}).get(
+                "crop_size", crop_size
+            )
         else:
             self.crop_size = normalized_config.config.embd_layer.get("crop_size", crop_size)
 
@@ -2913,11 +2919,7 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 
 class DummyAudioPhi4MMInputGenerator(DummyInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "audio_input",
-        "audio_feature",
-        "audio_mask"
-    )
+    SUPPORTED_INPUT_NAMES = ("audio_input", "audio_feature", "audio_mask")
 
     def __init__(
         self,
@@ -2930,7 +2932,9 @@ class DummyAudioPhi4MMInputGenerator(DummyInputGenerator):
     ):
         self.batch_size = batch_size
         self.signal_length = signal_length
-        self.audio_chunk_size = signal_length // normalized_config.config.audio_processor["config"]["time_reduction"] + 1
+        self.audio_chunk_size = (
+            signal_length // normalized_config.config.audio_processor["config"]["time_reduction"] + 1
+        )
         self.input_size = normalized_config.config.audio_processor["config"]["input_size"]
         self.attention_dim = normalized_config.config.audio_processor["config"]["attention_dim"]
         self.batch_size = batch_size
@@ -2944,17 +2948,21 @@ class DummyAudioPhi4MMInputGenerator(DummyInputGenerator):
             )
 
         if input_name == "audio_feature":
-            return self.random_float_tensor([self.batch_size, self.audio_chunk_size, self.attention_dim], framework=framework, dtype=float_dtype)
+            return self.random_float_tensor(
+                [self.batch_size, self.audio_chunk_size, self.attention_dim], framework=framework, dtype=float_dtype
+            )
 
         if input_name == "audio_mask":
-            return self.random_int_tensor([self.batch_size, self.audio_chunk_size, self.audio_chunk_size], max_value=2, framework=framework, dtype="bool")
+            return self.random_int_tensor(
+                [self.batch_size, self.audio_chunk_size, self.audio_chunk_size],
+                max_value=2,
+                framework=framework,
+                dtype="bool",
+            )
 
 
 class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "patch_position_ids",
-        "patch_attention_mask"
-    )
+    SUPPORTED_INPUT_NAMES = ("patch_position_ids", "patch_attention_mask")
 
     def __init__(
         self,
@@ -2972,7 +2980,9 @@ class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
         if input_name == "patch_position_ids":
             return self.get_vision_position_ids()
         if input_name == "patch_attention_mask":
-            return self.random_int_tensor([self.batch_size, self.height // 14, self.width // 14], framework=framework, dtype="bool", max_value=2)
+            return self.random_int_tensor(
+                [self.batch_size, self.height // 14, self.width // 14], framework=framework, dtype="bool", max_value=2
+            )
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
     def get_vision_position_ids(self, patch_size=14, num_patches_per_side=32):
@@ -2989,8 +2999,10 @@ class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
             ),
             fill_value=0,
         )
-        patch_attention_mask = torch.ones([self.batch_size, self.height // patch_size, self.width // patch_size], dtype=torch.int64)
-        patch_attention_mask[0, self.height - 2:] = 0
+        patch_attention_mask = torch.ones(
+            [self.batch_size, self.height // patch_size, self.width // patch_size], dtype=torch.int64
+        )
+        patch_attention_mask[0, self.height - 2 :] = 0
 
         for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
             nb_patches_h = p_attn_mask[:, 0].sum()
@@ -3056,17 +3068,17 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS,
             Phi4MMConfigBehavior.AUDIO_ENCODER,
             Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
-            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
         ):
-            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyAudioPhi4MMInputGenerator, )
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyAudioPhi4MMInputGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
             return {
-                "pixel_values": {0: "batch_size", 2: "height", 3: "width"}, 
-                "patch_attention_mask": {0: "batch_size",  1: "patch_height", 2: "patch_width"}, 
-                "patch_position_ids": {0: "batch_size", 1: "patch_size"}
+                "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+                "patch_attention_mask": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
+                "patch_position_ids": {0: "batch_size", 1: "patch_size"},
             }
         if self._behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
             return {"input": {0: "batch_size", 1: "img_feat_size"}}
@@ -3075,22 +3087,28 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             return {"audio_input": {0: "batch_size", 1: "audio_length"}}
 
         if self._behavior == Phi4MMConfigBehavior.AUDIO_ENCODER:
-            return {"audio_feature": {0: "batch_size", 1: "audio_length"}, "audio_mask": {0: "batch_size", 1: "audio_length", 2: "audio_length"}}
+            return {
+                "audio_feature": {0: "batch_size", 1: "audio_length"},
+                "audio_mask": {0: "batch_size", 1: "audio_length", 2: "audio_length"},
+            }
 
-        if self._behavior in [Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION, Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION]:
+        if self._behavior in [
+            Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
+        ]:
             return {"audio_feature": {0: "batch_size", 1: "audio_length"}}
         return {}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior in [
-            Phi4MMConfigBehavior.VISION_EMBEDDINGS, 
-            Phi4MMConfigBehavior.VISION_PROJECTION, 
+            Phi4MMConfigBehavior.VISION_EMBEDDINGS,
+            Phi4MMConfigBehavior.VISION_PROJECTION,
             Phi4MMConfigBehavior.AUDIO_EMBEDDINGS,
             Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS,
             Phi4MMConfigBehavior.AUDIO_ENCODER,
             Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
-            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
         ]:
             return {"last_hidden_state": {0: "batch_size", 1: "projection_size"}}
         return {}
@@ -3112,7 +3130,9 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             return get_vlm_text_embeddings_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Phi4MMConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config("phi3", self._orig_config, self.int_dtype, self.float_dtype, model_patcher=Phi4MMLanguageModelPatcher)
+            return get_vlm_text_generation_config(
+                "phi3", self._orig_config, self.int_dtype, self.float_dtype, model_patcher=Phi4MMLanguageModelPatcher
+            )
 
         if behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -3224,7 +3244,7 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             return audio_encoder
 
         if behavior == Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION:
-            audio_projection =  model.model.embed_tokens_extend.audio_embed.audio_projection["speech"]
+            audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["speech"]
             audio_projection.config = model.config
             return audio_projection
 
@@ -3249,10 +3269,14 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Phi4MMConfigBehavior.AUDIO_EMBEDDINGS:
             input_info = inputs.pop("audio_input")
             inputs["input_"] = input_info
-        if self._behavior in [Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION, Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION]:
+        if self._behavior in [
+            Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
+        ]:
             input_info = inputs.pop("audio_feature")
             inputs["input"] = input_info
         return inputs
+
 
 class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):

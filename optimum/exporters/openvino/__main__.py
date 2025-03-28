@@ -291,7 +291,7 @@ def main_export(
         # some models force flash_attn attention by default that does not support load model on cpu
         if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
-        
+
         if model_type == "phi4mm":
             if "activation_checkpointing" in config.audio_processor["config"]:
                 config.audio_processor["config"]["activation_checkpointing"] = ""
