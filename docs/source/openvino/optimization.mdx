@@ -45,18 +45,6 @@ Quantization is a technique to reduce the computational and memory costs of runn
         .sub-header {
             background-color: #FFEBB7;
         }
-        .copy-btn {
-            cursor: pointer;
-            background: none;
-            border: none;
-            color: #007acc;
-        }
-        .notification {
-            color: green;
-            font-size: 12px;
-            margin-left: 5px;
-            display: none;
-        }
     </style>
 </head>
 <body>
@@ -91,8 +79,11 @@ Quantization is a technique to reduce the computational and memory costs of runn
         <tr>
             <td>text-generation<br>(OVModelForCausalLM)</td>
             <td>
-                <button class="copy-btn" onclick="copyCommand(this, 'optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 ./save_dir')">+</button>
-                <span class="notification">Copied!</span>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('some cli command')">
+                    +
+                </button>
             </td>
             <td>+</td><td>+</td><td>+</td>
             <td>+</td><td>-</td>
@@ -122,6 +113,9 @@ Quantization is a technique to reduce the computational and memory costs of runn
         </tr>
     </tbody>
 </table>
+
+</body>
+</html>
 
 <script>
 function copyCommand(element, command) {
