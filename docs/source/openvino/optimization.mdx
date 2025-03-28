@@ -28,6 +28,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantization Table</title>
     <style>
         table {
             border-collapse: collapse;
@@ -40,10 +41,10 @@ Quantization is a technique to reduce the computational and memory costs of runn
             padding: 8px;
         }
         th {
-            background-color: #add8e6;
+            background-color: #FFD56B;
         }
         .sub-header {
-            background-color: #d9edf7;
+            background-color: #FFEBB7;
         }
     </style>
 </head>
@@ -52,59 +53,57 @@ Quantization is a technique to reduce the computational and memory costs of runn
 <table>
     <thead>
         <tr>
-            <th rowspan="2">Task (Class)</th>
+            <th rowspan="3">Task<br>(Class)</th>
             <th colspan="4">Weight-only quantization</th>
-            <th colspan="2">Hybrid Quantization</th>
-            <th colspan="2">Full Quantization</th>
-            <th colspan="2">Mixed Quantization</th>
+            <th colspan="2" rowspan="2">Hybrid Quantization</th>
+            <th colspan="2" rowspan="2">Full Quantization</th>
+            <th colspan="2" rowspan="2">Mixed Quantization</th>
         </tr>
         <tr class="sub-header">
             <th colspan="2">Data-free</th>
             <th colspan="2">Data-aware</th>
-            <th rowspan="1">CLI</th>
-            <th rowspan="1">Python API</th>
-            <th rowspan="1">CLI</th>
-            <th rowspan="1">Python API</th>
-            <th rowspan="1">CLI</th>
-            <th rowspan="1">Python API</th>
         </tr>
         <tr class="sub-header">
-            <td></td>
             <td>CLI</td>
             <td>Python API</td>
             <td>CLI</td>
             <td>Python API</td>
-            <td colspan="6"></td>
+            <td>CLI</td>
+            <td>Python API</td>
+            <td>CLI</td>
+            <td>Python API</td>
+            <td>CLI</td>
+            <td>Python API</td>
         </tr>
     </thead>
     <tbody>
         <tr>
-            <td>text-generation (OVModelForCausalLM)</td>
+            <td>text-generation<br>(OVModelForCausalLM)</td>
             <td>+</td><td>+</td><td>+</td><td>+</td>
-            <td>-</td><td>-</td>
-            <td>+</td><td>+</td>
+            <td>+</td><td>-</td>
+            <td>+</td><td>-</td>
             <td>+</td><td>+</td>
         </tr>
         <tr>
-            <td>image-text-to-text (OVModelForVisualCausalLM)</td>
+            <td>image-text-to-text<br>(OVModelForVisualCausalLM)</td>
             <td>+</td><td>+</td><td>+</td><td>+</td>
-            <td>-</td><td>-</td>
+            <td>+</td><td>-</td>
             <td>-</td><td>-</td>
             <td>-</td><td>-</td>
         </tr>
         <tr>
-            <td>text-to-image (OVStableDiffusionPipeline)</td>
-            <td>+</td><td>+</td><td>-</td><td>-</td>
-            <td>-</td><td>-</td>
-            <td>+</td><td>+</td>
-            <td>-</td><td>-</td>
+            <td>text-to-image<br>(OVStableDiffusionPipeline)</td>
+            <td>+</td><td>-</td><td>-</td><td>-</td>
+            <td>+</td><td>-</td>
+            <td>-</td><td>+</td>
+            <td>+</td><td>-</td>
         </tr>
         <tr>
-            <td>automatic-speech-recognition (OVModelForSpeechSeq2Seq)</td>
+            <td>automatic-speech-recognition<br>(OVModelForSpeechSeq2Seq)</td>
             <td>-</td><td>-</td><td>-</td><td>-</td>
             <td>-</td><td>-</td>
-            <td>+</td><td>+</td>
-            <td>-</td><td>-</td>
+            <td>-</td><td>+</td>
+            <td>+</td><td>-</td>
         </tr>
     </tbody>
 </table>
