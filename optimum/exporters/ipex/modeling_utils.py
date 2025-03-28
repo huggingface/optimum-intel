@@ -159,7 +159,9 @@ def _llama_model_forward(
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         # TODO: remove this WA after IPEX 2.7
         if device.type == "xpu":
-            position_embeddings = (cos.transpose(0, 1), sin.transpose(0, 1))
+            cos = cos.reshape(-1, cos.shape[-1])
+            sin = sin.reshape(-1, sin.shape[-1])
+            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -290,7 +292,9 @@ def _falcon_model_forward(
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         # TODO: remove this WA after IPEX 2.7
         if device.type == "xpu":
-            position_embeddings = (cos.transpose(0, 1), sin.transpose(0, 1))
+            cos = cos.reshape(-1, cos.shape[-1])
+            sin = sin.reshape(-1, sin.shape[-1])
+            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -571,7 +575,9 @@ def _qwen2_model_forward(
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         # TODO: remove this WA after IPEX 2.7
         if device.type == "xpu":
-            position_embeddings = (cos.transpose(0, 1), sin.transpose(0, 1))
+            cos = cos.reshape(-1, cos.shape[-1])
+            sin = sin.reshape(-1, sin.shape[-1])
+            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
         attention_mask = causal_mask
