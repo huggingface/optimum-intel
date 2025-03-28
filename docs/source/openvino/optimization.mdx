@@ -23,6 +23,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
 
 ## Optimization Support Matrix
 
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -123,15 +124,25 @@ Quantization is a technique to reduce the computational and memory costs of runn
 </table>
 
 <script>
-    function copyCommand(element, command) {
-        navigator.clipboard.writeText(command).then(() => {
-            let notification = element.nextElementSibling;
-            notification.style.display = 'inline';
-            setTimeout(() => {
-                notification.style.display = 'none';
-            }, 1500);
-        });
+function copyCommand(element, command) {
+    const textarea = document.createElement('textarea');
+    textarea.value = command;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = 0;
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        let notification = element.nextElementSibling;
+        notification.style.display = 'inline';
+        setTimeout(() => {
+            notification.style.display = 'none';
+        }, 1500);
+    } catch (err) {
+        alert('Failed to copy!');
     }
+    document.body.removeChild(textarea);
+}
 </script>
 
 </body>
