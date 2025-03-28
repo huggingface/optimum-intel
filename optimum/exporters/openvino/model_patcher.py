@@ -4783,26 +4783,35 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         for layer in self._model.vision_model.encoder.layers:
             layer.self_attn.forward = layer.self_attn._orig_forward
 
+
 class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Optional[Dict[str, Any]] = None
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if hasattr(model.config, "vision_lora") and model.config.vision_lora is not None:
             model.set_lora_adapter("vision")
         if hasattr(model.config, "speech_lora") and model.config.speech_lora is not None:
             model.set_lora_adapter("speech")
+
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
-            outputs = self.model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, use_cache=True, past_key_values=pkv)
+            outputs = self.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=pkv,
+            )
             hidden_states = outputs[0]
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
             logits = self.lm_head(hidden_states)
             return (logits, outputs.past_key_values.to_legacy_cache())
+
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
         super().__init__(config, model, model_kwargs)
@@ -4817,9 +4826,8 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
         self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Optional[Dict[str, Any]] = None
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-
         def forward(self, audio_input):
             audio_input, masks = self._forward_embeddings_core(audio_input, None)
             return audio_input
@@ -4838,7 +4846,7 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
         self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Optional[Dict[str, Any]] = None
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         def forward(self, audio_feature, audio_mask):
             relative_attention_bias = self.init_relative_attention_bias(audio_feature)
@@ -4872,9 +4880,11 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Optional[Dict[str, Any]] = None
+        model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        def get_img_features(self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None) -> torch.FloatTensor:
+        def get_img_features(
+            self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None
+        ) -> torch.FloatTensor:
             LAYER_IDX = self.layer_idx
             TYPE_FEATURE = self.type_feature
 
@@ -4882,18 +4892,28 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                 with torch.no_grad():
                     if patch_attention_mask is not None:
                         img_processor_output = self.img_processor(
-                            pixel_values, output_hidden_states=True, patch_attention_mask=patch_attention_mask, position_ids=patch_position_ids
+                            pixel_values,
+                            output_hidden_states=True,
+                            patch_attention_mask=patch_attention_mask,
+                            position_ids=patch_position_ids,
                         )
                     else:
-                        img_processor_output = self.img_processor(pixel_values, output_hidden_states=True, position_ids=patch_position_ids)
+                        img_processor_output = self.img_processor(
+                            pixel_values, output_hidden_states=True, position_ids=patch_position_ids
+                        )
                     img_feature = img_processor_output.hidden_states[LAYER_IDX]
             else:
                 if patch_attention_mask is not None:
                     img_processor_output = self.img_processor(
-                        pixel_values, output_hidden_states=True, patch_attention_mask=patch_attention_mask, position_ids=patch_position_ids
+                        pixel_values,
+                        output_hidden_states=True,
+                        patch_attention_mask=patch_attention_mask,
+                        position_ids=patch_position_ids,
                     )
                 else:
-                    img_processor_output = self.img_processor(pixel_values, output_hidden_states=True, position_ids=patch_position_ids)
+                    img_processor_output = self.img_processor(
+                        pixel_values, output_hidden_states=True, position_ids=patch_position_ids
+                    )
                 img_feature = img_processor_output.hidden_states[LAYER_IDX]
 
             if TYPE_FEATURE == "patch":
@@ -4909,7 +4929,9 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                     patch_feature = self.image_token_compression(patch_feature)
                     # convert to NHWC
                     patch_feature = patch_feature.permute(0, 2, 3, 1)
-                    patch_feature = patch_feature.view(-1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1))
+                    patch_feature = patch_feature.view(
+                        -1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1)
+                    )
                 elif getattr(self, "img_processor_padding", None) is not None:
                     width = int(math.sqrt(patch_feature.size(1)))
                     patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
@@ -4918,7 +4940,9 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                     patch_feature = self.img_processor_padding(patch_feature)
                     # convert to NHWC
                     patch_feature = patch_feature.permute(0, 2, 3, 1)
-                    patch_feature = patch_feature.view(-1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1))
+                    patch_feature = patch_feature.view(
+                        -1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1)
+                    )
                 return patch_feature
 
             if TYPE_FEATURE == "cls_patch":
@@ -4939,6 +4963,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
 
     def __enter__(self):
         super().__enter__()
+
         def transformer_fwd(
             self,
             pixel_values,
@@ -4951,7 +4976,9 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
             from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-            output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states = (
+                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            )
             return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
             batch_size = pixel_values.size(0)
@@ -4966,7 +4993,9 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                     device=pixel_values.device,
                 )
 
-            hidden_states = self.embeddings(pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, position_ids=position_ids)
+            hidden_states = self.embeddings(
+                pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, position_ids=position_ids
+            )
 
             patch_attention_mask = patch_attention_mask.view(batch_size, -1)
             # The call to `_upad_input` in `_flash_attention_forward` is expensive
@@ -5009,7 +5038,6 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
             attention_mask: Optional[torch.Tensor] = None,
             output_attentions: Optional[bool] = False,
         ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-
             if output_attentions:
                 return super().forward(
                     hidden_states=hidden_states,
@@ -5054,7 +5082,12 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
 
             return attn_output, None
 
-        def embd_forward(self, pixel_values: torch.FloatTensor, patch_attention_mask: torch.BoolTensor, position_ids: torch.FloatTensor = None) -> torch.Tensor:
+        def embd_forward(
+            self,
+            pixel_values: torch.FloatTensor,
+            patch_attention_mask: torch.BoolTensor,
+            position_ids: torch.FloatTensor = None,
+        ) -> torch.Tensor:
             batch_size = pixel_values.size(0)
 
             patch_embeds = self.patch_embedding(pixel_values)
@@ -5096,7 +5129,9 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         self._model.img_processor._orig_forward = self._model.img_processor.forward
         self._model.img_processor.forward = types.MethodType(transformer_fwd, self._model.img_processor)
         self._model.img_processor.embeddings._orig_forward = self._model.img_processor.embeddings.forward
-        self._model.img_processor.embeddings.forward = types.MethodType(embd_forward, self._model.img_processor.embeddings)
+        self._model.img_processor.embeddings.forward = types.MethodType(
+            embd_forward, self._model.img_processor.embeddings
+        )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -5104,4 +5139,4 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         for layer in self._model.img_processor.encoder.layers:
             layer.self_attn.forward = layer.self_attn._orig_forward
         self._model.img_processor.forward = self._model.img_processor._orig_forward
-        self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward 
+        self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward
