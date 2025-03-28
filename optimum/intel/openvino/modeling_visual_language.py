@@ -376,6 +376,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        lm_head: Optional[ov.Model] = None,
         **kwargs,
     ):
         self.config = config
@@ -3672,5 +3673,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "gemma3": _OVGemma3ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
-    "multi_modality": _OVJanusForCausalLM
+    "multi_modality": _OVJanusForCausalLM,
 }
