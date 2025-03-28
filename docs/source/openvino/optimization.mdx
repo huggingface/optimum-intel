@@ -88,7 +88,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
             <td>
                 <button
                     style="color: blue;"
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4))')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4))')">
                     +
                 </button>
             </td>
@@ -102,7 +102,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
             <td>
                 <button
                     style="color: blue;"
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4, dataset=\"wikitext2\"))')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4, dataset=\'wikitext2\'))')">
                     +
                 </button>
             </td>
@@ -110,7 +110,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
             <td>
                 <button
                     style="color: blue;"
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\"hybrid\", group_size=4, dataset=\"wikitext2\"))')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', group_size=4, dataset=\'wikitext2\'))')">
                     +
                 </button>
             </td>
@@ -124,7 +124,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
             <td>
                 <button
                     style="color: blue;"
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVQuantizationConfig(dtype=\"int8\", dataset=\"wikitext2\"))')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'wikitext2\'))')">
                     +
                 </button>
             </td>
@@ -138,31 +138,121 @@ Quantization is a technique to reduce the computational and memory costs of runn
             <td>
                 <button
                     style="color: blue;"
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\"HuggingFaceH4/tiny-random-LlamaForCausalLM\", quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\"nf4\", group_size=4), OVQuantizationConfig(dtype=\"f8e4m3\", dataset=\"wikitext2\"))')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'HuggingFaceH4/tiny-random-LlamaForCausalLM\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\', group_size=4), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))')">
                     +
                 </button>
             </td>
         </tr>
         <tr>
             <td>image-text-to-text<br>(OVModelForVisualCausalLM)</td>
-            <td>+</td><td>+</td><td>+</td><td>+</td>
-            <td>+</td><td>-</td>
-            <td>-</td><td>-</td>
-            <td>-</td><td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m katuni4ka/tiny-random-phi3-vision --trust-remote-code --weight-format int4 --group-size 4 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'katuni4ka/tiny-random-phi3-vision\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m katuni4ka/tiny-random-phi3-vision --trust-remote-code --weight-format int4 --group-size 4 --dataset contextual --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'katuni4ka/tiny-random-phi3-vision\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, group_size=4, dataset=\'contextual\', num_samples=1,  trust_remote_code=True))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
         </tr>
         <tr>
             <td>text-to-image<br>(OVStableDiffusionPipeline)</td>
-            <td>+</td><td>-</td><td>-</td><td>-</td>
-            <td>+</td><td>-</td>
-            <td>-</td><td>+</td>
-            <td>+</td><td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m echarlaix/tiny-random-latent-consistency --weight-format int8 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'echarlaix/tiny-random-latent-consistency\', quantization_config=OVWeightQuantizationConfig(bits=8))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m echarlaix/tiny-random-latent-consistency --weight-format int8 --dataset conceptual_captions --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'echarlaix/tiny-random-latent-consistency\', quantization_config=OVWeightQuantizationConfig(bits=8, quant_method=\'hybrid\', dataset=\'conceptual_captions\', num_samples=1))')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m echarlaix/tiny-random-latent-consistency --quant-mode int8 --dataset conceptual_captions --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'echarlaix/tiny-random-latent-consistency\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\', num_samples=1))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
         </tr>
         <tr>
             <td>automatic-speech-recognition<br>(OVModelForSpeechSeq2Seq)</td>
-            <td>-</td><td>-</td><td>-</td><td>-</td>
-            <td>-</td><td>-</td>
-            <td>-</td><td>+</td>
-            <td>+</td><td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m yujiepan/whisper-v3-tiny-random --quant-mode int8 --dataset librispeech --num-samples 1 ./save_dir')">
+                    +
+                </button>
+            </td>
+            <td>
+                <button
+                    style="color: blue;"
+                    onclick="navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'yujiepan/whisper-v3-tiny-random\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'librispeech\', num_samples=1))')">
+                    +
+                </button>
+            </td>
+            <td>-</td>
+            <td>-</td>
         </tr>
     </tbody>
 </table>
