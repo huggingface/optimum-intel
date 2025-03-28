@@ -634,6 +634,13 @@ class _IPEXAttention(nn.Module):
 
     def rope(self, query, key, **kwargs):
         position_embeddings = kwargs.pop("position_embeddings", None)
+        # TODO: remove this WA after IPEX 2.7
+        if self.module_device.type == "xpu":
+            cos = position_embeddings[0]
+            sin = position_embeddings[1]
+            cos = cos.reshape(-1, cos.shape[-1])
+            sin = sin.reshape(-1, sin.shape[-1])
+            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
         rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
         return query, key
 
