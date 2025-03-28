@@ -21,6 +21,98 @@ limitations under the License.
 
 Quantization is a technique to reduce the computational and memory costs of running inference by representing the weights and / or the activations with lower precision data types like 8-bit or 4-bit.
 
+## Optimization Support Matrix
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+        th, td {
+            border: 1px solid #cccccc;
+            text-align: center;
+            padding: 8px;
+        }
+        th {
+            background-color: #add8e6;
+        }
+        .sub-header {
+            background-color: #d9edf7;
+        }
+    </style>
+</head>
+<body>
+
+<table>
+    <thead>
+        <tr>
+            <th rowspan="2">Task (Class)</th>
+            <th colspan="4">Weight-only quantization</th>
+            <th colspan="2">Hybrid Quantization</th>
+            <th colspan="2">Full Quantization</th>
+            <th colspan="2">Mixed Quantization</th>
+        </tr>
+        <tr class="sub-header">
+            <th colspan="2">Data-free</th>
+            <th colspan="2">Data-aware</th>
+            <th rowspan="1">CLI</th>
+            <th rowspan="1">Python API</th>
+            <th rowspan="1">CLI</th>
+            <th rowspan="1">Python API</th>
+            <th rowspan="1">CLI</th>
+            <th rowspan="1">Python API</th>
+        </tr>
+        <tr class="sub-header">
+            <td></td>
+            <td>CLI</td>
+            <td>Python API</td>
+            <td>CLI</td>
+            <td>Python API</td>
+            <td colspan="6"></td>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>text-generation (OVModelForCausalLM)</td>
+            <td>+</td><td>+</td><td>+</td><td>+</td>
+            <td>-</td><td>-</td>
+            <td>+</td><td>+</td>
+            <td>+</td><td>+</td>
+        </tr>
+        <tr>
+            <td>image-text-to-text (OVModelForVisualCausalLM)</td>
+            <td>+</td><td>+</td><td>+</td><td>+</td>
+            <td>-</td><td>-</td>
+            <td>-</td><td>-</td>
+            <td>-</td><td>-</td>
+        </tr>
+        <tr>
+            <td>text-to-image (OVStableDiffusionPipeline)</td>
+            <td>+</td><td>+</td><td>-</td><td>-</td>
+            <td>-</td><td>-</td>
+            <td>+</td><td>+</td>
+            <td>-</td><td>-</td>
+        </tr>
+        <tr>
+            <td>automatic-speech-recognition (OVModelForSpeechSeq2Seq)</td>
+            <td>-</td><td>-</td><td>-</td><td>-</td>
+            <td>-</td><td>-</td>
+            <td>+</td><td>+</td>
+            <td>-</td><td>-</td>
+        </tr>
+    </tbody>
+</table>
+
+</body>
+</html>
+
+
 ## Weight-only quantization
 
 Quantization can be applied on the model's Linear, Convolutional and Embedding layers, enabling the loading of large models on memory-limited devices. For example, when applying 8-bit quantization, the resulting model will be x4 smaller than its fp32 counterpart. For 4-bit quantization, the reduction in memory could theoretically reach x8, but is closer to x6 in practice.
