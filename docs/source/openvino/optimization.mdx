@@ -28,6 +28,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantization Table</title>
     <style>
         table {
             border-collapse: collapse;
@@ -78,14 +79,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
     <tbody>
         <tr>
             <td>text-generation<br>(OVModelForCausalLM)</td>
-            <td>
-                <button
-                    style="color: blue;"
-                    onclick="navigator.clipboard.writeText('some cli command')">
-                    +
-                </button>
-            </td>
-            <td>+</td><td>+</td><td>+</td>
+            <td><button onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 ./save_dir')">+</button></td><td>+</td><td>+</td><td>+</td>
             <td>+</td><td>-</td>
             <td>+</td><td>-</td>
             <td>+</td><td>+</td>
