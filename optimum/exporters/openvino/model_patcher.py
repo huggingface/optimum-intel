@@ -4783,7 +4783,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         for layer in self._model.vision_model.encoder.layers:
             layer.self_attn.forward = layer.self_attn._orig_forward
 
-lass Phi4MMLanguageModelPatcher(DecoderModelPatcher):
+class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
