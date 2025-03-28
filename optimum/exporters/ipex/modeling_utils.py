@@ -144,19 +144,22 @@ def _llama_model_forward(
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
     max_input_lens = input_lens.max()
+    cos = position_embeddings[0]
+    sin = position_embeddings[1]
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
         index = attention_mask.view(-1) != 0
         hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        cos = position_embeddings[0]
-        sin = position_embeddings[1]
         cos = (cos.reshape(-1, cos.shape[-1]))[index]
         sin = (sin.reshape(-1, sin.shape[-1]))[index]
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        # TODO: remove this WA after IPEX 2.7
+        if device.type == "xpu":
+            position_embeddings = (cos.transpose(0, 1), sin.transpose(0, 1))
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -272,19 +275,22 @@ def _falcon_model_forward(
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
     max_input_lens = input_lens.max()
+    cos = position_embeddings[0]
+    sin = position_embeddings[1]
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
         index = attention_mask.view(-1) != 0
         hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        cos = position_embeddings[0]
-        sin = position_embeddings[1]
         cos = (cos.reshape(-1, cos.shape[-1]))[index]
         sin = (sin.reshape(-1, sin.shape[-1]))[index]
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        # TODO: remove this WA after IPEX 2.7
+        if device.type == "xpu":
+            position_embeddings = (cos.transpose(0, 1), sin.transpose(0, 1))
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -550,19 +556,22 @@ def _qwen2_model_forward(
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
     max_input_lens = input_lens.max()
+    cos = position_embeddings[0]
+    sin = position_embeddings[1]
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
         index = attention_mask.view(-1) != 0
         hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        cos = position_embeddings[0]
-        sin = position_embeddings[1]
         cos = (cos.reshape(-1, cos.shape[-1]))[index]
         sin = (sin.reshape(-1, sin.shape[-1]))[index]
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     else:
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        # TODO: remove this WA after IPEX 2.7
+        if device.type == "xpu":
+            position_embeddings = (cos.transpose(0, 1), sin.transpose(0, 1))
 
     if past_key_values is None:
         attention_mask = causal_mask
@@ -634,13 +643,6 @@ class _IPEXAttention(nn.Module):
 
     def rope(self, query, key, **kwargs):
         position_embeddings = kwargs.pop("position_embeddings", None)
-        # TODO: remove this WA after IPEX 2.7
-        if self.module_device.type == "xpu":
-            cos = position_embeddings[0]
-            sin = position_embeddings[1]
-            cos = cos.reshape(-1, cos.shape[-1])
-            sin = sin.reshape(-1, sin.shape[-1])
-            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
         rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
         return query, key
 
