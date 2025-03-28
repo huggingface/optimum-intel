@@ -23,13 +23,11 @@ Quantization is a technique to reduce the computational and memory costs of runn
 
 ## Optimization Support Matrix
 
-<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quantization Table</title>
-    <style>
+    <style>{'
         table {
             border-collapse: collapse;
             width: 100%;
@@ -46,7 +44,19 @@ Quantization is a technique to reduce the computational and memory costs of runn
         .sub-header {
             background-color: #FFEBB7;
         }
-    </style>
+        .copy-btn {
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: #007acc;
+        }
+        .notification {
+            color: green;
+            font-size: 12px;
+            margin-left: 5px;
+            display: none;
+        }
+    '}</style>
 </head>
 <body>
 
@@ -79,7 +89,11 @@ Quantization is a technique to reduce the computational and memory costs of runn
     <tbody>
         <tr>
             <td>text-generation<br>(OVModelForCausalLM)</td>
-            <td><button onclick="navigator.clipboard.writeText('optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 ./save_dir')">+</button></td><td>+</td><td>+</td><td>+</td>
+            <td>
+                <button class="copy-btn" onclick="copyCommand(this, 'optimum-cli export openvino -m HuggingFaceH4/tiny-random-LlamaForCausalLM --weight-format int4 --group-size 4 ./save_dir')">+</button>
+                <span class="notification">Copied!</span>
+            </td>
+            <td>+</td><td>+</td><td>+</td>
             <td>+</td><td>-</td>
             <td>+</td><td>-</td>
             <td>+</td><td>+</td>
@@ -107,6 +121,21 @@ Quantization is a technique to reduce the computational and memory costs of runn
         </tr>
     </tbody>
 </table>
+
+<script>
+function copyCommand(element, command) {
+    navigator.clipboard.writeText(command).then(() => {
+        let notif = document.createElement('span');
+        notif.className = 'notification';
+        notif.textContent = 'Copied!';
+        element.parentNode.appendChild(notif);
+        notif.style.visibility = 'visible';
+        setTimeout(() => {
+            notif.remove();
+        }, 1500);
+    });
+}
+</script>
 
 </body>
 </html>
