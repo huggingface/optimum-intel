@@ -332,11 +332,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "audio_forward_embeddings": OVAudioEmbeddings,
     "audio_encoder": OVAudioEncoder,
     "audio_vision_projection": OVAudioEmbeddings,
-<<<<<<< HEAD
     "audio_speech_projection": OVAudioEmbeddings,
-=======
-    "audio_speech_projection": OVAudioEmbeddings
->>>>>>> WIP
 }
 
 
@@ -874,7 +870,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_inputs = {"input_ids": input_ids}
 
         if pixel_values is None:
+<<<<<<< HEAD
             pixel_values = kwargs.get("input_image_embeds", kwargs.get("images"))
+=======
+            pixel_values = kwargs.get("input_image_embeds" if "input_image_embeds" in kwargs else "images")
+>>>>>>> model inference
 
         model_inputs.update(
             {
@@ -4231,6 +4231,582 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             )
         inputs = processor(text=text, images=image, audios=audio, return_tensors="pt")
         return inputs
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(language_model, text_embeddings, vision_embeddings, config, device, dynamic_shapes, ov_config, model_save_dir, quantization_config, **kwargs)
+        self.sub_GN = torch.tensor(self.config.sub_GN)
+        self.glb_GN = torch.tensor(self.config.glb_GN)
+        self.chunk_size = -1
+        self.left_chunk = 18
+        self.time_reduction = 8
+        self._IMAGE_SPECIAL_TOKEN_ID = 200010  # '<|endoftext10|>', or we can better name it (in `tokenizer_config.json`)
+        self._AUDIO_SPECIAL_TOKEN_ID = 200011  # '<|endoftext11|>'
+        self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE = [-9999, -1]  # For backward compatibility
+        self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE = [float("-inf"), -10000]  # For backward compatibility
+
+    def image_embed(self, input_ids: torch.LongTensor, input_embeds: torch.FloatTensor, image_sizes=None, **kwargs):
+        if isinstance(input_ids, tuple):
+            # # pipeline parallel
+            input_ids, input_embeds = input_ids
+
+        img_embeds = input_embeds
+        if image_sizes is None and "image_sizes" in kwargs:
+            image_sizes = kwargs["image_sizes"]
+        img_sizes = image_sizes
+        if "image_attention_mask" in kwargs:
+            image_attention_mask = kwargs["image_attention_mask"]
+        else:
+            image_attention_mask = None
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+
+        with torch.no_grad():
+            positions = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=False)
+            positions_tuple = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=True)
+
+        # logger.info(f'position size: {positions.size()} ...')
+        select = False
+        hd_transform = False
+        if len(positions.tolist()) > 0:
+            if self.config.embd_layer["image_embd_layer"]["use_hd_transform"] and img_sizes is not None and len(img_sizes):
+                hd_transform = True
+                assert img_embeds.ndim == 5, f"(branch 1) img_embeds size: {img_embeds.size()}, expect 5D tensor for hd transform"
+                # img_embeds: (num_images, max_num_crops, 3, H, W)
+                # img_sizes: (num_images, 2).view(1, -1)
+
+                bs = img_embeds.shape[0]
+                pixel_values = img_embeds.flatten(0, 1)
+                patch_attn_mask = image_attention_mask.type(torch.BoolTensor).flatten(0, 1)
+                v_position_ids = self.get_vision_position_ids(pixel_values, patch_attn_mask)
+                # Nx(HW)xC
+                img_features = torch.from_numpy(self.vision_embedings([pixel_values, patch_attn_mask, v_position_ids]))
+
+                base_feat_height_target = self.config.base_vision_feat_height_target
+                base_resolution = self.config.crop_size
+                base_feat_height_reduction = self.config.base_vision_feat_height_reduction
+
+                base_feat_height = base_feat_width = int(np.sqrt(img_features.shape[1]))
+
+                assert (
+                    base_feat_height == base_feat_height_target and base_feat_width == base_feat_height_target
+                ), f"base_feat_height: {base_feat_height}, base_feat_width: {base_feat_width}, expect {base_feat_height_target} features for hd transform"
+
+                # bs x max_num_crops x (24x24) x C
+                img_features = img_features.view(bs, -1, base_feat_height * base_feat_width, self.config.image_dim_out)
+                C = self.config.image_dim_out
+                H = base_feat_height
+
+                output_imgs = []
+                output_len = []
+                # training is tensor, inference is list
+                if isinstance(img_sizes, torch.Tensor):
+                    img_sizes = img_sizes.view(-1, 2)
+                for _bs in range(bs):
+                    h, w = img_sizes[_bs]
+                    h = h // base_resolution
+                    w = w // base_resolution
+                    B_ = h * w
+
+                    # 1 x (24x24) x 1024
+                    global_img_feature = img_features[_bs, :1]
+
+                    # 1 x 12 x 12 x 4096
+                    glb_img = (
+                        global_img_feature.reshape(1, H, H, C)
+                        .reshape(1, H // base_feat_height_reduction, base_feat_height_reduction, H // base_feat_height_reduction, base_feat_height_reduction, C)
+                        .contiguous()
+                        .permute(0, 1, 3, 2, 4, 5)
+                        .reshape(
+                            1, H // base_feat_height_reduction, H // base_feat_height_reduction, base_feat_height_reduction * base_feat_height_reduction * C
+                        )
+                        .contiguous()
+                    )
+                    temp_glb_GN = self.sub_GN.repeat(1, H // base_feat_height_reduction, 1, 1)
+
+                    # 1 x 156 x 4096
+                    glb_img = torch.cat([glb_img, temp_glb_GN], dim=2).reshape(1, -1, base_feat_height_reduction * base_feat_height_reduction * C)
+
+                    # (max_num_crops-1) x (12x12) x C
+                    sub_img = img_features[_bs, 1:]
+                    # 16x574x1024
+                    # get rid of padding sub_img
+                    sub_img = sub_img[:B_]
+
+                    # (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
+                    sub_img = (
+                        sub_img.reshape(B_, H, H, C)
+                        .reshape(
+                            B_, H // base_feat_height_reduction, base_feat_height_reduction, H // base_feat_height_reduction, base_feat_height_reduction, C
+                        )
+                        .contiguous()
+                        .permute(0, 1, 3, 2, 4, 5)
+                        .reshape(B_, -1, base_feat_height_reduction * base_feat_height_reduction * C)
+                        .contiguous()
+                    )
+                    sub_img = (
+                        sub_img.reshape(1, h, w, base_feat_height // base_feat_height_reduction, base_feat_width // base_feat_height_reduction, -1)
+                        .permute(0, 1, 3, 2, 4, 5)
+                        .reshape(
+                            1,
+                            h * base_feat_height // base_feat_height_reduction,
+                            w * base_feat_width // base_feat_height_reduction,
+                            base_feat_height_reduction * base_feat_height_reduction * C,
+                        )
+                    )
+
+                    if image_attention_mask is not None and len(image_attention_mask) > 0:
+                        reshaped_image_attention_mask = (
+                            image_attention_mask[_bs, 1 : B_ + 1, 0::2, 0::2]
+                            .reshape(1, h, w, base_feat_height // base_feat_height_reduction, base_feat_width // base_feat_height_reduction)
+                            .permute(0, 1, 3, 2, 4)
+                            .reshape(1, h * base_feat_height // base_feat_height_reduction, w * base_feat_width // base_feat_height_reduction)
+                        )
+                        useful_height = int(reshaped_image_attention_mask[0, :, 0].sum().item())
+                        useful_width = int(reshaped_image_attention_mask[0, 0, :].sum().item())
+                        sub_img = sub_img[:, :useful_height, :useful_width]
+                        temp_sub_GN = self.sub_GN.repeat(1, useful_height, 1, 1)
+                        temp_len = (
+                            int(image_attention_mask[_bs, : B_ + 1, 0::2, 0::2].sum().item())
+                            + (useful_height + 1)
+                            + base_feat_height // base_feat_height_reduction
+                        )
+                    else:
+                        temp_sub_GN = self.sub_GN.repeat(1, h * base_feat_height // base_feat_height_reduction, 1, 1)
+                        temp_len = int((h * w + 1) * self.num_img_tokens + 1 + (h + 1) * base_feat_height // base_feat_height_reduction)
+
+                    sub_img = torch.cat([sub_img, temp_sub_GN], dim=2).reshape(1, -1, base_feat_height_reduction * base_feat_height_reduction * C)
+                    # (1, num_img_tokens, 1024*4)
+
+                    # glb + sub
+                    if self.config.hd_transform_order == "glb_sub":
+                        output_imgs.append(torch.cat([glb_img, self.glb_GN, sub_img], dim=1))
+                    elif self.config.hd_transform_order == "sub_glb":
+                        output_imgs.append(torch.cat([sub_img, self.glb_GN, glb_img], dim=1))
+                    else:
+                        raise NotImplementedError(f"hd_transform_order = {self.hd_transform_order}, not implemented")
+
+                    # temp_len = int((h*w+1)*144 + 1 + (h+1)*12)
+                    assert temp_len == output_imgs[-1].shape[1], f"temp_len: {temp_len}, output_imgs[-1].shape[1]: {output_imgs[-1].shape[1]}"
+                    output_len.append(temp_len)
+
+                img_set_tensor = torch.from_numpy(self.vision_projector(output_imgs))
+
+            else:
+                raise NotImplementedError
+            select = True
+
+        # we use the token embedding layer from the huggingface model, this is REQUIRED to make sure we are using the loaded weights.
+        hidden_states = torch.from_numpy(self.model.embed_tokens(input_ids))
+
+        if select:
+            if hd_transform:
+                # new implementation without in-place operation
+                # Ref: https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/4a0d683eba9f1d0cbfb6151705d1ee73c25a80ca/modeling_phi3_v.py#L233
+                # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put.html
+                # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put_.html#torch.Tensor.index_put_
+                # img_set_tensor: a list of tensors, each tensor has shape (1, N_tokens, C)
+                # assert all([_img_set_tensor.shape[0] == 1 for _img_set_tensor in img_set_tensor]), 'img_set_tensor should have shape (1, N_tokens, C)'
+                # Shape: (merged_N_tokens, C)
+                merged_img_set_tensor = img_set_tensor.squeeze(0)  # torch.cat(img_set_tensor, dim=1).squeeze(0)
+                merged_img_set_tensor = merged_img_set_tensor.to(hidden_states.dtype).to(hidden_states.device)
+                # Temporarily disable autocast to avoid issue on bf16 tensors
+                # Ref: https://github.com/pytorch/pytorch/issues/132715
+                new_hidden_states = hidden_states.index_put(indices=positions_tuple, values=merged_img_set_tensor, accumulate=False)
+                hidden_states = new_hidden_states
+            else:
+                raise NotImplementedError
+
+        return hidden_states
+
+    def audio_embed(
+        self,
+        input_ids: torch.LongTensor,
+        input_embeds: torch.FloatTensor,
+        audio_embed_sizes=None,
+        audio_attention_mask=None,
+        audio_projection_mode="speech",
+        **kwargs,
+    ):
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+
+        positions = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=False)
+        positions_tuple = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=True)
+        if len(positions.tolist()) > 0:
+            audio_set_tensor = self.get_audio_features(input_embeds, audio_attention_mask, audio_projection_mode)
+
+        hidden_states = torch.from_numpy(self.model.embed_tokens(input_ids))
+
+        if len(positions.tolist()) > 0:
+
+            assert audio_embed_sizes.sum().item() == len(
+                positions
+            ), f"please ensure the encoder outputs have the same length as defined in input_ids! \n audio_embed_sizes.sum().item(): {audio_embed_sizes.sum().item()} \n len(positions): {len(positions)} \n audio_embed_sizes: {audio_embed_sizes} \n positions: {positions} \n input_ids.shape \n {input_ids.shape}"
+
+            # new implementation without in-place operation
+            # Ref: https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/4a0d683eba9f1d0cbfb6151705d1ee73c25a80ca/modeling_phi3_v.py#L233
+            # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put.html
+            # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put_.html#torch.Tensor.index_put_
+            # audio_set_tensor: shape (N_audios, N_padded_tokens, C)
+            # Shape: (merged_N_tokens, C)
+            merged_audio_set_tensor = torch.cat([audio_set_tensor[i, : audio_embed_sizes[i], :] for i in range(len(audio_embed_sizes))], dim=0)
+            new_hidden_states = hidden_states.index_put(indices=positions_tuple, values=merged_audio_set_tensor, accumulate=False)
+            hidden_states = new_hidden_states
+
+        return hidden_states
+
+    def get_audio_features(self, input_embeds: torch.FloatTensor, audio_attention_mask: torch.Tensor, audio_projection_mode: str = "speech"):
+        xs_pad = self.audio_embeddings(input_embeds)
+        input_tensor, pos_k, pos_v, hs_mask, masks = self.forward_embeddings(xs_pad)
+
+        unfolded = False
+        ori_bz, seq_len, D = input_tensor.shape
+        max_seq_len = 500  # maxium position for absolute positional encoding
+        masks_unfold = None
+        if seq_len > max_seq_len:
+            # audio sequence is longer than max_seq_len, unfold it into chunks of max_seq_len
+            unfolded = True
+            # the unfold op will drop residual frames, pad it to the multiple of max_seq_len
+            if seq_len % max_seq_len > 0:
+                chunk_pad_size = max_seq_len - (seq_len % max_seq_len)
+            else:
+                chunk_pad_size = 0
+            if chunk_pad_size > 0:
+                input_tensor_pad = torch.nn.functional.pad(torch.from_numpy(input_tensor), (0, 0, 0, chunk_pad_size), "constant", 0)
+                input_tensor = input_tensor_pad
+
+            input_tensor = self.unfold_tensor(input_tensor, max_seq_len)
+            if masks is not None:
+                # revise hs_mask here because the previous calculated hs_mask did not consider extra pad
+                subsampled_pad_mask = masks.squeeze(1)  # [bz, subsampled_unmask_seq_len]
+                extra_padded_subsamlped_pad_mask = torch.nn.functional.pad(
+                    subsampled_pad_mask, (0, chunk_pad_size), "constant", False
+                )  # extra padding to the pad mask
+                extra_padded_subsamlped_pad_mask = extra_padded_subsamlped_pad_mask.unsqueeze(-1).float()
+                masks_unfold = self.unfold_tensor(extra_padded_subsamlped_pad_mask, max_seq_len)  # unfold the pad mask like we did to the input tensor
+                masks_unfold = masks_unfold.squeeze(-1).bool()  # unfold op does not support bool tensor
+            else:
+                masks_unfold = None
+        hs_mask = self.calculate_hs_mask(input_tensor, masks_unfold)
+        audio_features = self.audio_encoder([input_tensor, hs_mask])
+        if unfolded:
+            embed_dim = audio_features.shape[-1]
+            audio_features = np.reshape(audio_features, (ori_bz, -1, embed_dim))
+            # if we ever padded before unfolding, we need to remove the padding
+            if chunk_pad_size > 0:
+                audio_features = audio_features[:, :-chunk_pad_size, :]
+        audio_encoder = self.audio_vision_projector if audio_projection_mode == "vision" else self.audio_speech_projector
+        audio_set_tensor = audio_encoder(audio_features)
+
+        return torch.from_numpy(audio_set_tensor)
+
+    def _chunk_size_selection(self, chunk_size=None, left_chunk=None):
+        """If chunk size is a list, we will randomly select a chunk size."""
+        if isinstance(chunk_size, list):
+            # Variable chunk size during training
+            chunk_size_index = int(torch.randint(low=0, high=len(chunk_size), size=(1,)))
+            chunk_size_train_eff = chunk_size[chunk_size_index]
+            if not isinstance(left_chunk, list):
+                raise ValueError("Since chunk_size is a list, left_chunk must be a list")
+            if len(left_chunk) != len(chunk_size):
+                raise ValueError("The length of left_chunk must be the same as length of chunk_size.")
+            left_chunk_train_eff = left_chunk[chunk_size_index]
+        else:
+            chunk_size_train_eff = chunk_size
+            left_chunk_train_eff = left_chunk
+
+        return chunk_size_train_eff, left_chunk_train_eff
+
+    def forward_embeddings(self, xs_pad, masks=None, chunk_size_nc=None, left_chunk_nc=None):
+        """Forwarding the inputs through the top embedding layers
+
+        Args:
+            xs_pad: torch.Tensor
+                input tensor
+            masks: torch.Tensor
+                input mask
+            chunk_size_nc: (optional, default is None) chunk size for non-causal layers
+            left_chunk_nc: (optional, default is None) # of left chunks for non-causal layers
+        """
+        # pylint: disable=R0915
+        # get new lens.
+        seq_len = int(self.compute_lens_change(xs_pad.shape[1]))
+        if seq_len <= 0:
+            raise ValueError(
+                f"""The squence length after time reduction is invalid: {seq_len}.
+                Your input feature is too short. Consider filtering out the very
+                short sentence from data loader""",
+            )
+
+        batch_size = xs_pad.shape[0]
+
+        enc_streaming_mask = self._streaming_mask(seq_len, batch_size, self.chunk_size, self.left_chunk)
+
+        input_tensor = xs_pad
+
+        input_tensor = self.audio_forward_embeddings(input_tensor)
+
+        streaming_mask = enc_streaming_mask
+        if streaming_mask is not None and masks is not None:
+            hs_mask = masks & streaming_mask
+        else:
+            hs_mask = streaming_mask
+
+        if chunk_size_nc is not None:
+            enc_streaming_mask_nc = self._streaming_mask(seq_len, batch_size, chunk_size_nc, left_chunk_nc)
+            if masks is not None:
+                hs_mask_nc = masks & enc_streaming_mask_nc
+            else:
+                hs_mask_nc = enc_streaming_mask_nc
+        else:
+            hs_mask_nc = None
+
+        if chunk_size_nc is None:
+            return input_tensor, None, None, hs_mask, None
+        return input_tensor, None, None, hs_mask, None, hs_mask_nc
+
+    def _streaming_mask(self, seq_len, batch_size, chunk_size, left_chunk):
+        chunk_size_train_eff, left_chunk_train_eff = self._chunk_size_selection(chunk_size, left_chunk)
+
+        # Create mask matrix for streaming
+        # S stores start index. if chunksize is 18, s is [0,18,36,....]
+        chunk_start_idx = np.arange(0, seq_len, chunk_size_train_eff)
+        # avoid randomness when run evaluation or decoding
+
+        enc_streaming_mask = self.adaptive_enc_mask(seq_len, chunk_start_idx, left_window=left_chunk_train_eff).unsqueeze(0).expand([batch_size, -1, -1])
+        return enc_streaming_mask
+
+    def compute_lens_change(self, feature_lens):
+        """feature_lens: int
+        return updated feature lens.
+
+        This used to return a different lambda function for each case that computed
+        the right thing.  That does not work within Torchscript.  If you really
+        need this to be faster, create nn.Module()-s for all the cases and return
+        one of them.  Torchscript does support that.
+        """
+        if self.config.audio_processor["config"]["input_layer"] == "nemo_conv":
+            nemo_conv_settings = self.config.audio_processor["config"]["nemo_conv_settings"]
+            # Handle the special causal case
+            subsampling_causal_cond = nemo_conv_settings.get("subsampling", "dw_striding") in [
+                "dw_striding",
+                "striding",
+                "striding_conv1d",
+            ]
+            is_causal = nemo_conv_settings.get("is_causal", False)
+            if is_causal and subsampling_causal_cond:
+                lens_change = (
+                    torch.ceil(feature_lens / self.time_reduction).long()
+                    if isinstance(feature_lens, torch.Tensor)
+                    else math.ceil(feature_lens / self.time_reduction)
+                )
+                feature_lens_remainder = feature_lens % self.time_reduction
+                if isinstance(feature_lens, torch.Tensor):
+                    lens_change[feature_lens_remainder != 1] += 1
+                elif feature_lens_remainder != 1:
+                    lens_change += 1
+                return lens_change
+            ceil_func = math.ceil if isinstance(feature_lens, int) else torch.ceil
+            return ceil_func(feature_lens / self.time_reduction)
+
+    def calculate_hs_mask(self, xs_pad, mask):
+        max_audio_length = xs_pad.shape[1]
+        batch_size = xs_pad.shape[0]
+        enc_streaming_mask = self._streaming_mask(max_audio_length, batch_size, self.chunk_size, self.left_chunk)
+        if mask is None:
+            return enc_streaming_mask
+
+        feature_lens = mask.sum(1)
+        padding_length = feature_lens
+        pad_mask = torch.arange(0, max_audio_length).expand(padding_length.size(0), -1) < padding_length.unsqueeze(1)
+        pad_mask = pad_mask.unsqueeze(1)
+        pad_mask = pad_mask & enc_streaming_mask
+        return pad_mask
+
+    @staticmethod
+    def unfold_tensor(xs_pad, max_seq_len):
+        """
+        For a given tensor with shape of (N, T, D), if sequence length T is longer than max_seq_len,
+        this function unfold it to a (NT', max_seq_len, D) where T' is T // max_seq_len.
+        Args:
+            xs_pad: N, T, D
+        """
+        _, _, D = xs_pad.shape
+        xs_pad = xs_pad.transpose(-1, -2)  # convert to N, D, T
+        # N x D x 1 x T => N x (D x max_seq_len) x T'
+        xs_pad = torch.nn.functional.unfold(
+            xs_pad[..., None, :],
+            kernel_size=(1, max_seq_len),
+            stride=(1, max_seq_len),
+        )
+
+        new_bsz, _, slen = xs_pad.shape
+        # N x D x max_seq_len x T'
+        xs_pad = xs_pad.view(new_bsz, -1, max_seq_len, slen)
+        # N x T' x max_seq_len x D
+        xs_pad = xs_pad.permute(0, 3, 2, 1).contiguous()
+        # NT' x max_seq_len x D
+        xs_pad = xs_pad.view(-1, max_seq_len, D)
+        return xs_pad
+
+    @staticmethod
+    def adaptive_enc_mask(x_len, chunk_start_idx, left_window=0, right_window=0):
+        """
+        The function is very important for Transformer Transducer Streaming mode
+        Args:
+            xs_len (int): sequence length
+            chunk_start_idx (list): first idx of each chunk, such as [0,18,36,48]. It also supports adaptive chunk size [0,10,15,45]
+            left_window (int): how many left chunks can be seen
+            right_window (int): how many right chunks can be seen. It is used for chunk overlap model.
+            Returns:
+                mask (torch.Tensor): a mask tensor for streaming model
+                Torch 1.0.1
+                tensor([[1., 1., 0., 0.],
+                        [0., 1., 1., 0.],
+                        [0., 0., 1., 1.]])
+                Torch 1.4.1
+                tensor([[True., True., False., False.],
+                        [False., True., True., False.],
+                        [False., False., True., True.]])
+        """
+        chunk_start_idx = torch.Tensor(chunk_start_idx).long()  # first idx of each chunk, such as [0,18,36,48].
+        start_pad = torch.nn.functional.pad(chunk_start_idx, (1, 0))  # append 0 to the beginning, so it becomes [0, 0, 18, 36, 48]
+        end_pad = torch.nn.functional.pad(chunk_start_idx, (0, 1), value=x_len)  # append x_len to the end, so it becomes [0,18,36,48, x_len]
+        seq_range = torch.arange(0, x_len).unsqueeze(-1)  # seq_range size: [x_len, 1]
+        idx = ((seq_range < end_pad) & (seq_range >= start_pad)).nonzero()[:, 1]  # idx size: [x_len]
+        boundary = end_pad[idx]  # boundary size: [x_len]
+        seq_range_expand = torch.arange(0, x_len).unsqueeze(0).expand(x_len, -1)  # seq_range_expand size [x_len, x_len]
+        idx_left = idx - left_window
+        idx_left[idx_left < 0] = 0
+        boundary_left = start_pad[idx_left]
+        mask_left = seq_range_expand >= boundary_left.unsqueeze(-1)
+        idx_right = idx + right_window
+        idx_right[idx_right > len(chunk_start_idx)] = len(chunk_start_idx)
+        boundary_right = end_pad[idx_right]
+        mask_right = seq_range_expand < boundary_right.unsqueeze(-1)
+        return mask_left & mask_right
+
+    @staticmethod
+    def get_vision_position_ids(pixel_values, patch_attention_mask, patch_size=14, num_patches_per_side=32):
+        batch_size = pixel_values.shape[0]
+        max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+        max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
+        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        position_ids = torch.full(
+            size=(
+                batch_size,
+                max_nb_patches_h * max_nb_patches_w,
+            ),
+            fill_value=0,
+        )
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            nb_patches_h = p_attn_mask[:, 0].sum()
+            nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1)] = pos_ids
+        return position_ids
+
+    def embed_tokens_extend(
+        self,
+        input_ids: torch.LongTensor,
+        input_embeds,
+        input_image_embeds: torch.FloatTensor = None,
+        input_audio_embeds: torch.FloatTensor = None,
+        image_sizes=None,
+        image_attention_mask=None,
+        audio_embed_sizes=None,
+        audio_attention_mask=None,
+        audio_projection_mode="speech",
+        past_key_values=None,
+    ):
+        if past_key_values is not None:
+            return self.model.embed_tokens(input_ids)
+
+        new_input_ids = input_ids.clone()
+        new_input_ids[(input_ids >= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[0]) & (input_ids <= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[1])] = (
+            self._IMAGE_SPECIAL_TOKEN_ID
+        )
+        new_input_ids[(input_ids >= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[0]) & (input_ids <= _COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[1])] = (
+            self._AUDIO_SPECIAL_TOKEN_ID
+        )
+        input_ids = new_input_ids
+        image_position_mask = input_ids == self._IMAGE_SPECIAL_TOKEN_ID
+        non_image_position_mask = ~image_position_mask
+        image_hidden_states = self.image_embed(
+            input_ids=input_ids, input_embeds=input_image_embeds, image_sizes=image_sizes, image_attention_mask=image_attention_mask
+        )
+        audio_hidden_states = self.audio_embed(
+            input_ids=input_ids,
+            input_embeds=input_audio_embeds,
+            audio_embed_sizes=audio_embed_sizes,
+            audio_attention_mask=audio_attention_mask,
+            audio_projection_mode=audio_projection_mode,
+        )
+        hidden_states = image_hidden_states * image_position_mask.unsqueeze(-1) + audio_hidden_states * non_image_position_mask.unsqueeze(-1)
+
+        return hidden_states
+
+    def get_multimodal_embeddings(
+        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, 
+        input_image_embeds: Optional[torch.FloatTensor] = None,
+        image_sizes: Optional[torch.LongTensor] = None,
+        image_attention_mask=None,
+        input_audio_embeds: Optional[torch.FloatTensor] = None,
+        audio_embed_sizes=None,
+        audio_attention_mask=None,
+        input_mode=None,
+        **kwargs
+    ):
+        if pixel_values is not None and input_image_embeds is None:
+            input_image_embeds = pixel_values
+        audio_projection_mode = None
+        if input_audio_embeds is not None:
+            if isinstance(input_mode, torch.Tensor):
+                assert len(input_mode) == 1
+                input_mode = input_mode[0].item()
+            input_mode = InputMode(input_mode)
+
+            if input_mode in [InputMode.VISION_SPEECH, InputMode.VISION]:
+                audio_projection_mode = "vision"
+            elif input_mode == InputMode.SPEECH:
+                audio_projection_mode = "speech"
+            elif input_mode == InputMode.LANGUAGE:
+                audio_projection_mode = "speech"
+            else:
+                raise ValueError(f"Invalid input_mode: {input_mode}")
+        inputs_embeds = self.embed_tokens_extend(
+            input_ids=input_ids,
+            input_embeds=inputs_embeds,
+            input_image_embeds=input_image_embeds,
+            input_audio_embeds=input_audio_embeds,
+            image_sizes=image_sizes,
+            image_attention_mask=image_attention_mask,
+            audio_embed_sizes=audio_embed_sizes,
+            audio_attention_mask=audio_attention_mask,
+            audio_projection_mode=audio_projection_mode,
+            past_key_values=kwargs.get("past_key_values"),
+        )
+        return inputs_embeds, attention_mask, position_ids
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
