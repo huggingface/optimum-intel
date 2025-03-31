@@ -579,6 +579,38 @@ class OVModelIntegrationTest(unittest.TestCase):
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
             self.assertTrue(len(ov_files) == 1)
 
+    def test_load_from_hub_onnx_model_and_save(self):
+        model_id = "katuni4ka/tiny-random-LlamaForCausalLM-onnx"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, from_onnx=True)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(loaded_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
+        loaded_model_outputs = loaded_model(**tokens)
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname)
+            self.assertEqual(model.use_cache, loaded_model.use_cache)
+
+            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
+            outputs = compile_only_model(**tokens)
+            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+            del compile_only_model
+
+        outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        del loaded_model
+        del model
+        gc.collect()
+
 
 class PipelineTest(unittest.TestCase):
     def test_load_model_from_hub(self):
@@ -1000,7 +1032,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("granite", "granite-moe")
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
         # openvino 2025.0 required for disabling check_trace
         if is_openvino_version(">=", "2025.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
@@ -2141,13 +2173,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ["maira2"]
+        SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
         SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ["gemma3"]
+        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
 
@@ -2166,6 +2198,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             "qwen2_5_vl",
             "got_ocr2",
             "gemma3",
+            "idefics3",
+            "smolvlm",
         ]:
             from transformers import AutoModelForImageTextToText
 

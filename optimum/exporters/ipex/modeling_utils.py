@@ -32,7 +32,7 @@ from .cache_utils import IPEXPagedCache
 
 logger = logging.getLogger(__name__)
 
-_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.4.0"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.6.0"
 _accelerate_added_attributes = ["to", "xpu"]
 
 
@@ -50,92 +50,6 @@ else:
         LinearNewGelu,
         PagedAttention,
     )
-
-
-# TODO: Following XPULinearXXX op classes will be put into ipex after 2.6.0 version
-class XPULinear2SiluMul(torch.nn.Module):
-    def __init__(
-        self,
-        gate_proj: torch.nn.Module,
-        up_proj: torch.nn.Module,
-    ):
-        super().__init__()
-        self.gate_proj_weight = gate_proj.weight.transpose(0, 1).contiguous()
-        self.up_proj_weight = up_proj.weight.transpose(0, 1).contiguous()
-        self.gate_proj_bias = gate_proj.bias
-        self.up_proj_bias = up_proj.bias
-
-    def forward(
-        self,
-        hidden_states,
-    ):
-        up = torch.ops.torch_ipex.mm_silu(hidden_states, self.gate_proj_weight)
-        if self.gate_proj_bias is not None:
-            up += self.gate_proj_bias
-        hidden_states = torch.ops.torch_ipex.mm_resmul(hidden_states, self.up_proj_weight, up)
-        if self.up_proj_bias is not None:
-            hidden_states += self.up_proj_bias
-        return hidden_states
-
-
-class XPULinearGelu(torch.nn.Module):
-    def __init__(self, module: torch.nn.Module):
-        super().__init__()
-        self.weight = module.weight.transpose(0, 1).contiguous()
-        self.bias = module.bias
-
-    def forward(self, x):
-        return torch.ops.torch_ipex.matmul_gelu(x, self.weight, self.bias, 1.0, "tanh")
-
-
-class XPULinearAdd(torch.nn.Module):
-    def __init__(
-        self,
-        module: torch.nn.Module,
-    ):
-        super().__init__()
-        self.weight = module.weight.transpose(0, 1).contiguous()
-        self.bias = module.bias
-
-    def forward(
-        self,
-        hidden_states,
-        residual,
-    ):
-        token_len, _ = hidden_states.size()
-        if residual is None:
-            hidden_states = torch.matmul(hidden_states, self.weight)
-            if self.bias is not None:
-                hidden_states += self.bias
-        else:
-            if self.bias is not None:
-                hidden_states = torch.ops.torch_ipex.mm_bias_resadd(
-                    hidden_states, self.weight, self.bias, 1.0, residual, 1.0
-                )
-            else:
-                hidden_states = torch.addmm(
-                    residual.flatten(0, -2),
-                    hidden_states.flatten(0, -2),
-                    self.weight,
-                    beta=1.0,
-                )
-        hidden_states = hidden_states.view(token_len, -1)
-        return hidden_states
-
-
-class XPUlinearAddAdd(torch.nn.Module):
-    def __init__(self, module: torch.nn.Module):
-        super().__init__()
-        self.weight = module.weight.transpose(0, 1).contiguous()
-        self.bias = module.bias
-
-    def forward(self, x, y, z):
-        if self.bias is not None:
-            x = torch.ops.torch_ipex.mm_bias_resadd(x, self.weight, self.bias, 1.0, y, 1.0)
-            x += z
-        else:
-            x = torch.ops.torch_ipex.mm_bias_resadd(x, self.weight, z, 1.0, y, 1.0)
-        return x
 
 
 # Adapted from https://github.com/huggingface/accelerate/blob/v1.2.1/src/accelerate/hooks.py#L183
@@ -229,7 +143,7 @@ def _llama_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max().item()
+    max_input_lens = input_lens.max()
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -357,7 +271,7 @@ def _falcon_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max().item()
+    max_input_lens = input_lens.max()
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -499,7 +413,7 @@ def _gpt2_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max().item()
+    max_input_lens = input_lens.max()
 
     if past_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -635,7 +549,7 @@ def _qwen2_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max().item()
+    max_input_lens = input_lens.max()
 
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -754,11 +668,11 @@ class _IPEXAttention(nn.Module):
         if past_key_value is None:
             n_rep = query.shape[1] // key.shape[1]
             attn_output = torch.nn.functional.scaled_dot_product_attention(
-                query.reshape(input_lens.shape[0], input_lens.max().item(), -1, query.shape[-1]).transpose(1, 2),
-                key.reshape(input_lens.shape[0], input_lens.max().item(), -1, key.shape[-1])
+                query.reshape(input_lens.shape[0], input_lens.max(), -1, query.shape[-1]).transpose(1, 2),
+                key.reshape(input_lens.shape[0], input_lens.max(), -1, key.shape[-1])
                 .transpose(1, 2)
                 .repeat_interleave(n_rep, 1),
-                value.reshape(input_lens.shape[0], input_lens.max().item(), -1, value.shape[-1])
+                value.reshape(input_lens.shape[0], input_lens.max(), -1, value.shape[-1])
                 .transpose(1, 2)
                 .repeat_interleave(n_rep, 1),
                 attn_mask=attention_mask,
@@ -885,13 +799,9 @@ class _IPEXLlamaAttention(_IPEXAttention):
             self.q_slice = self.q_proj.weight.shape[0]
             self.k_slice = self.q_slice + self.k_proj.weight.shape[0]
             self.v_slice = self.k_slice + self.v_proj.weight.shape[0]
-            if self.module_device.type == "cpu":
-                if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                    self.mha_linear_add = LinearAdd(module.o_proj)
 
-                elif self.module_device.type == "xpu":
-                    if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                        self.mha_linear_add = XPULinearAdd(module.o_proj)
+            if not config.compile and module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                self.mha_linear_add = LinearAdd(module.o_proj)
 
     def qkv_gemm(self, hidden_states):
         if hasattr(self, "concat_qkv"):
@@ -935,20 +845,15 @@ class _IPEXGPT2Attention(_IPEXAttention):
     def __init__(self, module, device, config) -> None:
         super().__init__(module, device, config)
         _setattr_from_module(self, module)
-        if getattr(config, "quantization_config", None) is None:
+        if not config.compile and getattr(config, "quantization_config", None) is None:
             self.c_attn_linear = nn.Linear(self.c_attn.weight.shape[0], self.c_attn.weight.shape[1])
             self.c_attn_linear.weight = nn.Parameter(self.c_attn.weight.t())
             self.c_attn_linear.bias = self.c_attn.bias
             self.c_proj_linear = nn.Linear(self.c_proj.weight.shape[0], self.c_proj.weight.shape[1])
             self.c_proj_linear.weight = nn.Parameter(self.c_proj.weight.t())
             self.c_proj_linear.bias = self.c_proj.bias
-            if self.module_device.type == "cpu":
-                if self.c_proj_linear not in ["LinearAllreduce"]:
-                    self.linear_add = LinearAdd(self.c_proj_linear)
-
-            elif self.module_device.type == "xpu":
-                if self.c_proj_linear not in ["LinearAllreduce"]:
-                    self.linear_add = XPULinearAdd(self.c_proj_linear)
+            if self.c_proj_linear not in ["LinearAllreduce"]:
+                self.linear_add = LinearAdd(self.c_proj_linear)
 
     def qkv_gemm(self, hidden_states):
         if hasattr(self, "c_attn_linear"):
@@ -979,17 +884,12 @@ class _IPEXLlamaMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         self.module_device = device
-        if getattr(config, "quantization_config", None) is None:
-            if self.module_device.type == "cpu":
-                # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-                if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                    self.mlp_linear_add = LinearAdd(module.down_proj)
-                self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
-            elif self.module_device.type == "xpu":
-                # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-                if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
-                    self.mlp_linear_add = XPULinearAdd(module.down_proj)
-                self.linear_silu_mul = XPULinear2SiluMul(module.gate_proj, module.up_proj)
+
+        if not config.compile and getattr(config, "quantization_config", None) is None:
+            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+            if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+                self.mlp_linear_add = LinearAdd(module.down_proj)
+            self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
@@ -1012,17 +912,12 @@ class _IPEXFalconMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         self.module_device = device
-        if getattr(config, "quantization_config", None) is None:
+        if not config.compile and getattr(config, "quantization_config", None) is None:
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-            if self.module_device.type == "cpu":
-                self.linear_gelu = LinearGelu(module.dense_h_to_4h)
-            elif self.module_device.type == "xpu":
-                self.linear_gelu = XPULinearGelu(module.dense_h_to_4h)
+            self.linear_gelu = LinearGelu(module.dense_h_to_4h)
+
             if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
-                if self.module_device.type == "cpu":
-                    self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
-                elif self.module_device.type == "xpu":
-                    self.linear_add_add = XPUlinearAddAdd(module.dense_4h_to_h)
+                self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
 
     def forward(
         self,
@@ -1052,7 +947,7 @@ class _IPEXGPT2MLP(nn.Module):
         self.config = config
         self.module_device = device
 
-        if getattr(config, "quantization_config", None) is None:
+        if not config.compile and getattr(config, "quantization_config", None) is None:
             self.c_fc_linear = nn.Linear(self.c_fc.weight.shape[0], self.c_fc.weight.shape[1])
             self.c_fc_linear.weight = nn.Parameter(self.c_fc.weight.t())
             self.c_fc_linear.bias = self.c_fc.bias
@@ -1062,13 +957,8 @@ class _IPEXGPT2MLP(nn.Module):
             if self.module_device.type == "cpu":
                 self.linear_new_gelu = LinearNewGelu(self.c_fc_linear)
 
-            if self.module_device.type == "cpu":
-                if self.c_proj_linear not in ["LinearAllreduce"]:
-                    self.linear_add = LinearAdd(self.c_proj_linear)
-
-            elif self.module_device.type == "xpu":
-                if self.c_proj_linear not in ["LinearAllreduce"]:
-                    self.linear_add = XPULinearAdd(self.c_proj_linear)
+            if self.c_proj_linear not in ["LinearAllreduce"]:
+                self.linear_add = LinearAdd(self.c_proj_linear)
 
     def forward(self, hidden_states: Optional[Tuple[torch.FloatTensor]]) -> torch.FloatTensor:
         if hasattr(self, "linear_new_gelu"):
@@ -1237,11 +1127,9 @@ class _IPEXIntermediate(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.module_device = device
-        if getattr(config, "quantization_config", None) is None:
-            if self.module_device.type == "cpu":
-                self.linear_gelu = LinearGelu(module.dense)
-            elif self.module_device.type == "xpu":
-                self.linear_gelu = XPULinearGelu(module.dense)
+
+        if not config.compile and getattr(config, "quantization_config", None) is None:
+            self.linear_gelu = LinearGelu(module.dense)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hasattr(self, "linear_gelu"):

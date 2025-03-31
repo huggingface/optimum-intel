@@ -374,7 +374,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
         )
         # It will be removed when torch 2.6 released
-        if model_arch == "opt" and not use_cache and model.compiled and is_torch_version("<", "2.6.0"):
+        if (
+            model_arch == "opt"
+            and not use_cache
+            and getattr(model.config, "compile", False)
+            and is_torch_version("<", "2.6.0")
+        ):
             return
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
@@ -431,9 +436,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     def test_patched_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         patched_model_id = MODEL_NAMES["patched_" + model_arch]
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, device_map=DEVICE)
-        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id, device_map=DEVICE)
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype, device_map=DEVICE)
+        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id, torch_dtype=dtype, device_map=DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt").to(DEVICE)
         ipex_outputs = ipex_model.generate(
