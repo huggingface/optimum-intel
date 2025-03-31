@@ -295,6 +295,22 @@ class OVMultiModalProjector(OVVisionProjection):
     _model_name = "multi_modal_projector"
 
 
+class OVAudioEmbeddings(OVModelPart):
+    _model_name = "audio_embeddings"
+
+    def forward(self, audio_signal):
+        self._compile()
+        return self.request(audio_signal)[0]
+
+
+class OVAudioEncoder(OVModelPart):
+    _model_name = "audio_encoder"
+
+    def forward(self, audio_feature, audio_mask):
+        self._compile()
+        return self.request({"audio_feature": audio_feature, "audio_mask": audio_mask})[0]
+
+
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
@@ -303,6 +319,11 @@ MODEL_PARTS_CLS_MAPPING = {
     "vision_resampler": OVVisionResampler,
     "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "audio_embeddings": OVAudioEmbeddings,
+    "audio_forward_embeddings": OVAudioEmbeddings,
+    "audio_encoder": OVAudioEncoder,
+    "audio_vision_projection": OVAudioEmbeddings,
+    "audio_speech_projection": OVAudioEmbeddings
 }
 
 
@@ -3428,6 +3449,10 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
 
+class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_projection", "audio_embeddings", "audio_forward_embeddings", "audio_encoder", "audio_vision_projection", "audio_speech_projection"]
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -3443,4 +3468,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "gemma3": _OVGemma3ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
+    "phi4mm": _OVPhi4MMForCausalLM,
 }

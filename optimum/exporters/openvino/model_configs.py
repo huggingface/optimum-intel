@@ -177,6 +177,14 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForCausalLM"
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForCausalLM"
+    )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
@@ -3031,7 +3039,7 @@ class Phi4MMConfigBehavior(str, enum.Enum):
     VISION_EMBEDDINGS = "vision_embeddings"
 
 
-@register_in_tasks_manager("phi4mm", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers")
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
