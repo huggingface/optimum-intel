@@ -332,7 +332,11 @@ MODEL_PARTS_CLS_MAPPING = {
     "audio_forward_embeddings": OVAudioEmbeddings,
     "audio_encoder": OVAudioEncoder,
     "audio_vision_projection": OVAudioEmbeddings,
+<<<<<<< HEAD
     "audio_speech_projection": OVAudioEmbeddings,
+=======
+    "audio_speech_projection": OVAudioEmbeddings
+>>>>>>> WIP
 }
 
 
