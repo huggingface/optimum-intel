@@ -332,7 +332,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "audio_forward_embeddings": OVAudioEmbeddings,
     "audio_encoder": OVAudioEncoder,
     "audio_vision_projection": OVAudioEmbeddings,
-    "audio_speech_projection": OVAudioEmbeddings
+    "audio_speech_projection": OVAudioEmbeddings,
 }
 
 
@@ -3475,7 +3475,14 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
 
 
 class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
-    additional_parts = ["vision_projection", "audio_embeddings", "audio_forward_embeddings", "audio_encoder", "audio_vision_projection", "audio_speech_projection"]
+    additional_parts = [
+        "vision_projection",
+        "audio_embeddings",
+        "audio_forward_embeddings",
+        "audio_encoder",
+        "audio_vision_projection",
+        "audio_speech_projection",
+    ]
 
     def __init__(
         self,
@@ -3490,13 +3497,26 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        super().__init__(language_model, text_embeddings, vision_embeddings, config, device, dynamic_shapes, ov_config, model_save_dir, quantization_config, **kwargs)
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
         self.chunk_size = -1
         self.left_chunk = 18
         self.time_reduction = 8
-        self._IMAGE_SPECIAL_TOKEN_ID = 200010  # '<|endoftext10|>', or we can better name it (in `tokenizer_config.json`)
+        self._IMAGE_SPECIAL_TOKEN_ID = (
+            200010  # '<|endoftext10|>', or we can better name it (in `tokenizer_config.json`)
+        )
         self._AUDIO_SPECIAL_TOKEN_ID = 200011  # '<|endoftext11|>'
         self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE = [-9999, -1]  # For backward compatibility
         self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE = [float("-inf"), -10000]  # For backward compatibility
@@ -3525,9 +3545,15 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         select = False
         hd_transform = False
         if len(positions.tolist()) > 0:
-            if self.config.embd_layer["image_embd_layer"]["use_hd_transform"] and img_sizes is not None and len(img_sizes):
+            if (
+                self.config.embd_layer["image_embd_layer"]["use_hd_transform"]
+                and img_sizes is not None
+                and len(img_sizes)
+            ):
                 hd_transform = True
-                assert img_embeds.ndim == 5, f"(branch 1) img_embeds size: {img_embeds.size()}, expect 5D tensor for hd transform"
+                assert (
+                    img_embeds.ndim == 5
+                ), f"(branch 1) img_embeds size: {img_embeds.size()}, expect 5D tensor for hd transform"
                 # img_embeds: (num_images, max_num_crops, 3, H, W)
                 # img_sizes: (num_images, 2).view(1, -1)
 
@@ -3536,7 +3562,13 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                 patch_attn_mask = image_attention_mask.type(torch.BoolTensor).flatten(0, 1)
                 v_position_ids = self.get_vision_position_ids(pixel_values, patch_attn_mask)
                 # Nx(HW)xC
-                img_features = torch.from_numpy(self.vision_embedings([pixel_values, patch_attn_mask, v_position_ids]))
+                img_features = torch.from_numpy(
+                    self.vision_embeddings(
+                        pixel_values=pixel_values,
+                        patch_attention_mask=patch_attn_mask,
+                        patch_position_ids=v_position_ids,
+                    ).last_hidden_state
+                )
 
                 base_feat_height_target = self.config.base_vision_feat_height_target
                 base_resolution = self.config.crop_size
@@ -3570,18 +3602,30 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                     # 1 x 12 x 12 x 4096
                     glb_img = (
                         global_img_feature.reshape(1, H, H, C)
-                        .reshape(1, H // base_feat_height_reduction, base_feat_height_reduction, H // base_feat_height_reduction, base_feat_height_reduction, C)
+                        .reshape(
+                            1,
+                            H // base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            H // base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            C,
+                        )
                         .contiguous()
                         .permute(0, 1, 3, 2, 4, 5)
                         .reshape(
-                            1, H // base_feat_height_reduction, H // base_feat_height_reduction, base_feat_height_reduction * base_feat_height_reduction * C
+                            1,
+                            H // base_feat_height_reduction,
+                            H // base_feat_height_reduction,
+                            base_feat_height_reduction * base_feat_height_reduction * C,
                         )
                         .contiguous()
                     )
                     temp_glb_GN = self.sub_GN.repeat(1, H // base_feat_height_reduction, 1, 1)
 
                     # 1 x 156 x 4096
-                    glb_img = torch.cat([glb_img, temp_glb_GN], dim=2).reshape(1, -1, base_feat_height_reduction * base_feat_height_reduction * C)
+                    glb_img = torch.cat([glb_img, temp_glb_GN], dim=2).reshape(
+                        1, -1, base_feat_height_reduction * base_feat_height_reduction * C
+                    )
 
                     # (max_num_crops-1) x (12x12) x C
                     sub_img = img_features[_bs, 1:]
@@ -3593,7 +3637,12 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                     sub_img = (
                         sub_img.reshape(B_, H, H, C)
                         .reshape(
-                            B_, H // base_feat_height_reduction, base_feat_height_reduction, H // base_feat_height_reduction, base_feat_height_reduction, C
+                            B_,
+                            H // base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            H // base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            C,
                         )
                         .contiguous()
                         .permute(0, 1, 3, 2, 4, 5)
@@ -3601,7 +3650,14 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                         .contiguous()
                     )
                     sub_img = (
-                        sub_img.reshape(1, h, w, base_feat_height // base_feat_height_reduction, base_feat_width // base_feat_height_reduction, -1)
+                        sub_img.reshape(
+                            1,
+                            h,
+                            w,
+                            base_feat_height // base_feat_height_reduction,
+                            base_feat_width // base_feat_height_reduction,
+                            -1,
+                        )
                         .permute(0, 1, 3, 2, 4, 5)
                         .reshape(
                             1,
@@ -3614,9 +3670,19 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                     if image_attention_mask is not None and len(image_attention_mask) > 0:
                         reshaped_image_attention_mask = (
                             image_attention_mask[_bs, 1 : B_ + 1, 0::2, 0::2]
-                            .reshape(1, h, w, base_feat_height // base_feat_height_reduction, base_feat_width // base_feat_height_reduction)
+                            .reshape(
+                                1,
+                                h,
+                                w,
+                                base_feat_height // base_feat_height_reduction,
+                                base_feat_width // base_feat_height_reduction,
+                            )
                             .permute(0, 1, 3, 2, 4)
-                            .reshape(1, h * base_feat_height // base_feat_height_reduction, w * base_feat_width // base_feat_height_reduction)
+                            .reshape(
+                                1,
+                                h * base_feat_height // base_feat_height_reduction,
+                                w * base_feat_width // base_feat_height_reduction,
+                            )
                         )
                         useful_height = int(reshaped_image_attention_mask[0, :, 0].sum().item())
                         useful_width = int(reshaped_image_attention_mask[0, 0, :].sum().item())
@@ -3629,9 +3695,15 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                         )
                     else:
                         temp_sub_GN = self.sub_GN.repeat(1, h * base_feat_height // base_feat_height_reduction, 1, 1)
-                        temp_len = int((h * w + 1) * self.num_img_tokens + 1 + (h + 1) * base_feat_height // base_feat_height_reduction)
+                        temp_len = int(
+                            (h * w + 1) * self.num_img_tokens
+                            + 1
+                            + (h + 1) * base_feat_height // base_feat_height_reduction
+                        )
 
-                    sub_img = torch.cat([sub_img, temp_sub_GN], dim=2).reshape(1, -1, base_feat_height_reduction * base_feat_height_reduction * C)
+                    sub_img = torch.cat([sub_img, temp_sub_GN], dim=2).reshape(
+                        1, -1, base_feat_height_reduction * base_feat_height_reduction * C
+                    )
                     # (1, num_img_tokens, 1024*4)
 
                     # glb + sub
@@ -3643,17 +3715,19 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                         raise NotImplementedError(f"hd_transform_order = {self.hd_transform_order}, not implemented")
 
                     # temp_len = int((h*w+1)*144 + 1 + (h+1)*12)
-                    assert temp_len == output_imgs[-1].shape[1], f"temp_len: {temp_len}, output_imgs[-1].shape[1]: {output_imgs[-1].shape[1]}"
+                    assert (
+                        temp_len == output_imgs[-1].shape[1]
+                    ), f"temp_len: {temp_len}, output_imgs[-1].shape[1]: {output_imgs[-1].shape[1]}"
                     output_len.append(temp_len)
 
-                img_set_tensor = torch.from_numpy(self.vision_projector(output_imgs))
+                img_set_tensor = torch.from_numpy(self.vision_projection(output_imgs))
 
             else:
                 raise NotImplementedError
             select = True
 
         # we use the token embedding layer from the huggingface model, this is REQUIRED to make sure we are using the loaded weights.
-        hidden_states = torch.from_numpy(self.model.embed_tokens(input_ids))
+        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
 
         if select:
             if hd_transform:
@@ -3668,7 +3742,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                 merged_img_set_tensor = merged_img_set_tensor.to(hidden_states.dtype).to(hidden_states.device)
                 # Temporarily disable autocast to avoid issue on bf16 tensors
                 # Ref: https://github.com/pytorch/pytorch/issues/132715
-                new_hidden_states = hidden_states.index_put(indices=positions_tuple, values=merged_img_set_tensor, accumulate=False)
+                new_hidden_states = hidden_states.index_put(
+                    indices=positions_tuple, values=merged_img_set_tensor, accumulate=False
+                )
                 hidden_states = new_hidden_states
             else:
                 raise NotImplementedError
@@ -3692,10 +3768,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         if len(positions.tolist()) > 0:
             audio_set_tensor = self.get_audio_features(input_embeds, audio_attention_mask, audio_projection_mode)
 
-        hidden_states = torch.from_numpy(self.model.embed_tokens(input_ids))
+        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
 
         if len(positions.tolist()) > 0:
-
             assert audio_embed_sizes.sum().item() == len(
                 positions
             ), f"please ensure the encoder outputs have the same length as defined in input_ids! \n audio_embed_sizes.sum().item(): {audio_embed_sizes.sum().item()} \n len(positions): {len(positions)} \n audio_embed_sizes: {audio_embed_sizes} \n positions: {positions} \n input_ids.shape \n {input_ids.shape}"
@@ -3706,13 +3781,22 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put_.html#torch.Tensor.index_put_
             # audio_set_tensor: shape (N_audios, N_padded_tokens, C)
             # Shape: (merged_N_tokens, C)
-            merged_audio_set_tensor = torch.cat([audio_set_tensor[i, : audio_embed_sizes[i], :] for i in range(len(audio_embed_sizes))], dim=0)
-            new_hidden_states = hidden_states.index_put(indices=positions_tuple, values=merged_audio_set_tensor, accumulate=False)
+            merged_audio_set_tensor = torch.cat(
+                [audio_set_tensor[i, : audio_embed_sizes[i], :] for i in range(len(audio_embed_sizes))], dim=0
+            )
+            new_hidden_states = hidden_states.index_put(
+                indices=positions_tuple, values=merged_audio_set_tensor, accumulate=False
+            )
             hidden_states = new_hidden_states
 
         return hidden_states
 
-    def get_audio_features(self, input_embeds: torch.FloatTensor, audio_attention_mask: torch.Tensor, audio_projection_mode: str = "speech"):
+    def get_audio_features(
+        self,
+        input_embeds: torch.FloatTensor,
+        audio_attention_mask: torch.Tensor,
+        audio_projection_mode: str = "speech",
+    ):
         xs_pad = self.audio_embeddings(input_embeds)
         input_tensor, pos_k, pos_v, hs_mask, masks = self.forward_embeddings(xs_pad)
 
@@ -3729,7 +3813,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             else:
                 chunk_pad_size = 0
             if chunk_pad_size > 0:
-                input_tensor_pad = torch.nn.functional.pad(torch.from_numpy(input_tensor), (0, 0, 0, chunk_pad_size), "constant", 0)
+                input_tensor_pad = torch.nn.functional.pad(
+                    torch.from_numpy(input_tensor), (0, 0, 0, chunk_pad_size), "constant", 0
+                )
                 input_tensor = input_tensor_pad
 
             input_tensor = self.unfold_tensor(input_tensor, max_seq_len)
@@ -3740,19 +3826,23 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                     subsampled_pad_mask, (0, chunk_pad_size), "constant", False
                 )  # extra padding to the pad mask
                 extra_padded_subsamlped_pad_mask = extra_padded_subsamlped_pad_mask.unsqueeze(-1).float()
-                masks_unfold = self.unfold_tensor(extra_padded_subsamlped_pad_mask, max_seq_len)  # unfold the pad mask like we did to the input tensor
+                masks_unfold = self.unfold_tensor(
+                    extra_padded_subsamlped_pad_mask, max_seq_len
+                )  # unfold the pad mask like we did to the input tensor
                 masks_unfold = masks_unfold.squeeze(-1).bool()  # unfold op does not support bool tensor
             else:
                 masks_unfold = None
         hs_mask = self.calculate_hs_mask(input_tensor, masks_unfold)
-        audio_features = self.audio_encoder([input_tensor, hs_mask])
+        audio_features = self.audio_encoder(input_tensor, hs_mask)
         if unfolded:
             embed_dim = audio_features.shape[-1]
             audio_features = np.reshape(audio_features, (ori_bz, -1, embed_dim))
             # if we ever padded before unfolding, we need to remove the padding
             if chunk_pad_size > 0:
                 audio_features = audio_features[:, :-chunk_pad_size, :]
-        audio_encoder = self.audio_vision_projector if audio_projection_mode == "vision" else self.audio_speech_projector
+        audio_encoder = (
+            self.audio_vision_projection if audio_projection_mode == "vision" else self.audio_speech_projection
+        )
         audio_set_tensor = audio_encoder(audio_features)
 
         return torch.from_numpy(audio_set_tensor)
@@ -3830,7 +3920,11 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         chunk_start_idx = np.arange(0, seq_len, chunk_size_train_eff)
         # avoid randomness when run evaluation or decoding
 
-        enc_streaming_mask = self.adaptive_enc_mask(seq_len, chunk_start_idx, left_window=left_chunk_train_eff).unsqueeze(0).expand([batch_size, -1, -1])
+        enc_streaming_mask = (
+            self.adaptive_enc_mask(seq_len, chunk_start_idx, left_window=left_chunk_train_eff)
+            .unsqueeze(0)
+            .expand([batch_size, -1, -1])
+        )
         return enc_streaming_mask
 
     def compute_lens_change(self, feature_lens):
@@ -3927,12 +4021,18 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                         [False., False., True., True.]])
         """
         chunk_start_idx = torch.Tensor(chunk_start_idx).long()  # first idx of each chunk, such as [0,18,36,48].
-        start_pad = torch.nn.functional.pad(chunk_start_idx, (1, 0))  # append 0 to the beginning, so it becomes [0, 0, 18, 36, 48]
-        end_pad = torch.nn.functional.pad(chunk_start_idx, (0, 1), value=x_len)  # append x_len to the end, so it becomes [0,18,36,48, x_len]
+        start_pad = torch.nn.functional.pad(
+            chunk_start_idx, (1, 0)
+        )  # append 0 to the beginning, so it becomes [0, 0, 18, 36, 48]
+        end_pad = torch.nn.functional.pad(
+            chunk_start_idx, (0, 1), value=x_len
+        )  # append x_len to the end, so it becomes [0,18,36,48, x_len]
         seq_range = torch.arange(0, x_len).unsqueeze(-1)  # seq_range size: [x_len, 1]
         idx = ((seq_range < end_pad) & (seq_range >= start_pad)).nonzero()[:, 1]  # idx size: [x_len]
-        boundary = end_pad[idx]  # boundary size: [x_len]
-        seq_range_expand = torch.arange(0, x_len).unsqueeze(0).expand(x_len, -1)  # seq_range_expand size [x_len, x_len]
+        end_pad[idx]  # boundary size: [x_len]
+        seq_range_expand = (
+            torch.arange(0, x_len).unsqueeze(0).expand(x_len, -1)
+        )  # seq_range_expand size [x_len, x_len]
         idx_left = idx - left_window
         idx_left[idx_left < 0] = 0
         boundary_left = start_pad[idx_left]
@@ -3985,20 +4085,25 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         past_key_values=None,
     ):
         if past_key_values is not None:
-            return self.model.embed_tokens(input_ids)
+            return self.language_model.embed_tokens(input_ids)
 
         new_input_ids = input_ids.clone()
-        new_input_ids[(input_ids >= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[0]) & (input_ids <= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[1])] = (
-            self._IMAGE_SPECIAL_TOKEN_ID
-        )
-        new_input_ids[(input_ids >= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[0]) & (input_ids <= _COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[1])] = (
-            self._AUDIO_SPECIAL_TOKEN_ID
-        )
+        new_input_ids[
+            (input_ids >= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[0])
+            & (input_ids <= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[1])
+        ] = self._IMAGE_SPECIAL_TOKEN_ID
+        new_input_ids[
+            (input_ids >= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[0])
+            & (input_ids <= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[1])
+        ] = self._AUDIO_SPECIAL_TOKEN_ID
         input_ids = new_input_ids
         image_position_mask = input_ids == self._IMAGE_SPECIAL_TOKEN_ID
         non_image_position_mask = ~image_position_mask
         image_hidden_states = self.image_embed(
-            input_ids=input_ids, input_embeds=input_image_embeds, image_sizes=image_sizes, image_attention_mask=image_attention_mask
+            input_ids=input_ids,
+            input_embeds=input_image_embeds,
+            image_sizes=image_sizes,
+            image_attention_mask=image_attention_mask,
         )
         audio_hidden_states = self.audio_embed(
             input_ids=input_ids,
@@ -4007,12 +4112,18 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             audio_attention_mask=audio_attention_mask,
             audio_projection_mode=audio_projection_mode,
         )
-        hidden_states = image_hidden_states * image_position_mask.unsqueeze(-1) + audio_hidden_states * non_image_position_mask.unsqueeze(-1)
+        hidden_states = image_hidden_states * image_position_mask.unsqueeze(
+            -1
+        ) + audio_hidden_states * non_image_position_mask.unsqueeze(-1)
 
         return hidden_states
 
     def get_multimodal_embeddings(
-        self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, 
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
         input_image_embeds: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[torch.LongTensor] = None,
         image_attention_mask=None,
@@ -4020,7 +4131,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         audio_embed_sizes=None,
         audio_attention_mask=None,
         input_mode=None,
-        **kwargs
+        **kwargs,
     ):
         if pixel_values is not None and input_image_embeds is None:
             input_image_embeds = pixel_values
@@ -4041,7 +4152,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                 raise ValueError(f"Invalid input_mode: {input_mode}")
         inputs_embeds = self.embed_tokens_extend(
             input_ids=input_ids,
-            input_embeds=inputs_embeds,
+            input_embeds=kwargs.get("inputs_embeds"),
             input_image_embeds=input_image_embeds,
             input_audio_embeds=input_audio_embeds,
             image_sizes=image_sizes,
@@ -4052,6 +4163,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             past_key_values=kwargs.get("past_key_values"),
         )
         return inputs_embeds, attention_mask, position_ids
+
+    def preprocess_inputs(self, text, image, *args, **kwargs):
+        return None
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
