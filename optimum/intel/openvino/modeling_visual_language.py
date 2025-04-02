@@ -340,9 +340,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
     auto_model_class = AutoModelForCausalLM
-    SUPPORT_IMAGES = True
-    SUPPORT_VIDEOS = False
-    SUPPORT_AUDIO = False
 
     def __init__(
         self,
@@ -902,9 +899,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
         return True
 
-    @classmethod
+    @staticmethod
+    @abstractmethod
     def preprocess_inputs(
-        cls,
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -916,28 +913,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Preprocess input instruction and an image.
         """
-        cls._check_inputs_for_preprocessing(text, image, video, audio)
-        return cls._preprocess_inputs(text, image, processor, tokenizer, config)
-
-    @classmethod
-    def _check_inputs_for_preprocessing(cls, text, image=None, video=None, audio=None):
-        if video is not None and not cls.SUPPORT_VIDEOS:
-            raise ValueError("Video input is not supported")
-        if audio is not None and not cls.SUPPORT_AUDIO:
-            raise ValueError("Audio input is not supported")
-
-    @abstractmethod
-    @staticmethod
-    def _preprocess_inputs(
-        text: str,
-        image: Optional["Image"] = None,
-        processor: Optional[AutoImageProcessor] = None,
-        tokenizer: Optional[PreTrainedTokenizer] = None,
-        config: Optional[PretrainedConfig] = None,
-        video: Optional["VideoInput"] = None,
-        audio=None,
-    ):
-        pass
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
@@ -1105,7 +1080,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         return attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -1444,7 +1419,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
     additional_parts = ["vision_resampler", "multi_modal_projector"]
     auto_model_class = AutoModelForVision2Seq
-    SUPPORT_VIDEOS = True
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -1528,7 +1502,7 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
         return image_features, feature_lens
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -1716,7 +1690,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         return input_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -2102,7 +2076,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return vllm_embedding, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -2305,7 +2279,7 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         return new_input_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -2472,7 +2446,7 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -2509,7 +2483,6 @@ class QWen2VLModelOutputWithPast(ModelOutput):
 
 class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger"]
-    SUPPORT_VIDEOS = True
 
     def __init__(
         self,
@@ -2755,7 +2728,7 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         return final_result
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -2789,7 +2762,6 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
 class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger"]
-    SUPPORT_VIDEOS = True
 
     def __init__(
         self,
@@ -3300,7 +3272,7 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -3377,7 +3349,7 @@ class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: Optional[str] = None,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -3475,7 +3447,7 @@ class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(
+    def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
         processor: Optional[AutoImageProcessor] = None,
@@ -4937,8 +4909,37 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
     @staticmethod
-    def _preprocess_inputs(text, image, *args, **kwargs):
-        return None
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        user_prompt = "<|user|>"
+        assistant_prompt = "<|assistant|>"
+        prompt_suffix = "<|end|>"
+        image_token = "<|image_1|>"
+        audio_token = "<|audio_1|>"
+        if audio is not None and audio_token not in text:
+            text = audio_token + text
+        if image is not None and image_token not in text:
+            text = image_token + text
+        if processor.tokenizer.chat_template is None:
+            if not text.startswith(user_prompt):
+                text = user_prompt + text + prompt_suffix + assistant_prompt
+        else:
+            text = processor.tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True
+            )
+        inputs = processor(text=text, images=image, audios=audio, return_tensors="pt")
+        return inputs
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
