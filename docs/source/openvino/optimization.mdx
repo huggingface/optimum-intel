@@ -85,7 +85,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(dtype=\'int8\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -97,14 +97,14 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(dtype=\'int4\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
             <td>&#8211</td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(dtype=\'int4\', quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -116,7 +116,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -128,7 +128,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(dtype=\'int4\', dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -143,7 +143,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(dtype=\'int4\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4)).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -155,7 +155,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(dtype=\'int4\', dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -176,7 +176,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(dtype=\'int8\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -190,7 +190,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(dtype=\'int8\', quant_method=\'hybrid\', dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(bits=8, quant_method=\'hybrid\', dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -202,7 +202,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVStableDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
@@ -225,7 +225,7 @@ Click on a &#x2705 to copy the command/code for the corresponding optimization c
             </td>
             <td>
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'openai/whisper-large-v3-turbo\', quantization_config=OVQuantizationConfig(dtype=\'int8\', dataset=\'librispeech\', num_samples=10)).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'openai/whisper-large-v3-turbo\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'librispeech\', num_samples=10)).save_pretrained(\'save_dir\')')">
                     &#x2705
                 </button>
             </td>
