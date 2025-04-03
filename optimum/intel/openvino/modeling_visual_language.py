@@ -31,9 +31,9 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from .quantization import OVConfig, OVWeightQuantizationConfig
 from .utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -583,7 +583,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
+            from optimum.intel.openvino.quantization.quantizer import OVQuantizer
 
             quantization_config_copy = copy.deepcopy(quantization_config)
             quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
@@ -1913,7 +1913,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
     def _set_2d_pos_cache(self, max_size):
         pos_embed = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
-        self._pos_embed = pos_embed
+        self._pos_embeds = pos_embed
 
     def _adjust_pos_cache(self, tgt_sizes):
         max_h = torch.max(tgt_sizes[:, 0])

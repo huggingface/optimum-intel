@@ -12,27 +12,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
 
-# ruff: noqa
+from optimum.intel.utils.import_utils import is_nncf_available
 
-from .quantization.configuration import (
-    OVQuantizationMethod,
-    OVQuantizationConfigBase,
-    OVQuantizationConfig,
-    OVWeightQuantizationConfig,
+from .configuration import (
+    OVConfig,
     OVDynamicQuantizationConfig,
     OVMixedQuantizationConfig,
-    OVConfig,
-    _DEFAULT_4BIT_CONFIG,
-    _DEFAULT_4BIT_CONFIGS,
-    get_default_int4_config,
-    _check_default_4bit_configs,
+    OVQuantizationConfig,
+    OVQuantizationConfigBase,
+    OVQuantizationMethod,
+    OVWeightQuantizationConfig,
 )
 
-logger = logging.getLogger(__name__)
 
-logger.warning(
-    "`optimum.intel.configuration` import path is deprecated and will be removed in optimum-intel v1.24. "
-    "Please use `optimum.intel.quantization.configuration` instead."
-)
+if is_nncf_available():
+    # Running quantization is possible only if nncf is installed
+    # TODO: Remove InferRequestWrapper import after v1.25 release
+    from .calibration_dataset_builder import CalibrationDataset, InferRequestWrapper
+    from .quantizer import OVQuantizer
