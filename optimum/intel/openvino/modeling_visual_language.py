@@ -3549,9 +3549,12 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         )
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
-        self.chunk_size = -1
-        self.left_chunk = 18
-        self.time_reduction = 8
+        self.chunk_size = config.audio_processor["config"].get("chunk_size", -1)
+        self.left_chunk = config.audio_processor["config"].get("left_chunk", 18)
+        self.time_reduction = config.audio_processor["config"].get("time_reduction", 8)
+        self.image_size = config.img_processor.get("image_size", 448)
+        self.patch_size = config.img_processor.get("patch_size", 14)
+        self.num_patches_per_side = self.image_size // self.patch_size
         self._IMAGE_SPECIAL_TOKEN_ID = (
             200010  # '<|endoftext10|>', or we can better name it (in `tokenizer_config.json`)
         )
@@ -3598,7 +3601,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                 bs = img_embeds.shape[0]
                 pixel_values = img_embeds.flatten(0, 1)
                 patch_attn_mask = image_attention_mask.type(torch.BoolTensor).flatten(0, 1)
-                v_position_ids = self.get_vision_position_ids(pixel_values, patch_attn_mask)
+                v_position_ids = self.get_vision_position_ids(
+                    pixel_values, patch_attn_mask, self.patch_size, self.num_patches_per_side
+                )
                 # Nx(HW)xC
                 img_features = torch.from_numpy(
                     self.vision_embeddings(

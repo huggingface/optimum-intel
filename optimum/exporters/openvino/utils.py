@@ -28,7 +28,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available
-from optimum.utils.save_utils import maybe_save_preprocessors
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 
 logger = logging.getLogger(__name__)
@@ -369,3 +369,24 @@ def allow_skip_tracing_check(library_name, model_type):
     if library_name == "diffusers":
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
+
+
+def load_preprocessors(
+    src_name_or_path: Union[str, Path], subfolder: str = "", trust_remote_code: bool = False, model_type: str = None
+):
+    preprocessors = maybe_load_preprocessors(
+        src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+    )
+    if model_type == "phi4mm":
+        # audio feature extractor config overrides image processor config during saving, need to save it explicitly
+        try:
+            from transformers import AutoImageProcessor
+
+            preprocessors.append(
+                AutoImageProcessor.from_pretrained(
+                    src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception:
+            pass
+    return preprocessors

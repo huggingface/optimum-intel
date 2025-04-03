@@ -2780,7 +2780,9 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         self.batch_size = batch_size
         self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"]
         self.image_dim_out = (
-            normalized_config.config.img_processor["image_dim_out"]
+            normalized_config.config.img_processor.get(
+                "image_dim_out", normalized_config.config.img_processor["hidden_size"]
+            )
             if normalized_config.config.img_processor is not None
             else 1152
         )

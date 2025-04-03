@@ -2326,6 +2326,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["llava"]
     SUPPORT_VIDEO = []
+    SUPPORT_AUDIO = []
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
@@ -2342,12 +2343,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
 
     if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2"]
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2", "phi4mm"]
         SUPPORT_VIDEO.append("qwen2_5_vl")
+        SUPPORT_AUDIO.append("phi4mm")
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2"]
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
 
     IMAGE = Image.open(
         requests.get(
@@ -2595,9 +2597,26 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
+
+        if model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Translate this audio to French"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
         del model
 
         gc.collect()
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return (audio_data, 16000)
 
     def get_preprocessors(self, model_arch):
         model_id = MODEL_NAMES[model_arch]

@@ -130,6 +130,7 @@ MODEL_NAMES = {
     "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
     "phi3-moe": "katuni4ka/phi-3.5-moe-tiny-random",
     "phi3_v": "katuni4ka/tiny-random-phi3-vision",
+    "phi4mm": "katuni4ka/tiny-random-phi-4-multimodal",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
