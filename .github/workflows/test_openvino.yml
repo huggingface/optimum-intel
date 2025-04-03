@@ -39,6 +39,8 @@ jobs:
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
+          pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
+          pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2160
 
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
@@ -65,7 +67,7 @@ jobs:
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install dependencies (nightly)
         run: |
-          pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Test with Pytest (nightly)

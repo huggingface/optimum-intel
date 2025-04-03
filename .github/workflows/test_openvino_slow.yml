@@ -50,6 +50,7 @@ jobs:
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,tests] transformers[testing]
+          pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
           pip uninstall -y nncf
 
       - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }} 
@@ -74,7 +75,7 @@ jobs:
 
       - name: Install dependencies (slow)
         run: |
-          pip install .[nncf]
+          pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2160
 
       - name: Test with Pytest (slow)
         run: |
