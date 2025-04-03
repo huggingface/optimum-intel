@@ -4304,7 +4304,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                 bs = img_embeds.shape[0]
                 pixel_values = img_embeds.flatten(0, 1)
                 patch_attn_mask = image_attention_mask.type(torch.BoolTensor).flatten(0, 1)
-                v_position_ids = self.get_vision_position_ids(pixel_values, patch_attn_mask)
+                v_position_ids = self.get_vision_position_ids(
+                    pixel_values, patch_attn_mask, self.patch_size, self.num_patches_per_side
+                )
                 # Nx(HW)xC
                 img_features = torch.from_numpy(
                     self.vision_embeddings(
