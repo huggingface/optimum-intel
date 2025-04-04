@@ -234,6 +234,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "smolvlm",
     "phi4mm",
     "phi4-multimodal",
+    "llama4"
 ]
 
 
@@ -364,7 +365,7 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
     return ov_tokenizer_model
 
 
-SKIP_CHECK_TRACE_MODELS = ("deepseek", "deepseek-v2", "deepseek-v3", "levit")
+SKIP_CHECK_TRACE_MODELS = ("deepseek", "deepseek-v2", "deepseek-v3", "levit", "llama4", )
 
 
 def allow_skip_tracing_check(library_name, model_type):

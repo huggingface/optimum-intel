@@ -6025,3 +6025,179 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
         self._model.img_processor.forward = self._model.img_processor._orig_forward
         self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward
+
+
+class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
+        def get_image_embeddings(self, pixel_values):
+            image_features = self.get_image_features(
+                pixel_values=pixel_values,
+                vision_feature_layer=self.config.vision_config.vision_feature_layer,
+                vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+            )
+            vision_flat = image_features.view(-1, image_features.size(-1))
+            projected_vision_flat = self.multi_modal_projector(vision_flat)
+            return projected_vision_flat
+
+        model.forward = types.MethodType(get_image_embeddings, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+# modified from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L229
+# use real cos / sin instead of complex
+def llama4_rope_forward(self, x, position_ids):
+    if "dynamic" in self.rope_type:
+        self._dynamic_frequency_update(position_ids, device=x.device)
+    # Core RoPE block
+    inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+    position_ids_expanded = position_ids[:, None, :].float()
+    # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
+    device_type = x.device.type
+    device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+    with torch.autocast(device_type=device_type, enabled=False):
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+    return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
+# https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L329
+# use real cos / sin instead of complex
+def llama4_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
+    past_key_value=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    from transformers.models.llama4.modeling_llama4 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
+
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+
+    query_states = self.q_proj(hidden_states).view(hidden_shape)
+    key_states = self.k_proj(hidden_states).view(*input_shape, -1, self.head_dim)
+    value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+    if self.use_rope:  # the 16E model skips rope for long context on certain layers
+        cos, sin = position_embeddings[0], position_embeddings[1]
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos.to(query_states.device), sin.to(query_states.device), unsqueeze_dim=2
+        )
+
+    if hasattr(self, "qk_norm"):  # the 128E model does not use qk_norm
+        query_states = self.qk_norm(query_states)
+        key_states = self.qk_norm(key_states)
+
+    # Use temperature tuning from https://arxiv.org/abs/2501.19399) to NoROPE layers
+    if self.attn_temperature_tuning and not self.use_rope:
+        attn_scales = (
+            torch.log(torch.floor((cache_position.float() + 1.0) / self.floor_scale) + 1.0) * self.attn_scale + 1.0
+        )
+        attn_scales = attn_scales.view((1, input_shape[-1], 1, 1)).expand((*input_shape, 1, 1))  # batch size > 1
+        query_states = (query_states * attn_scales).to(query_states.dtype)
+
+    query_states = query_states.transpose(1, 2)
+    key_states = key_states.transpose(1, 2)
+
+    if past_key_value is not None:
+        # sin and cos are specific to RoPE models; cache_position needed for the static cache
+        cache_kwargs = {"cache_position": cache_position}
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    attention_interface = eager_attention_forward
+    if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
+            attention_interface = eager_attention_forward
+        else:
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+    attn_output, attn_weights = attention_interface(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=0.0 if not self.training else self.attention_dropout,
+        scaling=self.scaling,
+        **kwargs,
+    )
+
+    attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+    return attn_output, attn_weights
+
+
+# modified from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L157
+# due to openvino transformations issue removed routed_out.view(-1, hidden_dim) in scatter_add_
+def llama4_moe_forward(self, hidden_states):
+    batch, seq_len, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, self.hidden_dim)
+    router_logits = self.router(hidden_states).transpose(0, 1)
+    tokens_per_expert = batch * seq_len
+
+    router_top_value, router_indices = torch.topk(router_logits.transpose(0, 1), self.top_k, dim=1)
+    router_scores = (
+        torch.full_like(router_logits.transpose(0, 1), float("-inf"))
+        .scatter_(1, router_indices, router_top_value)
+        .transpose(0, 1)
+    )
+    # We do this to make sure we have -inf for non topK tokens before going through the !
+    # Here we are just creating a tensor to index each and every single one of the hidden states. Let s maybe register a buffer for this!
+    router_indices = (
+        torch.arange(tokens_per_expert, device=hidden_states.device).view(1, -1).expand(router_scores.size(0), -1)
+    )
+    router_scores = torch.sigmoid(router_scores.float()).to(hidden_states.dtype)
+
+    router_indices = router_indices.reshape(-1, 1).expand(-1, hidden_dim)
+    routed_in = torch.gather(
+        input=hidden_states,
+        dim=0,
+        index=router_indices,
+    ).to(hidden_states.device)
+    # we gather inputs corresponding to each expert based on the router indices
+    routed_in = routed_in * router_scores.reshape(-1, 1)
+    routed_out = self.experts(routed_in)
+    out = self.shared_expert(hidden_states)
+    # now that we finished expert computation -> we scatter add because we gathered previously
+    # we have to do this because we used all experts on all tokens. This is faster than the for loop, tho you are compute bound
+    # this scales a lot better if you do EP!
+    out.scatter_add_(dim=0, index=router_indices, src=routed_out)
+    return out, router_scores
+
+
+class Llama4TextModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
+        self._model.model.rotary_emb.forward = types.MethodType(llama4_rope_forward, self._model.model.rotary_emb)
+        for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
+            if layer.is_moe_layer:
+                layer.feed_forward._orig_forward = layer.feed_forward.forward
+                layer.feed_forward.forward = types.MethodType(llama4_moe_forward, layer.feed_forward)
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(llama4_attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
+        for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
+            if layer.is_moe_layer:
+                layer.feed_forward.forward = layer.feed_forward._orig_forward
+            layer.self_attn.forward = layer.self_attn._orig_forward
