@@ -4782,3 +4782,28 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.vision_model.embeddings.forward = self._model.vision_model.embeddings._orig_forward
         for layer in self._model.vision_model.encoder.layers:
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        def get_image_embeddings(self, pixel_values):
+            image_features = self.get_image_features(
+                pixel_values=pixel_values,
+                vision_feature_layer=self.config.vision_config.vision_feature_layer,
+                vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+            )
+            vision_flat = image_features.view(-1, image_features.size(-1))
+            projected_vision_flat = self.multi_modal_projector(vision_flat)
+            return projected_vision_flat
+        model.forward = types.MethodType(get_image_embeddings, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
