@@ -81,4 +81,5 @@ jobs:
           pytest tests/openvino -m "run_slow" --durations=0
         env:
           RUN_SLOW: 1
+          HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
