@@ -96,6 +96,7 @@ from .model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
+    Llama4ImageEmbeddingsModelPatcher,
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
@@ -157,6 +158,10 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "smolvlm", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
+        "transformers",
+        "Llama4ForConditionalGeneration",
     )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
@@ -1538,9 +1543,9 @@ def get_vlm_text_generation_config(
 
 
 class VLMConfigBehavior(str, enum.Enum):
-    LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
+    LANGUAGE = "language"
 
 
 class BaseVLMOpenVINOConfig(OnnxConfig):
@@ -3236,3 +3241,45 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("smolvlm", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+
+@register_in_tasks_manager(
+    "llama4-text", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+
+@register_in_tasks_manager(
+    "llama4", *["image-text-to-text"], library_name="transformers"
+)
+class Llama4OpenVINOConfig(BaseVLMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
