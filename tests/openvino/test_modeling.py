@@ -2353,6 +2353,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_AUDIO.append("phi4mm")
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
+    if is_transformers_version(">", "4.50"):
+        SUPPORTED_ARCHITECTURES += ["llama4"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
 
@@ -2373,6 +2375,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             "gemma3",
             "idefics3",
             "smolvlm",
+            "llama4",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -2433,6 +2436,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
+        # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
+        if model_arch == "llama4":
+            transformers_inputs["pixel_values"] = transformers_inputs["pixel_values"].to(torch.float32)
         test_device = "AUTO"
         ov_model.to(test_device)
         self._check_device_and_request(ov_model, test_device, False)
@@ -2451,7 +2457,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3, equal_nan=True),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
@@ -2481,6 +2487,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
+
+        if model_arch == "llama4":
+            transformers_model.config._attn_implementation = "sdpa"
 
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(

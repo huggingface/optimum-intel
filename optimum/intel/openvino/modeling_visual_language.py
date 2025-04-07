@@ -4123,24 +4123,28 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
-        return self.vision_embeddings(pixel_values).last_hidden_state
+        if pixel_values.dtype != torch.float32:
+            pixel_values.to(torch.float32)
+        return self.vision_embeddings(pixel_values.to(torch.float32)).last_hidden_state
 
-    def merge_vision_text_embeddings(self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs):
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
         original_inputs_embeds_shape = inputs_embeds.shape
         special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
-        final_mask = special_image_mask.to(inputs_embeds.device) 
+        final_mask = special_image_mask.to(inputs_embeds.device)
         inputs_embeds = inputs_embeds.view(-1, inputs_embeds.size(-1))
 
         final_mask_1d = final_mask[..., 0].reshape(-1)
         num_tokens_to_fill = final_mask_1d.sum()
 
         if num_tokens_to_fill != image_features.size(0):
-                raise ValueError(
-                    f"Mismatch: final_mask wants {num_tokens_to_fill} embeddings, "
-                    f"but multi_modal_projector returned {image_features.size(0)}"
-                )
+            raise ValueError(
+                f"Mismatch: final_mask wants {num_tokens_to_fill} embeddings, "
+                f"but multi_modal_projector returned {image_features.size(0)}"
+            )
 
         expanded_mask = final_mask_1d.unsqueeze(-1).expand(-1, inputs_embeds.size(-1))
         inputs_embeds.masked_scatter_(expanded_mask, image_features)
@@ -4148,6 +4152,36 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         inputs_embeds = inputs_embeds.view(original_inputs_embeds_shape)
 
         return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+
+        if video is not None:
+            raise ValueError("video input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
@@ -4167,5 +4201,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "smolvlm": _OVSmolVLForCasualLM,
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
-    "llama4": _OVLlama4ForCausalLM
+    "llama4": _OVLlama4ForCausalLM,
 }

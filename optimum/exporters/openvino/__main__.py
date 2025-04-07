@@ -49,7 +49,7 @@ from .utils import (
 )
 
 
-FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager", "gemma2": "sdpa"}
+FORCE_ATTN_MODEL_CLASSES = {"phi3-v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
@@ -333,7 +333,7 @@ def main_export(
             if dtype in [torch.float16, torch.bfloat16]:
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
- #           loading_kwargs["low_cpu_mem_usage"] = True
+        #           loading_kwargs["low_cpu_mem_usage"] = True
         # Patch the modules to export of GPTQ models w/o GPU
         if do_quant_patching:
             orig_cuda_check = torch.cuda.is_available

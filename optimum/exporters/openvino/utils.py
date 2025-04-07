@@ -234,7 +234,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "smolvlm",
     "phi4mm",
     "phi4-multimodal",
-    "llama4"
+    "llama4",
 ]
 
 
