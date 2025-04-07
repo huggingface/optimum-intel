@@ -316,6 +316,9 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+        # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
+        if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
+            (Path(output) / "chat_template.json").unlink()
     else:
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
