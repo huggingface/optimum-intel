@@ -3798,7 +3798,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         input_ids: torch.LongTensor,
         input_embeds: torch.FloatTensor,
         audio_embed_sizes=None,
-        audio_attention_mask=None,
         audio_projection_mode="speech",
         **kwargs,
     ):
@@ -3809,7 +3808,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         positions_tuple = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=True)
         hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
         if len(positions.tolist()) > 0:
-            audio_set_tensor = self.get_audio_features(input_embeds, audio_attention_mask, audio_projection_mode)
+            audio_set_tensor = self.get_audio_features(input_embeds, audio_projection_mode)
             assert audio_embed_sizes.sum().item() == len(
                 positions
             ), f"please ensure the encoder outputs have the same length as defined in input_ids! \n audio_embed_sizes.sum().item(): {audio_embed_sizes.sum().item()} \n len(positions): {len(positions)} \n audio_embed_sizes: {audio_embed_sizes} \n positions: {positions} \n input_ids.shape \n {input_ids.shape}"
@@ -3833,7 +3832,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
     def get_audio_features(
         self,
         input_embeds: torch.FloatTensor,
-        audio_attention_mask: torch.Tensor,
         audio_projection_mode: str = "speech",
     ):
         xs_pad = self.audio_embeddings(input_embeds)
@@ -4113,13 +4111,11 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
     def embed_tokens_extend(
         self,
         input_ids: torch.LongTensor,
-        input_embeds,
         input_image_embeds: torch.FloatTensor = None,
         input_audio_embeds: torch.FloatTensor = None,
         image_sizes=None,
         image_attention_mask=None,
         audio_embed_sizes=None,
-        audio_attention_mask=None,
         audio_projection_mode="speech",
         past_key_values=None,
     ):
@@ -4148,7 +4144,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             input_ids=input_ids,
             input_embeds=input_audio_embeds,
             audio_embed_sizes=audio_embed_sizes,
-            audio_attention_mask=audio_attention_mask,
             audio_projection_mode=audio_projection_mode,
         )
         hidden_states = image_hidden_states * image_position_mask.unsqueeze(
@@ -4168,7 +4163,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         image_attention_mask=None,
         input_audio_embeds: Optional[torch.FloatTensor] = None,
         audio_embed_sizes=None,
-        audio_attention_mask=None,
         input_mode=None,
         **kwargs,
     ):
@@ -4191,13 +4185,11 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
                 raise ValueError(f"Invalid input_mode: {input_mode}")
         inputs_embeds = self.embed_tokens_extend(
             input_ids=input_ids,
-            input_embeds=kwargs.get("inputs_embeds"),
             input_image_embeds=input_image_embeds,
             input_audio_embeds=input_audio_embeds,
             image_sizes=image_sizes,
             image_attention_mask=image_attention_mask,
             audio_embed_sizes=audio_embed_sizes,
-            audio_attention_mask=audio_attention_mask,
             audio_projection_mode=audio_projection_mode,
             past_key_values=kwargs.get("past_key_values"),
         )
