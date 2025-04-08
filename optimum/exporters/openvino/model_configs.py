@@ -57,8 +57,8 @@ from optimum.utils.input_generators import (
     DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
-    MistralDummyPastKeyValuesGenerator,
     GemmaDummyPastKeyValuesGenerator,
+    MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
 
