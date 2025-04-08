@@ -4885,6 +4885,7 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
         def get_image_embeddings(self, pixel_values):
             image_features = self.get_image_features(
                 pixel_values=pixel_values,
@@ -4903,6 +4904,8 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
+# modified from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L229
+# use real cos / sin instead of complex
 def llama4_rope_forward(self, x, position_ids):
     if "dynamic" in self.rope_type:
         self._dynamic_frequency_update(position_ids, device=x.device)
@@ -4921,6 +4924,8 @@ def llama4_rope_forward(self, x, position_ids):
     return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
+# https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L329
+# use real cos / sin instead of complex
 def llama4_attn_forward(
     self,
     hidden_states: torch.Tensor,
@@ -4942,12 +4947,9 @@ def llama4_attn_forward(
 
     if self.use_rope:  # the 16E model skips rope for long context on certain layers
         cos, sin = position_embeddings[0], position_embeddings[1]
-        print(key_states.shape)
-        print(cos.shape)
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, cos.to(query_states.device), sin.to(query_states.device), unsqueeze_dim=2
         )
-        print(key_states.shape)
 
     if hasattr(self, "qk_norm"):  # the 128E model does not use qk_norm
         query_states = self.qk_norm(query_states)
@@ -4991,6 +4993,8 @@ def llama4_attn_forward(
     return attn_output, attn_weights
 
 
+# modified from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L157
+# due to openvino transformations issue removed routed_out.view(-1, hidden_dim) in scatter_add_
 def llama4_moe_forward(self, hidden_states):
     batch, seq_len, hidden_dim = hidden_states.shape
     hidden_states = hidden_states.view(-1, self.hidden_dim)
