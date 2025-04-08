@@ -21,7 +21,6 @@ from typing import Dict, List, Optional, Union
 
 import openvino
 import torch
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core, Model, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
@@ -29,6 +28,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
 from transformers.utils import is_offline_mode
+from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
@@ -111,9 +111,9 @@ class OVBaseModel(OptimizedModel):
         for idx, key in enumerate(model.inputs):
             names = tuple(key.get_names())
             input_names[next((name for name in names if "/" not in name), names[0])] = idx
-            input_dtypes[
-                next((name for name in names if "/" not in name), names[0])
-            ] = key.get_element_type().get_type_name()
+            input_dtypes[next((name for name in names if "/" not in name), names[0])] = (
+                key.get_element_type().get_type_name()
+            )
         self.input_names = input_names
         self.input_dtypes = input_dtypes
 
@@ -122,9 +122,9 @@ class OVBaseModel(OptimizedModel):
         for idx, key in enumerate(model.outputs):
             names = tuple(key.get_names())
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
-            output_dtypes[
-                next((name for name in names if "/" not in name), names[0])
-            ] = key.get_element_type().get_type_name()
+            output_dtypes[next((name for name in names if "/" not in name), names[0])] = (
+                key.get_element_type().get_type_name()
+            )
 
         self.output_names = output_names
         self.output_dtypes = output_dtypes
@@ -540,17 +540,19 @@ class OVBaseModel(OptimizedModel):
             else:
                 model_file_names = [file_name]
             for file_name in model_file_names:
-                model_cache_path = hf_hub_download(
-                    repo_id=model_path.as_posix(),
-                    filename=file_name.as_posix(),
-                    subfolder=subfolder,
-                    token=token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
+                model_cache_path = Path(
+                    cached_file(
+                        model_path.as_posix(),
+                        filename=file_name.as_posix(),
+                        token=token,
+                        revision=revision,
+                        force_download=force_download,
+                        cache_dir=cache_dir,
+                        subfolder=subfolder,
+                        local_files_only=local_files_only,
+                    )
                 )
-            model_cache_path = Path(model_cache_path)
+
 
         return model_cache_path
 
