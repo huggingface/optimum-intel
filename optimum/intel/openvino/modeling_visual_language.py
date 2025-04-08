@@ -4285,7 +4285,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             positions = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=False)
             positions_tuple = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=True)
 
-        # logger.info(f'position size: {positions.size()} ...')
         select = False
         hd_transform = False
         if len(positions.tolist()) > 0:
@@ -4511,12 +4510,9 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
 
         positions = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=False)
         positions_tuple = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=True)
+        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
         if len(positions.tolist()) > 0:
             audio_set_tensor = self.get_audio_features(input_embeds, audio_attention_mask, audio_projection_mode)
-
-        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
-
-        if len(positions.tolist()) > 0:
             assert audio_embed_sizes.sum().item() == len(
                 positions
             ), f"please ensure the encoder outputs have the same length as defined in input_ids! \n audio_embed_sizes.sum().item(): {audio_embed_sizes.sum().item()} \n len(positions): {len(positions)} \n audio_embed_sizes: {audio_embed_sizes} \n positions: {positions} \n input_ids.shape \n {input_ids.shape}"
@@ -4548,7 +4544,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
 
         unfolded = False
         ori_bz, seq_len, D = input_tensor.shape
-        max_seq_len = 500  # maxium position for absolute positional encoding
+        max_seq_len = 500  # maximum position for absolute positional encoding
         masks_unfold = None
         if seq_len > max_seq_len:
             # audio sequence is longer than max_seq_len, unfold it into chunks of max_seq_len
