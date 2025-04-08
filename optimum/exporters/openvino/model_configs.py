@@ -2781,7 +2781,7 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"]
         self.image_dim_out = (
             normalized_config.config.img_processor.get(
-                "image_dim_out", normalized_config.config.img_processor["hidden_size"]
+                "image_dim_out", normalized_config.config.img_processor.get("hidden_size")
             )
             if normalized_config.config.img_processor is not None
             else 1152
@@ -4138,3 +4138,4 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
             )
+
