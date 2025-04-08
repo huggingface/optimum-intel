@@ -63,6 +63,7 @@ class OVBaseModel(OptimizedModel):
     _supports_cache_class = False
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
+    _search_pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
 
     def __init__(
         self,
@@ -459,7 +460,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
