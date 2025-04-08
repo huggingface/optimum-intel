@@ -4123,10 +4123,12 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
+        # Llama4 preprocessor creates bf16 tensor for pixel values, it can not be represented as numpy array
         if pixel_values.dtype != torch.float32:
             pixel_values.to(torch.float32)
         return self.vision_embeddings(pixel_values.to(torch.float32)).last_hidden_state
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1743-L1759
     def merge_vision_text_embeddings(
         self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
     ):
