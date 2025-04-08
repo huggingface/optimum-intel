@@ -139,6 +139,7 @@ MODEL_NAMES = {
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
+    "sam": "fxmarty/sam-vit-tiny-random",
     "smolvlm": "katuni4ka/tiny-random-smolvlm2",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
@@ -214,6 +215,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
+    "sam": (102, 100),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"

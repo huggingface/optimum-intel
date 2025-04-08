@@ -46,6 +46,8 @@ OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
 OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
 OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
 OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
+OV_VISION_ENCODER_MODEL_NAME = "openvino_vision_encoder.xml"
+OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME = "openvino_prompt_encoder_mask_decoder.xml"
 
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
 OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
@@ -129,6 +131,7 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "sam": "OVSamModel",
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
     "flux-fill": "OVFluxFillPipeline",
