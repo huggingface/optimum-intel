@@ -47,7 +47,7 @@ if is_nncf_available():
 
     patch_torch_operators()
 
-    from .quantization import CalibrationDataset, OVQuantizer
+    from .quantization import OVCalibrationDataset, OVQuantizer
 
 
 from .configuration import (
