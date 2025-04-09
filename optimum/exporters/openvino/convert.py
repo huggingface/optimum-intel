@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.generation import GenerationMixin
+from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import Model, save_model
@@ -995,6 +996,10 @@ def _get_submodels_and_export_configs(
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
         )
+    elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
+        return _get_speecht5_tss_model_for_export(
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
+        )
 
     export_config, models_for_export = _default_get_submodels_and_export_configs(
         model,
@@ -1340,3 +1345,79 @@ def _get_encoder_decoder_stateful_models_for_export(
         decoder_export_config_with_past,
     )
     return None, models_for_export
+
+
+def _get_speecht5_tss_model_for_export(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    library_name: str,
+    int_dtype: str,
+    float_dtype: str,
+    preprocessors: Optional[List[Any]] = None,
+    model_kwargs: Optional[Dict] = None,
+    stateful: bool = True,
+):
+    DECODER_WITH_PAST_NAME = "decoder_with_past_model"
+    if model_kwargs is None or "vocoder" not in model_kwargs:
+        raise ValueError(
+            'The export of SpeechT5 requires a vocoder. Please pass `--model-kwargs \'{"vocoder": "vocoder_model_name_or_path"}\'` from the command line, or `model_kwargs={"vocoder": "vocoder_model_name_or_path"}` if calling main_export.'
+        )
+
+    # prepare export config
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name=library_name
+    )
+    export_config = export_config_constructor(
+        model.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        preprocessors=preprocessors,
+        legacy=False,
+    )
+
+    export_config.variant = "default"
+    all_variants = "\n".join([f"    - {name}: {description}" for name, description in export_config.VARIANTS.items()])
+    logger.info(f"Using the export variant {export_config.variant}. Available variants are:\n{all_variants}")
+
+    config = export_config
+
+    models_for_export = {}
+    encoder_export_config = config.with_behavior("encoder")
+    decoder_export_config = config.with_behavior("decoder", use_past=True, use_past_in_inputs=True)
+    postnet_export_config = config.__class__(
+        config._config,
+        task=config.task,
+        int_dtype=config.int_dtype,
+        float_dtype=config.float_dtype,
+        use_past=False,
+        use_past_in_inputs=False,  # Irrelevant here.
+        behavior=config._behavior,  # Irrelevant here.
+        preprocessors=config._preprocessors,
+        is_postnet=True,
+        is_vocoder=False,
+        legacy=config.legacy,
+    )
+    vocoder_export_config = config.__class__(
+        config._config,
+        task=config.task,
+        int_dtype=config.int_dtype,
+        float_dtype=config.float_dtype,
+        use_past=False,
+        use_past_in_inputs=False,  # Irrelevant here.
+        behavior=config._behavior,  # Irrelevant here.
+        preprocessors=config._preprocessors,
+        is_postnet=False,
+        is_vocoder=True,
+        legacy=config.legacy,
+    )
+
+    vocoder = SpeechT5HifiGan.from_pretrained(model_kwargs["vocoder"]).eval()
+
+    models_for_export[ENCODER_NAME] = (model.speecht5.encoder, encoder_export_config)
+    models_for_export[DECODER_NAME] = (model, decoder_export_config)
+    models_for_export["postnet"] = (model, postnet_export_config)
+    models_for_export["vocoder"] = (vocoder, vocoder_export_config)
+
+    stateful_per_model = [False, True, False, False]
+
+    return export_config, models_for_export, stateful_per_model
