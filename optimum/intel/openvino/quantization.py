@@ -601,7 +601,8 @@ class OVCalibrationDatasetBuilder:
         self, config: OVQuantizationConfigBase, dataset: "Dataset"
     ) -> OVCalibrationDataset:
         """
-        Prepares calibration data for VLM pipelines. Currently, collects data only for a language model component.
+        Prepares calibration data for VLM pipelines.
+        Currently, collects data only for a language model component.
         """
         processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
         try:
@@ -873,7 +874,7 @@ class OVQuantizer(OptimumQuantizer):
             ):
                 logger.warning(
                     "Assuming `caption` column should be used for calibration. This behavior will be deprecated in "
-                    "optimum-intel v1.25. Please filter the required columns before passing the dataset."
+                    "optimum-intel v1.25. Please filter out the unnecessary columns before passing the dataset."
                 )
                 calibration_dataset = calibration_dataset.select_columns(["caption"])
 
@@ -974,15 +975,6 @@ class OVQuantizer(OptimumQuantizer):
 
             if calibration_dataset is None:
                 raise ValueError("Calibration dataset is required to run data-aware quantization.")
-            if (
-                not (
-                    is_diffusers_available()
-                    and isinstance(self.model, OVDiffusionPipeline)
-                    or isinstance(self.model, _OVModelForWhisper)
-                )
-                and "model" not in calibration_dataset
-            ):
-                raise RuntimeError("Calibration datasets should contain a key 'model' with a dataset.")
 
             if (
                 isinstance(quantization_config, OVWeightQuantizationConfig)
