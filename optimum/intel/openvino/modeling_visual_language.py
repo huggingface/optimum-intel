@@ -24,7 +24,7 @@ from transformers import (
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -72,6 +72,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self,
         model: ov.Model,
         text_embeds_model: ov.Model,
+        lm_head: Optional[ov.Model] = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -82,8 +83,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     ):
         self.model = model
         self.text_emb_model = text_embeds_model
+        self.lm_head_model = lm_head
         self.request = None
         self.text_emb_request = None
+        self.lm_head_request = None
         compile_only = kwargs.get("compile_only", False)
         if compile_only:
             self.text_emb_request = self.text_emb_model
@@ -98,6 +101,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             logger.info(f"Compiling the Language model to {self._device} ...")
             super().compile()
         self._compile_text_emb()
+        self._compile_lm_head()
 
     def _compile_text_emb(self):
         if self.text_emb_request is None:
@@ -110,6 +114,17 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                     self.text_emb_model, self._device, self.ov_config, self.model_save_dir
                 )
 
+    def _compile_lm_head(self):
+        if self.lm_head_model is not None and self.lm_head_request is None:
+            logger.info(f"Compiling the LM head model to {self._device} ...")
+            if self._compile_only:
+                self.lm_head_request = self.lm_head_model
+            else:
+                logger.info(f"Compiling the LM head model to {self._device} ...")
+                self.lm_head_request = self._compile_model(
+                    self.lm_head_model, self._device, self.ov_config, self.model_save_dir
+                )
+
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
@@ -117,6 +132,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             )
         self.request = None
         self.text_emb_request = None
+        self.lm_head_request = None
 
     def embed_tokens(self, input_ids: torch.LongTensor):
         self._compile_text_emb()
@@ -209,13 +225,23 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
+        include_head = kwargs.get("include_head", True)
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = self.request.get_tensor("logits").data
-        logits = torch.from_numpy(logits).to(self.device)
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
+        if self.lm_head_request is not None:
+            last_hidden_state = self.request.get_tensor("last_hidden_state").data
+            if include_head:
+                logits = self.lm_head_request(last_hidden_state)[0]
+            else:
+                return BaseModelOutputWithPast(
+                    torch.from_numpy(last_hidden_state).to(self.device), past_key_values=past_key_values
+                )
+        else:
+            logits = self.request.get_tensor("logits").data
+        logits = torch.from_numpy(logits).to(self.device)
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
@@ -295,6 +321,31 @@ class OVMultiModalProjector(OVVisionProjection):
     _model_name = "multi_modal_projector"
 
 
+class OVVisionGenEmbedding(OVModelPart):
+    _model_name = "vision_gen_embeddings"
+
+    def forward(self, image_ids):
+        self._compile()
+        return self.request(image_ids)[0]
+
+
+class OVVisionGenHead(OVModelPart):
+    _model_name = "vision_gen_head"
+
+    def forward(self, hidden_state):
+        self._compile()
+        return self.request(hidden_state)[0]
+
+
+class OVVisionGenDecoder(OVModelPart):
+    _model_name = "vision_gen_decoder"
+
+    def forward(self, code_b, input_shape):
+        self._compile()
+        images = self.request({"code_b": code_b, "shape": np.array(input_shape, dtype=int)})[0]
+        return images
+
+
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
@@ -303,6 +354,9 @@ MODEL_PARTS_CLS_MAPPING = {
     "vision_resampler": OVVisionResampler,
     "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "vision_gen_embeddings": OVVisionGenEmbedding,
+    "vision_gen_head": OVVisionGenHead,
+    "vision_gen_decoder": OVVisionGenDecoder,
 }
 
 
@@ -322,6 +376,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        lm_head: Optional[ov.Model] = None,
         **kwargs,
     ):
         self.config = config
@@ -332,6 +387,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self.lm_model = language_model
+        self.lm_head_model = lm_head
         self.text_embeddings_model = text_embeddings
         self.vision_embeddings_model = vision_embeddings
         self._supports_cache_class = False
@@ -339,7 +395,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._compile_only = kwargs.get("compile_only", False)
 
         for part in self.additional_parts:
-            setattr(self, f"{part}_model", kwargs.get(part))
+            if part != "lm_head":
+                setattr(self, f"{part}_model", kwargs.get(part))
 
         enable_compilation = kwargs.get("compile", True)
         self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
@@ -350,6 +407,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.language_model = OVModelWithEmbedForCausalLM(
             self.lm_model,
             self.text_embeddings_model,
+            lm_head=self.lm_head_model,
             config=config,
             device=device,
             ov_config=ov_config,
@@ -360,6 +418,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
         self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
         for part in self.additional_parts:
+            if part == "lm_head":
+                continue
             model_part = getattr(self, f"{part}_model", None)
             if model_part is not None:
                 model_part = MODEL_PARTS_CLS_MAPPING[part](model_part, self)
@@ -678,6 +738,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     def _ov_submodel_names(self):
         model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
         for part in self.additional_parts:
+            if part == "lm_head" and getattr(self, part + "_model", None) is not None:
+                model_names.append(part + "_model")
+                continue
             if getattr(self, part, None) is not None:
                 model_names.append(part + "_model")
         return model_names
@@ -719,6 +782,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         second_per_grid_ts=None,
         token_type_ids=None,
         pixel_attention_mask=None,
+        images_seq_mask=None,
+        images_emb_mask=None,
         **kwargs,
     ):
         pixel_values = pixel_values if pixel_values is not None else images
@@ -737,6 +802,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             rope_deltas=rope_deltas,
             second_per_grid_ts=second_per_grid_ts,
             pixel_attention_mask=pixel_attention_mask,
+            images_seq_mask=images_seq_mask,
+            images_emb_mask=images_emb_mask,
             **kwargs,
         )
         return self.language_model.forward(
@@ -845,6 +912,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "video_grid_thw": kwargs.get("video_grid_thw"),
                 "token_type_ids": kwargs.get("token_type_ids"),
                 "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
+                "images_seq_mask": kwargs.get("images_seq_mask"),
+                "images_emb_mask": kwargs.get("images_emb_mask"),
             }
         )
         return model_inputs
@@ -3382,6 +3451,167 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
 
+class _OVJanusForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = ["vision_gen_embeddings", "vision_gen_head", "vision_gen_decoder", "lm_head"]
+
+    def get_text_embeddings(self, input_ids, **kwargs):
+        input_ids[input_ids < 0] = 0  # ignore the image embeddings
+        return self.language_model.embed_tokens(input_ids)
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if pixel_values is None:
+            return None
+
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        images_embeds = self.vision_embeddings(pixel_values).last_hidden_state
+        return images_embeds
+
+    def merge_vision_text_embeddings(
+        self,
+        vision_embeds,
+        inputs_embeds,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        images_seq_mask=None,
+        images_emb_mask=None,
+        **kwargs,
+    ):
+        if vision_embeds is not None:
+            images_emb_mask = images_emb_mask.reshape(vision_embeds.shape[0], -1)
+            inputs_embeds = (
+                torch.from_numpy(inputs_embeds) if not isinstance(inputs_embeds, torch.Tensor) else inputs_embeds
+            )
+            vision_embeds = (
+                torch.from_numpy(vision_embeds) if not isinstance(vision_embeds, torch.Tensor) else vision_embeds
+            )
+
+            # replace with the image embeddings
+            inputs_embeds[images_seq_mask] = vision_embeds[images_emb_mask]
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_gen_img_embeds(self, image_ids: torch.LongTensor):
+        return self.vision_gen_embeddings(image_ids)
+
+    def generate_image(
+        self,
+        processor,
+        prompt: str,
+        temperature: float = 1,
+        parallel_size: int = 16,
+        cfg_weight: float = 5,
+        image_token_num_per_image: int = 576,
+        img_size: int = 384,
+        patch_size: int = 16,
+        generator=None,
+        show_progress=True,
+    ):
+        from PIL import Image
+
+        conversation = [
+            {
+                "role": "User",
+                "content": prompt,
+            },
+            {"role": "Assistant", "content": ""},
+        ]
+
+        sft_format = processor.apply_sft_template_for_multi_turn_prompts(
+            conversations=conversation,
+            sft_format=processor.sft_format,
+            system_prompt="",
+        )
+        prompt = sft_format + processor.image_start_tag
+        input_ids = processor.tokenizer.encode(prompt)
+        input_ids = torch.LongTensor(input_ids)
+
+        tokens = torch.zeros((parallel_size * 2, len(input_ids)), dtype=torch.int)
+        for i in range(parallel_size * 2):
+            tokens[i, :] = input_ids
+            if i % 2 != 0:
+                tokens[i, 1:-1] = processor.pad_id
+
+        inputs_embeds = self.language_model.embed_tokens(tokens)
+
+        generated_tokens = torch.zeros((parallel_size, image_token_num_per_image), dtype=torch.int)
+        past_key_values = None
+
+        for i in range(image_token_num_per_image):
+            outputs = self.language_model.forward(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                use_cache=True,
+                past_key_values=past_key_values,
+                include_head=False,
+            )
+            hidden_states = outputs.last_hidden_state
+            past_key_values = outputs.past_key_values
+            logits = torch.from_numpy(self.vision_gen_head(hidden_states[:, -1, :]))
+            logit_cond = logits[0::2, :]
+            logit_uncond = logits[1::2, :]
+
+            logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+            probs = torch.softmax(logits / temperature, dim=-1)
+
+            next_token = (
+                torch.multinomial(probs, num_samples=1)
+                if generator is None
+                else torch.multinomial(probs, num_samples=1, generator=generator)
+            )
+            generated_tokens[:, i] = next_token.squeeze(dim=-1)
+
+            next_token = torch.cat([next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], dim=1).view(-1)
+            img_embeds = torch.from_numpy(self.prepare_gen_img_embeds(next_token))
+            inputs_embeds = img_embeds.unsqueeze(dim=1)
+        dec = self.vision_gen_decoder(
+            generated_tokens.to(dtype=torch.int), [parallel_size, 8, img_size // patch_size, img_size // patch_size]
+        )
+        dec = np.transpose(dec, (0, 2, 3, 1))
+
+        dec = np.clip((dec + 1) / 2 * 255, 0, 255)
+
+        visual_img = np.zeros((parallel_size, img_size, img_size, 3), dtype=np.uint8)
+        visual_img[:, :, :] = dec
+
+        images = []
+
+        for i in range(parallel_size):
+            images.append(Image.fromarray(visual_img[i]))
+
+        return images
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required")
+
+        if image is not None:
+            conversation = [
+                {
+                    "role": "<|User|>",
+                    "content": f"<image_placeholder>\n{text}",
+                    "images": [image],
+                },
+                {"role": "<|Assistant|>", "content": ""},
+            ]
+            prepare_inputs = processor(conversations=conversation, images=[image], force_batchify=True)
+        else:
+            tokenizer = tokenizer if tokenizer is not None else processor.tokenizer
+            prepare_inputs = tokenizer(text, return_tensors="pt")
+        required_keys = ["input_ids", "pixel_values", "images_seq_mask", "images_emb_mask"]
+        inputs = {}
+        for key in required_keys:
+            inputs[key] = getattr(prepare_inputs, key, None)
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
@@ -3397,4 +3627,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "gemma3": _OVGemma3ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
+    "multi_modality": _OVJanusForCausalLM,
 }
