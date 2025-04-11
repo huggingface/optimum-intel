@@ -97,6 +97,15 @@ _DEFAULT_4BIT_CONFIGS = {
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "Qwen/Qwen2.5-1.5B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 0.9,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "Qwen/Qwen2.5-7B-Instruct": {
         "bits": 4,
         "sym": False,
@@ -200,6 +209,15 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "ratio": 0.8,
         "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
+    "meta-llama/Llama-3.2-1B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
     "meta-llama/Meta-Llama-3.1-8B": {
