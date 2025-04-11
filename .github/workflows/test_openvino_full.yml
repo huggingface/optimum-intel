@@ -60,7 +60,7 @@ jobs:
 
       - name: Install openvino-nightly
         if: ${{ matrix.openvino == 'ov-nightly' }}
-        run: pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+        run: pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
 
       - name: Install openvino release
         if: ${{ matrix.openvino == 'ov-stable' }}
@@ -68,7 +68,7 @@ jobs:
 
       - name: Install nncf develop
         if: ${{ matrix.nncf == 'nncf-develop' }}
-        run: pip install git+https://github.com/openvinotoolkit/nncf.git
+        run: pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2160
 
       - name: Install nncf release
         if: ${{ matrix.nncf == 'nncf-stable' }}
@@ -90,4 +90,5 @@ jobs:
         run: pytest tests/openvino --durations=0
         env:
           RUN_SLOW: 1
+          HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
