@@ -147,7 +147,6 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         # Keeping the original model for serialization
-        self._original_model = self.model.clone() if not compile_only else None
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
         self._past_length = 0
@@ -197,6 +196,17 @@ class OVBaseDecoderModel(OVModel):
         if not self._compile_only and enable_compilation:
             self.compile()
 
+    @staticmethod
+    def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
+        ppp = PrePostProcessor(model)
+        for key in model.inputs:
+            if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
+                ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
+        for key in model.outputs:
+            if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
+                ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
+        return ppp.build()
+
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful or self._compile_only:
             return
@@ -216,20 +226,13 @@ class OVBaseDecoderModel(OVModel):
                 if inference_precision_hint in STR_TO_OV_TYPE:
                     pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
 
-            ppp = PrePostProcessor(self.model)
-            for key in self.model.inputs:
-                if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
-                    ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
-            for key in self.model.outputs:
-                if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
-                    ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
-
-            self.model = ppp.build()
+            self.model = self._get_model_with_updated_pkv_precision(self.model, pkv_precision)
             self._pkv_precision = pkv_precision
+            self.request = None
         else:
             if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
+                self.model = self._get_model_with_updated_pkv_precision(self.model, Type.f32)
                 self._pkv_precision = Type.f32
-                self.model = self._original_model.clone()
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
@@ -248,7 +251,11 @@ class OVBaseDecoderModel(OVModel):
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
             )
-        model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
+        model_to_save = (
+            self.model
+            if self._pkv_precision == Type.f32
+            else self._get_model_with_updated_pkv_precision(self.model.clone(), Type.f32)
+        )
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
