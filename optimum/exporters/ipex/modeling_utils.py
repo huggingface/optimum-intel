@@ -143,7 +143,7 @@ def _llama_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max()
+    max_input_lens = input_lens.max().item()
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
@@ -276,7 +276,7 @@ def _falcon_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max()
+    max_input_lens = input_lens.max().item()
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
@@ -423,7 +423,7 @@ def _gpt2_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max()
+    max_input_lens = input_lens.max().item()
 
     if past_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
@@ -559,7 +559,7 @@ def _qwen2_model_forward(
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = input_lens.max()
+    max_input_lens = input_lens.max().item()
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
@@ -683,11 +683,11 @@ class _IPEXAttention(nn.Module):
         if past_key_value is None:
             n_rep = query.shape[1] // key.shape[1]
             attn_output = torch.nn.functional.scaled_dot_product_attention(
-                query.reshape(input_lens.shape[0], input_lens.max(), -1, query.shape[-1]).transpose(1, 2),
-                key.reshape(input_lens.shape[0], input_lens.max(), -1, key.shape[-1])
+                query.reshape(input_lens.shape[0], input_lens.max().item(), -1, query.shape[-1]).transpose(1, 2),
+                key.reshape(input_lens.shape[0], input_lens.max().item(), -1, key.shape[-1])
                 .transpose(1, 2)
                 .repeat_interleave(n_rep, 1),
-                value.reshape(input_lens.shape[0], input_lens.max(), -1, value.shape[-1])
+                value.reshape(input_lens.shape[0], input_lens.max().item(), -1, value.shape[-1])
                 .transpose(1, 2)
                 .repeat_interleave(n_rep, 1),
                 attn_mask=attention_mask,
@@ -723,8 +723,8 @@ class _IPEXAttention(nn.Module):
                 attn_output,
                 seq_len_tensor,
                 seq_len_tensor,
-                input_lens.max(),
-                input_lens.max(),
+                input_lens.max().item(),
+                input_lens.max().item(),
                 0.0,
                 1.0 / math.sqrt(self.head_dim),
                 False,
@@ -745,7 +745,7 @@ class _IPEXAttention(nn.Module):
                 past_key_value.block_tables,
                 input_lens,
                 past_key_value.block_size,
-                input_lens.max(),
+                input_lens.max().item(),
                 None,
             )
 
