@@ -165,14 +165,9 @@ class IPEXModel(OptimizedModel):
             self._init_warmup()
 
     @classmethod
-    def _from_transformers(cls, *args, **kwargs):
-        return cls._from_pretrained(*args, **kwargs)
-
-    @classmethod
-    def _from_pretrained(
+    def from_pretrained(
         cls,
         model_id: Union[str, Path],
-        config: PretrainedConfig,
         **kwargs,
     ):
         """
@@ -185,10 +180,10 @@ class IPEXModel(OptimizedModel):
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
         """
-        if getattr(config, "torchscript", False):
-            raise ValueError("IPEXModel is no longer support torchscript models.")
 
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
+        if getattr(model.config, "torchscript", False):
+            raise ValueError("IPEXModel is no longer support torchscript models.")
         return cls(model, config=model.config, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
