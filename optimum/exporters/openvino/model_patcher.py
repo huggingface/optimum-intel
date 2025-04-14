@@ -2024,9 +2024,8 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     attention_mask: Optional[torch.Tensor] = None,
     head_mask: Optional[torch.Tensor] = None,
 ):
-    from optimum.bettertransformer.models.attention import raise_on_head_mask
-
-    raise_on_head_mask(head_mask)
+    if head_mask is not None:
+        raise ValueError("`head_mask` input argument is not supported")
     batch_size = query.shape[0]
     mask_value = torch.finfo(value.dtype).min
     mask_value = torch.full([], mask_value, dtype=value.dtype)
