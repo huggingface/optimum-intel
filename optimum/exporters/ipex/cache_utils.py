@@ -87,6 +87,8 @@ class IPEXPagedCache(Cache):
         for i in range(config.num_hidden_layers):
             new_layer_key_cache = torch.zeros(key_cache_shape, dtype=dtype, device=device)
             new_layer_value_cache = torch.zeros(value_cache_shape, dtype=dtype, device=device)
+            torch._dynamo.mark_static_address(new_layer_key_cache)
+            torch._dynamo.mark_static_address(new_layer_value_cache)
             self.key_cache.append(new_layer_key_cache)
             self.value_cache.append(new_layer_value_cache)
 
