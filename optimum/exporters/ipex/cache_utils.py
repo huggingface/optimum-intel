@@ -69,7 +69,7 @@ class IPEXPagedCache(Cache):
         else:
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
-        self.max_seq_len = 0
+        self.max_seq_len = torch.Tensor([0]).int()
 
         self.key_cache: List[torch.Tensor] = []
         self.value_cache: List[torch.Tensor] = []
