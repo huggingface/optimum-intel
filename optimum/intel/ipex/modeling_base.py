@@ -348,10 +348,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
     def _prepare_generation_config(
-        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
         kwargs["use_cache"] = self.use_cache
-        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_config, model_kwargs = super()._prepare_generation_config(
+            generation_config, use_model_defaults, **kwargs
+        )
         generation_method = generation_config.get_generation_mode().value
         if (
             getattr(self.model.config, "compile", False)
@@ -481,9 +483,11 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
     def _prepare_generation_config(
-        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
-        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_config, model_kwargs = super()._prepare_generation_config(
+            generation_config, use_model_defaults, **kwargs
+        )
         # Use static cache for torch.compile
         if getattr(self.model.config, "compile", False):
             generation_config.cache_implementation = "static"
