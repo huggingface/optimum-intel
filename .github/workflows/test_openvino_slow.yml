@@ -18,6 +18,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  TRANSFORMERS_IS_CI: true
+
 jobs:
   build:
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
@@ -52,7 +55,7 @@ jobs:
           pip install .[openvino,tests] transformers[testing]
           pip uninstall -y nncf
 
-      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }} 
+      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
 
@@ -60,7 +63,7 @@ jobs:
         name: Install auto-gptq, autoawq
         run: |
           pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
-  
+
       - if: ${{ matrix.transformers-version == 'main' }}
         name: Install transformers from repository
         run: pip install git+https://github.com/huggingface/transformers.git

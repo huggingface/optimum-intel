@@ -1990,6 +1990,66 @@ class InternLMModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Adapted from https://github.com/huggingface/optimum/blob/3adbe7c75e3c41c1a3b945cf085e74ece7f8e192/optimum/bettertransformer/models/attention.py#L234
+def codegen_wrapped_scaled_dot_product(
+    self,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    head_mask: Optional[torch.Tensor] = None,
+):
+    batch_size = query.shape[0]
+    mask_value = torch.finfo(value.dtype).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    # in codegen the query and key are always in fp32 regardless of the dtype of the model
+    # https://github.com/huggingface/transformers/blob/5b28b7833297adf65c5160a685425ddb1eee5ce2/src/transformers/models/codegen/modeling_codegen.py#L226
+    query = query.to(value.dtype)
+    key = key.to(value.dtype)
+
+    dropout_p = self.dropout_prob_attn if self.training else 0.0
+    if batch_size == 1 or self.training:
+        if query.shape[2] > 1:
+            # first step of the decoding
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            # in this case, which is the later decoding steps, the `causal_mask` in
+            # https://github.com/huggingface/transformers/blob/ae54e3c3b18bac0832ad62ea9b896dfd52a09850/src/transformers/models/gpt2/modeling_gpt2.py#L195
+            # is [True, ..., True] so actually not causal
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        # causal_mask is always [True, ..., True] otherwise, so executing this
+        # is unnecessary
+        if query_length > 1:
+            if not is_transformers_version(">", "4.44.99"):
+                causal_mask = self.causal_mask[:, :, key_length - query_length : key_length, :key_length].to(
+                    torch.bool
+                )
+
+                causal_mask = torch.where(causal_mask, 0, mask_value)
+
+                # torch.Tensor.expand does no memory copy
+                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+
+                # we use torch.min to avoid having tensor(-inf)
+                attention_mask = torch.min(causal_mask, attention_mask)
+            else:
+                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
+        )
+
+    return sdpa_result, None
+
+
 # copied from  https://github.com/huggingface/optimum/blob/2112e99122d7f23a1da1a9d263fef64301050ea7/optimum/bettertransformer/models/attention.py#L168
 # for preserving backward compatibility between outdated codegen remote code and new transformers
 def _codegen_wrapped_scaled_dot_product_legacy(
@@ -2000,9 +2060,8 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     attention_mask: Optional[torch.Tensor] = None,
     head_mask: Optional[torch.Tensor] = None,
 ):
-    from optimum.bettertransformer.models.attention import raise_on_head_mask
-
-    raise_on_head_mask(head_mask)
+    if head_mask is not None:
+        raise ValueError("`head_mask` input argument is not supported")
     batch_size = query.shape[0]
     mask_value = torch.finfo(value.dtype).min
     mask_value = torch.full([], mask_value, dtype=value.dtype)
@@ -2054,11 +2113,6 @@ def _codegen_wrapped_scaled_dot_product_legacy(
 class CodeGenModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-
-        # whole codegen bettertransformer patch include attn.forward and does not cover codegen2.
-        # For avoiding breaking model on tracing stage, we reduce area of bettertransformer patch only for _attn.
-        from optimum.bettertransformer.models.attention import codegen_wrapped_scaled_dot_product
-
         attn_fn = codegen_wrapped_scaled_dot_product
         if is_torch_version(">=", "2.1.0") and is_transformers_version(">=", "4.45"):
             # in transformers 4.45 causal_mask const buffer was removed from the model
@@ -4448,6 +4502,8 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
+                if isinstance(legacy_pkv, EncoderDecoderCache):
+                    legacy_pkv = legacy_pkv.to_legacy_cache()
                 only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
                 pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
                 return_legacy_cache = True
