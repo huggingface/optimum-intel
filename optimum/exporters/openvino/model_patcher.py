@@ -2051,14 +2051,72 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     return sdpa_result, None
 
 
+# Adapted from https://github.com/huggingface/optimum/blob/3adbe7c75e3c41c1a3b945cf085e74ece7f8e192/optimum/bettertransformer/models/attention.py#L234
+def codegen_wrapped_scaled_dot_product(
+    self,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    head_mask: Optional[torch.Tensor] = None,
+):
+    batch_size = query.shape[0]
+    mask_value = torch.finfo(value.dtype).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    # in codegen the query and key are always in fp32 regardless of the dtype of the model
+    # https://github.com/huggingface/transformers/blob/5b28b7833297adf65c5160a685425ddb1eee5ce2/src/transformers/models/codegen/modeling_codegen.py#L226
+    query = query.to(value.dtype)
+    key = key.to(value.dtype)
+
+    dropout_p = self.dropout_prob_attn if self.training else 0.0
+    if batch_size == 1 or self.training:
+        if query.shape[2] > 1:
+            # first step of the decoding
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            # in this case, which is the later decoding steps, the `causal_mask` in
+            # https://github.com/huggingface/transformers/blob/ae54e3c3b18bac0832ad62ea9b896dfd52a09850/src/transformers/models/gpt2/modeling_gpt2.py#L195
+            # is [True, ..., True] so actually not causal
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        # causal_mask is always [True, ..., True] otherwise, so executing this
+        # is unnecessary
+        if query_length > 1:
+            if not is_transformers_version(">", "4.44.99"):
+                causal_mask = self.causal_mask[:, :, key_length - query_length : key_length, :key_length].to(
+                    torch.bool
+                )
+
+                causal_mask = torch.where(causal_mask, 0, mask_value)
+
+                # torch.Tensor.expand does no memory copy
+                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+
+                # we use torch.min to avoid having tensor(-inf)
+                attention_mask = torch.min(causal_mask, attention_mask)
+            else:
+                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
+        )
+
+    return sdpa_result, None
+
+
 class CodeGenModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
         # whole codegen bettertransformer patch include attn.forward and does not cover codegen2.
         # For avoiding breaking model on tracing stage, we reduce area of bettertransformer patch only for _attn.
-        from optimum.bettertransformer.models.attention import codegen_wrapped_scaled_dot_product
-
         attn_fn = codegen_wrapped_scaled_dot_product
         if is_torch_version(">=", "2.1.0") and is_transformers_version(">=", "4.45"):
             # in transformers 4.45 causal_mask const buffer was removed from the model
@@ -4448,6 +4506,8 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
+                if isinstance(legacy_pkv, EncoderDecoderCache):
+                    legacy_pkv = legacy_pkv.to_legacy_cache()
                 only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
                 pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
                 return_legacy_cache = True
@@ -4491,6 +4551,121 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
             for layer in self._model.layers:
                 if hasattr(layer.self_attn, "_orig_forward"):
                     layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+def janus_vision_embed_forward(self, pixel_values):
+    from einops import rearrange
+
+    bs, n = pixel_values.shape[0:2]
+    images = rearrange(pixel_values, "b n c h w -> (b n) c h w")
+    # [b x n, T2, D]
+    images_embeds = self.aligner(self.vision_model(images))
+
+    # [b x n, T2, D] -> [b, n x T2, D]
+    images_embeds = rearrange(images_embeds, "(b n) t d -> b (n t) d", b=bs, n=n)
+    return images_embeds
+
+
+class JanusVisionEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(janus_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class JanusVisionGenEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self, config: "OnnxConfig", model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Dict[str, Any]
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.prepare_gen_img_embeds
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class JanusVisionGenDecoderModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = model.decode_code
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class RemoveLMHeadPatcherHelper(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+        internal_patcher=None,
+    ):
+        model.__orig_forward = model.forward
+
+        @functools.wraps(model.__orig_forward)
+        def patched_forward(*args, **kwargs):
+            fwd_args = inspect.signature(model.__orig_forward).parameters
+            internal_fwd_args = inspect.signature(model.model.forward).parameters
+            inputs = {}
+            for arg, fwd_arg_name in zip(args, fwd_args):
+                if fwd_arg_name in internal_fwd_args:
+                    inputs[fwd_arg_name] = arg
+            for key, value in kwargs.items():
+                if key in internal_fwd_args:
+                    inputs[key] = value
+            return model.model.forward(**inputs)
+
+        model.forward = patched_forward
+        self._internal_patcher = internal_patcher
+        if self._internal_patcher is not None:
+            self._patched_forward = self._internal_patcher.patched_forward
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        if self._internal_patcher is not None:
+            return self._internal_patcher.__enter__()
+        return super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._internal_patcher:
+            self._internal_patcher.__exit__(exc_type, exc_value, traceback)
+        else:
+            super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+    @property
+    def patched_forward(self):
+        if self._internal_patcher is not None:
+            return self._internal_patcher.patched_forward
+        return self._patched_forward
+
+    @patched_forward.setter
+    def patched_forward(self, fn):
+        self._patched_forward = fn
+        if self._internal_patcher is not None:
+            self._internal_patcher.patched_forward = fn
 
 
 class MiniCPMModelPatcher(DecoderModelPatcher):
