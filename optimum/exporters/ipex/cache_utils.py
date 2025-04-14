@@ -69,7 +69,7 @@ class IPEXPagedCache(Cache):
         else:
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
-        self.max_seq_len = self._seen_tokens.max(dim=0)
+        self.max_seq_len = self._seen_tokens.max()
 
         self.key_cache: List[torch.Tensor] = []
         self.value_cache: List[torch.Tensor] = []
@@ -153,7 +153,7 @@ class IPEXPagedCache(Cache):
         # Update the number of seen tokens
         if layer_idx == self.num_hidden_layers - 1:
             self._seen_tokens = self._seen_tokens + input_lens
-            self.max_seq_len, _ = self._seen_tokens.max(dim=0)
+            self.max_seq_len, _ = self._seen_tokens.max()
 
     def update_for_decode(
         self,
