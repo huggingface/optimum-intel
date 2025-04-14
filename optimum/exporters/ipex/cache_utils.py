@@ -70,6 +70,7 @@ class IPEXPagedCache(Cache):
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
         self.max_seq_len = self._seen_tokens.max()
+        self.slots = torch.zeros([max_batch_size], device=self.device, dtype=torch.int32)
 
         self.key_cache: List[torch.Tensor] = []
         self.value_cache: List[torch.Tensor] = []
@@ -165,7 +166,7 @@ class IPEXPagedCache(Cache):
         if layer_idx == 0:
             start_block_idx = self._seen_tokens // self.block_size
             slot_offset_in_block = (self._seen_tokens) % self.block_size
-            self.slots = torch.zeros([batch_size], device=self.device, dtype=torch.int32)
+            self.slots = self.slots * 0
             for i in range(batch_size):
                 if slot_offset_in_block[i] == 0:
                     # need a new block:
