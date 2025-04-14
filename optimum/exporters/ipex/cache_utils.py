@@ -153,7 +153,7 @@ class IPEXPagedCache(Cache):
         # Update the number of seen tokens
         if layer_idx == self.num_hidden_layers - 1:
             self._seen_tokens = self._seen_tokens + input_lens
-            self.max_seq_len, _ = self._seen_tokens.max()
+            self.max_seq_len = self._seen_tokens.max()
 
     def update_for_decode(
         self,
@@ -268,7 +268,7 @@ class IPEXPagedCache(Cache):
             num_blocks = (new_tokens + self.block_size - 1) // self.block_size
             self.block_tables[bs, num_blocks:] = -1
             self._seen_tokens[bs] = new_tokens
-        self.max_seq_len, _ = self._seen_tokens.max(dim=0)
+        self.max_seq_len = self._seen_tokens.max()
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
         for i in free_table:
             if not (self.block_tables == i).any():
