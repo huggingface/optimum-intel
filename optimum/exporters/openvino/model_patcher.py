@@ -27,8 +27,10 @@ from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
+    UNSUPPORTED_OPS_PATCHING_SPEC,
     DecoderModelPatcher,
     ModelPatcher,
+    PatchingSpec,
     Seq2SeqModelPatcher,
     override_arguments,
 )
@@ -53,6 +55,38 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
+def ov_compatible_repeat_interleave(input_tensor, repeats, dim=None, output_size=None):
+    """
+    Custom implementation of torch.repeat_interleave without using torch.repeat_interleave.
+
+    Args:
+        input_tensor (torch.Tensor): The input tensor.
+        repeats (int or torch.Tensor): The number of repetitions for each element.
+        dim (int, optional): The dimension along which to repeat. Defaults to None.
+
+    Returns:
+        torch.Tensor: The repeated tensor.
+    """
+    result = torch.repeat_interleave(input_tensor, repeats=repeats, dim=dim)
+
+    return result
+
+
+def patch_unsupported_ops():
+    spec_idx = -1
+    for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
+        if spec.name == "repeat_interleave":
+            spec_idx = idx
+            break
+    repreate_interlive_spec = PatchingSpec(
+        torch.Tensor, "repeat_interleave", ov_compatible_repeat_interleave, torch.Tensor.repeat_interleave
+    )
+    if spec_idx != -1:
+        UNSUPPORTED_OPS_PATCHING_SPEC[spec_idx] = repreate_interlive_spec
+    else:
+        UNSUPPORTED_OPS_PATCHING_SPEC.append(repreate_interlive_spec)
+
+
 BETTERTRANSFORMER_IGNORE = [
     "codegen",
 ]
@@ -60,6 +94,8 @@ BETTERTRANSFORMER_IGNORE = [
 # in transformers 4.45 gpt_neo has SDPA
 if is_transformers_version(">=", "4.44.99"):
     BETTERTRANSFORMER_IGNORE.append("gpt_neo")
+
+patch_unsupported_ops()
 
 
 def patch_model_with_bettertransformer(model):
