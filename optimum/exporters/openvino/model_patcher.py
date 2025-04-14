@@ -2025,7 +2025,7 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     head_mask: Optional[torch.Tensor] = None,
 ):
     if head_mask is not None:
-        raise ValueError("`head_mask` input argu,emt is not supported")
+        raise ValueError("`head_mask` input argument is not supported")
     batch_size = query.shape[0]
     mask_value = torch.finfo(value.dtype).min
     mask_value = torch.full([], mask_value, dtype=value.dtype)
