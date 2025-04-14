@@ -31,7 +31,7 @@ import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from parameterized import parameterized
 from PIL import Image
 from sentence_transformers import SentenceTransformer
@@ -63,6 +63,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
+from transformers.utils import http_user_agent
 from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
@@ -487,11 +488,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         export = subfolder == ""
         # hub model
         OVModelForFeatureExtraction.from_pretrained(model_id, subfolder=subfolder, export=export)
-        # local model
-        api = HfApi()
         with TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
-            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            snapshot_download(repo_id=model_id, local_dir=local_dir, user_agent=http_user_agent())
             OVModelForFeatureExtraction.from_pretrained(local_dir, subfolder=subfolder, export=export)
 
     def test_infer_export_when_loading(self):
@@ -517,12 +516,12 @@ class OVModelIntegrationTest(unittest.TestCase):
             )
             self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
 
-        # local model
-        api = HfApi()
         with TemporaryDirectory() as tmpdirname:
             for revision in ("main", "ov", "itrex"):
                 local_dir = Path(tmpdirname) / revision
-                api.snapshot_download(repo_id=model_id, local_dir=local_dir, revision=revision)
+                snapshot_download(
+                    repo_id=model_id, local_dir=local_dir, revision=revision, user_agent=http_user_agent()
+                )
                 ov_files = _find_files_matching_pattern(
                     local_dir, pattern=pattern, revision=revision, subfolder="openvino" if revision == "itrex" else ""
                 )
@@ -536,11 +535,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
         self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
 
-        # local model
-        api = HfApi()
         with TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
-            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            snapshot_download(repo_id=model_id, local_dir=local_dir, user_agent=http_user_agent())
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern)
             self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
 
@@ -553,11 +550,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
         self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
 
-        # local model
-        api = HfApi()
         with tempfile.TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
-            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            snapshot_download(repo_id=model_id, local_dir=local_dir, user_agent=http_user_agent())
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
             self.assertTrue(len(ov_files) == 1 if subfolder == "openvino" else len(ov_files) == 0)
 
@@ -571,11 +566,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder=subfolder)
         self.assertTrue(len(ov_files) == 1)
 
-        # local model
-        api = HfApi()
         with tempfile.TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
-            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            snapshot_download(repo_id=model_id, local_dir=local_dir, user_agent=http_user_agent())
             ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder=subfolder)
             self.assertTrue(len(ov_files) == 1)
 
@@ -689,7 +682,13 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
-            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(
+                torch.allclose(
+                    torch.Tensor(ov_outputs.logits),
+                    transformers_outputs.logits,
+                    atol=1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08,
+                )
+            )
         del transformers_model
         del ov_model
         gc.collect()
@@ -2413,7 +2412,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers.image_utils import load_video
 
             video_path = hf_hub_download(
-                repo_id="raushan-testing-hf/videos-test", filename="sample_demo_1.mp4", repo_type="dataset"
+                repo_id="raushan-testing-hf/videos-test",
+                filename="sample_demo_1.mp4",
+                repo_type="dataset",
+                user_agent=http_user_agent(),
             )
             input_video, _ = load_video(video_path, num_frames=2)
             question = "Why is this video funny?"

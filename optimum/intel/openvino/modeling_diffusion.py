@@ -53,6 +53,7 @@ from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 from transformers.modeling_outputs import ModelOutput
+from transformers.utils import http_user_agent
 
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -437,6 +438,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 local_files_only=local_files_only,
                 revision=revision,
                 token=token,
+                user_agent=http_user_agent,
                 allow_patterns=allow_patterns,
                 ignore_patterns=ignore_patterns,
             )
