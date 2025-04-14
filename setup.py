@@ -43,7 +43,6 @@ TESTS_REQUIRE = [
     "parameterized",
     "Pillow",
     "evaluate",
-    "diffusers",
     "py-cpuinfo",
     "sacremoses",
     "torchaudio",
@@ -69,7 +68,7 @@ EXTRAS_REQUIRE = {
     "openvino": ["nncf>=2.14.0", "openvino>=2024.5.0", "openvino-tokenizers>=2024.5.0"],
     "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
     "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.48,<4.50", "accelerate"],
-    "diffusers": ["diffusers"],
+    "diffusers": ["diffusers<0.33.0"], # diffusers 0.33.0+ requires transformers 4.50.0+ (GlmModel)
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
