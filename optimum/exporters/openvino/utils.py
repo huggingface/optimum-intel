@@ -307,7 +307,7 @@ def save_preprocessors(
             and model_type in ["llava", "llava-next", "llava-next-video"]
             and preprocessors is not None
         ):
-            if getattr(preprocessors[1], "patch_size", None) is None:
+            if len(preprocessors) > 1 and getattr(preprocessors[1], "patch_size", None) is None:
                 preprocessors[1].patch_size = config.vision_config.patch_size
                 preprocessors[1].vision_feature_select_strategy = config.vision_feature_select_strategy
         for processor in preprocessors:

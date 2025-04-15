@@ -28,10 +28,9 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum~=1.24",
+    "optimum@git+https://github.com/huggingface/optimum.git",
     "transformers>=4.36,<4.50",
     "datasets>=1.4.0",
-    "sentencepiece",
     "setuptools",
     "scipy",
     "onnx",
@@ -43,9 +42,9 @@ TESTS_REQUIRE = [
     "parameterized",
     "Pillow",
     "evaluate",
-    "diffusers",
     "py-cpuinfo",
     "sacremoses",
+    "sentencepiece",
     "torchaudio",
     "rjieba",
     "timm",
@@ -59,6 +58,7 @@ TESTS_REQUIRE = [
     "datasets[audio]>=1.4.0",
     "tbb",
     "langchain-huggingface",
+    "hf_xet",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
@@ -68,7 +68,7 @@ EXTRAS_REQUIRE = {
     "openvino": ["nncf>=2.14.0", "openvino>=2024.5.0", "openvino-tokenizers>=2024.5.0"],
     "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
     "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.48,<4.50", "accelerate"],
-    "diffusers": ["diffusers"],
+    "diffusers": ["diffusers<0.33.0"],  # diffusers 0.33.0+ requires transformers 4.50.0+ (GlmModel)
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
