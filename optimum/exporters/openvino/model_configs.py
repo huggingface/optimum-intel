@@ -3290,6 +3290,13 @@ class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
         )
 
 
+class SpeechT5ConfigBehavior(str, enum.Enum):
+    ENCODER = "encoder"
+    DECODER = "decoder"
+    POSTNET = "postnet"
+    VOCODER = "vocoder"
+
+
 @register_in_tasks_manager(
     "speecht5",
     *["text-to-audio", "text-to-audio-with-past"],
@@ -3310,10 +3317,8 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
         float_dtype: str = "fp32",
         use_past: bool = True,
         use_past_in_inputs: bool = True,
-        behavior: ConfigBehavior = ConfigBehavior.MONOLITH,
+        behavior: SpeechT5ConfigBehavior = SpeechT5ConfigBehavior.ENCODER,
         preprocessors: Optional[List[Any]] = None,
-        is_postnet: bool = False,
-        is_vocoder: bool = False,
         legacy: bool = False,
     ):
         super().__init__(
@@ -3328,8 +3333,6 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             is_postnet_and_vocoder=False,
             legacy=legacy,
         )
-        self.is_postnet = is_postnet
-        self.is_vocoder = is_vocoder
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -3356,27 +3359,24 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {}
-        # Batched inference is not supported in Transformers.
-        if self._behavior is ConfigBehavior.ENCODER:
+        if self._behavior is SpeechT5ConfigBehavior.ENCODER:
             common_inputs["input_ids"] = {1: "encoder_sequence_length"}
-        elif self._behavior is ConfigBehavior.DECODER:
+        elif self._behavior is SpeechT5ConfigBehavior.DECODER:
             common_inputs["inputs_embeds"] = {0: "batch_size", 1: "decoder_sequence_length"}
             common_inputs["speaker_embeddings"] = {}  # No dynamic shape here.
             common_inputs["encoder_hidden_states"] = {0: "batch_size", 1: "encoder_sequence_length"}
             common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
             if self.variant == "with-past" and self.use_past_in_inputs:
                 self.add_past_key_values(common_inputs, direction="inputs")
-        elif self.is_postnet:
+        elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
             common_inputs["raw_spectrogram"] = {
                 0: "n_spectrums",
                 1: "batch_size",
                 2: "reduction_factor",
                 3: "num_mel_bins",
             }
-        elif self.is_vocoder:
+        elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
             common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums", 2: "num_mel_bins"}
-        elif self.is_postnet_and_vocoder:
-            common_inputs["spectrogram"] = {0: "n_spectrums x reduction_factor"}
         else:
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
@@ -3387,20 +3387,63 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         common_outputs = {}
-        if self._behavior == ConfigBehavior.ENCODER:
+        if self._behavior == SpeechT5ConfigBehavior.ENCODER:
             common_outputs = {
                 "last_hidden_state": {1: "encoder_sequence_length"},
                 "encoder_attention_mask": {1: "encoder_sequence_length"},
             }
-        elif self._behavior is ConfigBehavior.DECODER:
+        elif self._behavior is SpeechT5ConfigBehavior.DECODER:
             common_outputs = {}
             common_outputs["output_sequence_out"] = {1: "decoder_sequence_length + 1"}
             common_outputs["spectrum"] = {}  # No dynamic shape here.
             common_outputs["prob"] = {}  # No dynamic shape here.
             if self.variant == "with-past" and self.use_past:
                 self.add_past_key_values(common_outputs, direction="outputs")
-        elif self.is_postnet:
+        elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
             common_outputs["postnet_spectrogram"] = {}
-        elif self.is_vocoder:
+        elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
             common_outputs["waveform"] = {}
         return common_outputs
+
+    def with_behavior(
+        self,
+        behavior: Union[str, SpeechT5ConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, SpeechT5ConfigBehavior):
+            behavior = SpeechT5ConfigBehavior(behavior)
+
+        if behavior == SpeechT5ConfigBehavior.ENCODER:
+            return self.__class__(
+                self._config,
+                use_past=False,
+                use_past_in_inputs=False,
+                behavior=behavior,
+            )
+        elif behavior == SpeechT5ConfigBehavior.DECODER:
+            return self.__class__(
+                self._config,
+                use_past=True,
+                use_past_in_inputs=True,
+                behavior=behavior,
+            )
+        elif behavior == SpeechT5ConfigBehavior.POSTNET:
+            return self.__class__(
+                self._config,
+                use_past=False,
+                use_past_in_inputs=False,
+                behavior=behavior,
+            )
+        elif behavior == SpeechT5ConfigBehavior.VOCODER:
+            return self.__class__(
+                self._config,
+                use_past=False,
+                use_past_in_inputs=False,
+                behavior=behavior,
+            )
+        else:
+            raise ValueError(
+                "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
+            )

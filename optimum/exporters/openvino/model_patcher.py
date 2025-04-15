@@ -5102,7 +5102,7 @@ def speecht5_decoder_layer_forward(
 
 class OVSpeechT5ModelPatcher(ModelPatcher):
     def __enter__(self):
-        if not self.real_config.is_vocoder:
+        if self.real_config._behavior != "vocoder":
             setattr(self._model, self.orig_forward_name, self.patched_forward)
         if self.real_config._behavior == "decoder":
             self._model.speecht5.decoder.prenet.__orig_forward = self._model.speecht5.decoder.prenet.forward
@@ -5116,7 +5116,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
                 layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if not self.real_config.is_vocoder:
+        if self.real_config._behavior != "vocoder":
             setattr(self._model, self.orig_forward_name, self.orig_forward)
         if self.real_config._behavior == "decoder":
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
@@ -5232,9 +5232,9 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             self.patched_forward = patched_encoder_forward
         elif self.real_config._behavior == "decoder":
             self.patched_forward = patched_decoder_forward
-        elif self.real_config.is_postnet:
+        elif self.real_config._behavior == "postnet":
             self.patched_forward = patched_postnet_forward
-        elif self.real_config.is_vocoder:
+        elif self.real_config._behavior == "vocoder":
             self.patched_forward = patched_vocoder_forward
         else:
             raise ValueError("Unknown ")

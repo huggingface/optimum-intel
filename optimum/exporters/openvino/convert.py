@@ -1383,33 +1383,9 @@ def _get_speecht5_tss_model_for_export(
 
     models_for_export = {}
     encoder_export_config = config.with_behavior("encoder")
-    decoder_export_config = config.with_behavior("decoder", use_past=True, use_past_in_inputs=True)
-    postnet_export_config = config.__class__(
-        config._config,
-        task=config.task,
-        int_dtype=config.int_dtype,
-        float_dtype=config.float_dtype,
-        use_past=False,
-        use_past_in_inputs=False,  # Irrelevant here.
-        behavior=config._behavior,  # Irrelevant here.
-        preprocessors=config._preprocessors,
-        is_postnet=True,
-        is_vocoder=False,
-        legacy=config.legacy,
-    )
-    vocoder_export_config = config.__class__(
-        config._config,
-        task=config.task,
-        int_dtype=config.int_dtype,
-        float_dtype=config.float_dtype,
-        use_past=False,
-        use_past_in_inputs=False,  # Irrelevant here.
-        behavior=config._behavior,  # Irrelevant here.
-        preprocessors=config._preprocessors,
-        is_postnet=False,
-        is_vocoder=True,
-        legacy=config.legacy,
-    )
+    decoder_export_config = config.with_behavior("decoder")
+    postnet_export_config = config.with_behavior("postnet")
+    vocoder_export_config = config.with_behavior("vocoder")
 
     vocoder = SpeechT5HifiGan.from_pretrained(model_kwargs["vocoder"]).eval()
 
