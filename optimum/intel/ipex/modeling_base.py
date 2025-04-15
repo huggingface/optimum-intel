@@ -132,7 +132,6 @@ class IPEXModel(OptimizedModel):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        warmup: Optional[bool] = True,
         **kwargs,
     ):
         config = config or model.config
@@ -160,9 +159,6 @@ class IPEXModel(OptimizedModel):
 
         if getattr(self.model.config, "compile", False):
             self.apply_torch_compile()
-
-        if warmup and not getattr(self.model.config, "compile", False):
-            self._init_warmup()
 
     @classmethod
     def from_pretrained(
@@ -250,13 +246,6 @@ class IPEXModel(OptimizedModel):
         logger.info("Enable torch.compile optimization")
         self.model.forward = torch.compile(self.model.forward)
 
-    def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        with torch.no_grad():
-            self.model(**inputs)
-            self.model(**inputs)
-        logger.info("Warm up end")
-
 
 class IPEXModelForSequenceClassification(IPEXModel):
     auto_model_class = AutoModelForSequenceClassification
@@ -301,10 +290,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
-        warmup: Optional[bool] = True,
         **kwargs,
     ):
-        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache)
+        super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
         if self._add_patch:
             self._supports_cache_class = True
         GenerationMixin.__init__(self)
@@ -327,9 +315,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
-
-        if warmup and not getattr(self.model.config, "compile", False):
-            self._init_warmup()
 
     @torch.no_grad()
     def forward(
@@ -427,12 +412,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return result
 
-    def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        logger.info("Warm up end")
-
 
 class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
@@ -444,10 +423,9 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
-        warmup: Optional[bool] = True,
         **kwargs,
     ):
-        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache)
+        super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
@@ -466,9 +444,6 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
-
-        if warmup and not getattr(self.model.config, "compile", False):
-            self._init_warmup()
 
     @torch.no_grad()
     def forward(
@@ -513,12 +488,6 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
         return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
-
-    def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        logger.info("Warm up end")
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
