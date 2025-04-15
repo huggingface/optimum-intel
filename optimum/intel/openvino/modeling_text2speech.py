@@ -79,31 +79,10 @@ class OVTextToSpeechDecoder(OVModelPart):
                 key.get_any_name() for key in self.model.outputs[2:] if "hidden_states" in key.get_any_name()
             ]
 
-    def forward(
-        self,
-        inputs_embeds,
-        speaker_embeddings,
-        encoder_last_hidden_state,
-        encoder_attention_mask,
-        # TODO: (rkazants) recover by removal
-        # past_key_values,
-        **kwargs,
-    ):
+    def forward(self, inputs_embeds, speaker_embeddings, encoder_last_hidden_state, encoder_attention_mask, **kwargs):
         self._compile()
         bsz = inputs_embeds.size(0)
 
-        # TODO: (rkazants) recover inputs
-        # inputs = {
-        #    "inputs_embeds": inputs_embeds,
-        #    "speaker_embeddings": speaker_embeddings,
-        #    "encoder_hidden_states": encoder_last_hidden_state,
-        #    "encoder_attention_mask": encoder_attention_mask,
-        # }
-        # for var_idx in range(6):
-        #    key_tensor_name = "past_key_values.{}.decoder.key".format(var_idx)
-        #    value_tensor_name = "past_key_values.{}.decoder.value".format(var_idx)
-        #    inputs[key_tensor_name] = past_key_values[var_idx][0]
-        #    inputs[value_tensor_name] = past_key_values[var_idx][1]
         inputs = {
             "inputs_embeds": inputs_embeds,
             "speaker_embeddings": speaker_embeddings,
@@ -115,41 +94,7 @@ class OVTextToSpeechDecoder(OVModelPart):
         output_sequence_out = torch.from_numpy(result[0])
         spectrum = torch.from_numpy(result[1])
         prob = torch.from_numpy(result[2])
-        if "decoder_hidden_states" in result:
-            decoder_hidden_states = torch.from_numpy(result["decoder_hidden_states"])
-        if "speaker_embeddings_norm" in result:
-            speaker_embeddings_norm = torch.from_numpy(result["speaker_embeddings_norm"])
-        if "mask" in result:
-            mask = torch.from_numpy(result["mask"])
-        if "tensor_for_check" in result:
-            tensor_for_check = torch.from_numpy(result["tensor_for_check"])
-
-        # numpy_past_key_values = []
-        # for var_idx in range(6):
-        #    key_tensor_name = "present.{}.decoder.key".format(var_idx)
-        #    value_tensor_name = "present.{}.decoder.value".format(var_idx)
-        #    numpy_past_key_values.append((result[key_tensor_name], result[value_tensor_name]))
-
-        # TODO: (rkazants) recover code below
-        # states = self.request.query_state()
-        # numpy_past_key_values = []
-        # for idx in range(6):
-        #    var_key_name = "past_key_values.{}.decoder.keypresent.{}.decoder.key".format(idx, idx)
-        #    var_key_value_numpy = None
-        #    var_value_name = "past_key_values.{}.decoder.valuepresent.{}.decoder.value".format(idx, idx)
-        #    var_value_value_numpy = None
-        #    for state in states:
-        #        if state.name == var_key_name:
-        #            var_key_value_numpy = state.state.data
-        #        elif state.name == var_value_name:
-        #            var_value_value_numpy = state.state.data
-        #    numpy_past_key_values.append((var_key_value_numpy, var_value_value_numpy))
-        return ModelOutput(
-            output_sequence_out=output_sequence_out,
-            spectrum=spectrum,
-            prob=prob,
-            # past_key_values=numpy_past_key_values
-        )
+        return ModelOutput(output_sequence_out=output_sequence_out, spectrum=spectrum, prob=prob)
 
 
 class OVTextToSpeechPostNet(OVModelPart):
