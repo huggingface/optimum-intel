@@ -339,7 +339,10 @@ def main_export(
                 orig_post_init_model = GPTQQuantizer.post_init_model
 
                 def post_init_model(self, model):
-                    from auto_gptq import exllama_set_max_input_length
+                    try:
+                        from gptqmodel import exllama_set_max_input_length
+                    except ImportError:
+                        from auto_gptq import exllama_set_max_input_length
 
                     class StoreAttr(object):
                         pass
