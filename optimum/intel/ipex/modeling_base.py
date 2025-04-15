@@ -339,10 +339,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         if self.add_patch:
-            kwargs["input_lens"] = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
-            kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
             if input_ids is not None and attention_mask is None:
                 attention_mask = torch.ones_like(input_ids)
+            kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
+            kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
+
         return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
     def _prepare_generation_config(
