@@ -164,7 +164,7 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
         "id": "openslr/librispeech_asr",
         "name": "clean",
         "split": "validation",
-        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
+        "streaming": True,
     }
 }
 
