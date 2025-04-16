@@ -1146,10 +1146,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=2,
             do_sample=False,
             eos_token_id=None,
         )
+        if is_transformers_version(">=", "4.51"):
+            tokens["use_model_defaults"] = False
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
@@ -1444,6 +1445,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateful.config.eos_token_id = None
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
+
+        if is_transformers_version(">=", "4.51"):
+            additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
@@ -2284,8 +2288,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.do_sample = False
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
+        ov_model.genration_config.do_sample = False
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
@@ -2302,7 +2308,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "gemma3":
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
-            transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
