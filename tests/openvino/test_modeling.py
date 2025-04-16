@@ -712,13 +712,8 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
 
         ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
-        self.assertTrue(
-            torch.allclose(
-                torch.Tensor(ov_outputs[-1]["score"]),
-                outputs[-1]["score"],
-                atol=1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08,
-            )
-        )
+        atol = 1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08
+        self.assertTrue(abs(ov_outputs[-1]["score"] - outputs[-1]["score"]) < atol)
         del ov_pipe
 
         if model_arch == "bert":
