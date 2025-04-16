@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import copy
+import inspect
 import functools
 import gc
 import logging
@@ -427,7 +428,8 @@ def export_pytorch(
 
             @functools.wraps(patched_forward)
             def ts_patched_forward(*args, **kwargs):
-                kwargs.update(zip(dummy_input_keys, args))
+                ordered_example_inputs = [param for param in inspect.signature(patcher.orig_forward).parameters if param in dummy_input_keys]
+                kwargs.update(zip(ordered_example_inputs, args))
                 for i in range(len(dict_inputs)):
                     input_name, keys = dict_inputs[i]
                     tuple_input = kwargs[input_name]
@@ -459,6 +461,7 @@ def export_pytorch(
                 )
 
         except Exception as ex:
+            raise ex
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
 
             if stateful:
