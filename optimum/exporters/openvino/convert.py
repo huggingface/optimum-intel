@@ -461,7 +461,6 @@ def export_pytorch(
                 )
 
         except Exception as ex:
-            raise ex
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
 
             if stateful:
