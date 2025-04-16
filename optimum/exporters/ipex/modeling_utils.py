@@ -147,21 +147,12 @@ def _llama_model_forward(
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
-    if past_key_values_length == 0 and past_key_values is not None:
-        # first token, remove the padding from hidden_states, varlen do not accept attention mask
-        hidden_states_copy = hidden_states
-        index = attention_mask.view(-1) != 0
-        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        cos = (cos.reshape(-1, cos.shape[-1]))[index]
-        sin = (sin.reshape(-1, sin.shape[-1]))[index]
-        position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
-    else:
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        # TODO: remove this WA after IPEX 2.7
-        if device.type == "xpu":
-            cos = cos.reshape(-1, cos.shape[-1])
-            sin = sin.reshape(-1, sin.shape[-1])
-            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    hidden_states_copy = hidden_states
+    index = kwargs.pop("index", None)
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+    cos = (cos.reshape(-1, cos.shape[-1]))[index]
+    sin = (sin.reshape(-1, sin.shape[-1]))[index]
+    position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
