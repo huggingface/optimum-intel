@@ -109,6 +109,11 @@ else:
     FluxFillPipeline = object
     SanaPipeline = object
 
+if is_diffusers_version(">=", "0.33.0"):
+    from diffusers import SanaSprintPipeline
+else:
+    SanaSprintPipeline = object
+
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -1609,6 +1614,12 @@ class OVSanaPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaPip
     auto_model_class = SanaPipeline
 
 
+class OVSanaSprintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaSprintPipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = SanaSprintPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1682,6 +1693,11 @@ if is_diffusers_version(">=", "0.32.0"):
     SUPPORTED_OV_PIPELINES.append(OVFluxFillPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana"] = OVSanaPipeline
     SUPPORTED_OV_PIPELINES.append(OVSanaPipeline)
+
+
+if is_diffusers_version(">=", "0.33.0"):
+    SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
