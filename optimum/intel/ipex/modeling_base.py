@@ -328,6 +328,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 attention_mask = torch.ones_like(input_ids)
             kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
             kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
+            kwargs["seq_len_tensor"] = torch.cat((kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int()))
+            kwargs["query_len_tensor"] = torch.arange(kwargs["seq_len_tensor"].shape[0], device=input_ids.device).int() if input_ids.shape[-1] != 1 else kwargs["seq_len_tensor"]
             if self.use_cache:
                 self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 

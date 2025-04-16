@@ -140,15 +140,16 @@ def _llama_model_forward(
 
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-    input_lens = kwargs.pop("input_lens")
-    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = kwargs.pop("max_input_lens")
+    input_lens = kwargs.pop("input_lens", None)
+    seq_len_tensor = kwargs.pop("seq_len_tensor", None)
+    query_len_tensor = kwargs.pop("query_len_tensor", None)
+    max_input_lens = kwargs.pop("max_input_lens", None)
+    query_max_len = kwargs.pop("query_max_len", None)
+    index = kwargs.pop("index", None)
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
     hidden_states_copy = hidden_states
-    index = kwargs.pop("index", None)
     hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
     cos = (cos.reshape(-1, cos.shape[-1]))[index]
     sin = (sin.reshape(-1, sin.shape[-1]))[index]
@@ -176,6 +177,7 @@ def _llama_model_forward(
             position_embeddings=position_embeddings,
             input_lens=input_lens,
             max_input_lens=max_input_lens,
+            query_max_len=query_max_len,
             seq_len_tensor=seq_len_tensor,
             query_len_tensor=query_len_tensor,
         )
@@ -265,28 +267,20 @@ def _falcon_model_forward(
     # create position embeddings to be shared across the decoder layers
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-    input_lens = kwargs.pop("input_lens")
-    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = kwargs.pop("max_input_lens")
+    input_lens = kwargs.pop("input_lens", None)
+    seq_len_tensor = kwargs.pop("seq_len_tensor", None)
+    query_len_tensor = kwargs.pop("query_len_tensor", None)
+    max_input_lens = kwargs.pop("max_input_lens", None)
+    query_max_len = kwargs.pop("query_max_len", None)
+    index = kwargs.pop("index", None)
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
-    if past_key_values_length == 0 and past_key_values is not None:
-        # first token, remove the padding from hidden_states, varlen do not accept attention mask
-        hidden_states_copy = hidden_states
-        index = attention_mask.view(-1) != 0
-        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        cos = (cos.reshape(-1, cos.shape[-1]))[index]
-        sin = (sin.reshape(-1, sin.shape[-1]))[index]
-        position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
-    else:
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        # TODO: remove this WA after IPEX 2.7
-        if device.type == "xpu":
-            cos = cos.reshape(-1, cos.shape[-1])
-            sin = sin.reshape(-1, sin.shape[-1])
-            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    hidden_states_copy = hidden_states
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+    cos = (cos.reshape(-1, cos.shape[-1]))[index]
+    sin = (sin.reshape(-1, sin.shape[-1]))[index]
+    position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -317,6 +311,7 @@ def _falcon_model_forward(
             position_embeddings=position_embeddings,
             input_lens=input_lens,
             max_input_lens=max_input_lens,
+            query_max_len=query_max_len,
             seq_len_tensor=seq_len_tensor,
             query_len_tensor=query_len_tensor,
         )
@@ -413,18 +408,15 @@ def _gpt2_model_forward(
 
     hidden_states = self.drop(hidden_states)
 
-    input_lens = kwargs.pop("input_lens")
-    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = kwargs.pop("max_input_lens")
+    input_lens = kwargs.pop("input_lens", None)
+    seq_len_tensor = kwargs.pop("seq_len_tensor", None)
+    query_len_tensor = kwargs.pop("query_len_tensor", None)
+    max_input_lens = kwargs.pop("max_input_lens", None)
+    query_max_len = kwargs.pop("query_max_len", None)
+    index = kwargs.pop("index", None)
 
-    if past_length == 0 and past_key_values is not None:
-        # first token, remove the padding from hidden_states, varlen do not accept attention mask
-        hidden_states_copy = hidden_states
-        index = attention_mask.view(-1) != 0
-        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-    else:
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+    hidden_states_copy = hidden_states
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -453,6 +445,7 @@ def _gpt2_model_forward(
             output_attentions=output_attentions,
             input_lens=input_lens,
             max_input_lens=max_input_lens,
+            query_max_len=query_max_len,
             seq_len_tensor=seq_len_tensor,
             query_len_tensor=query_len_tensor,
         )
@@ -549,28 +542,20 @@ def _qwen2_model_forward(
     # create position embeddings to be shared across the decoder layers
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-    input_lens = kwargs.pop("input_lens")
-    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
-    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
-    max_input_lens = kwargs.pop("max_input_lens")
+    input_lens = kwargs.pop("input_lens", None)
+    seq_len_tensor = kwargs.pop("seq_len_tensor", None)
+    query_len_tensor = kwargs.pop("query_len_tensor", None)
+    max_input_lens = kwargs.pop("max_input_lens", None)
+    query_max_len = kwargs.pop("query_max_len", None)
+    index = kwargs.pop("index", None)
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
-    if past_key_values_length == 0 and past_key_values is not None:
-        # first token, remove the padding from hidden_states, varlen do not accept attention mask
-        hidden_states_copy = hidden_states
-        index = attention_mask.view(-1) != 0
-        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-        cos = (cos.reshape(-1, cos.shape[-1]))[index]
-        sin = (sin.reshape(-1, sin.shape[-1]))[index]
-        position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
-    else:
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        # TODO: remove this WA after IPEX 2.7
-        if device.type == "xpu":
-            cos = cos.reshape(-1, cos.shape[-1])
-            sin = sin.reshape(-1, sin.shape[-1])
-            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    hidden_states_copy = hidden_states
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+    cos = (cos.reshape(-1, cos.shape[-1]))[index]
+    sin = (sin.reshape(-1, sin.shape[-1]))[index]
+    position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
         attention_mask = causal_mask
@@ -594,6 +579,7 @@ def _qwen2_model_forward(
             position_embeddings=position_embeddings,
             input_lens=input_lens,
             max_input_lens=max_input_lens,
+            query_max_len=query_max_len,
             seq_len_tensor=seq_len_tensor,
             query_len_tensor=query_len_tensor,
             **kwargs,
@@ -672,6 +658,7 @@ class _IPEXAttention(nn.Module):
         seq_len_tensor,
         query_len_tensor,
         max_input_lens,
+        query_max_len,
     ):
         if past_key_value is None:
             n_rep = query.shape[1] // key.shape[1]
@@ -690,8 +677,6 @@ class _IPEXAttention(nn.Module):
             self.use_sdpa = True
         elif self.has_flash_attn():
             attn_output = torch.empty_like(query)
-            query_len_tensor = seq_len_tensor if past_len == 0 else query_len_tensor
-            query_max_len = max_input_lens if past_len == 0 else 1
             PagedAttention.flash_attn_varlen_func(
                 attn_output,
                 query.contiguous() if query.device.type == "xpu" else query,
@@ -758,6 +743,7 @@ class _IPEXAttention(nn.Module):
         seq_len_tensor = kwargs.pop("seq_len_tensor", None)
         query_len_tensor = kwargs.pop("query_len_tensor", None)
         max_input_lens = kwargs.pop("max_input_lens", 0)
+        query_max_len = kwargs.pop("query_max_len", 0)
         past_len = 0
         if past_key_value is not None:
             past_len = past_key_value.get_seq_length()
@@ -781,6 +767,7 @@ class _IPEXAttention(nn.Module):
             seq_len_tensor,
             query_len_tensor,
             max_input_lens,
+            query_max_len,
         )
 
         attn_output = self.postprocess_attention_output(attn_output)
