@@ -775,7 +775,7 @@ class _IPEXAttention(nn.Module):
 
         key_cache, value_cache = None, None
         if past_key_value is not None:
-            key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask)
+            key_cache, value_cache = past_key_value.update(key, value, self.layer_idx)
 
         attn_output = self.attention_interface(
             query,
