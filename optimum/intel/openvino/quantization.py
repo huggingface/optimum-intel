@@ -52,6 +52,7 @@ from ...exporters.openvino.stateful import ensure_export_task_support_stateful, 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
+    _nncf_version,
     is_datasets_available,
     is_datasets_version,
     is_diffusers_available,
@@ -1053,6 +1054,7 @@ def _weight_only_quantization(
     )
 
     _remove_f16_kv_cache_precision_flag(compressed_model)
+    _add_nncf_version_flag(compressed_model)
 
     return compressed_model
 
@@ -1087,6 +1089,7 @@ def _full_quantization(
     quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
 
     _remove_f16_kv_cache_precision_flag(quantized_model)
+    _add_nncf_version_flag(quantized_model)
 
     return quantized_model
 
@@ -1253,4 +1256,9 @@ def _remove_f16_kv_cache_precision_flag(model: openvino.Model) -> openvino.Model
         if prev_rt_info["KV_CACHE_PRECISION"] == "f16":
             prev_rt_info.pop("KV_CACHE_PRECISION")
             model.set_rt_info(prev_rt_info, "runtime_options")
+    return model
+
+
+def _add_nncf_version_flag(model: openvino.Model) -> openvino.Model:
+    model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
     return model
