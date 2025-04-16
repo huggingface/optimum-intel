@@ -329,11 +329,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
             kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
             kwargs["seq_len_tensor"] = torch.cat((kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int()))
-            kwargs["query_len_tensor"] = torch.arange(kwargs["seq_len_tensor"].shape[0], device=input_ids.device).int() if input_ids.shape[-1] != 1 else kwargs["seq_len_tensor"]
+            kwargs["query_len_tensor"] = kwargs["seq_len_tensor"] if input_ids.shape[-1] != 1 else torch.arange(kwargs["seq_len_tensor"].shape[0], device=input_ids.device).int()
+            kwargs["query_max_len"] = kwargs["max_input_lens"] if input_ids.shape[-1] != 1 else 1
             if self.use_cache:
                 self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
-            kwargs["index"] = attention_mask.view(-1) != 0 if input_ids.shape[-1] != 1 else torch.ones(input_ids.shape[0]).int()
+            kwargs["index"] = attention_mask.view(-1) != 0 if input_ids.shape[-1] != 1 else torch.ones(input_ids.shape[0], dtype=torch.bool).to(input_ids.device)
 
         results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
