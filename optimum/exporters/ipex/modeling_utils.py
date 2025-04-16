@@ -757,10 +757,8 @@ class _IPEXAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[IPEXPagedCache] = None,
         output_attentions: bool = False,
-        use_cache: bool = False,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if past_key_value is None and kwargs.get("layer_past", None) is not None:
@@ -777,7 +775,7 @@ class _IPEXAttention(nn.Module):
 
         key_cache, value_cache = None, None
         if past_key_value is not None:
-            key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask, input_lens)
+            key_cache, value_cache = past_key_value.update(key, value, self.layer_idx, attention_mask)
 
         attn_output = self.attention_interface(
             query,

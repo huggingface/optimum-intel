@@ -328,8 +328,33 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 attention_mask = torch.ones_like(input_ids)
             kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
             kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
+            if self.use_cache:
+                self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
-        return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+        results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+        if self.add_patch and self.use_cache:
+            self.postprocess_ipex_paged_cache(results["past_key_values"], kwargs["input_lens"])
+
+        return results
+    
+    def preprocess_ipex_paged_cache(self, past_key_values, input_lens):
+        batch_size = input_lens.shape[0]
+        past_key_values_length = past_key_values.get_seq_length()
+        if past_key_values_length == 0:
+            past_key_values.alloc_slot_for_prefill(input_lens, batch_size)
+        else:
+            past_key_values.alloc_slot_for_decode(batch_size)
+
+    def postprocess_ipex_paged_cache(self, past_key_values, input_lens):
+        past_key_values_length = past_key_values.get_seq_length()
+        if past_key_values_length == 0:
+            past_key_values._seen_tokens = past_key_values._seen_tokens + input_lens
+            past_key_values.max_seq_len = past_key_values._seen_tokens.max()
+        else:
+            past_key_values._seen_tokens = past_key_values._seen_tokens + 1
+            past_key_values.max_seq_len = past_key_values.max_seq_len + 1
+
 
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], **kwargs: Dict
