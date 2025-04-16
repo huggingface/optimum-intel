@@ -181,6 +181,12 @@ def _normalize_dummy_inputs(dummy_inputs: Dict[str, Any], dtype: Any) -> Dict[st
     return new_dummy
 
 
+def get_model_dtype(model):
+    for param in model.parameters():
+        return param.dtype
+    return getattr(model, "dtype", torch.float32)
+
+
 def remove_none_from_dummy_inputs(dummy_inputs: Dict[str, Any]):
     """
     Removes None values from the dictionary.

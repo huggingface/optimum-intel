@@ -68,6 +68,7 @@ from .utils import (
     _get_dynamic_shapes_info,
     _normalize_dummy_inputs,
     _get_open_clip_submodels_fn_and_export_configs,
+    get_model_dtype,
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
@@ -530,7 +531,7 @@ def export_pytorch(
                         # patch_everywhere breaks torch.ops namespace
                         del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
                     dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
-                    _export_kwargs = {"args": tuple(), "kwargs": _normalize_dummy_inputs(dummy_inputs, model.dtype)}
+                    _export_kwargs = {"args": tuple(), "kwargs": _normalize_dummy_inputs(dummy_inputs, get_model_dtype(model))}
                     _export_kwargs["dynamic_shapes"] = dynamic_shapes
 
                     try:
