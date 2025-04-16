@@ -423,6 +423,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVSanaPipeline
 
                 model_cls = OVSanaPipeline
+            elif class_name == "SaneSprintPipeline":
+                from optimum.intel import OVSanaSprintPipeline
+
+                model_cls = OVSanaSprintPipeline
+
             else:
                 raise NotImplementedError(f"Quantization isn't supported for class {class_name}.")
 

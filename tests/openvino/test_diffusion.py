@@ -37,7 +37,7 @@ from optimum.intel.openvino import (
     OVPipelineForText2Image,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
 from optimum.utils.testing_utils import require_diffusers
 
 
@@ -80,6 +80,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux", "sana"])
         NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.extend(["stable-diffusion-3"])
+    if is_diffusers_version(">=", "0.33.0"):
+        SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
 
     OVMODEL_CLASS = OVPipelineForText2Image
@@ -87,11 +89,14 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     TASK = "text-to-image"
 
-    def generate_inputs(self, height=128, width=128, batch_size=1):
+    def generate_inputs(self, height=128, width=128, batch_size=1, model_type=None):
         inputs = _generate_prompts(batch_size=batch_size)
 
         inputs["height"] = height
         inputs["width"] = width
+
+        if model_type == "sana-sprint":
+            inputs["num_inference_steps"] = 2
 
         return inputs
 
@@ -105,7 +110,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
-        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
@@ -125,7 +130,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             for height in [64, 128]:
                 for width in [64, 128]:
                     for num_images_per_prompt in [1, 3]:
-                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        inputs = self.generate_inputs(
+                            height=height, width=width, batch_size=batch_size, model_type=model_arch
+                        )
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
                         self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
@@ -133,17 +140,16 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
+        auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
-            if model_arch == "sana":
+            if "sana" in model_arch:
                 # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
                 inputs["use_resolution_binning"] = False
-
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
@@ -153,7 +159,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
-            if model_arch == "sana":
+            if "sana" in model_arch:
                 # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
                 inputs["use_resolution_binning"] = False
 
@@ -166,7 +172,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_callback(self, model_arch: str):
         height, width, batch_size = 64, 128, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         class Callback:
             def __init__(self):
@@ -198,8 +204,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 128, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-        if model_arch == "sana":
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
+        if "sana" in model_arch:
             inputs["use_resolution_binning"] = False
 
         for output_type in ["pil", "np", "pt", "latent"]:
@@ -239,7 +245,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
+        if "sana" in model_arch:
+            inputs["use_resolution_binning"] = False
 
         for generator_framework in ["np", "pt"]:
             ov_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
@@ -252,7 +260,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES)
     def test_negative_prompt(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         negative_prompt = ["This is a negative prompt"]
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
@@ -314,7 +322,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
 
         height, width, batch_size = 32, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED))
         diffusers_output = pipeline(**inputs, generator=get_generator("pt", SEED))
@@ -447,7 +455,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         pipeline.compile()
         # generation with incompatible size
         height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         inputs["output_type"] = "pil"
         from optimum.intel.openvino.modeling_diffusion import logger as diffusers_logger
 
