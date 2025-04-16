@@ -331,7 +331,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             if self.use_cache:
                 self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
-            kwargs["index"] = attention_mask.view(-1) != 0 if input_ids.shape[-1] != 1 else torch.ones(sum(kwargs["input_lens"])).int()
+            kwargs["index"] = attention_mask.view(-1) != 0 if input_ids.shape[-1] != 1 else torch.ones(input_ids.shape[0]).int()
 
         results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
