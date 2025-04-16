@@ -59,6 +59,7 @@ TESTS_REQUIRE = [
     "tbb",
     "langchain-huggingface",
     "hf_xet",
+    "num2words",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

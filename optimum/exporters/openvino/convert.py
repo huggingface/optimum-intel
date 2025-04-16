@@ -423,15 +423,17 @@ def export_pytorch(
             # model.config.torchscript = True can not be used for patching, because it overrides return_dict to False
             patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
             patched_forward = patcher.patched_forward
+            dummy_input_keys = list(dummy_inputs.keys())
 
             @functools.wraps(patched_forward)
             def ts_patched_forward(*args, **kwargs):
+                kwargs.update(zip(dummy_input_keys, args))
                 for i in range(len(dict_inputs)):
                     input_name, keys = dict_inputs[i]
                     tuple_input = kwargs[input_name]
                     input_dict = dict(zip(keys, tuple_input))
                     kwargs[input_name] = input_dict
-                outputs = patched_forward(*args, **kwargs)
+                outputs = patched_forward(**kwargs)
                 return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs.values()])
 
             patcher.patched_forward = ts_patched_forward

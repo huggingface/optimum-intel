@@ -1163,6 +1163,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["gemma2", "gemma3-text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
+            transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
@@ -2301,6 +2302,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "gemma3":
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
+            transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
