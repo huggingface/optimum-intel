@@ -4877,6 +4877,9 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
+# this is a patch to avoid PyTorch FE issue
+# with the same tensor names on input and intermediate tensor for speaker_embeddings
 def speecht5_decoder_prenet_forward(
     self,
     input_values: torch.Tensor,
@@ -4901,6 +4904,9 @@ def speecht5_decoder_prenet_forward(
     return inputs_embeds
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L993
+# this is a patch to avoid CPU plugin issue that is happened on 16-th iteration of token generation
+# values computed by self-attention attn_output = torch.bmm(attn_probs, value_states) in a decoder gets incorrect
 def speecht5_attention_forward(
     self,
     hidden_states: torch.Tensor,
@@ -5025,6 +5031,9 @@ def speecht5_attention_forward(
     return attn_output, attn_weights_reshaped, past_key_value
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1175
+# this is a patch for a model to avoid incorrect tracing
+# cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple are computed using encoder_hidden_states
 def speecht5_decoder_layer_forward(
     self,
     hidden_states: torch.Tensor,
