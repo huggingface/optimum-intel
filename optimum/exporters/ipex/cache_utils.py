@@ -69,7 +69,6 @@ class IPEXPagedCache(Cache):
         else:
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
-        self.slots = torch.zeros([max_batch_size], device=self.device, dtype=torch.int32)
 
         self.key_cache: List[torch.Tensor] = []
         self.value_cache: List[torch.Tensor] = []
@@ -136,14 +135,16 @@ class IPEXPagedCache(Cache):
             all_slot_offsets.append(slot_offsets)
 
         all_block_indices = torch.cat(all_block_indices)
-        all_slot_offsets = torch.cat(all_slot_offsets)
+        all_slot_offsets = torch.cat(all_slot_offsets).int()
         self.slots = all_block_indices * self.block_size + all_slot_offsets
+        torch._dynamo.mark_static_address(self.slots)
 
     # outside the model forward
     def alloc_slot_for_decode(self, batch_size: int):
         start_block_idx = self._seen_tokens // self.block_size
         slot_offset_in_block = (self._seen_tokens) % self.block_size
-        self.slots = self.slots * 0
+        # Use inplace op to avoid change object id, which will break torch.compile
+        self.slots.zero_()
         for i in range(batch_size):
             if slot_offset_in_block[i] == 0:
                 # need a new block:
