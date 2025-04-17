@@ -314,7 +314,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
         safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
+            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker", subfolder="safety_checker"
         )
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
@@ -655,7 +655,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
         safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
+            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker", subfolder="safety_checker"
         )
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
@@ -925,7 +925,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
         safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
+            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker", subfolder="safety_checker"
         )
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
