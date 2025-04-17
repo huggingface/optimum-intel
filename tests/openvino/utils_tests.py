@@ -140,6 +140,7 @@ MODEL_NAMES = {
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
     "smolvlm": "katuni4ka/tiny-random-smolvlm2",
+    "speecht5": "hf-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
@@ -179,7 +180,6 @@ MODEL_NAMES = {
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
-    "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
 }
 
 
