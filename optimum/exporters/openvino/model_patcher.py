@@ -2985,7 +2985,7 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
                 and (cache_position_index > len(args) and "cache_position" not in kwargs)
             ):
                 past_seen_tokens = legacy_pkv[0][0].shape[-2]
-                input_ids = args[input_ids_index]
+                input_ids = args[input_ids_index] if "input_ids" not in kwargs else kwargs["input_ids"]
                 cache_position = torch.arange(
                     past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
                 )
