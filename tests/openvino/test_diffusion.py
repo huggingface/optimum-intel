@@ -313,7 +313,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(["stable-diffusion", "latent-consistency"])
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("katuni4ka/tiny-random-stable-diffusion-with-safety-checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
@@ -652,7 +652,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @parameterized.expand(["stable-diffusion", "latent-consistency"])
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("katuni4ka/tiny-random-stable-diffusion-with-safety-checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
@@ -920,7 +920,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(["stable-diffusion"])
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("katuni4ka/tiny-random-stable-diffusion-with-safety-checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
