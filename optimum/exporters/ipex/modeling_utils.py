@@ -118,12 +118,13 @@ def _llama_model_forward(
     if past_key_values is not None and not isinstance(past_key_values, IPEXPagedCache):
         raise ValueError("only support IPEXPagedCache input now")
 
-    past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    max_input_lens = kwargs.pop("max_input_lens", None)
+    past_key_values_length = max_input_lens - seq_length
 
     device = input_ids.device if input_ids is not None else inputs_embeds.device
     if position_ids is None:
         position_ids = torch.arange(
-            past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+            past_key_values_length, max_input_lens, dtype=torch.long, device=device
         )
         position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
@@ -143,7 +144,6 @@ def _llama_model_forward(
     input_lens = kwargs.pop("input_lens", None)
     seq_len_tensor = kwargs.pop("seq_len_tensor", None)
     query_len_tensor = kwargs.pop("query_len_tensor", None)
-    max_input_lens = kwargs.pop("max_input_lens", None)
     query_max_len = kwargs.pop("query_max_len", None)
     index = kwargs.pop("index", None)
     cos = position_embeddings[0]

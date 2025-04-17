@@ -69,7 +69,6 @@ class IPEXPagedCache(Cache):
         else:
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
-        self.max_seq_len = self._seen_tokens.max()
         self.slots = torch.zeros([max_batch_size], device=self.device, dtype=torch.int32)
 
         self.key_cache: List[torch.Tensor] = []
@@ -182,10 +181,6 @@ class IPEXPagedCache(Cache):
 
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
-    def get_seq_length(self) -> int:
-        """Returns the sequence length of the cached states that were seen by the model."""
-        return self.max_seq_len
-
     def get_max_length(self) -> Optional[int]:
         """Returns the maximum sequence length of the cached states."""
         return self.max_cache_len
@@ -195,7 +190,6 @@ class IPEXPagedCache(Cache):
         self._seen_tokens = torch.zeros([self.max_batch_size], dtype=torch.int32, device=self.device)
         self.block_tables.fill_(-1)
         self.free_blocks = torch.ones([self.num_blocks], dtype=torch.int32, device=self.device)
-        self.max_seq_len = 0
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
@@ -220,7 +214,7 @@ class IPEXPagedCache(Cache):
         """Crop the past key values up to a new `maximum_length` in terms of tokens. `maximum_length` can also be
         negative to remove `maximum_length` tokens. This is used in assisted decoding and contrastive search."""
 
-        max_seq_len = self.get_seq_length()
+        max_seq_len = self._seen_tokens.max()
         if maximum_length < 0:
             maximum_length = max_seq_len - abs(maximum_length)
 
@@ -232,7 +226,7 @@ class IPEXPagedCache(Cache):
             num_blocks = (new_tokens + self.block_size - 1) // self.block_size
             self.block_tables[bs, num_blocks:] = -1
             self._seen_tokens[bs] = new_tokens
-        self.max_seq_len = self._seen_tokens.max()
+
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
         for i in free_table:
             if not (self.block_tables == i).any():

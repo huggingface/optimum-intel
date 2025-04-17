@@ -323,11 +323,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         attention_mask: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        if not hasattr(self, "decode_index"):
-            self.decode_index = torch.arange(input_ids.shape[0], dtype=torch.int).to(input_ids.device)
         if self.add_patch:
             if input_ids is not None and attention_mask is None:
                 attention_mask = torch.ones_like(input_ids)
+            if not hasattr(self, "decode_index"):
+                self.decode_index = torch.arange(input_ids.shape[0], dtype=torch.int).to(input_ids.device)
             kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
             kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
             kwargs["seq_len_tensor"] = torch.cat((kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int()))
@@ -344,7 +344,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self.postprocess_ipex_paged_cache(results["past_key_values"], kwargs["input_lens"])
 
         return results
-    
+
     def preprocess_ipex_paged_cache(self, past_key_values, input_lens):
         batch_size = input_lens.shape[0]
         past_key_values_length = past_key_values.get_seq_length()
@@ -357,11 +357,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         past_key_values_length = past_key_values.get_seq_length()
         if past_key_values_length == 0:
             past_key_values._seen_tokens = past_key_values._seen_tokens + input_lens
-            past_key_values.max_seq_len = past_key_values._seen_tokens.max()
         else:
             past_key_values._seen_tokens = past_key_values._seen_tokens + 1
-            past_key_values.max_seq_len = past_key_values.max_seq_len + 1
-
 
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], **kwargs: Dict
