@@ -57,7 +57,7 @@ TESTS_REQUIRE = [
     "peft",
     "datasets[audio]>=1.4.0",
     "tbb",
-    "langchain-core<0.3.53",
+    "langchain-core<0.3.52",
     "langchain-huggingface",
     "hf_xet",
 ]
