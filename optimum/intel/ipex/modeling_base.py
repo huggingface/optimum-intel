@@ -328,11 +328,13 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 attention_mask = torch.ones_like(input_ids)
             if not hasattr(self, "decode_index"):
                 self.decode_index = torch.arange(input_ids.shape[0], dtype=torch.int).to(input_ids.device)
+            if not hasattr(self, "decode_query_len_tensor"):
+                self.decode_query_len_tensor = torch.arange(input_ids.shape[0] + 1, dtype=torch.int).to(input_ids.device)
             kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
             kwargs["max_input_lens"] = kwargs["input_lens"].max().item()
             kwargs["seq_len_tensor"] = torch.cat((kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int()))
-            kwargs["query_len_tensor"] = kwargs["seq_len_tensor"] if input_ids.shape[-1] != 1 else torch.arange(kwargs["seq_len_tensor"].shape[0], device=input_ids.device).int()
-            kwargs["query_max_len"] = kwargs["max_input_lens"] if input_ids.shape[-1] != 1 else 1
+            kwargs["query_len_tensor"] = kwargs["seq_len_tensor"].clone() if input_ids.shape[-1] != 1 else self.decode_query_len_tensor
+            kwargs["query_max_len"] = input_ids.shape[-1]
             if self.use_cache:
                 self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
