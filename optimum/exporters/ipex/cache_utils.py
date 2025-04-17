@@ -181,6 +181,10 @@ class IPEXPagedCache(Cache):
 
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
+    def get_seq_length(self) -> int:
+        """Returns the sequence length of the cached states that were seen by the model."""
+        return self._seen_tokens.max()
+
     def get_max_length(self) -> Optional[int]:
         """Returns the maximum sequence length of the cached states."""
         return self.max_cache_len
