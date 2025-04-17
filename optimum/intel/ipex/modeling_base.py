@@ -323,6 +323,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         attention_mask: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        if not hasattr(self, "decode_index"):
+            self.decode_index = torch.arange(input_ids.shape[0], dtype=torch.int).to(input_ids.device)
         if self.add_patch:
             if input_ids is not None and attention_mask is None:
                 attention_mask = torch.ones_like(input_ids)
@@ -334,7 +336,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             if self.use_cache:
                 self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
-            kwargs["index"] = attention_mask.view(-1) != 0 if input_ids.shape[-1] != 1 else torch.ones(input_ids.shape[0], dtype=torch.bool).to(input_ids.device)
+            kwargs["index"] = attention_mask.view(-1).nonzero().squeeze() if input_ids.shape[-1] != 1 else self.decode_index
 
         results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 

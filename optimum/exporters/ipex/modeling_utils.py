@@ -150,9 +150,9 @@ def _llama_model_forward(
     sin = position_embeddings[1]
 
     hidden_states_copy = hidden_states
-    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-    cos = (cos.reshape(-1, cos.shape[-1]))[index]
-    sin = (sin.reshape(-1, sin.shape[-1]))[index]
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1])).index_select(0, index)
+    cos = (cos.reshape(-1, cos.shape[-1])).index_select(0, index)
+    sin = (sin.reshape(-1, sin.shape[-1])).index_select(0, index)
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
