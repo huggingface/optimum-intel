@@ -310,6 +310,7 @@ if TYPE_CHECKING:
             OVPipelineForInpainting,
             OVPipelineForText2Image,
             OVSanaPipeline,
+            OVSanaSprintPipeline,
             OVStableDiffusion3Img2ImgPipeline,
             OVStableDiffusion3InpaintPipeline,
             OVStableDiffusion3Pipeline,

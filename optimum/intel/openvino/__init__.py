@@ -94,6 +94,7 @@ if is_diffusers_available():
         OVPipelineForInpainting,
         OVPipelineForText2Image,
         OVSanaPipeline,
+        OVSanaSprintPipeline,
         OVStableDiffusion3Img2ImgPipeline,
         OVStableDiffusion3InpaintPipeline,
         OVStableDiffusion3Pipeline,
