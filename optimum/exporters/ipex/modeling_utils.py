@@ -609,6 +609,38 @@ def _qwen2_model_forward(
     return output if return_dict else output.to_tuple()
 
 
+my_lib = torch.library.Library("optimum_intel", "FRAGMENT")
+my_lib.define("flash_attn(Tensor query, Tensor key_cache, Tensor value_cache, Tensor block_tables, Tensor seq_len_tensor, Tensor query_len_tensor, Tensor max_input_lens, int query_max_len, int head_dim) -> Tensor")
+# torch.optimum_intel.flash_attn
+@torch.library.impl("optimum_intel::flash_attn", "CPU")
+def flash_attn_impl(
+    query,
+    key_cache,
+    value_cache,
+    block_tables,
+    seq_len_tensor,
+    query_len_tensor,
+    max_input_lens,
+    query_max_len,
+    head_dim,
+):
+    attn_output = torch.empty_like(query)
+    PagedAttention.flash_attn_varlen_func(
+        attn_output,
+        query.contiguous() if query.device.type == "xpu" else query,
+        key_cache,
+        value_cache,
+        query_len_tensor,
+        seq_len_tensor,
+        query_max_len,
+        max_input_lens.item(),
+        1.0 / math.sqrt(head_dim),
+        True,
+        block_tables,
+        None,
+    )
+    return attn_output
+
 class _IPEXAttention(nn.Module):
     def __init__(self, module, device, config) -> None:
         super().__init__()
@@ -676,21 +708,17 @@ class _IPEXAttention(nn.Module):
             )
             self.use_sdpa = True
         elif self.has_flash_attn():
-            attn_output = torch.empty_like(query)
-            PagedAttention.flash_attn_varlen_func(
-                attn_output,
-                query.contiguous() if query.device.type == "xpu" else query,
-                key_cache,
-                value_cache,
-                query_len_tensor,
-                seq_len_tensor,
-                query_max_len,
-                max_input_lens,
-                1.0 / math.sqrt(self.head_dim),
-                True,
-                past_key_value.block_tables,
-                None,
-            )
+            attn_output = torch.ops.optimum_intel.flash_attn(
+                    query,
+                    key_cache,
+                    value_cache,
+                    past_key_value.block_tables,
+                    seq_len_tensor,
+                    query_len_tensor,
+                    max_input_lens,
+                    query_max_len,
+                    self.head_dim,
+                )
         elif past_len == 0:
             # prefill, remove padding
             attn_output = torch.empty_like(query)
