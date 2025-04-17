@@ -338,7 +338,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             if self.use_cache:
                 self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
-            kwargs["index"] = attention_mask.view(-1).nonzero().squeeze() if input_ids.shape[-1] != 1 else self.decode_index
+            kwargs["index"] = attention_mask.view(-1).nonzero().squeeze().int() if input_ids.shape[-1] != 1 else self.decode_index
 
         results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
@@ -357,10 +357,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
     def postprocess_ipex_paged_cache(self, past_key_values, input_lens):
         past_key_values_length = past_key_values.get_seq_length()
+        # Use inplace op to keep the same memory address, avoid recompile
         if past_key_values_length == 0:
-            past_key_values._seen_tokens = past_key_values._seen_tokens + input_lens
+            past_key_values._seen_tokens = past_key_values._seen_tokens.add_(input_lens)
         else:
-            past_key_values._seen_tokens = past_key_values._seen_tokens + 1
+            past_key_values._seen_tokens = past_key_values._seen_tokens.add_(1)
 
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], **kwargs: Dict
