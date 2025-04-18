@@ -22,7 +22,11 @@ from transformers.cache_utils import Cache
 from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPastAndCrossAttentions
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPast,
+    BaseModelOutputWithPastAndCrossAttentions,
+    CausalLMOutputWithCrossAttentions,
+)
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_torch_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
@@ -90,6 +94,82 @@ def _remove_hooks_for_ipex(module, recurse):
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
 def _ipex_rms_layer_norm_forward(self, hidden_states):
     return RMSNorm.apply_function(hidden_states, self.weight, self.variance_epsilon)
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/gpt2/modeling_gpt2.py#L1036
+def _gpt2_lm_head_model_forward(
+    self,
+    input_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    token_type_ids: Optional[torch.LongTensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.FloatTensor] = None,
+    labels: Optional[torch.LongTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    **kwargs,
+) -> Union[Tuple, CausalLMOutputWithCrossAttentions]:
+    r"""
+    labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+        Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
+        `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
+        are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
+    """
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    transformer_outputs = self.transformer(
+        input_ids,
+        past_key_values=past_key_values,
+        attention_mask=attention_mask,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        encoder_hidden_states=encoder_hidden_states,
+        encoder_attention_mask=encoder_attention_mask,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+        **kwargs,
+    )
+    hidden_states = transformer_outputs[0]
+
+    # Set device for model parallelism
+    if self.model_parallel:
+        torch.cuda.set_device(self.transformer.first_device)
+        hidden_states = hidden_states.to(self.lm_head.weight.device)
+
+    lm_logits = self.lm_head(hidden_states)
+
+    loss = None
+    if labels is not None:
+        # Flatten the tokens
+        loss = self.loss_function(
+            lm_logits,
+            labels,
+            vocab_size=self.config.vocab_size,
+            **kwargs,
+        )
+
+    if not return_dict:
+        output = (lm_logits,) + transformer_outputs[1:]
+        return ((loss,) + output) if loss is not None else output
+
+    return CausalLMOutputWithCrossAttentions(
+        loss=loss,
+        logits=lm_logits,
+        past_key_values=transformer_outputs.past_key_values,
+        hidden_states=transformer_outputs.hidden_states,
+        attentions=transformer_outputs.attentions,
+        cross_attentions=transformer_outputs.cross_attentions,
+    )
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llama/modeling_llama.py#L918
