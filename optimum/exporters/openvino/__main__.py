@@ -39,13 +39,13 @@ from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _OpenClipForZeroShotImageClassification,
 )
-from optimum.utils.save_utils import maybe_load_preprocessors
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
+    load_preprocessors,
 )
 
 
@@ -291,6 +291,11 @@ def main_export(
         # some models force flash_attn attention by default that does not support load model on cpu
         if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
+        if model_type == "phi4mm":
+            if "activation_checkpointing" in config.audio_processor["config"]:
+                config.audio_processor["config"]["activation_checkpointing"] = ""
+            config._attn_implementation = "sdpa"
+            loading_kwargs["config"] = config
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
         if (
@@ -441,8 +446,8 @@ def main_export(
                 possible_synonyms = ""
             logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
-        preprocessors = maybe_load_preprocessors(
-            model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+        preprocessors = load_preprocessors(
+            model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
 
         submodel_paths = export_from_model(
