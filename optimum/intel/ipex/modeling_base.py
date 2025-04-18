@@ -243,7 +243,8 @@ class IPEXModel(OptimizedModel):
         from torch._inductor import config as inductor_config
 
         # System level optimization
-        inductor_config.cpp_wrapper = True
+        # Patched model can disable cpp wrapper to get better performance.
+        inductor_config.cpp_wrapper = False if self._add_patch and self.export_feature == "text-generation" else True
         os.environ["TORCHINDUCTOR_FREEZING"] = "1"
         logger.info("Enable torch.compile optimization")
         self.model.forward = torch.compile(self.model.forward)
