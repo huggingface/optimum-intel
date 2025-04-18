@@ -815,7 +815,6 @@ class _IPEXAttention(nn.Module):
         query_len_tensor,
         max_input_lens,
         query_max_len,
-        attn_output,
     ):
         if past_key_value is None:
             n_rep = query.shape[1] // key.shape[1]
