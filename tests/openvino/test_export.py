@@ -40,6 +40,7 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVStableDiffusion3Pipeline,
@@ -73,6 +74,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
         "llava": OVModelForVisualCausalLM,
+        "speecht5": OVModelForTextToSpeechSeq2Seq,
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -85,7 +87,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.update({"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline})
 
-    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava")
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
     def _openvino_export(
         self,

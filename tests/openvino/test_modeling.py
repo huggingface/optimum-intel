@@ -85,6 +85,7 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
     OVModelForVisualCausalLM,
@@ -2968,4 +2969,76 @@ class OVLangchainTest(unittest.TestCase):
         self.assertTrue(len(stream_results_string.strip()) > 1)
 
         del hf_pipe
+        gc.collect()
+
+
+class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("speecht5",)
+
+    def _generate_text(self):
+        return "This text is converted to speech using OpenVINO backend"
+
+    def _generate_speaker_embedding(self):
+        np.random.seed(42)
+        speaker_embedding = np.random.randn(1, 512).astype(np.float32)
+        return torch.tensor(speaker_embedding)
+
+    def _get_processor(self, model_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5Processor
+
+            processor = SpeechT5Processor.from_pretrained(model_id)
+            return processor
+        else:
+            raise Exception("{} unknown processor for text-to-speech".format(model_arch))
+
+    def _get_model(self, model_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5ForTextToSpeech
+
+            model = SpeechT5ForTextToSpeech.from_pretrained(model_id)
+            return model
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+    def _get_vocoder(self, vocoder_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5HifiGan
+
+            vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id)
+            return vocoder
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        set_seed(SEED)
+        text_data = self._generate_text()
+        speaker_embeddings = self._generate_speaker_embedding()
+        model_id = MODEL_NAMES[model_arch]
+
+        if model_arch == "speecht5":
+            # since Auto class for text-to-audio is not implemented in optimum
+            # generate model classes for reference generation
+            vocoder_id = "fxmarty/speecht5-hifigan-tiny"
+            processor = self._get_processor(model_id, model_arch)
+            model = self._get_model(model_id, model_arch)
+            vocoder = self._get_vocoder(vocoder_id, model_arch)
+            inputs = processor(text=text_data, return_tensors="pt")
+            ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
+            ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+        ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(model_id, vocoder=vocoder_id)
+        ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+
+        self.assertIsInstance(ov_pipe.config, PretrainedConfig)
+        self.assertTrue(model_has_state(ov_pipe.decoder_model.model))
+        self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
+
+        del vocoder
+        del model
+        del processor
+
         gc.collect()

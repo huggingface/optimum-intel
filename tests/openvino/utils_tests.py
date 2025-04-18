@@ -140,6 +140,7 @@ MODEL_NAMES = {
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
     "smolvlm": "katuni4ka/tiny-random-smolvlm2",
+    "speecht5": "hf-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
@@ -214,6 +215,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
+    "speecht5": (28, 52, 10, 156),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
