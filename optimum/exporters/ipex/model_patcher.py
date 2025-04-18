@@ -129,7 +129,7 @@ def _patch_qwen2_model(model):
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
     # To avoid call _ignore_causal_mask_sdpa which will cause recompile
-    model.config._attn_implementation == "ipex_paged"
+    model.config._attn_implementation = "ipex_paged"
     convert_functions(model, Qwen2Model, "forward", _qwen2_model_forward)
     convert_functions(model, Qwen2RMSNorm, "forward", _ipex_rms_layer_norm_forward)
     convert_class(model, Qwen2DecoderLayer, _IPEXQwen2DecoderLayer, model.device, model.config)
