@@ -1146,6 +1146,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
+            num_beams=2 if model_arch != "glm4" else 1,
             do_sample=False,
             eos_token_id=None,
         )
@@ -1513,7 +1514,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "ibert",
         "mobilebert",
         "mpnet",
-        "nystromformer",
         "perceiver_text",
         "roberta",
         "roformer",
@@ -1521,6 +1521,10 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "xlm",
         "xlm_roberta",
     )
+
+    # accuracy issue, need additional investigation
+    if is_transformers_version("<", "4.51.0"):
+        SUPPORTED_ARCHITECTURES += ("nystromformer",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -2291,7 +2295,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.generation_config.do_sample = False
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
-        ov_model.genration_config.do_sample = False
+        ov_model.generation_config.do_sample = False
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,

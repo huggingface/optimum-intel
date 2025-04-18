@@ -13,9 +13,9 @@
 #  limitations under the License.
 
 import copy
-import inspect
 import functools
 import gc
+import inspect
 import logging
 import os
 from pathlib import Path
@@ -428,7 +428,9 @@ def export_pytorch(
 
             @functools.wraps(patched_forward)
             def ts_patched_forward(*args, **kwargs):
-                ordered_example_inputs = [param for param in inspect.signature(patcher.orig_forward).parameters if param in dummy_input_keys]
+                ordered_example_inputs = [
+                    param for param in inspect.signature(patcher.orig_forward).parameters if param in dummy_input_keys
+                ]
                 kwargs.update(zip(ordered_example_inputs, args))
                 for i in range(len(dict_inputs)):
                     input_name, keys = dict_inputs[i]
