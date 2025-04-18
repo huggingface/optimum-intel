@@ -285,7 +285,7 @@ def _llama_model_forward(
         raise ValueError("only support IPEXPagedCache input now")
 
     # avoid multi inputs
-    index = kwargs.pop("index", None)
+    index = kwargs.pop("max_input_lens", None)
     max_input_lens = self.config.max_input_lens
     past_key_values_length = max_input_lens - seq_length
 
@@ -409,7 +409,7 @@ def _falcon_model_forward(
         inputs_embeds = self.word_embeddings(input_ids)
 
     # avoid multi inputs
-    index = kwargs.pop("index", None)
+    index = kwargs.pop("max_input_lens", None)
     max_input_lens = self.config.max_input_lens
     batch_size, seq_length, _ = inputs_embeds.shape
     past_key_values_length = max_input_lens - seq_length
@@ -547,7 +547,7 @@ def _gpt2_model_forward(
         token_type_ids = token_type_ids.view(-1, input_shape[-1])
 
     # avoid multi inputs
-    index = kwargs.pop("index", None)
+    index = kwargs.pop("max_input_lens", None)
     max_input_lens = self.config.max_input_lens
     seq_length = input_ids.shape[-1]
     past_key_values_length = max_input_lens - seq_length
@@ -679,7 +679,7 @@ def _qwen2_model_forward(
     device = input_ids.device if input_ids is not None else inputs_embeds.device
 
     # avoid multi inputs
-    index = kwargs.pop("index", None)
+    index = kwargs.pop("max_input_lens", None)
     max_input_lens = self.config.max_input_lens
     past_key_values_length = max_input_lens - seq_length
     if cache_position is None:
