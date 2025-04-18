@@ -41,7 +41,7 @@ if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
     )
 else:
-    from intel_extension_for_pytorch.llm.functional import rms_norm, rotary_embedding, varlen_attention
+    from intel_extension_for_pytorch.llm.functional import varlen_attention
     from intel_extension_for_pytorch.llm.modules import (
         Linear2SiluMul,
         LinearAdd,
@@ -49,7 +49,15 @@ else:
         LinearGelu,
         LinearNewGelu,
         PagedAttention,
+        RMSNorm,
+        RotaryEmbedding,
     )
+    import intel_extension_for_pytorch as ipex
+    device_type = "xpu" if ipex._C._has_xpu() else "cpu"
+    # Assign device type earlier to void recompile in ipex.
+    PagedAttention.runtime_ops.device_type = device_type
+    RMSNorm.runtime_ops.device_type = device_type
+    RotaryEmbedding.runtime_ops.device_type = device_type
 
 
 # Adapted from https://github.com/huggingface/accelerate/blob/v1.2.1/src/accelerate/hooks.py#L183
@@ -80,7 +88,7 @@ def _remove_hooks_for_ipex(module, recurse):
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
 def _ipex_rms_layer_norm_forward(self, hidden_states):
-    return rms_norm(hidden_states, self.weight, self.variance_epsilon)
+    return RMSNorm.apply_function(hidden_states, self.weight, self.variance_epsilon)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/models/llama/modeling_llama.py#L918
@@ -628,7 +636,7 @@ class _IPEXAttention(nn.Module):
 
     def rope(self, query, key, **kwargs):
         position_embeddings = kwargs.pop("position_embeddings", None)
-        rotary_embedding(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
+        RotaryEmbedding.apply_function(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
         return query, key
 
     def postprocess_attention_output(self, attn_output):
