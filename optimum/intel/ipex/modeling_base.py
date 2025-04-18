@@ -348,14 +348,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             kwargs["index"] = (
                 attention_mask.view(-1).nonzero().squeeze().int() if input_ids.shape[-1] != 1 else self.decode_index
             )
-            kwargs["empty_attn_output"] = torch.empty(
-                [
-                    kwargs["input_lens"].sum(),
-                    self.model.config.num_attention_heads,
-                    self.model.config.hidden_size // self.model.config.num_attention_heads,
-                ],
-                dtype=self.dtype,
-            )
             # The int value will be recognized as constant if we pass it in the forward.
             # To avoid recompile, we pass the int value through config so the torch.compile will not recognize it as constant.
             self.model.config.max_input_lens = kwargs["input_lens"].max().item()
