@@ -147,7 +147,7 @@ class IPEXModel(OptimizedModel):
         self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
         self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
-        self.model.config.compile = self.can_compile(self.model, self.use_cache)
+        self.model.config.compile = self.can_compile()
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
@@ -225,14 +225,16 @@ class IPEXModel(OptimizedModel):
     def can_generate(self):
         return isinstance(self, GenerationMixin)
 
-    @staticmethod
-    def can_compile(model, use_cache):
+    def can_compile(self):
         if (
-            model.device.type != "cpu"
-            or model.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
+            self.model.device.type != "cpu"
+            or self.model.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
             or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
-            or getattr(model.config, "quantization_config", None)
+            or getattr(self.model.config, "quantization_config", None)
         ):
+            return False
+
+        if self.use_cache and not self.model._supports_cache_class and not self._add_patch:
             return False
 
         return True
