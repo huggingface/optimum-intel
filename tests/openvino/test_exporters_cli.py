@@ -40,6 +40,7 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
@@ -82,6 +83,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
+        ("text-to-audio", "speecht5"),
     ]
 
     if is_transformers_version(">=", "4.45"):
@@ -110,6 +112,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "speecht5": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

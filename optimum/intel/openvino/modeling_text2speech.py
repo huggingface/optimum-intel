@@ -247,6 +247,10 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
     def submodels(self):
         return {submodel_name: getattr(self, submodel_name) for submodel_name in self._submodel_names}
 
+    @property
+    def ov_submodels(self) -> Dict[str, ov.runtime.Model]:
+        return {submodel_name: getattr(self, submodel_name).model for submodel_name in self._submodel_names}
+
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
