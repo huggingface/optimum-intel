@@ -118,7 +118,7 @@ def _llama_model_forward(
     if past_key_values is not None and not isinstance(past_key_values, IPEXPagedCache):
         raise ValueError("only support IPEXPagedCache input now")
 
-    max_input_lens = kwargs.pop("max_input_lens", None)
+    max_input_lens = self.config.max_input_lens
     past_key_values_length = max_input_lens - seq_length
 
     device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -144,8 +144,8 @@ def _llama_model_forward(
     input_lens = kwargs.pop("input_lens", None)
     seq_len_tensor = kwargs.pop("seq_len_tensor", None)
     query_len_tensor = kwargs.pop("query_len_tensor", None)
-    query_max_len = kwargs.pop("query_max_len", None)
     index = kwargs.pop("index", None)
+    query_max_len = seq_length
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
