@@ -97,6 +97,7 @@ def _ipex_rms_layer_norm_forward(self, hidden_states):
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/gpt2/modeling_gpt2.py#L1036
+# For passing kwargs, we can remove it when gpt2 model support passing kwargs to self.transformer.
 def _gpt2_lm_head_model_forward(
     self,
     input_ids: Optional[torch.LongTensor] = None,

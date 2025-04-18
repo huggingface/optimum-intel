@@ -116,7 +116,7 @@ def _patch_gpt2_model(model):
     """
     num_key_value_heads = model.config.num_attention_heads
     setattr(model.config, "num_key_value_heads", num_key_value_heads)
-    convert_functions(model, GPT2LMHeadModel, "forward", _gpt2_lm_head_model_forward)
+    convert_func(model, "forward", _gpt2_lm_head_model_forward)
     convert_functions(model, GPT2Model, "forward", _gpt2_model_forward)
     convert_class(model, GPT2Block, _IPEXGPT2Block, model.device, model.config)
     return model
