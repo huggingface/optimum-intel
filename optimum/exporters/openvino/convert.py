@@ -1357,11 +1357,11 @@ def _get_speecht5_tss_model_for_export(
     model_kwargs: Optional[Dict] = None,
     stateful: bool = True,
 ):
-    DECODER_WITH_PAST_NAME = "decoder_with_past_model"
     if model_kwargs is None or "vocoder" not in model_kwargs:
-        raise ValueError(
-            'The export of SpeechT5 requires a vocoder. Please pass `--model-kwargs \'{"vocoder": "vocoder_model_name_or_path"}\'` from the command line, or `model_kwargs={"vocoder": "vocoder_model_name_or_path"}` if calling main_export.'
-        )
+        # use the default vocoder if it is not specified
+        vocoder_id = "microsoft/speecht5_hifigan"
+    else:
+        vocoder_id = model_kwargs["vocoder"]
 
     # prepare export config
     export_config_constructor = TasksManager.get_exporter_config_constructor(
@@ -1387,7 +1387,7 @@ def _get_speecht5_tss_model_for_export(
     postnet_export_config = config.with_behavior("postnet")
     vocoder_export_config = config.with_behavior("vocoder")
 
-    vocoder = SpeechT5HifiGan.from_pretrained(model_kwargs["vocoder"]).eval()
+    vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id).eval()
 
     models_for_export[ENCODER_NAME] = (model.speecht5.encoder, encoder_export_config)
     models_for_export[DECODER_NAME] = (model, decoder_export_config)
