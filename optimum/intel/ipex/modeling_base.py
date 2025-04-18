@@ -234,8 +234,6 @@ class IPEXModel(OptimizedModel):
             or getattr(model.config, "quantization_config", None)
         ):
             return False
-        if use_cache and not model._supports_static_cache:
-            return False
 
         return True
 
