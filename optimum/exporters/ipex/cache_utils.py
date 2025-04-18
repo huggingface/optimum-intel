@@ -54,7 +54,7 @@ class IPEXPagedCache(Cache):
         # Used in `generate` to keep tally of how many tokens the cache has seen
 
         self._seen_tokens = torch.zeros([max_batch_size], dtype=torch.int32, device=device)
-        self.slots = torch.zeros([max_batch_size], device=self.device, dtype=torch.int32)
+        self.slots = torch.zeros([max_cache_len], dtype=torch.int32, device=device)
         torch._dynamo.mark_static_address(self._seen_tokens)
         torch._dynamo.mark_static_address(self.slots)
         default_block_size = 16
@@ -140,7 +140,7 @@ class IPEXPagedCache(Cache):
         all_block_indices = torch.cat(all_block_indices)
         all_slot_offsets = torch.cat(all_slot_offsets).int()
         # Use inplace op to keep the same memory address, avoid recompile
-        self.slots.copy_(all_block_indices * self.block_size + all_slot_offsets)
+        self.slots[:all_block_indices.shape[0]].copy_(all_block_indices * self.block_size + all_slot_offsets)
 
     # outside the model forward
     def alloc_slot_for_decode(self, batch_size: int):
@@ -195,9 +195,9 @@ class IPEXPagedCache(Cache):
 
     def reset(self):
         """Resets the cache values while preserving the objects"""
-        self._seen_tokens = torch.zeros([self.max_batch_size], dtype=torch.int32, device=self.device)
+        self._seen_tokens.zero_()
         self.block_tables.fill_(-1)
-        self.free_blocks = torch.ones([self.num_blocks], dtype=torch.int32, device=self.device)
+        self.free_blocks.fill_(1)
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
