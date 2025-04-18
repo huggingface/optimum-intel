@@ -14,7 +14,7 @@
 
 from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconModel
-from transformers.models.gpt2.modeling_gpt2 import GPT2Block, GPT2LMHeadModel, GPT2Model
+from transformers.models.gpt2.modeling_gpt2 import GPT2Block, GPT2Model
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaModel,
@@ -128,6 +128,8 @@ def _patch_qwen2_model(model):
         1. Use IPEX rope and paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
+    # To avoid call _ignore_causal_mask_sdpa which will cause recompile
+    model.config._attn_implementation == "ipex_paged"
     convert_functions(model, Qwen2Model, "forward", _qwen2_model_forward)
     convert_functions(model, Qwen2RMSNorm, "forward", _ipex_rms_layer_norm_forward)
     convert_class(model, Qwen2DecoderLayer, _IPEXQwen2DecoderLayer, model.device, model.config)
