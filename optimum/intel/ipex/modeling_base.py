@@ -67,6 +67,8 @@ _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
 # Page attention model cannot use torch.compile for now.
 if is_torch_version("<", "2.6"):
     _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
+elif is_torch_version("<", "2.7"):
+    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
 else:
     _COMPILE_NOT_READY_MODEL_TYPES = ()
 

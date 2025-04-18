@@ -255,8 +255,9 @@ def _falcon_model_forward(
     if inputs_embeds is None:
         inputs_embeds = self.word_embeddings(input_ids)
 
-    past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    max_input_lens = self.config.max_input_lens
     batch_size, seq_length, _ = inputs_embeds.shape
+    past_key_values_length = max_input_lens - seq_length
     device = input_ids.device if input_ids is not None else inputs_embeds.device
 
     if cache_position is None:
@@ -278,16 +279,15 @@ def _falcon_model_forward(
     input_lens = kwargs.pop("input_lens", None)
     seq_len_tensor = kwargs.pop("seq_len_tensor", None)
     query_len_tensor = kwargs.pop("query_len_tensor", None)
-    max_input_lens = kwargs.pop("max_input_lens", None)
-    query_max_len = kwargs.pop("query_max_len", None)
     index = kwargs.pop("index", None)
+    query_max_len = seq_length
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
     hidden_states_copy = hidden_states
-    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-    cos = (cos.reshape(-1, cos.shape[-1]))[index]
-    sin = (sin.reshape(-1, sin.shape[-1]))[index]
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1])).index_select(0, index)
+    cos = (cos.reshape(-1, cos.shape[-1])).index_select(0, index)
+    sin = (sin.reshape(-1, sin.shape[-1])).index_select(0, index)
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
@@ -396,7 +396,9 @@ def _gpt2_model_forward(
     if token_type_ids is not None:
         token_type_ids = token_type_ids.view(-1, input_shape[-1])
 
-    past_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    max_input_lens = self.config.max_input_lens
+    seq_length = input_ids.shape[-1]
+    past_length = max_input_lens - seq_length
     if position_ids is None:
         position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
         position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
@@ -419,12 +421,11 @@ def _gpt2_model_forward(
     input_lens = kwargs.pop("input_lens", None)
     seq_len_tensor = kwargs.pop("seq_len_tensor", None)
     query_len_tensor = kwargs.pop("query_len_tensor", None)
-    max_input_lens = kwargs.pop("max_input_lens", None)
-    query_max_len = kwargs.pop("query_max_len", None)
     index = kwargs.pop("index", None)
+    query_max_len = seq_length
 
     hidden_states_copy = hidden_states
-    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1])).index_select(0, index)
 
     if past_key_values is None:
         attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -528,7 +529,8 @@ def _qwen2_model_forward(
     batch_size, seq_length = inputs_embeds.shape[:2]
     device = input_ids.device if input_ids is not None else inputs_embeds.device
 
-    past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    max_input_lens = self.config.max_input_lens
+    past_key_values_length = max_input_lens - seq_length
     if cache_position is None:
         cache_position = torch.arange(
             past_key_values_length, past_key_values_length + inputs_embeds.shape[1], device=inputs_embeds.device
@@ -553,16 +555,15 @@ def _qwen2_model_forward(
     input_lens = kwargs.pop("input_lens", None)
     seq_len_tensor = kwargs.pop("seq_len_tensor", None)
     query_len_tensor = kwargs.pop("query_len_tensor", None)
-    max_input_lens = kwargs.pop("max_input_lens", None)
-    query_max_len = kwargs.pop("query_max_len", None)
     index = kwargs.pop("index", None)
+    query_max_len = seq_length
     cos = position_embeddings[0]
     sin = position_embeddings[1]
 
     hidden_states_copy = hidden_states
-    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
-    cos = (cos.reshape(-1, cos.shape[-1]))[index]
-    sin = (sin.reshape(-1, sin.shape[-1]))[index]
+    hidden_states = (hidden_states.view(-1, hidden_states.shape[-1])).index_select(0, index)
+    cos = (cos.reshape(-1, cos.shape[-1])).index_select(0, index)
+    sin = (sin.reshape(-1, sin.shape[-1])).index_select(0, index)
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
