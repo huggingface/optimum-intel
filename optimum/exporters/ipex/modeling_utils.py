@@ -96,6 +96,82 @@ def _ipex_rms_layer_norm_forward(self, hidden_states):
     return RMSNorm.apply_function(hidden_states, self.weight, self.variance_epsilon)
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/falcon/modeling_falcon.py#L1161
+# For passing kwargs, we can remove it when falcon model support passing kwargs to self.transformer.
+def _falcon_for_causal_lm_forward(
+    self,
+    input_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Union[Cache, Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    head_mask: Optional[torch.Tensor] = None,
+    inputs_embeds: Optional[torch.Tensor] = None,
+    labels: Optional[torch.Tensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    logits_to_keep: Union[int, torch.Tensor] = 0,
+    **kwargs,
+) -> Union[Tuple[torch.Tensor], CausalLMOutputWithCrossAttentions]:
+    r"""
+    labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+        Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
+        `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
+        are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
+
+    logits_to_keep (`int` or `torch.Tensor`, *optional*):
+        If an `int`, compute logits for the last `logits_to_keep` tokens. If `0`, calculate logits for all
+        `input_ids` (special case). Only last token logits are needed for generation, and calculating them only for that
+        token can save memory, which becomes pretty significant for long sequences or large vocabulary size.
+        If a `torch.Tensor`, must be 1D corresponding to the indices to keep in the sequence length dimension.
+        This is useful when using packed tensor format (single dimension for batch and sequence length).
+    """
+
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    transformer_outputs = self.transformer(
+        input_ids,
+        past_key_values=past_key_values,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        head_mask=head_mask,
+        inputs_embeds=inputs_embeds,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+        cache_position=cache_position,
+        **kwargs,
+    )
+    hidden_states = transformer_outputs[0]
+
+    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+    lm_logits = self.lm_head(hidden_states[:, slice_indices, :])
+
+    loss = None
+    if labels is not None:
+        loss = self.loss_function(
+            lm_logits,
+            labels,
+            vocab_size=self.config.vocab_size,
+            **kwargs,
+        )
+
+    if not return_dict:
+        output = (lm_logits,) + transformer_outputs[1:]
+        return ((loss,) + output) if loss is not None else output
+
+    return CausalLMOutputWithCrossAttentions(
+        loss=loss,
+        logits=lm_logits,
+        past_key_values=transformer_outputs.past_key_values,
+        hidden_states=transformer_outputs.hidden_states,
+        attentions=transformer_outputs.attentions,
+    )
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/gpt2/modeling_gpt2.py#L1036
 # For passing kwargs, we can remove it when gpt2 model support passing kwargs to self.transformer.
 def _gpt2_lm_head_model_forward(
