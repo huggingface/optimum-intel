@@ -41,6 +41,7 @@ if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
     )
 else:
+    import intel_extension_for_pytorch as ipex
     from intel_extension_for_pytorch.llm.functional import varlen_attention
     from intel_extension_for_pytorch.llm.modules import (
         Linear2SiluMul,
@@ -52,7 +53,7 @@ else:
         RMSNorm,
         RotaryEmbedding,
     )
-    import intel_extension_for_pytorch as ipex
+
     device_type = "xpu" if ipex._C._has_xpu() else "cpu"
     # Assign device type earlier to void recompile in ipex.
     PagedAttention.runtime_ops.device_type = device_type
@@ -131,9 +132,7 @@ def _llama_model_forward(
 
     device = input_ids.device if input_ids is not None else inputs_embeds.device
     if position_ids is None:
-        position_ids = torch.arange(
-            past_key_values_length, max_input_lens, dtype=torch.long, device=device
-        )
+        position_ids = torch.arange(past_key_values_length, max_input_lens, dtype=torch.long, device=device)
         position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
     if inputs_embeds is None:
@@ -637,7 +636,9 @@ class _IPEXAttention(nn.Module):
 
     def rope(self, query, key, **kwargs):
         position_embeddings = kwargs.pop("position_embeddings", None)
-        RotaryEmbedding.apply_function(query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True)
+        RotaryEmbedding.apply_function(
+            query, key, position_embeddings[1], position_embeddings[0], query.size(-1), True
+        )
         return query, key
 
     def postprocess_attention_output(self, attn_output):

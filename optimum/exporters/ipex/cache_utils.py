@@ -140,7 +140,7 @@ class IPEXPagedCache(Cache):
         all_block_indices = torch.cat(all_block_indices)
         all_slot_offsets = torch.cat(all_slot_offsets).int()
         # Use inplace op to keep the same memory address, avoid recompile
-        self.slots[:all_block_indices.shape[0]].copy_(all_block_indices * self.block_size + all_slot_offsets)
+        self.slots[: all_block_indices.shape[0]].copy_(all_block_indices * self.block_size + all_slot_offsets)
 
     # outside the model forward
     def alloc_slot_for_decode(self, batch_size: int):
