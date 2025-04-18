@@ -54,7 +54,9 @@ class IPEXPagedCache(Cache):
         # Used in `generate` to keep tally of how many tokens the cache has seen
 
         self._seen_tokens = torch.zeros([max_batch_size], dtype=torch.int32, device=device)
+        self.slots = torch.zeros([max_batch_size], device=self.device, dtype=torch.int32)
         torch._dynamo.mark_static_address(self._seen_tokens)
+        torch._dynamo.mark_static_address(self.slots)
         default_block_size = 16
         self.block_size = int(os.environ.get("OI_PAGED_ATTN_BLOCK_SIZE", str(default_block_size)))
         self.num_blocks = (max_cache_len // self.block_size + (max_cache_len % self.block_size != 0)) * max_batch_size
@@ -137,8 +139,8 @@ class IPEXPagedCache(Cache):
 
         all_block_indices = torch.cat(all_block_indices)
         all_slot_offsets = torch.cat(all_slot_offsets).int()
-        self.slots = all_block_indices * self.block_size + all_slot_offsets
-        torch._dynamo.mark_static_address(self.slots)
+        # Use inplace op to keep the same memory address, avoid recompile
+        self.slots.copy_(all_block_indices * self.block_size + all_slot_offsets)
 
     # outside the model forward
     def alloc_slot_for_decode(self, batch_size: int):
