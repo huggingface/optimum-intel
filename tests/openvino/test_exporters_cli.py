@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -785,8 +786,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
+            with open(Path(tmpdir) / "config.json", "r") as f:
+                config = json.load(f)
+                config["_name_or_path"] = "tiiuae/falcon-7b-instruct"
+
+            with open(Path(tmpdir) / "config.json", "w") as wf:
+                json.dump(config, wf)
 
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",

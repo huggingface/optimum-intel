@@ -115,9 +115,9 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
                 smooth_quant_alpha=0.95,
             ),
-            [8, 12, 21] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"int8": 8}, {"int8": 12}, {"int8": 17}]
+                [{"int8": 10}, {"int8": 12}, {"int8": 11}]
                 if is_transformers_version("<=", "4.36.0")
                 else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
             ),
