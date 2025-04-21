@@ -117,7 +117,7 @@ class OVQuantizerTest(unittest.TestCase):
             ),
             [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"int8": 10}, {"int8": 12}, {"int8": 11}]
+                [{"int8": 8}, {"int8": 11}, {"int8": 9}]
                 if is_transformers_version("<=", "4.36.0")
                 else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
             ),
