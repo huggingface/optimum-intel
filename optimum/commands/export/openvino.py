@@ -439,7 +439,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             quantize_with_dataset
             and (
                 task.startswith("text-generation")
-                or "automatic-speech-recognition" in task
+                or task.startswith("automatic-speech-recognition")
                 or task.startswith("feature-extraction")
             )
             or (task == "image-text-to-text" and quantization_config is not None)

@@ -567,7 +567,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             ):
                 raise ValueError(
                     "You have entered a string value for dataset. You can only choose between "
-                    f"{language_datasets} for sentence transformers models, "
+                    f"{language_datasets} for text feature extraction models, "
                     f"{CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
@@ -832,7 +832,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             ):
                 raise ValueError(
                     "You can only choose between the following datasets:"
-                    f"{language_datasets} for sentence transformers  models, "
+                    f"{language_datasets} for text feature extraction models, "
                     f"{CAUSAL_LANGUAGE_DATASETS} for LLMs, "
                     f"{speech_to_text_datasets} for speech-to-text models or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."

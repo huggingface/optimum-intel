@@ -137,7 +137,7 @@ class InferRequestWrapper:
         request: Union[openvino.InferRequest, openvino.CompiledModel],
         collected_inputs: List = None,
         apply_caching: bool = False,
-        inference_result_mock=None,
+        inference_result_mock: Any = None,
     ):
         """
         Args:
@@ -149,6 +149,10 @@ class InferRequestWrapper:
             apply_caching (`bool`, defaults to False):
                 Whether to apply data caching. May improve memory footprint, but results in slight performance overhead
                 due to tensor hash computation.
+            inference_result_mock (`Any`, *optional*):
+                If provided, the target request won't be executed and this value will be returned instead resulting in
+                faster inputs collection. This is useful when the actual model inference can be skipped, and it
+                should not be provided for models which depend on previous inference results, e.g. encoder-decoder pipelines.
         """
         self.request = request
         self.collected_inputs = [] if collected_inputs is None else collected_inputs
@@ -817,7 +821,7 @@ class OVCalibrationDatasetBuilder:
                 elif isinstance(self.model, OVSentenceTransformer):
                     self.model.encode([sentence])
                 else:
-                    raise NotImplementedError
+                    raise RuntimeError("Unsupported model type for calibration dataset collection.")
 
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
