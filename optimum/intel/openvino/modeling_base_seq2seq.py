@@ -431,7 +431,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config=ov_config,
             stateful=stateful,
             variant=variant,
-            model_kwargs=kwargs,
         )
 
         return cls._from_pretrained(
