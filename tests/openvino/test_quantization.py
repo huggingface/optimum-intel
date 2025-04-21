@@ -74,7 +74,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization import InferRequestWrapper, _weight_only_quantization, _full_quantization
+from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
@@ -305,8 +305,44 @@ class OVQuantizerTest(unittest.TestCase):
         ),
     ]
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
-    def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes):
+    @staticmethod
+    def get_calibration_dataset(
+        quantizer,
+        quantization_config,
+        dataset_name,
+        dataset_config_name,
+        preprocess_function,
+        tokenizer,
+        as_dataset_instance,
+    ):
+        if as_dataset_instance:
+            calibration_dataset = quantizer.get_calibration_dataset(
+                dataset_name,
+                dataset_config_name=dataset_config_name,
+                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+                num_samples=10,
+                dataset_split="train",
+                trust_remote_code=True,
+            )
+        else:
+            dataset_builder = OVCalibrationDatasetBuilder(quantizer.model)
+            calibration_dataset = dataset_builder.build_from_dataset_name(
+                quantization_config,
+                dataset_name,
+                dataset_config_name=dataset_config_name,
+                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+                num_samples=10,
+                dataset_split="train",
+                trust_remote_code=True,
+            )
+        return calibration_dataset
+
+    @parameterized.expand(
+        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_TORCH_MODEL, [False, True])]
+    )
+    def test_automodel_static_quantization(
+        self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
+    ):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
@@ -322,15 +358,16 @@ class OVQuantizerTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
 
-            calibration_dataset = quantizer.get_calibration_dataset(
-                dataset_name,
-                dataset_config_name=dataset_config_name,
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
-                dataset_split="train",
-                trust_remote_code=True,
-            )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
+            calibration_dataset = self.get_calibration_dataset(
+                quantizer,
+                ov_config.quantization_config,
+                dataset_name,
+                dataset_config_name,
+                preprocess_function,
+                tokenizer,
+                from_dataset_instance,
+            )
             quantizer.quantize(
                 save_directory=tmp_dir,
                 calibration_dataset=calibration_dataset,
@@ -350,8 +387,12 @@ class OVQuantizerTest(unittest.TestCase):
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL)
-    def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes):
+    @parameterized.expand(
+        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_OV_MODEL, [False, True])]
+    )
+    def test_ovmodel_static_quantization(
+        self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
+    ):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
@@ -366,15 +407,16 @@ class OVQuantizerTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
             quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
 
-            calibration_dataset = quantizer.get_calibration_dataset(
-                dataset_name,
-                dataset_config_name=dataset_config_name,
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
-                dataset_split="train",
-                trust_remote_code=True,
-            )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
+            calibration_dataset = self.get_calibration_dataset(
+                quantizer,
+                ov_config.quantization_config,
+                dataset_name,
+                dataset_config_name,
+                preprocess_function,
+                tokenizer,
+                from_dataset_instance,
+            )
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
 
             model = model_cls.from_pretrained(tmp_dir)
@@ -968,11 +1010,22 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
         check_optimization_not_applicable_to_optimized_model(int8_pipe, quantization_config)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
+    @parameterized.expand(
+        [
+            (*it[0], it[1])
+            for it in itertools.product(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:], [False, True])
+        ]
+    )
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
-        self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes
+        self,
+        model_cls,
+        model_type,
+        expected_fake_nodes,
+        expected_int8_nodes,
+        dataset_via_config,
     ):
         model_id = MODEL_NAMES[model_type]
+        # TODO: Run only dataset_via_config=True after v1.25
         dataset = [
             "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
         ]
@@ -981,6 +1034,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method="hybrid")
         self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
 
+        quantization_config.dataset = dataset if dataset_via_config else None
+        dataset = None if dataset_via_config else dataset
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(
             model.unet if model.unet is not None else model.transformer
@@ -1495,6 +1550,8 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ]
     )
     def test_quantization_kwargs_override(self, mock_method_name, quantization_function, dataset_key, config_type):
+        from optimum.intel.openvino.quantization import _weight_only_quantization, _full_quantization
+
         with unittest.mock.patch(mock_method_name) as mock_method:
             mock_model = unittest.mock.Mock([])
             mock_model.get_rt_info = unittest.mock.Mock(return_value={})
@@ -1504,7 +1561,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
             additional_kwargs = {"param2": "new_value2", "param3": "value3"}
 
-            quantization_function = globals()[quantization_function]
+            quantization_function = (
+                _weight_only_quantization
+                if quantization_function == "_weight_only_quantization"
+                else _full_quantization
+            )
             quantization_function(mock_model, mock_quantization_config, None, **additional_kwargs)
 
             expected_kwargs = {"param1": "value1", "param2": "new_value2", "param3": "value3", dataset_key: None}
