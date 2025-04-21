@@ -27,6 +27,7 @@ from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
 from .utils import (
+    CAUSAL_LANGUAGE_DATASETS,
     LANGUAGE_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
@@ -559,11 +560,16 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.dataset is not None and isinstance(self.dataset, str):
             visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            if self.dataset not in LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets:
+            language_datasets = list(LANGUAGE_DATASETS.keys())
+            if (
+                self.dataset
+                not in language_datasets + CAUSAL_LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets
+            ):
                 raise ValueError(
-                    f"""You have entered a string value for dataset. You can only choose between
-                    {LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs
-                    or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
+                    "You have entered a string value for dataset. You can only choose between "
+                    f"{language_datasets} for sentence transformers models, "
+                    f"{CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
+                    f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
 
         if self.dataset is not None and not (
@@ -816,11 +822,20 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         if self.dataset is not None:
             speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
             stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            if self.dataset not in LANGUAGE_DATASETS + speech_to_text_datasets + stable_diffusion_datasets:
+            language_datasets = list(LANGUAGE_DATASETS.keys())
+            if (
+                self.dataset
+                not in language_datasets
+                + CAUSAL_LANGUAGE_DATASETS
+                + speech_to_text_datasets
+                + stable_diffusion_datasets
+            ):
                 raise ValueError(
-                    f"""You can only choose between the following datasets: {LANGUAGE_DATASETS} for LLMs,
-                    {speech_to_text_datasets} for speech-to-text models or
-                    {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."""
+                    "You can only choose between the following datasets:"
+                    f"{language_datasets} for sentence transformers  models, "
+                    f"{CAUSAL_LANGUAGE_DATASETS} for LLMs, "
+                    f"{speech_to_text_datasets} for speech-to-text models or "
+                    f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
 
         if self.bits != 8:

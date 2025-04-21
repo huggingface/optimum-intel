@@ -9,6 +9,8 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
+from .. import OVConfig
+from .configuration import OVQuantizationConfigBase
 from .modeling import MODEL_START_DOCSTRING, OVModel
 
 
@@ -75,6 +77,8 @@ class OVSentenceTransformer(OVModel):
         subfolder: str = "",
         from_onnx: bool = False,
         local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVQuantizationConfigBase, Dict] = None,
         **kwargs,
     ):
         trust_remote_code = kwargs.pop("trust_remote_code", False)
@@ -91,7 +95,7 @@ class OVSentenceTransformer(OVModel):
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_args)
 
-        return super()._from_pretrained(
+        model = super()._from_pretrained(
             model_id=model_id,
             config=config,
             token=token,
@@ -105,6 +109,15 @@ class OVSentenceTransformer(OVModel):
             tokenizer=tokenizer,
             **kwargs,
         )
+
+        if quantization_config is not None:
+            from optimum.intel import OVQuantizer
+
+            quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+            quantizer = OVQuantizer(model)
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+        return model
 
     def tokenize(
         self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
