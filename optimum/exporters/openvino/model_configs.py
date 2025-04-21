@@ -41,6 +41,7 @@ from optimum.exporters.onnx.model_configs import (
     PhiOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
+    VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
@@ -2335,6 +2336,57 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
         return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class LTXVaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        base_input =  {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+        if self._normalized_config.config.timestep_conditioning:
+            base_input["timestep"] = {}
+        return base_input
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+class LTXVideoTransformerOpenVINOConfig(FluxTransformerOpenVINOConfig):
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "packed_height_width"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "width": {},
+            "height": {},
+            "num_frames": {},
+            "timestep": {0: "batch_size"},
+            "rope_interpolation_scale": {}
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 1: "packed_height_width"},
+        }
 
 
 class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
