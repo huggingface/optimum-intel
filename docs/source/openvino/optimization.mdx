@@ -105,7 +105,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
                     ✅
                 </button>
             </td>
@@ -208,6 +208,121 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
+        </tr>
+        <tr>
+            <td style="text-align: center; vertical-align: middle;">feature-extraction<br>(OVModelForFeatureExtraction)</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --weight-format int8 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --weight-format int4 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+        </tr>
+        <tr>
+            <td style="text-align: center; vertical-align: middle;">feature-extraction<br>(OVSentenceTransformer)</td>
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --weight-format int8 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --weight-format int4 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
         </tr>
     </tbody>
 </table>
