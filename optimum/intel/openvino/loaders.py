@@ -24,7 +24,7 @@ from openvino.runtime import opset11 as ops
 from openvino.runtime.passes import Manager, Matcher, MatcherPass, WrapType
 from transformers import PreTrainedTokenizer
 
-from .utils import TEXTUAL_INVERSION_EMBEDDING_KEY
+from .utils import TEXTUAL_INVERSION_EMBEDDING_KEYS
 
 
 try:
@@ -48,8 +48,9 @@ class InsertTextEmbedding(MatcherPass):
 
         def callback(matcher: Matcher) -> bool:
             root = matcher.get_match_root()
-            if root.get_friendly_name() == TEXTUAL_INVERSION_EMBEDDING_KEY:  # there should be a better way to do this
+            if root.get_friendly_name() in TEXTUAL_INVERSION_EMBEDDING_KEYS:  # there should be a better way to do this
                 add_ti = root
+                friendly_name = root.get_friendly_name()
                 consumers = matcher.get_match_value().get_target_inputs()
                 for token_id, embedding in zip(tokens_ids, embeddings):
                     ti_weights = ops.constant(embedding, Type.f32, name=str(token_id))
@@ -57,7 +58,7 @@ class InsertTextEmbedding(MatcherPass):
                     add_ti = ops.concat(
                         nodes=[add_ti, ti_weights_unsqueeze],
                         axis=0,
-                        name=f"{TEXTUAL_INVERSION_EMBEDDING_KEY}.textual_inversion_{token_id}",
+                        name=f"{friendly_name}.textual_inversion_{token_id}",
                     )
 
                 for consumer in consumers:
@@ -65,7 +66,6 @@ class InsertTextEmbedding(MatcherPass):
 
                 # Use new operation for additional matching
                 self.register_new_node(add_ti)
-                print("FOUND")
                 return True
 
             # Root node wasn't replaced or changed
@@ -113,7 +113,6 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
             else pretrained_model_name_or_path
         )
         tokens = [token] if not isinstance(token, list) else token
-        print(tokens)
         if tokens[0] is None:
             tokens = tokens * len(pretrained_model_name_or_paths)
 
@@ -142,8 +141,6 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
         # 7.4 add tokens to tokenizer (modified)
         tokenizer.add_tokens(tokens)
         token_ids = tokenizer.convert_tokens_to_ids(tokens)
-        for ops in text_encoder.model.get_ordered_ops():
-            print(ops.get_friendly_name)
 
         # Insert textual inversion embeddings to text encoder with OpenVINO ngraph transformation
         manager = Manager()

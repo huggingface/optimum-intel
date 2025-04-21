@@ -189,7 +189,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [8, 12, 21] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
                 [{"int8": 8}, {"int8": 11}, {"int8": 9}]
                 if is_transformers_version("<=", "4.36.0")
@@ -201,7 +201,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [8, 12, 21] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
                 [{"f8e4m3": 8}, {"f8e4m3": 11}, {"f8e4m3": 9}]
                 if is_transformers_version("<=", "4.36.0")
