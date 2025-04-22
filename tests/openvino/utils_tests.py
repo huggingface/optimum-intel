@@ -172,7 +172,7 @@ MODEL_NAMES = {
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
-    "glm4": "katuni4ka/tiny-random-glm4",
+    "glm4": "snake7gun/tiny-random-glm4",
     "glm": "katuni4ka/tiny-random-glm-edge",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
