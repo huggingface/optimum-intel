@@ -211,12 +211,10 @@ class IPEXPagedCache(Cache):
             self.block_tables[i, 0 : nb - 1] = updated_block_tables[i, 0 : nb - 1]
             updated_table[i] = self.block_tables[i][nb - 1]
         for layer_idx in range(self.num_hidden_layers):
-            # Fowwlow the same logic as in `transformers.Cache.reorder_cache`
-            # It cannot be changed inplace becasue ipex paged cache is in a static address,
-            # the memory will be messed if we change the cache by other index of the cache.
-            # The result is correct if we returned a new tensor by select index,
-            # it will cause the memory address changed and recompile as transformers.
-            # This is a temporary solution, we will optimize it once transformers fix this issue.
+            # Fowwlow the same logic as in `transformers.Cache.reorder_cache`.
+            # The memory will be messed if we change the cache by other index of the cache because of static address.
+            # Using index select to return a new tensor can fix it but will cause recompile (due to cache memory changed) as in transformers.
+            # It is a temporary solution to get the correct result, we will optimize it once transformers fix this issue.
             self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, updated_table[beam_idx])
             self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, updated_table[beam_idx])
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
