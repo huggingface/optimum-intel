@@ -1005,7 +1005,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
-        "glm4",
+        "chatglm4",
         "decilm",
     )
 
@@ -1064,7 +1064,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "codegen2",
         "arctic",
-        "glm4",
+        "chatglm4",
         "exaone",
         "decilm",
         "minicpm3",
@@ -1115,7 +1115,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["qwen", "arctic", "glm4"]:
+        if model_arch in ["qwen", "arctic", "chatglm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -1132,7 +1132,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen"]:
             return
 
-        if model_arch not in ["chatglm", "glm4", "persimmon"]:
+        if model_arch not in ["chatglm", "chatglm4", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
 
         if model_arch == "persimmon":
@@ -1347,7 +1347,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_kwargs["attn_implementation"] = "sdpa"
 
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
-        if model_arch in ["qwen", "chatglm", "glm4"]:
+        if model_arch in ["qwen", "chatglm", "chatglm4"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49

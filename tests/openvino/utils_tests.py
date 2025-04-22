@@ -42,6 +42,7 @@ MODEL_NAMES = {
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "cohere": "hf-internal-testing/tiny-random-CohereForCausalLM",
     "chatglm": "katuni4ka/tiny-random-chatglm2",
+    "chatglm4": "katuni4ka/tiny-random-glm4",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "codegen2": "katuni4ka/tiny-random-codegen2",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
