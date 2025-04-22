@@ -2974,7 +2974,7 @@ class GLMOpenVINOConfig(LlamaOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class GLMOpenVINOConfig(LlamaOpenVINOConfig):
+class GLM4OpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.52.0"
 
 
