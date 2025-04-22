@@ -567,7 +567,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 )
 
         if self.dataset is not None and not (
-            self.quant_method == OVQuantizationMethod.AWQ
+            self.quant_method in [OVQuantizationMethod.AWQ, OVQuantizationMethod.HYBRID]
             or self.scale_estimation
             or self.gptq
             or self.lora_correction

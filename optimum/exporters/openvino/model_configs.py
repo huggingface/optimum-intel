@@ -3047,6 +3047,11 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
         common_inputs = super().inputs
         if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
             common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+
+        if self._behavior is not ConfigBehavior.ENCODER and self.use_past_in_inputs:
+            if is_transformers_version(">=", "4.43.0"):
+                # since https://github.com/huggingface/transformers/pull/31166
+                common_inputs["cache_position"] = {0: "decoder_sequence_length"}
         return common_inputs
 
 
