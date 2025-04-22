@@ -456,10 +456,14 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForSpeechSeq2Seq
 
                 model_cls = OVModelForSpeechSeq2Seq
-            elif task.startswith("feature-extraction") and library_name in ["transformers", "sentence_transformers"]:
-                from ...intel import OVModelForFeatureExtraction, OVSentenceTransformer
+            elif task.startswith("feature-extraction") and library_name == "transformers":
+                from ...intel import OVModelForFeatureExtraction
 
-                model_cls = OVModelForFeatureExtraction if library_name == "transformers" else OVSentenceTransformer
+                model_cls = OVModelForFeatureExtraction
+            elif task.startswith("feature-extraction") and library_name == "sentence_transformers":
+                from ...intel import OVSentenceTransformer
+
+                model_cls = OVSentenceTransformer
             else:
                 raise NotImplementedError(
                     f"Unable to find a matching model class for the task={task} and library_name={library_name}."

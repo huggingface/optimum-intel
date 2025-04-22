@@ -110,10 +110,10 @@ class OVSentenceTransformer(OVModel):
             **kwargs,
         )
 
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         if quantization_config is not None:
             from optimum.intel import OVQuantizer
 
-            quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
             quantizer = OVQuantizer(model)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
