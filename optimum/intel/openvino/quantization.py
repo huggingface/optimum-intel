@@ -807,21 +807,22 @@ class OVCalibrationDatasetBuilder:
                 },
             )
 
-            tokenizer = None
+            if isinstance(self.model, OVModelForFeatureExtraction):
+                tokenizer = AutoTokenizer.from_pretrained(
+                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+                )
+            elif isinstance(self.model, OVSentenceTransformer):
+                tokenizer = self.model.tokenizer
+            else:
+                raise RuntimeError("Unsupported model type for calibration dataset collection.")
+
             pbar = tqdm(total=num_samples, desc="Collecting calibration data")
             for item in dataset:
-                sentence = item["text"].strip()[:seq_len]
-                if len(sentence) < seq_len:
+                inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="np")
+                if inputs["input_ids"].shape[1] < seq_len:
                     continue
 
-                if isinstance(self.model, OVModelForFeatureExtraction):
-                    tokenizer = tokenizer or AutoTokenizer.from_pretrained(quantization_config.tokenizer)
-                    inputs = tokenizer(sentence, return_tensors="np")
-                    self.model(**inputs)
-                elif isinstance(self.model, OVSentenceTransformer):
-                    self.model.encode([sentence])
-                else:
-                    raise RuntimeError("Unsupported model type for calibration dataset collection.")
+                self.model(**inputs) if isinstance(self.model, OVModelForFeatureExtraction) else self.model(inputs)
 
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
