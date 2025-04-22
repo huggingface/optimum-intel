@@ -54,7 +54,7 @@ class IPEXPagedCache(Cache):
         # Used in `generate` to keep tally of how many tokens the cache has seen
 
         self._seen_tokens = torch.zeros([max_batch_size], dtype=torch.int32, device=device)
-        self.slots = torch.zeros([max_cache_len], dtype=torch.int32, device=device)
+        self.slots = torch.zeros([max_cache_len * max_batch_size], dtype=torch.int32, device=device)
         torch._dynamo.mark_static_address(self._seen_tokens)
         torch._dynamo.mark_static_address(self.slots)
         default_block_size = 16
@@ -203,16 +203,22 @@ class IPEXPagedCache(Cache):
         """Reorders the cache for beam search, given the selected beam indices."""
         origin_table = self.block_tables.clone()
         updated_block_tables = self.block_tables.index_select(0, beam_idx.to(self.device))
-        mask = self.block_tables.masked_fill(self.block_tables != -1, 1).masked_fill(self.block_tables == -1, 0)
-        num_blocks = mask.cumsum(-1)[:, -1]
+        mask = torch.where(self.block_tables == -1, 0, 1)
+        num_blocks = mask.sum(-1)
         updated_table = torch.zeros_like(beam_idx)
         for i in range(beam_idx.shape[0]):
             nb = num_blocks[i]
             self.block_tables[i, 0 : nb - 1] = updated_block_tables[i, 0 : nb - 1]
             updated_table[i] = self.block_tables[i][nb - 1]
         for layer_idx in range(self.num_hidden_layers):
-            self.key_cache[layer_idx][updated_table] = self.key_cache[layer_idx][updated_table[beam_idx]]
-            self.value_cache[layer_idx][updated_table] = self.value_cache[layer_idx][updated_table[beam_idx]]
+            # Fowwlow the same logic as in `transformers.Cache.reorder_cache`
+            # It cannot be changed inplace becasue ipex paged cache is in a static address,
+            # the memory will be messed if we change the cache by other index of the cache.
+            # The result is correct if we returned a new tensor by select index,
+            # it will cause the memory address changed and recompile as transformers.
+            # This is a temporary solution, we will optimize it once transformers fix this issue.
+            self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, updated_table[beam_idx])
+            self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, updated_table[beam_idx])
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
         for i in free_table:
             if not (self.block_tables == i).any():
