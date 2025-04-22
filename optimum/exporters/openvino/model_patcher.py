@@ -5247,3 +5247,4 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             self.patched_forward = patched_vocoder_forward
         else:
             raise ValueError("Unknown ")
+        self.orig_forward = self.patched_forward
