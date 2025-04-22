@@ -3294,7 +3294,7 @@ class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
         self.sequence_length = sequence_length
         self.speaker_embedding_dim = normalized_config.speaker_embedding_dim
         self.num_mel_bins = normalized_config.num_mel_bins
-        self.reduction_factor = 2
+        self.reduction_factor = normalized_config.config.reduction_factor
         self.hidden_size = normalized_config.config.hidden_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -3381,10 +3381,10 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             name = "present"
 
         for i in range(self._normalized_config.decoder_num_layers):
-            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "total_batch_size", 2: decoder_sequence_name}
-            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "total_batch_size", 2: decoder_sequence_name}
-            inputs_or_outputs[f"{name}.{i}.encoder.key"] = {0: "total_batch_size", 2: "encoder_sequence_length_out"}
-            inputs_or_outputs[f"{name}.{i}.encoder.value"] = {0: "total_batch_size", 2: "encoder_sequence_length_out"}
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.encoder.key"] = {0: "batch_size", 2: "encoder_sequence_length_out"}
+            inputs_or_outputs[f"{name}.{i}.encoder.value"] = {0: "batch_size", 2: "encoder_sequence_length_out"}
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3402,11 +3402,9 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             common_inputs["raw_spectrogram"] = {
                 0: "n_spectrums",
                 1: "batch_size",
-                2: "reduction_factor",
-                3: "num_mel_bins",
             }
         elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
-            common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums", 2: "num_mel_bins"}
+            common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums"}
         else:
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
