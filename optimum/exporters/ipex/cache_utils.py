@@ -57,7 +57,7 @@ class IPEXPagedCache(Cache):
         self.slots = torch.zeros([max_cache_len * max_batch_size], dtype=torch.int32, device=device)
         torch._dynamo.mark_static_address(self._seen_tokens)
         torch._dynamo.mark_static_address(self.slots)
-        default_block_size = 16
+        default_block_size = 16 if max_cache_len <= 64 else 64
         self.block_size = int(os.environ.get("OI_PAGED_ATTN_BLOCK_SIZE", str(default_block_size)))
         self.num_blocks = (max_cache_len // self.block_size + (max_cache_len % self.block_size != 0)) * max_batch_size
         self.block_tables = -1 * torch.ones([self.num_blocks], dtype=torch.int32, device=device).reshape(
@@ -211,12 +211,14 @@ class IPEXPagedCache(Cache):
             self.block_tables[i, 0 : nb - 1] = updated_block_tables[i, 0 : nb - 1]
             updated_table[i] = self.block_tables[i][nb - 1]
         for layer_idx in range(self.num_hidden_layers):
-            # Fowwlow the same logic as in `transformers.Cache.reorder_cache`.
-            # The memory will be messed if we change the cache by other index of the cache because of static address.
-            # Using index select to return a new tensor can fix it but will cause recompile (due to cache memory changed) as in transformers.
-            # It is a temporary solution to get the correct result, we will optimize it once transformers fix this issue.
-            self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, updated_table[beam_idx])
-            self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, updated_table[beam_idx])
+            # The updated_table cannot contain the whole block table, otherwise will cause core-dump.
+            self.key_cache[layer_idx][updated_table] = self.key_cache[layer_idx].index_select(
+                0, updated_table[beam_idx]
+            )
+            self.value_cache[layer_idx][updated_table] = self.value_cache[layer_idx].index_select(
+                0, updated_table[beam_idx]
+            )
+
         free_table = torch.unique((origin_table[origin_table != self.block_tables]).view(-1))
         for i in free_table:
             if not (self.block_tables == i).any():
