@@ -814,7 +814,9 @@ class OVCalibrationDatasetBuilder:
             elif isinstance(self.model, OVSentenceTransformer):
                 tokenizer = self.model.tokenizer
             else:
-                raise RuntimeError("Unsupported model type for calibration dataset collection.")
+                raise RuntimeError(
+                    f"Unsupported model type {type(self.model).__name__} for calibration dataset collection."
+                )
 
             pbar = tqdm(total=num_samples, desc="Collecting calibration data")
             for item in dataset:
