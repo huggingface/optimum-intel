@@ -62,6 +62,10 @@ MIN_ONNX_QDQ_OPSET = 13
 EXTERNAL_DATA_FORMAT_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
 
 TEXTUAL_INVERSION_EMBEDDING_KEY = "self.text_model.embeddings.token_embedding.weight"
+TEXTUAL_INVERSION_EMBEDDING_KEYS = [
+    "self.text_model.embeddings.token_embedding.weight",
+    "self.model.text_model.embeddings.token_embedding.weight",
+]
 
 OV_TO_NP_TYPE = {
     "boolean": np.bool_,
@@ -142,9 +146,13 @@ _HEAD_TO_AUTOMODELS = {
 LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
 
 PREDEFINED_SD_DATASETS = {
-    "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
-    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
-    "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+    "conceptual_captions": {"split": "train", "prompt_column_name": "caption", "streaming": True},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {
+        "split": "train",
+        "prompt_column_name": "caption",
+        "streaming": True,
+    },
+    "laion/filtered-wit": {"split": "train", "prompt_column_name": "caption", "streaming": True},
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
@@ -152,6 +160,7 @@ PREDEFINED_VISUAL_LM_DATASETS = {
         "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
+        "streaming": True,
     }
 }
 
@@ -160,7 +169,7 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
         "id": "openslr/librispeech_asr",
         "name": "clean",
         "split": "validation",
-        "inputs": {"audio": ("audio", "array"), "sampling_rate": ("audio", "sampling_rate")},
+        "streaming": True,
     }
 }
 
