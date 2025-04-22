@@ -502,8 +502,7 @@ class OVQuantizerTest(unittest.TestCase):
                 OVStableDiffusionXLPipeline,
                 OVLatentConsistencyModelPipeline,
             ):
-                # TODO: add inference check
-                pass
+                ov_model(prompt="A text-to-image prompt")
             elif model_cls == OVSentenceTransformer:
                 ov_model.encode(["This is a sample input"])
             else:
