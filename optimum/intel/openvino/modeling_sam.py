@@ -110,7 +110,7 @@ class OVSamModel(OVBaseModel):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for _, component in self.components.items():
