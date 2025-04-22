@@ -172,6 +172,9 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image", "SanaPipeline")
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana-sprint"] = "SanaSprintPipeline"
+    if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXVideoPipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -2338,7 +2341,40 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_mask",
+        "sample",
+        "latent_sample",
+        "timestep"
+    )
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        num_frames: int = 2,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+
+    def generate(self, input_name:str, framework:str = "pt", int_dtype:str = "int64", float_dtype:str = "fp32"):
+        if input_name in ["sample", "latent_sample"]:
+            return self.random_float_tensor([self.batch_size, self.num_channels, self.num_frames, self.height, self.width])
+        if input_name == "timestep":
+            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+        
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+@register_in_tasks_manager("ltx-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class LTXVaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator, )
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
@@ -2351,8 +2387,10 @@ class LTXVaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
             "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
         }
 
-
+@register_in_tasks_manager("ltx-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator, )
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         base_input =  {
@@ -2369,12 +2407,58 @@ class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
-class LTXVideoTransformerOpenVINOConfig(FluxTransformerOpenVINOConfig):
+@register_in_tasks_manager("ltx-video-transformer", *["semantic-segmentation"], library_name="diffusers")
+class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "width",
+        "height",
+        "num_frames",
+        "rope_interpolation_scale"
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 16,
+        height: int = 8,
+        num_frames: int = 2,
+        frame_rate: int = 10,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.frame_rate = frame_rate
+        self.vae_spatial_compression_ratio = normalized_config.config.vae_spatial_compression_ratio
+
+    def generate(self, input_name:str, framework:str = "pt", int_dtype:str = "int64", float_dtype:str = "fp32"):
+        if input_name == "hidden_states":
+            return self.random_float_tensor([self.batch_size, self.num_frames * self.height * self.width, self.num_channels])
+        if input_name == "width":
+            return self.constant_tensor([1], self.width, framework=framework, dtype=int_dtype)
+        if input_name == "height":
+            return self.constant_tensor([1], self.height, framework=framework, dtype=int_dtype)
+        if input_name == "num_frames":
+            return self.constant_tensor([1], self.num_frames, framework=framework, dtype=int_dtype)
+        if input_name == "rope_interpolation_scale":
+            import torch
+            return torch.tensor([
+                self.vae_temporal_compression_ratio / self.frame_rate,
+                self.vae_spatial_compression_ratio,
+                self.vae_spatial_compression_ratio
+            ])
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     @property
     def inputs(self):
         return {
-            "hidden_states": {0: "batch_size", 1: "packed_height_width"},
+            "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
             "width": {},
             "height": {},
             "num_frames": {},
@@ -2385,7 +2469,7 @@ class LTXVideoTransformerOpenVINOConfig(FluxTransformerOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "out_sample": {0: "batch_size", 1: "packed_height_width"},
+            "out_sample": {0: "batch_size", 1: "video_sequence_length"},
         }
 
 
