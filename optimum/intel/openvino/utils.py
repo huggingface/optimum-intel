@@ -62,6 +62,10 @@ MIN_ONNX_QDQ_OPSET = 13
 EXTERNAL_DATA_FORMAT_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
 
 TEXTUAL_INVERSION_EMBEDDING_KEY = "self.text_model.embeddings.token_embedding.weight"
+TEXTUAL_INVERSION_EMBEDDING_KEYS = [
+    "self.text_model.embeddings.token_embedding.weight",
+    "self.model.text_model.embeddings.token_embedding.weight",
+]
 
 OV_TO_NP_TYPE = {
     "boolean": np.bool_,

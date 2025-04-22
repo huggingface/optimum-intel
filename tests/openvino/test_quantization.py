@@ -88,7 +88,11 @@ _TASK_TO_DATASET = {
     "text-classification": ("glue", "sst2", "sentence"),
 }
 
-pattern_prefix = "^__module.model.model" if is_transformers_version(">=", "4.49") else "^__module.model"
+pattern_prefix = (
+    "^__module.model.model"
+    if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.51")
+    else "^__module.model"
+)
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -111,11 +115,11 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
                 smooth_quant_alpha=0.95,
             ),
-            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+                [{"int8": 8}, {"int8": 11}, {"int8": 9}]
                 if is_transformers_version("<=", "4.36.0")
-                else [{"int8": 14}, {"int8": 22}, {"int8": 18}]
+                else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
             ),
         ),
         (
@@ -459,7 +463,7 @@ class OVQuantizerTest(unittest.TestCase):
                     expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
                     expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
 
-                input_features = torch.randn((1, 128, 3000), dtype=torch.float32)
+                input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
             elif model_cls == OVModelForCausalLM:
                 submodels = [ov_model]
