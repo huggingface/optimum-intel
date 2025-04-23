@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -188,11 +189,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+                [{"int8": 8}, {"int8": 11}, {"int8": 9}]
                 if is_transformers_version("<=", "4.36.0")
-                else [{"int8": 14}, {"int8": 22}, {"int8": 18}]
+                else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
             ),
         ),
         (
@@ -200,11 +201,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
+                [{"f8e4m3": 8}, {"f8e4m3": 11}, {"f8e4m3": 9}]
                 if is_transformers_version("<=", "4.36.0")
-                else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}]
+                else [{"f8e4m3": 8}, {"f8e4m3": 12}, {"f8e4m3": 18}]
             ),
         ),
         (
@@ -785,8 +786,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
+            with open(Path(tmpdir) / "config.json", "r") as f:
+                config = json.load(f)
+                config["_name_or_path"] = "tiiuae/falcon-7b-instruct"
+
+            with open(Path(tmpdir) / "config.json", "w") as wf:
+                json.dump(config, wf)
 
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
