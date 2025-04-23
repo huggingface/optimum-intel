@@ -35,7 +35,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install .[neural-compressor,diffusers,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
+          pip install .[neural-compressor,peft,tests] transformers[testing] intel-extension-for-pytorch==${{ matrix.torch-version }}
+          pip install diffusers==0.32.2
 
       - name: Assert versions
         run: |
@@ -45,5 +46,3 @@ jobs:
       - name: Test with Pytest
         run: |
           pytest tests/neural_compressor
-        env:
-          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
