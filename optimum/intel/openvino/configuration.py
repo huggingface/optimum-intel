@@ -563,7 +563,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
             if (
                 self.dataset
-                not in set(PREDEFINED_CAUSAL_LANGUAGE_DATASETS)
+                not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
                 | language_datasets
                 | visual_lm_datasets
                 | stable_diffusion_datasets
@@ -828,7 +828,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
             if (
                 self.dataset
-                not in set(PREDEFINED_CAUSAL_LANGUAGE_DATASETS)
+                not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
                 | language_datasets
                 | speech_to_text_datasets
                 | stable_diffusion_datasets

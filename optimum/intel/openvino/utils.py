@@ -137,7 +137,7 @@ _HEAD_TO_AUTOMODELS = {
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
 }
 
-PREDEFINED_CAUSAL_LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
+PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}
 
 PREDEFINED_LANGUAGE_DATASETS = {
     "wikitext2": {"path": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
