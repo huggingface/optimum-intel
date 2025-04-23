@@ -1048,7 +1048,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
 
-    if is_transformers_version(">=", "4.52"):
+    if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
     GENERATION_LENGTH = 100
