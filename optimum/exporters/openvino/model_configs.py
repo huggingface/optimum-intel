@@ -2407,7 +2407,6 @@ class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
-@register_in_tasks_manager("ltx-video-transformer", *["semantic-segmentation"], library_name="diffusers")
 class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
@@ -2433,16 +2432,20 @@ class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
         self.num_frames = num_frames
         self.frame_rate = frame_rate
         self.vae_spatial_compression_ratio = normalized_config.config.vae_spatial_compression_ratio
+        self.vae_temporal_compression_ratio = normalized_config.config.vae_temporal_compression_ratio
+
 
     def generate(self, input_name:str, framework:str = "pt", int_dtype:str = "int64", float_dtype:str = "fp32"):
+        import torch
+
         if input_name == "hidden_states":
             return self.random_float_tensor([self.batch_size, self.num_frames * self.height * self.width, self.num_channels])
         if input_name == "width":
-            return self.constant_tensor([1], self.width, framework=framework, dtype=int_dtype)
+            return torch.tensor(self.width)
         if input_name == "height":
-            return self.constant_tensor([1], self.height, framework=framework, dtype=int_dtype)
+            return torch.tensor(self.height)
         if input_name == "num_frames":
-            return self.constant_tensor([1], self.num_frames, framework=framework, dtype=int_dtype)
+            return torch.tensor(self.num_frames)
         if input_name == "rope_interpolation_scale":
             import torch
             return torch.tensor([
@@ -2452,7 +2455,12 @@ class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
             ])
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
+
+@register_in_tasks_manager("ltx-video-transformer", *["semantic-segmentation"], library_name="diffusers")
 class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXTransformerDummyInputGenerator, DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+        DummySanaTimestepInputGenerator,)
+
     @property
     def inputs(self):
         return {

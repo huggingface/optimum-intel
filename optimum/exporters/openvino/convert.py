@@ -456,7 +456,6 @@ def export_pytorch(
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )
-
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
 
@@ -623,10 +622,10 @@ def export_from_model(
     if library_name != "open_clip":
         TasksManager.standardize_model_attributes(model)
 
-    if hasattr(model.config, "export_model_type"):
+    if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
         model_type = model.config.export_model_type.replace("_", "-")
     else:
-        model_type = model.config.model_type.replace("_", "-")
+        model_type = (getattr(model.config, "model_type", None) or "").replace("_", "-")
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
@@ -652,7 +651,6 @@ def export_from_model(
         logger.info(f"Automatic task detection to: {task}.")
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
-    model_type = getattr(getattr(model, "config", {}), "model_type", "")
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
@@ -1075,6 +1073,8 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["text_encoder"] = (text_encoder, export_config)
     transformer = pipeline.transformer
+    transformer.config.vae_temporal_compression_ratio = pipeline.vae_temporal_compression_ratio
+    transformer.config.vae_spatial_compression_ratio = pipeline.vae_spatial_compression_ratio
     export_config_constructor = TasksManager.get_exporter_config_constructor(
             model=transformer,
             exporter=exporter,
@@ -1082,9 +1082,8 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             task="semantic-segmentation",
             model_type="ltx-video-transformer",
         )
-    pipeline.transformer.config.vae_temporal_compression_ratio = pipeline.vae_temporal_compression_ratio
     transformer_export_config = export_config_constructor(
-        pipeline.transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+        transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
     models_for_export["transformer"] = (transformer, transformer_export_config)
     # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
@@ -1106,7 +1105,7 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     # VAE Decoder 
     vae_decoder = copy.deepcopy(pipeline.vae)
     def _vae_decode_forward(self, latent_sample, timestep=None):
-        return self.decode(z=latent_sample, timeb=timestep)
+        return self.decode(z=latent_sample, temb=timestep)
     
     vae_decoder.forward = types.MethodType(_vae_decode_forward, vae_decoder)
     
