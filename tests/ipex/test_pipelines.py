@@ -109,7 +109,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_sequence_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         transformers_generator = transformers_pipeline("text-classification", model_id, device_map=DEVICE)
+        set_seed(SEED)
         ipex_generator = ipex_pipeline("text-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "This restaurant is awesome"
         with torch.inference_mode():
