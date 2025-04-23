@@ -101,6 +101,7 @@ class IPEXModelTest(unittest.TestCase):
         if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(ipex_model.add_patch)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id, device_map=DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"

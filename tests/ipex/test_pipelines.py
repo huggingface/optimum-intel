@@ -18,7 +18,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import torch
 from parameterized import parameterized
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, set_seed
 from transformers.pipelines import pipeline as transformers_pipeline
 from utils_tests import IS_XPU_AVAILABLE, MODEL_NAMES
 
@@ -37,6 +37,7 @@ from optimum.intel.pipelines import pipeline as ipex_pipeline
 
 torch.use_deterministic_algorithms(True)
 DEVICE = "xpu:0" if IS_XPU_AVAILABLE else "cpu"
+SEED = 42
 
 
 class PipelinesIntegrationTest(unittest.TestCase):
@@ -91,7 +92,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_token_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         transformers_generator = transformers_pipeline("token-classification", model_id, device_map=DEVICE)
+        set_seed(SEED)
         ipex_generator = ipex_pipeline("token-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "Hello I'm Omar and I live in Zürich."
         with torch.inference_mode():
