@@ -1150,7 +1150,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=2 if model_arch != "glm4" else 1,
+            num_beams=2 if model_arch != "chatglm4" else 1,
             do_sample=False,
             eos_token_id=None,
         )
