@@ -909,3 +909,15 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    def test_export_openvino_with_model_kwargs(self):
+        with TemporaryDirectory() as tmpdir:
+            model_kwargs = '"{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
+            subprocess.run(
+                f"optimum-cli export openvino --model hf-internal-testing/tiny-random-SpeechT5ForTextToSpeech --model-kwargs {model_kwargs} {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["text-to-audio"]).from_pretrained(tmpdir, compile=False)
+            for component in ["encoder_model", "decoder_model", "postnet_model", "vocoder_model"]:
+                self.assertIsNotNone(getattr(model, component))
