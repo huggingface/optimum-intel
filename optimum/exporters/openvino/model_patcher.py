@@ -167,7 +167,7 @@ def patch_update_causal_mask(
 
 def unpatch_update_causal_mask(model, inner_model_name="model", patch_extrnal_model=False):
     inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
-    if inner_model is not None and hasattr(inner_model, "._orig_update_causal_mask"):
+    if inner_model is not None and hasattr(inner_model, "_orig_update_causal_mask"):
         inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
 

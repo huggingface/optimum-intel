@@ -2967,6 +2967,21 @@ class GLMOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "glm4",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GLM4OpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.3"
+
+
+@register_in_tasks_manager(
     "granite",
     *[
         "feature-extraction",
