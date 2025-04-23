@@ -27,8 +27,8 @@ from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
 from .utils import (
-    CAUSAL_LANGUAGE_DATASETS,
-    LANGUAGE_DATASETS,
+    PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
+    PREDEFINED_LANGUAGE_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
@@ -558,17 +558,20 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            visual_lm_datasets = list(PREDEFINED_VISUAL_LM_DATASETS.keys())
-            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            language_datasets = list(LANGUAGE_DATASETS.keys())
+            visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
+            stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
+            language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
             if (
                 self.dataset
-                not in language_datasets + CAUSAL_LANGUAGE_DATASETS + visual_lm_datasets + stable_diffusion_datasets
+                not in set(PREDEFINED_CAUSAL_LANGUAGE_DATASETS)
+                | language_datasets
+                | visual_lm_datasets
+                | stable_diffusion_datasets
             ):
                 raise ValueError(
                     "You have entered a string value for dataset. You can only choose between "
                     f"{language_datasets} for text feature extraction models, "
-                    f"{CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
+                    f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
 
@@ -820,20 +823,20 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         super().post_init()
 
         if self.dataset is not None:
-            speech_to_text_datasets = list(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
-            stable_diffusion_datasets = list(PREDEFINED_SD_DATASETS.keys())
-            language_datasets = list(LANGUAGE_DATASETS.keys())
+            speech_to_text_datasets = set(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
+            language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
             if (
                 self.dataset
-                not in language_datasets
-                + CAUSAL_LANGUAGE_DATASETS
-                + speech_to_text_datasets
-                + stable_diffusion_datasets
+                not in set(PREDEFINED_CAUSAL_LANGUAGE_DATASETS)
+                | language_datasets
+                | speech_to_text_datasets
+                | stable_diffusion_datasets
             ):
                 raise ValueError(
                     "You can only choose between the following datasets:"
                     f"{language_datasets} for text feature extraction models, "
-                    f"{CAUSAL_LANGUAGE_DATASETS} for LLMs, "
+                    f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, "
                     f"{speech_to_text_datasets} for speech-to-text models or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )

@@ -65,11 +65,11 @@ from .configuration import (
     OVWeightQuantizationConfig,
 )
 from .utils import (
-    LANGUAGE_DATASETS,
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
+    PREDEFINED_LANGUAGE_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
@@ -329,12 +329,12 @@ class OVCalibrationDatasetBuilder:
         elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer)):
             if isinstance(config.dataset, str):
                 dataset = self.load_dataset(
-                    LANGUAGE_DATASETS[config.dataset]["path"],
+                    PREDEFINED_LANGUAGE_DATASETS[config.dataset]["path"],
                     num_samples=None,
-                    dataset_config_name=LANGUAGE_DATASETS[config.dataset]["name"],
-                    dataset_split=LANGUAGE_DATASETS[config.dataset]["split"],
+                    dataset_config_name=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["name"],
+                    dataset_split=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["split"],
                     trust_remote_code=config.trust_remote_code,
-                    streaming=LANGUAGE_DATASETS[config.dataset]["streaming"],
+                    streaming=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["streaming"],
                 )
             elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
                 dataset = datasets.Dataset.from_list([{"text": it} for it in config.dataset])
