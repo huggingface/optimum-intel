@@ -940,22 +940,9 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.crop_size = model.model.embed_tokens_extend.image_embed.crop_size
         model.config.image_dim_out = model.model.embed_tokens_extend.image_embed.image_dim_out
         model.config.hd_transform_order = model.model.embed_tokens_extend.image_embed.hd_transform_order
-
-    if model_type == "phi4mm":
-        model.config.glb_GN = model.model.embed_tokens_extend.image_embed.glb_GN.tolist()
-        model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_GN.tolist()
-        model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
-        model.config.base_vision_feat_height_target = (
-            model.model.embed_tokens_extend.image_embed.base_feat_height_target
-        )
-        model.config.base_vision_feat_height_reduction = (
-            model.model.embed_tokens_extend.image_embed.base_feat_height_reduction
-        )
-        model.config.crop_size = model.model.embed_tokens_extend.image_embed.crop_size
-        model.config.image_dim_out = model.model.embed_tokens_extend.image_embed.image_dim_out
-        model.config.hd_transform_order = model.model.embed_tokens_extend.image_embed.hd_transform_order
         if model.config.img_processor is None:
             model.config.img_processor = model.model.embed_tokens_extend.image_embed.img_processor.config.to_dict()
+
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
     main_config_cls = TasksManager.get_exporter_config_constructor(
