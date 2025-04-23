@@ -47,6 +47,8 @@ OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
 OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
 OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
 OV_VISION_ENCODER_MODEL_NAME = "openvino_vision_encoder.xml"
+ONNX_VISION_ENCODER_MODEL_NAME = "vision_encoder.onnx"
+ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME = "prompt_encoder_mask_decoder.onnx"
 OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME = "openvino_prompt_encoder_mask_decoder.xml"
 
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"

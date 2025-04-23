@@ -7,17 +7,21 @@ from typing import Dict, Optional, Union
 import numpy as np
 import openvino as ov
 import torch
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import AutoConfig, PretrainedConfig, SamModel
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
-from ...exporters.openvino import main_export
 from ...exporters.openvino.utils import save_config
 from .modeling_base import OVBaseModel, OVModelPart
-from .utils import OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME, OV_VISION_ENCODER_MODEL_NAME, TemporaryDirectory
+from .utils import (
+    ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
+    ONNX_VISION_ENCODER_MODEL_NAME,
+    OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
+    OV_VISION_ENCODER_MODEL_NAME,
+    TemporaryDirectory,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -82,7 +86,6 @@ class OVSamModel(OVBaseModel):
         **kwargs,
     ):
         self.config = config
-        self.use_cache = kwargs.get("use_cache", True)
         self._model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
@@ -117,8 +120,8 @@ class OVSamModel(OVBaseModel):
             component.clear_requests()
 
     def compile(self):
-        for _, component in self.components.items():
-            component._compile()
+        self.vision_encoder._compile()
+        self.prompt_encoder_mask_decoder._compile()
 
     def _save_config(self, save_directory):
         """
@@ -158,6 +161,8 @@ class OVSamModel(OVBaseModel):
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        vision_encoder_file_name: Optional[str] = None,
+        prompt_encoder_mask_decoder_file_name: Optional[str] = None,
         local_files_only: bool = False,
         **kwargs,
     ):
@@ -183,15 +188,12 @@ class OVSamModel(OVBaseModel):
             cache_dir (`Union[str, Path]`, *optional*):
                 The path to a directory in which a downloaded pretrained model configuration should be cached if the
                 standard cache should not be used.
-            encoder_file_name(`str`, *optional*):
-                The encoder model file name. Overwrites the default file name openvino_encoder_model.xml and allows one to
-                load the encoder model with a different name.
-            decoder_file_name(`str`, *optional*):
-                The decoder model file name. Overwrites the default file name openvino_decoder_model.xml and allows one to
-                load the decoder model with a different name.
-            decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name
-                openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
+            vision_encoder_file_name(`str`, *optional*):
+                The vision encoder model file name. Overwrites the default file name openvino_vision_encoder.xml and allows one to
+                load the vision encoder model with a different name.
+            prompt_encoder_mask_decoder_file_name(`str`, *optional*):
+                The prompt encdoer and mask decoder model file name overwriting the default file name
+                openvino_prompt_encoder_mask_decoder.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
@@ -204,12 +206,33 @@ class OVSamModel(OVBaseModel):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
+        from_onnx = kwargs.get("from_onnx", False)
+
+        default_vision_encoder_file_name = (
+            ONNX_VISION_ENCODER_MODEL_NAME if from_onnx else OV_VISION_ENCODER_MODEL_NAME
+        )
+        default_prompt_encoder_mask_decoder_file_name = (
+            ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME if from_onnx else OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME
+        )
+        vision_encoder_file_name = vision_encoder_file_name or default_vision_encoder_file_name
+        prompt_encoder_mask_decoder_file_name = (
+            prompt_encoder_mask_decoder_file_name or default_prompt_encoder_mask_decoder_file_name
+        )
+
         model_file_names = {
-            "vision_encoder_model": OV_VISION_ENCODER_MODEL_NAME,
-            "vision_encoder_model_bin": OV_VISION_ENCODER_MODEL_NAME.replace(".xml", ".bin"),
-            "prompt_encoder_mask_decoder_model": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
-            "prompt_encoder_mask_deocder_model_bin": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME.replace(".xml", ".bin"),
+            "vision_encoder_model": vision_encoder_file_name,
+            "prompt_encoder_mask_decoder_model": prompt_encoder_mask_decoder_file_name,
         }
+
+        if not from_onnx:
+            model_file_names.update(
+                {
+                    "vision_encoder_model_bin": vision_encoder_file_name.replace(".xml", ".bin"),
+                    "prompt_encoder_mask_decoder_model_bin": prompt_encoder_mask_decoder_file_name.replace(
+                        ".xml", ".bin"
+                    ),
+                }
+            )
 
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
@@ -219,7 +242,7 @@ class OVSamModel(OVBaseModel):
         else:
             file_names = {}
             for name, file_name in model_file_names.items():
-                model_cache_path = hf_hub_download(
+                model_cache_path = cls._cached_file(
                     repo_id=model_id,
                     filename=file_name,
                     token=token,
@@ -256,73 +279,6 @@ class OVSamModel(OVBaseModel):
         )
 
         return model
-
-    @classmethod
-    def _from_transformers(
-        cls,
-        model_id: str,
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        task: Optional[str] = None,
-        use_cache: bool = True,
-        trust_remote_code: bool = False,
-        **kwargs,
-    ):
-        compile_only = kwargs.pop("compile_only", False)
-        if compile_only:
-            logger.warning(
-                "`compile_only` mode will be disabled because it does not support model export."
-                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
-            )
-            compile_only = False
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-
-        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
-        # would end-up removing the directory containing the underlying OpenVINO model
-        cls._model_save_dir_tempdirectory_instance = save_dir
-
-        if task is None:
-            task = cls.export_feature
-
-        variant = kwargs.pop("variant", None)
-
-        main_export(
-            model_name_or_path=model_id,
-            output=save_dir_path,
-            task=task,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            stateful=False,
-            variant=variant,
-        )
-        config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_cache=use_cache,
-            **kwargs,
-        )
-
-    @property
-    def _component_names(self):
-        base_components = ["vision_encoder", "prompt_encoder_mask_decoder"]
-        return base_components
-
-    @property
-    def components(self):
-        return {component_name: getattr(self, component_name) for component_name in self._component_names}
 
     @property
     def _ov_submodel_names(self):
