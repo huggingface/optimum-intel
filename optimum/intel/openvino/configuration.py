@@ -413,7 +413,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         bits (`int`, defaults to 8):
             The number of bits to quantize to.
         sym (`bool`, defaults to `False`):
-            Whether to use symmetric quantization on the weights.
+            Whether to use symmetric quantization on the weights. Does not affect backup precision symmetricity.
         group_size (`int`, *optional*):
             The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
         tokenizer (`str`, *optional*):
