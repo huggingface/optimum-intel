@@ -1382,8 +1382,6 @@ def _get_speecht5_tss_model_for_export(
     )
 
     export_config.variant = "default"
-    all_variants = "\n".join([f"    - {name}: {description}" for name, description in export_config.VARIANTS.items()])
-    logger.info(f"Using the export variant {export_config.variant}. Available variants are:\n{all_variants}")
 
     config = export_config
 

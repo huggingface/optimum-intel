@@ -181,7 +181,6 @@ else:
             "OVModelForVision2Seq",
             "OVModelForVisualCausalLM",
             "OVModelForSequenceClassification",
-            "OVModelForTextToSpeechSeq2Seq",
             "OVModelForTokenClassification",
             "OVConfig",
             "OVModelOpenCLIPVisual",
