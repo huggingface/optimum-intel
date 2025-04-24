@@ -1004,7 +1004,7 @@ def _get_submodels_and_export_configs(
         )
     elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
         return _get_speecht5_tss_model_for_export(
-            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs
         )
 
     export_config, models_for_export = _default_get_submodels_and_export_configs(
@@ -1361,7 +1361,6 @@ def _get_speecht5_tss_model_for_export(
     float_dtype: str,
     preprocessors: Optional[List[Any]] = None,
     model_kwargs: Optional[Dict] = None,
-    stateful: bool = True,
 ):
     if model_kwargs is None or "vocoder" not in model_kwargs:
         # use the default vocoder if it is not specified
@@ -1380,16 +1379,13 @@ def _get_speecht5_tss_model_for_export(
         preprocessors=preprocessors,
         legacy=False,
     )
-
     export_config.variant = "default"
 
-    config = export_config
-
     models_for_export = {}
-    encoder_export_config = config.with_behavior("encoder")
-    decoder_export_config = config.with_behavior("decoder")
-    postnet_export_config = config.with_behavior("postnet")
-    vocoder_export_config = config.with_behavior("vocoder")
+    encoder_export_config = export_config.with_behavior("encoder")
+    decoder_export_config = export_config.with_behavior("decoder")
+    postnet_export_config = export_config.with_behavior("postnet")
+    vocoder_export_config = export_config.with_behavior("vocoder")
 
     vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id).eval()
 
