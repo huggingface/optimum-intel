@@ -126,7 +126,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
     def test_fill_mask_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         inputs = "The Milky Way is a <mask> galaxy."
+        set_seed(SEED)
         transformers_generator = transformers_pipeline("fill-mask", model_id, device_map=DEVICE)
+        set_seed(SEED)
         ipex_generator = ipex_pipeline("fill-mask", model_id, accelerator="ipex", device_map=DEVICE)
         mask_token = transformers_generator.tokenizer.mask_token
         inputs = inputs.replace("<mask>", mask_token)
