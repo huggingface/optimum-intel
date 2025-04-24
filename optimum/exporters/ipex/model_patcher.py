@@ -25,7 +25,7 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Model,
     Qwen2RMSNorm,
 )
-from transformers.models.mistral.modeling_mistral import MistralModel, MistralRMSNorm, MistrtralDecoderLayer
+from transformers.models.mistral.modeling_mistral import MistralModel, MistralRMSNorm, MistralDecoderLayer
 
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
@@ -144,7 +144,7 @@ def _patch_mistral_model(model):
     """
     convert_functions(model, MistralModel, "forward", _mistral_model_forward)
     convert_functions(model, MistralRMSNorm, "forward", _ipex_rms_layer_norm_forward)
-    convert_class(model, MistrtralDecoderLayer, _IPEXMistralDecoderLayer, model.device, model.config)
+    convert_class(model, MistralDecoderLayer, _IPEXMistralDecoderLayer, model.device, model.config)
     return model
 
 

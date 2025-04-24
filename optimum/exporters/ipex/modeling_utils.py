@@ -709,21 +709,21 @@ def _mistral_model_forward(
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-                cache_position=cache_position,
-                position_embeddings=position_embeddings,
-                input_lens=input_lens,
-                max_input_lens=max_input_lens,
-                seq_len_tensor=seq_len_tensor,
-                query_len_tensor=query_len_tensor,
-                **kwargs,
-            )
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_values,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            input_lens=input_lens,
+            max_input_lens=max_input_lens,
+            seq_len_tensor=seq_len_tensor,
+            query_len_tensor=query_len_tensor,
+            **kwargs,
+        )
 
         hidden_states = layer_outputs[0]
 
