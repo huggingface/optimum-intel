@@ -84,6 +84,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
+        ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
     ]
 
@@ -113,6 +114,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "sam": 0,  # no tokenizer
         "speecht5": 2,
     }
 

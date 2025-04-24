@@ -186,6 +186,7 @@ else:
             "OVModelOpenCLIPVisual",
             "OVModelOpenCLIPText",
             "OVModelOpenCLIPForZeroShotImageClassification",
+            "OVSamModel",
         ]
     )
 

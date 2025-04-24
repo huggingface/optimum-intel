@@ -43,6 +43,7 @@ from optimum.intel import (
     OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
+    OVSamModel,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
@@ -74,6 +75,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
         "llava": OVModelForVisualCausalLM,
+        "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
     }
 
