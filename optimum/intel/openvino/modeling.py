@@ -51,7 +51,7 @@ from transformers.modeling_outputs import (
 )
 
 from ..utils.import_utils import is_timm_available, is_timm_version
-from .modeling_base import FROM_PRETRAINED_START_DOCSTRING, OVBaseModel
+from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
 from .utils import _is_timm_ov_dir
 
@@ -402,61 +402,11 @@ class OVModelForFeatureExtraction(OVModel):
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
     @classmethod
-    @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
-    def from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        export: bool = False,
-        force_download: bool = False,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        config: Optional[PretrainedConfig] = None,
-        local_files_only: bool = False,
-        trust_remote_code: bool = False,
-        revision: Optional[str] = None,
-        **kwargs,
-    ):
-        if config is None:
-            config = AutoConfig.from_pretrained(
-                model_id,
-                trust_remote_code=trust_remote_code,
-                revision=revision,
-                local_files_only=local_files_only,
-                subfolder=subfolder,
-                cache_dir=cache_dir,
-                token=token,
-            )
+    def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
         if config.model_type == "sam":
-            return OVSamModel.from_pretrained(
-                model_id,
-                export=export,
-                force_download=force_download,
-                use_auth_token=use_auth_token,
-                token=token,
-                cache_dir=cache_dir,
-                subfolder=subfolder,
-                config=config,
-                local_files_only=local_files_only,
-                trust_remote_code=trust_remote_code,
-                revision=revision,
-                **kwargs,
-            )
-        return super().from_pretrained(
-            model_id,
-            export=export,
-            force_download=force_download,
-            use_auth_token=use_auth_token,
-            token=token,
-            cache_dir=cache_dir,
-            subfolder=subfolder,
-            config=config,
-            local_files_only=local_files_only,
-            trust_remote_code=trust_remote_code,
-            revision=revision,
-            **kwargs,
-        )
+            return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        else:
+            return super()._from_pretrained(model_id, config, *args, **kwargs)
 
 
 MASKED_LM_EXAMPLE = r"""

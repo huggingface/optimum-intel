@@ -73,7 +73,6 @@ class OVSamPromptEncoder(OVModelPart):
 class OVSamModel(OVBaseModel):
     export_feature = "feature-extraction"
     auto_model_class = SamModel
-    _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
     def __init__(
         self,

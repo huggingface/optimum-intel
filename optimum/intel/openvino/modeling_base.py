@@ -63,7 +63,7 @@ class OVBaseModel(OptimizedModel):
     _supports_cache_class = False
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
-    _search_pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
+    _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
     def __init__(
         self,
