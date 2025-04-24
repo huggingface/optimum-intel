@@ -142,8 +142,12 @@ _HEAD_TO_AUTOMODELS = {
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
+PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}
 
-LANGUAGE_DATASETS = ["wikitext2", "c4", "c4-new", "auto"]
+PREDEFINED_LANGUAGE_DATASETS = {
+    "wikitext2": {"path": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
+    "c4": {"path": "allenai/c4", "name": "en", "split": "train", "streaming": True},
+}
 
 PREDEFINED_SD_DATASETS = {
     "conceptual_captions": {"split": "train", "prompt_column_name": "caption", "streaming": True},

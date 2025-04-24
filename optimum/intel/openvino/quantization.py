@@ -20,7 +20,9 @@ from collections import UserDict, deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+import datasets
 import nncf
+import numpy as np
 import openvino
 import requests
 import torch
@@ -67,6 +69,7 @@ from .utils import (
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
+    PREDEFINED_LANGUAGE_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
@@ -134,6 +137,7 @@ class InferRequestWrapper:
         request: Union[openvino.InferRequest, openvino.CompiledModel],
         collected_inputs: List = None,
         apply_caching: bool = False,
+        inference_result_mock: Any = None,
     ):
         """
         Args:
@@ -145,10 +149,15 @@ class InferRequestWrapper:
             apply_caching (`bool`, defaults to False):
                 Whether to apply data caching. May improve memory footprint, but results in slight performance overhead
                 due to tensor hash computation.
+            inference_result_mock (`Any`, *optional*):
+                If provided, the target request won't be executed and this value will be returned instead resulting in
+                faster inputs collection. This is useful when the actual model inference can be skipped, and it
+                should not be provided for models which depend on previous inference results, e.g. encoder-decoder pipelines.
         """
         self.request = request
         self.collected_inputs = [] if collected_inputs is None else collected_inputs
         self.apply_caching = apply_caching
+        self.inference_result_mock = inference_result_mock
         self.tensor_cache = {}
 
     def collect_inputs(self, inputs):
@@ -177,11 +186,15 @@ class InferRequestWrapper:
         signature = inspect.signature(self.request)
         bound_args = signature.bind(*args, **kwargs).arguments
         self.collect_inputs(bound_args["inputs"])
-        return self.request(*args, **kwargs)
+        if self.inference_result_mock is None:
+            return self.request(*args, **kwargs)
+        return self.inference_result_mock
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
         self.collect_inputs(inputs)
-        return self.request.infer(inputs, share_inputs)
+        if self.inference_result_mock is None:
+            return self.request.infer(inputs, share_inputs)
+        return self.inference_result_mock
 
     def start_async(
         self,
@@ -192,7 +205,9 @@ class InferRequestWrapper:
         shared_memory: Any = None,
     ):
         self.collect_inputs(inputs)
-        self.request.infer(inputs, share_inputs, share_outputs=True)
+        if self.inference_result_mock is None:
+            self.request.infer(inputs, share_inputs, share_outputs=True)
+        return self.inference_result_mock
 
     def wait(self):
         pass
@@ -247,7 +262,12 @@ class OVCalibrationDatasetBuilder:
         Returns:
             A calibration dataset as an instance of `OVCalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import OVModelForCausalLM, OVModelForVisualCausalLM
+        from optimum.intel import (
+            OVModelForCausalLM,
+            OVModelForFeatureExtraction,
+            OVModelForVisualCausalLM,
+            OVSentenceTransformer,
+        )
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
 
         if is_diffusers_available():
@@ -305,6 +325,23 @@ class OVCalibrationDatasetBuilder:
                     "Please provide dataset as one of the accepted dataset labels or as a list of string prompts."
                 )
 
+            return self.build_from_dataset(config, dataset)
+        elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer)):
+            if isinstance(config.dataset, str):
+                dataset = self.load_dataset(
+                    PREDEFINED_LANGUAGE_DATASETS[config.dataset]["path"],
+                    num_samples=None,
+                    dataset_config_name=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["name"],
+                    dataset_split=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["split"],
+                    trust_remote_code=config.trust_remote_code,
+                    streaming=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["streaming"],
+                )
+            elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
+                dataset = datasets.Dataset.from_list([{"text": it} for it in config.dataset])
+            else:
+                raise ValueError(
+                    "Please provide dataset as one of the accepted dataset labels or as a list of strings."
+                )
             return self.build_from_dataset(config, dataset)
 
     def build_from_dataset_name(
@@ -406,7 +443,7 @@ class OVCalibrationDatasetBuilder:
         Returns:
             A calibration dataset as an instance of `OVCalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import OVModelForVisualCausalLM
+        from optimum.intel import OVModelForFeatureExtraction, OVModelForVisualCausalLM, OVSentenceTransformer
         from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
 
@@ -419,9 +456,10 @@ class OVCalibrationDatasetBuilder:
                 "Please provide it as `datasets.Dataset`."
             )
 
-        if isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)) or (
-            is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)
-        ):
+        if isinstance(
+            self.model,
+            (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForFeatureExtraction, OVSentenceTransformer),
+        ) or (is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)):
             # Prepare from raw dataset avoiding dataloader creation
             if batch_size != 1 or data_collator is not None or remove_unused_columns:
                 logger.warning(
@@ -434,6 +472,8 @@ class OVCalibrationDatasetBuilder:
                 return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
             elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 return self._prepare_diffusion_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer)):
+                return self._prepare_feature_extraction_calibration_data(quantization_config, dataset)
             else:
                 raise RuntimeError("Unsupported model type for calibration dataset collection.")
         else:
@@ -743,6 +783,56 @@ class OVCalibrationDatasetBuilder:
             self.model._progress_bar_config = {"disable": disable}
         else:
             self.model._progress_bar_config["disable"] = disable
+
+    def _prepare_feature_extraction_calibration_data(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        dataset: "Dataset",
+        seq_len: int = 128,
+    ) -> OVCalibrationDataset:
+        from optimum.intel import OVModelForFeatureExtraction, OVSentenceTransformer
+
+        self.model.compile()
+
+        num_samples = quantization_config.num_samples or 128
+        calibration_data = []
+        try:
+            self.model.request = InferRequestWrapper(
+                self.model.request,
+                calibration_data,
+                inference_result_mock={
+                    "last_hidden_state": np.empty((1,), np.float32),
+                    "token_embeddings": np.empty((1,), np.float32),
+                    "sentence_embedding": np.empty((1,), np.float32),
+                },
+            )
+
+            if isinstance(self.model, OVModelForFeatureExtraction):
+                tokenizer = AutoTokenizer.from_pretrained(
+                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+                )
+            elif isinstance(self.model, OVSentenceTransformer):
+                tokenizer = self.model.tokenizer
+            else:
+                raise RuntimeError(
+                    f"Unsupported model type {type(self.model).__name__} for calibration dataset collection."
+                )
+
+            pbar = tqdm(total=num_samples, desc="Collecting calibration data")
+            for item in dataset:
+                inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="np")
+                if inputs["input_ids"].shape[1] < seq_len:
+                    continue
+
+                self.model(**inputs) if isinstance(self.model, OVModelForFeatureExtraction) else self.model(inputs)
+
+                pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
+                if len(calibration_data) >= num_samples:
+                    break
+        finally:
+            self.model.request = self.model.request.request
+
+        return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
 
 
 class OVQuantizer(OptimumQuantizer):

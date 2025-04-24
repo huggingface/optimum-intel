@@ -64,6 +64,7 @@ from optimum.intel import (
     OVDynamicQuantizationConfig,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelForVisualCausalLM,
+    OVSentenceTransformer,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -307,6 +308,36 @@ class OVQuantizerTest(unittest.TestCase):
                 {"int8": 40},
             ],
         ),
+        (
+            OVModelForFeatureExtraction,
+            "blenderbot",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                33,
+            ],
+            [
+                {"int8": 35},
+            ],
+        ),
+        (
+            OVSentenceTransformer,
+            "sentence-transformers-bert",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="c4",
+                num_samples=1,
+            ),
+            [
+                12,
+            ],
+            [
+                {"int8": 15},
+            ],
+        ),
     ]
 
     @staticmethod
@@ -455,30 +486,29 @@ class OVQuantizerTest(unittest.TestCase):
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
+            submodels = ov_model.ov_submodels.values()
+
             if model_cls == OVModelForSpeechSeq2Seq:
-                submodels = [ov_model.encoder.model, ov_model.decoder.model]
-                if ov_model.decoder_with_past is not None:
-                    submodels.append(ov_model.decoder_with_past.model)
-                else:
+                if ov_model.decoder_with_past is None:
                     expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
                     expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
 
                 input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
-            elif model_cls == OVModelForCausalLM:
-                submodels = [ov_model]
-
+            elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction):
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
                     tokenizer.pad_token = tokenizer.eos_token
                 tokens = tokenizer("This is a sample input", return_tensors="pt")
-                outputs = ov_model(**tokens)
-                self.assertTrue("logits" in outputs)
-            elif any(
-                x == model_cls
-                for x in (OVStableDiffusionPipeline, OVStableDiffusionXLPipeline, OVLatentConsistencyModelPipeline)
+                ov_model(**tokens)
+            elif model_cls in (
+                OVStableDiffusionPipeline,
+                OVStableDiffusionXLPipeline,
+                OVLatentConsistencyModelPipeline,
             ):
-                submodels = ov_model.ov_submodels.values()
+                ov_model(prompt="A text-to-image prompt")
+            elif model_cls == OVSentenceTransformer:
+                ov_model.encode(["This is a sample input"])
             else:
                 raise Exception("Unexpected model class.")
 

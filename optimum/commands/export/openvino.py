@@ -126,7 +126,17 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--sym",
         action="store_true",
         default=None,
-        help=("Whether to apply symmetric quantization"),
+        help=(
+            "Whether to apply symmetric quantization. This argument is related to integer-typed --weight-format and --quant-mode options. "
+            "In case of full or mixed quantization (--quant-mode) symmetric quantization will be applied to weights in any case, so only activation quantization "
+            "will be affected by --sym argument. For weight-only quantization (--weight-format) --sym argument does not affect backup precision. "
+            "Examples: (1) --weight-format int8 --sym => int8 symmetric quantization of weights; "
+            "(2) --weight-format int4 => int4 asymmetric quantization of weights; "
+            "(3) --weight-format int4 --sym --backup-precision int8_asym => int4 symmetric quantization of weights with int8 asymmetric backup precision; "
+            "(4) --quant-mode int8 --sym => weights and activations are quantized to int8 symmetric data type; "
+            "(5) --quant-mode int8 => activations are quantized to int8 asymmetric data type, weights -- to int8 symmetric data type; "
+            "(6) --quant-mode int4_f8e5m2 --sym => activations are quantized to f8e5m2 data type, weights -- to int4 symmetric data type."
+        ),
     )
     optional_group.add_argument(
         "--group-size",
@@ -443,7 +453,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
         elif (
             quantize_with_dataset
-            and (task.startswith("text-generation") or "automatic-speech-recognition" in task)
+            and (
+                task.startswith("text-generation")
+                or task.startswith("automatic-speech-recognition")
+                or task.startswith("feature-extraction")
+            )
             or (task == "image-text-to-text" and quantization_config is not None)
         ):
             if task.startswith("text-generation"):
@@ -454,10 +468,22 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForVisualCausalLM
 
                 model_cls = OVModelForVisualCausalLM
-            else:
+            elif "automatic-speech-recognition" in task:
                 from optimum.intel import OVModelForSpeechSeq2Seq
 
                 model_cls = OVModelForSpeechSeq2Seq
+            elif task.startswith("feature-extraction") and library_name == "transformers":
+                from ...intel import OVModelForFeatureExtraction
+
+                model_cls = OVModelForFeatureExtraction
+            elif task.startswith("feature-extraction") and library_name == "sentence_transformers":
+                from ...intel import OVSentenceTransformer
+
+                model_cls = OVSentenceTransformer
+            else:
+                raise NotImplementedError(
+                    f"Unable to find a matching model class for the task={task} and library_name={library_name}."
+                )
 
             # In this case, to apply quantization an instance of a model class is required
             model = model_cls.from_pretrained(
