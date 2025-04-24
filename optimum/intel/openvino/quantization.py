@@ -829,7 +829,8 @@ class OVCalibrationDatasetBuilder:
 
             self.model.request = InferRequestWrapper(
                 self.model.request,
-                calibration_data,  # inference_result_mock=inference_result_mock,
+                calibration_data,
+                inference_result_mock=inference_result_mock,
             )
 
             if isinstance(self.model, OVSentenceTransformer):
