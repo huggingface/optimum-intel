@@ -1363,10 +1363,10 @@ def _get_speecht5_tss_model_for_export(
     model_kwargs: Optional[Dict] = None,
 ):
     if model_kwargs is None or "vocoder" not in model_kwargs:
-        # use the default vocoder if it is not specified
-        vocoder_id = "microsoft/speecht5_hifigan"
-    else:
-        vocoder_id = model_kwargs["vocoder"]
+        raise ValueError(
+            'The export of SpeechT5 requires a vocoder. Please pass `--model-kwargs \'{"vocoder": "vocoder_model_name_or_path"}\'` from the command line, or `model_kwargs={"vocoder": "vocoder_model_name_or_path"}` if calling main_export.'
+        )
+    vocoder_id = model_kwargs["vocoder"]
 
     # prepare export config
     export_config_constructor = TasksManager.get_exporter_config_constructor(

@@ -94,6 +94,7 @@ class ExportModelTest(unittest.TestCase):
         model_type: str,
         stateful: bool = True,
         patch_16bit_model: bool = False,
+        model_kwargs: dict = None,
     ):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
@@ -126,6 +127,7 @@ class ExportModelTest(unittest.TestCase):
                     task=supported_task,
                     preprocessors=preprocessors,
                     stateful=stateful,
+                    model_kwargs=model_kwargs,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -182,7 +184,10 @@ class ExportModelTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
-        self._openvino_export(model_type)
+        model_kwargs = None
+        if model_type == "speecht5":
+            model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
+        self._openvino_export(model_type, model_kwargs=model_kwargs)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):

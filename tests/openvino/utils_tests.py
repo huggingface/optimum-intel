@@ -216,7 +216,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
-    "speecht5": (28, 52, 10, 156),
+    "speecht5": (28, 52, 10, 80),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
