@@ -213,11 +213,15 @@ class ExportModelTest(unittest.TestCase):
         supported_tasks = (task, task + "-with-past") if "text-generation" in task else (task,)
         for supported_task in supported_tasks:
             with TemporaryDirectory() as tmpdirname:
+                model_kwargs = None
+                if model_type == "speecht5":
+                    model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
                 export_from_model(
                     model=model,
                     output=Path(tmpdirname),
                     task=supported_task,
                     preprocessors=preprocessors,
+                    model_kwargs=model_kwargs,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
