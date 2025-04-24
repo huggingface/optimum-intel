@@ -447,7 +447,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
         elif (
             quantize_with_dataset
-            and (task.startswith("text-generation") or "automatic-speech-recognition" in task)
+            and (
+                task.startswith("text-generation")
+                or task.startswith("automatic-speech-recognition")
+                or task.startswith("feature-extraction")
+            )
             or (task == "image-text-to-text" and quantization_config is not None)
         ):
             if task.startswith("text-generation"):
@@ -458,10 +462,22 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForVisualCausalLM
 
                 model_cls = OVModelForVisualCausalLM
-            else:
+            elif "automatic-speech-recognition" in task:
                 from optimum.intel import OVModelForSpeechSeq2Seq
 
                 model_cls = OVModelForSpeechSeq2Seq
+            elif task.startswith("feature-extraction") and library_name == "transformers":
+                from ...intel import OVModelForFeatureExtraction
+
+                model_cls = OVModelForFeatureExtraction
+            elif task.startswith("feature-extraction") and library_name == "sentence_transformers":
+                from ...intel import OVSentenceTransformer
+
+                model_cls = OVSentenceTransformer
+            else:
+                raise NotImplementedError(
+                    f"Unable to find a matching model class for the task={task} and library_name={library_name}."
+                )
 
             # In this case, to apply quantization an instance of a model class is required
             model = model_cls.from_pretrained(
