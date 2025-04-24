@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 import warnings
@@ -395,25 +395,37 @@ class OVBaseModel(OptimizedModel):
         compile_only = kwargs.get("compile_only", False)
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
 
-        model = None
         if not compile_only:
-            model = cls.load_model(model_cache_path, quantization_config=quantization_config)
+            ov_model = cls.load_model(
+                model_cache_path, quantization_config=None if is_data_aware_quantization else quantization_config
+            )
         else:
-            model = cls._compile_model(
+            ov_model = cls._compile_model(
                 model_cache_path,
                 kwargs.get("device"),
                 kwargs.get("ov_config"),
                 model_save_dir=model_cache_path.parent,
             )
 
-        return cls(
-            model,
+        model = cls(
+            ov_model,
             config=config,
             model_save_dir=model_cache_path.parent,
             quantization_config=quantization_config,
             **kwargs,
         )
+
+        if is_data_aware_quantization:
+            from optimum.intel import OVQuantizer
+
+            quantizer = OVQuantizer(model)
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+
+        return model
 
     @classmethod
     @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
