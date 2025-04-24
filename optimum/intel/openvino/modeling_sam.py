@@ -21,6 +21,7 @@ from .utils import (
     OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
     OV_VISION_ENCODER_MODEL_NAME,
     TemporaryDirectory,
+    model_has_dynamic_inputs,
 )
 
 
@@ -88,7 +89,6 @@ class OVSamModel(OVBaseModel):
         self.config = config
         self._model_save_dir = model_save_dir
         self._device = device.upper()
-        self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self.vision_encoder_model = vision_encoder_model
@@ -97,6 +97,9 @@ class OVSamModel(OVBaseModel):
         enable_compilation = kwargs.get("compile", True)
         self.vision_encoder = OVSamVisionEncoder(self.vision_encoder_model, self)
         self.prompt_encoder_mask_decoder = OVSamPromptEncoder(self.prompt_encoder_mask_decoder_model, self)
+
+        if dynamic_shapes and not self.is_dynamic and not self._compile_only:
+            self.reshape()
 
         if enable_compilation and not self._compile_only:
             self.compile()
@@ -243,8 +246,8 @@ class OVSamModel(OVBaseModel):
             file_names = {}
             for name, file_name in model_file_names.items():
                 model_cache_path = cls._cached_file(
-                    repo_id=model_id,
-                    filename=file_name,
+                    model_path=model_id,
+                    file_name=file_name,
                     token=token,
                     revision=revision,
                     cache_dir=cache_dir,
@@ -285,7 +288,37 @@ class OVSamModel(OVBaseModel):
         model_names = ["vision_encoder_model", "prompt_encoder_mask_decoder_model"]
         return model_names
 
-    def reshape(self, batch_size: int, sequence_length: int):
+    def reshape(self, batch_size: int = -1, point_batch_size: int = -1, num_points_per_image: int = -1):
+        """
+        Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
+
+        Arguments:
+            batch_size (`int`):
+                The batch size.
+            point_batch_size (`int`):
+                The point batch size.
+            num_points_per_image (`int`, *optional*):
+                The number of points per image
+        """
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+        vision_encoder_shapes = {}
+        for inputs in self.vision_encoder_model.inputs:
+            vision_encoder_shapes[inputs] = inputs.get_partial_shape()
+            vision_encoder_shapes[inputs][0] = batch_size
+        self.vision_encoder_model.reshape(vision_encoder_shapes)
+        self.vision_encoder.request = None
+        mask_decoder_shapes = {}
+        for inputs in self.prompt_encoder_mask_decoder_model.inputs:
+            mask_decoder_shapes[inputs] = inputs.get_partial_shape()
+            mask_decoder_shapes[inputs][0] = batch_size
+            if inputs.get_any_name() in ["input_points", "input_labels"]:
+                mask_decoder_shapes[inputs][1] = point_batch_size
+                mask_decoder_shapes[inputs][2] = num_points_per_image
+        self.prompt_encoder_mask_decoder_model.reshape(mask_decoder_shapes)
+        self.prompt_encoder_mask_decoder.request = None
         return self
 
     def half(self):
@@ -363,3 +396,9 @@ class OVSamModel(OVBaseModel):
 
     def get_image_features(self, pixel_values, *args, **kwargs):
         return torch.from_numpy(self.vision_encoder(pixel_values).image_embeddings)
+
+    @property
+    def is_dynamic(self):
+        return model_has_dynamic_inputs(self.vision_encoder_model) or model_has_dynamic_inputs(
+            self.prompt_encoder_mask_decoder_model
+        )

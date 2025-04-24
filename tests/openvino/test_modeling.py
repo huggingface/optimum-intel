@@ -3093,7 +3093,7 @@ class OVSamIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
-        self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.iou_scores, transformers_outputs.iou_scores, atol=1e-4))
 
         # test separated image features extraction
         pixel_values = inputs.pop("pixel_values")
@@ -3105,9 +3105,37 @@ class OVSamIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs, image_embeddings=features)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
-        self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.iou_scores, transformers_outputs.iou_scores, atol=1e-4))
 
         del transformers_model
         del ov_model
 
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_reshape(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+        self.assertTrue(ov_model.is_dynamic)
+        input_points = [[[450, 600]]]
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
+        ov_dyn_outputs = ov_model(**inputs)
+        ov_model.reshape(*inputs["input_points"].shape[:-1])
+        self.assertFalse(ov_model.is_dynamic)
+        self.assertIsNone(ov_model.vision_encoder.request)
+        self.assertIsNone(ov_model.prompt_encoder_mask_decoder.request)
+        ov_stat_outputs = ov_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_dyn_outputs.pred_masks, ov_stat_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_dyn_outputs.iou_scores, ov_stat_outputs.iou_scores, atol=1e-4))
+
+        del ov_model
         gc.collect()
