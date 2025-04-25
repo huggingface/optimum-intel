@@ -28,7 +28,6 @@ from transformers.file_utils import add_start_docstrings, add_start_docstrings_t
 from transformers.modeling_outputs import Seq2SeqLMOutput
 from transformers.utils import ModelOutput
 
-from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_seq2seq import (
@@ -457,100 +456,6 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
             OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
-
-    @classmethod
-    def _from_transformers(
-        cls,
-        model_id: str,
-        config: PretrainedConfig,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        task: Optional[str] = None,
-        use_cache: bool = True,
-        trust_remote_code: bool = False,
-        load_in_8bit: Optional[bool] = None,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        **kwargs,
-    ):
-        """
-        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
-
-        Arguments:
-            model_id (`str` or `Path`):
-                The directory from which to load the model.
-                Can be either:
-                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.
-            save_dir (`str` or `Path`):
-                The directory where the exported ONNX model should be saved, defaults to
-                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`):
-                Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id
-            kwargs (`Dict`, *optional*):
-                kwargs will be passed to the model during initialization
-        """
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-
-        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
-        # would end-up removing the directory containing the underlying OpenVINO model
-        cls._model_save_dir_tempdirectory_instance = save_dir
-
-        if task is None:
-            task = cls.export_feature
-            if use_cache:
-                task = task + "-with-past"
-
-        compile_only = kwargs.pop("compile_only", False)
-        if compile_only:
-            logger.warning(
-                "`compile_only` mode will be disabled because it does not support model export."
-                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
-            )
-            compile_only = False
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-        stateful = kwargs.get("stateful", True)
-        variant = kwargs.pop("variant", None)
-
-        # NOTE: need to pass kwargs that can contain vocoder path
-        # it will be an additional component in the pipeline
-        main_export(
-            model_name_or_path=model_id,
-            output=save_dir_path,
-            task=task,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
-            stateful=stateful,
-            variant=variant,
-            model_kwargs=kwargs,
-        )
-
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_cache=use_cache,
-            load_in_8bit=load_in_8bit,
-            quantization_config=quantization_config,
-            compile_only=compile_only,
-            **kwargs,
-        )
 
     def generate(
         self,
