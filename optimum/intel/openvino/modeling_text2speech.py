@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 import copy
 import logging
 import os
@@ -24,17 +25,13 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from torch import nn
 from transformers import AutoConfig, GenerationConfig, PretrainedConfig, SpeechT5ForTextToSpeech
-from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
-from transformers.modeling_outputs import Seq2SeqLMOutput
+from transformers.file_utils import add_start_docstrings
 from transformers.utils import ModelOutput
 
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_seq2seq import (
-    _PROCESSOR_FOR_DOC,
-    AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE,
     INPUTS_DOCSTRING,
-    SPEECH_SEQ2SEQ_MODEL_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
 from .utils import (
@@ -272,67 +269,6 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
                     f"The generation config will not be saved, saving failed with following error:\n{exception}"
                 )
 
-    def prepare_inputs_for_generation(
-        self,
-        decoder_input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        use_cache=None,
-        encoder_outputs=None,
-        decoder_attention_mask=None,
-        **kwargs,
-    ):
-        # cut decoder_input_ids if past is used
-        if past_key_values is not None:
-            decoder_input_ids = decoder_input_ids[:, -1:]
-
-        if decoder_attention_mask is None and decoder_input_ids is not None:
-            decoder_attention_mask = torch.ones_like(decoder_input_ids).to(decoder_input_ids.device)
-
-        return {
-            "encoder_outputs": encoder_outputs,
-            "past_key_values": past_key_values,
-            "decoder_input_ids": decoder_input_ids,
-            "attention_mask": attention_mask,
-            "head_mask": head_mask,
-            "decoder_head_mask": decoder_head_mask,
-            "cross_attn_head_mask": cross_attn_head_mask,
-            "use_cache": use_cache,
-        }
-
-    @add_start_docstrings_to_model_forward(
-        SPEECH_SEQ2SEQ_MODEL_DOCSTRING
-        + AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE.format(
-            processor_class=_PROCESSOR_FOR_DOC,
-            model_class="OVModelForTextToSpeechSeq2Seq",
-            checkpoint="microsoft/speecht5_tts",
-        )
-    )
-    def forward(
-        self,
-        input_features: Optional[torch.FloatTensor] = None,
-        attention_mask: Optional[torch.LongTensor] = None,
-        decoder_input_ids: Optional[torch.LongTensor] = None,
-        decoder_attention_mask: Optional[torch.BoolTensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ) -> Seq2SeqLMOutput:
-        return super().forward(
-            input_ids=input_features,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            decoder_attention_mask=decoder_attention_mask,
-            encoder_outputs=encoder_outputs,
-            past_key_values=past_key_values,
-            cache_position=cache_position,
-            **kwargs,
-        )
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -500,9 +436,6 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
                 encoder_last_hidden_state=encoder_last_hidden_state,
                 encoder_attention_mask=encoder_attention_mask,
             )
-
-            # if output_cross_attentions:
-            #    cross_attentions.append(torch.cat(decoder_out.cross_attentions, dim=0))
 
             spectrum = decoder_out.spectrum
             spectrogram.append(spectrum)
