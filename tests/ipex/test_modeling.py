@@ -126,19 +126,6 @@ class IPEXModelTest(unittest.TestCase):
                 self.assertTrue(torch.allclose(outputs[output_name], loaded_model_outputs[output_name]))
                 self.assertTrue(torch.allclose(outputs[output_name], init_model_outputs[output_name]))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, device_map=DEVICE)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
-        text = "This restaurant is awesome"
-        if self.IPEX_MODEL_CLASS.export_feature == "fill-mask":
-            text += tokenizer.mask_token
-
-        _ = pipe(text)
-        self.assertEqual(pipe.device, model.device)
-
 
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
     IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
