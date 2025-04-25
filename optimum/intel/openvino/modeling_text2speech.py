@@ -239,17 +239,8 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
         return {component_name: getattr(self, component_name) for component_name in self._component_names}
 
     @property
-    def _submodel_names(self):
-        model_names = ["encoder_model", "decoder_model", "postnet_model", "vocoder_model"]
-        return model_names
-
-    @property
-    def submodels(self):
-        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._submodel_names}
-
-    @property
     def ov_submodels(self) -> Dict[str, ov.runtime.Model]:
-        return {submodel_name: getattr(self, submodel_name).model for submodel_name in self._submodel_names}
+        return {component_name: getattr(self, component_name).model for component_name in self._component_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -260,19 +251,17 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_models = self.submodels
-        dst_file_names = {
-            "encoder_model": self.OV_ENCODER_MODEL_NAME,
-            "decoder_model": self.OV_DECODER_MODEL_NAME,
-            "postnet_model": self.OV_POSTNET_MODEL_NAME,
-            "vocoder_model": self.OV_VOCODER_MODEL_NAME,
-        }
+        src_models = list(self.ov_submodels.values())
+        dst_file_names = [
+            self.OV_ENCODER_MODEL_NAME,
+            self.OV_DECODER_MODEL_NAME,
+            self.OV_POSTNET_MODEL_NAME,
+            self.OV_VOCODER_MODEL_NAME,
+        ]
 
-        for name in self._submodel_names:
-            model = src_models[name].model
-            dst_file_name = dst_file_names[name]
+        for src_model, dst_file_name in zip(src_models, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(model, dst_path, compress_to_fp16=False)
+            ov.save_model(src_model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
