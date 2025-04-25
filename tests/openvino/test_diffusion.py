@@ -1006,6 +1006,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
+@unittest.skipIf(is_transformers_version("<", "4.45"))
 class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_transformers_version(">=", "4.45.0"):

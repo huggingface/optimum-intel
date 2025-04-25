@@ -1204,9 +1204,6 @@ class OVModelTextEncoder(OVPipelinePart):
         if "attention_mask" in self.input_names:
             model_inputs["attention_mask"] = attention_mask
 
-        print(self.request)
-        print(model_inputs)
-
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]
         model_outputs = {}
@@ -1333,8 +1330,6 @@ class OVModelTransformer(OVPipelinePart):
                 rope_interpolation_scale = torch.tensor(rope_interpolation_scale)
             model_inputs["rope_interpolation_scale"] = rope_interpolation_scale
 
-        print(model_inputs)
-        print(self.request.inputs)
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
         model_outputs = {}

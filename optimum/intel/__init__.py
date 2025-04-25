@@ -127,7 +127,6 @@ except OptionalDependencyNotAvailable:
         "OVPipelineForText2Image",
         "OVPipelineForInpainting",
         "OVPipelineForText2Video",
-        "OVPipelineForImage2Video",
         "OVDiffusionPipeline",
     ]
 else:
