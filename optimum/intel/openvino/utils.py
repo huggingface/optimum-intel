@@ -135,6 +135,7 @@ _HEAD_TO_AUTOMODELS = {
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
+    "ltx-video": "OVLTXPipeline",
 }
 
 

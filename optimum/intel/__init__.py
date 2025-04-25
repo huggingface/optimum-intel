@@ -143,7 +143,6 @@ else:
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
             "OVLTXPipeline",
-            "OVLTXImage2VideoPipeline",
             "OVFluxPipeline",
             "OVFluxImg2ImgPipeline",
             "OVFluxInpaintPipeline",
@@ -153,7 +152,6 @@ else:
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
             "OVPipelineForText2Video",
-            "OVPipelineForImage2Video",
             "OVDiffusionPipeline",
         ]
     )

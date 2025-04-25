@@ -175,9 +175,6 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
-    if is_diffusers_available() and "image-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
-        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"] = {}
-        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx-video"] = "LTXImage2VideoPipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",

@@ -85,11 +85,11 @@ if is_diffusers_version(">=", "0.25.0"):
 else:
     from diffusers.models.vae import DiagonalGaussianDistribution
 
+# Required EncoderDecoderCache object from transformers
 if is_diffusers_version(">=", "0.28.2") and is_transformers_version(">=", "4.45"):
-    from diffusers import LTXImageToVideoPipeline, LTXPipeline
+    from diffusers import LTXPipeline
 else:
     LTXPipeline = object
-    LTXImageToVideoPipeline = object
 
 
 if is_diffusers_version(">=", "0.29.0"):
@@ -685,7 +685,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         height = model.inputs[0].get_partial_shape()[-2]
         if height.is_dynamic:
             return -1
-        return height.get_length() * self.vae_scale_factor
+        return height.get_length() * (
+            self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio
+        )
 
     @property
     def width(self) -> int:
@@ -693,7 +695,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         width = model.inputs[0].get_partial_shape()[-1]
         if width.is_dynamic:
             return -1
-        return width.get_length() * self.vae_scale_factor
+        return width.get_length() * (
+            self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio
+        )
 
     @property
     def batch_size(self) -> int:
@@ -928,11 +932,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
+                # GemmaTokenizer uses inf as model_max_length, Text Encoder in LTX do not pad input to model_max_length
                 self.text_encoder.model,
                 batch_size,
                 (
                     getattr(self.tokenizer, "model_max_length", -1)
                     if "Gemma" not in self.tokenizer.__class__.__name__
+                    and not self.__class__.__name__.startswith("OVLTX")
                     else -1
                 ),
             )
@@ -1198,6 +1204,9 @@ class OVModelTextEncoder(OVPipelinePart):
         if "attention_mask" in self.input_names:
             model_inputs["attention_mask"] = attention_mask
 
+        print(self.request)
+        print(model_inputs)
+
         ov_outputs = self.request(model_inputs, share_inputs=True)
         main_out = ov_outputs[0]
         model_outputs = {}
@@ -1324,6 +1333,8 @@ class OVModelTransformer(OVPipelinePart):
                 rope_interpolation_scale = torch.tensor(rope_interpolation_scale)
             model_inputs["rope_interpolation_scale"] = rope_interpolation_scale
 
+        print(model_inputs)
+        print(self.request.inputs)
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
         model_outputs = {}
@@ -1699,12 +1710,6 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     auto_model_class = LTXPipeline
 
 
-class OVLTXImage2VideoPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXImageToVideoPipeline):
-    main_input_name = "prompt"
-    export_feature = "image-to-video"
-    auto_model_class = LTXImageToVideoPipeline
-
-
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1754,13 +1759,9 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
 
 OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
 
-OV_IMAGE2VIDEO_PIPELINES_MAPPING = OrderedDict()
-
 if is_diffusers_version(">=", "0.28.2") and is_transformers_version(">=", "4.45.0"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
-    OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXImage2VideoPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTXPipeline)
-    SUPPORTED_OV_PIPELINES.append(OVLTXImage2VideoPipeline)
 
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(
@@ -1799,7 +1800,6 @@ SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_IMAGE2IMAGE_PIPELINES_MAPPING,
     OV_INPAINT_PIPELINES_MAPPING,
     OV_TEXT2VIDEO_PIPELINES_MAPPING,
-    OV_IMAGE2VIDEO_PIPELINES_MAPPING,
 ]
 
 
@@ -1870,9 +1870,3 @@ class OVPipelineForText2Video(OVPipelineForTask):
     auto_model_class = DiffusionPipeline
     ov_pipelines_mapping = OV_TEXT2VIDEO_PIPELINES_MAPPING
     export_feature = "text-to-video"
-
-
-class OVPipelineForImage2Video(OVPipelineForTask):
-    auto_model_class = DiffusionPipeline
-    ov_pipelines_mapping = OV_IMAGE2VIDEO_PIPELINES_MAPPING
-    export_feature = "image-to-video"
