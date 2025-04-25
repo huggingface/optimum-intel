@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import time
+
 from transformers import is_torch_xpu_available
 
 
