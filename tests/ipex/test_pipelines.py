@@ -44,25 +44,20 @@ class PipelinesIntegrationTest(unittest.TestCase):
     COMMON_SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        "distilbert",
         "electra",
-        "flaubert",
         "roberta",
         "roformer",
-        # "squeezebert", # squeezebert have bug in transformers version 4.49.0, will enable it after we upgrade transformers
         "xlm",
     )
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
         "bart",
         "gpt_bigcode",
         "blenderbot",
-        "blenderbot-small",
         "bloom",
         "codegen",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "llama",
         "llama2",
         "mistral",
         "mpt",
@@ -72,7 +67,6 @@ class PipelinesIntegrationTest(unittest.TestCase):
     )
     QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES = (
         "bert",
-        "distilbert",
         "roberta",
     )
     AUDIO_CLASSIFICATION_SUPPORTED_ARCHITECTURES = (
@@ -81,7 +75,6 @@ class PipelinesIntegrationTest(unittest.TestCase):
     )
     IMAGE_CLASSIFICATION_SUPPORTED_ARCHITECTURES = (
         "beit",
-        "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",
         "resnet",

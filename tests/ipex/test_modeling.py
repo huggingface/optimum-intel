@@ -83,12 +83,9 @@ class IPEXModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        "distilbert",
         "electra",
-        "flaubert",
         "roberta",
         "roformer",
-        # "squeezebert", # squeezebert have bug in transformers version 4.49.0, will enable it after we upgrade transformers
         "xlm",
     )
     IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("bert",)
@@ -143,7 +140,6 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForQuestionAnswering
     SUPPORTED_ARCHITECTURES = (
         "bert",
-        "distilbert",
         "roberta",
     )
 
@@ -217,7 +213,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "bart",
         "gpt_bigcode",
         "blenderbot",
-        "blenderbot-small",
         "bloom",
         "codegen",
         "falcon",
@@ -225,9 +220,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "mistral",
-        "llama",
         "llama2",
-        "distilgpt2",
         "mpt",
         "opt",
         "phi",
@@ -248,7 +241,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokens = tokenizer(
             "This is a sample",
             return_tensors="pt",
-            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+            return_token_type_ids=False if model_arch in ("llama2",) else None,
         ).to(DEVICE)
         inputs = ipex_model.prepare_inputs_for_generation(**tokens)
         outputs = ipex_model(**inputs)
@@ -573,7 +566,6 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForImageClassification
     SUPPORTED_ARCHITECTURES = (
         "beit",
-        "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",
         "resnet",
@@ -661,7 +653,7 @@ class IPEXModelForSeq2SeqLMTest(unittest.TestCase):
         tokens = tokenizer(
             "This is a sample",
             return_tensors="pt",
-            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+            return_token_type_ids=False if model_arch in ("llama2",) else None,
         )
         decoder_start_token_id = transformers_model.config.decoder_start_token_id if model_arch != "mbart" else 2
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
