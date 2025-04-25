@@ -28,10 +28,9 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum~=1.24",
-    "transformers>=4.36,<4.50",
+    "optimum@git+https://github.com/huggingface/optimum.git",
+    "transformers>=4.36,<4.52",
     "datasets>=1.4.0",
-    "sentencepiece",
     "setuptools",
     "scipy",
     "onnx",
@@ -43,9 +42,9 @@ TESTS_REQUIRE = [
     "parameterized",
     "Pillow",
     "evaluate",
-    "diffusers",
     "py-cpuinfo",
     "sacremoses",
+    "sentencepiece",
     "torchaudio",
     "rjieba",
     "timm",
@@ -59,6 +58,8 @@ TESTS_REQUIRE = [
     "datasets[audio]>=1.4.0",
     "tbb",
     "langchain-huggingface",
+    "hf_xet",
+    "num2words",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

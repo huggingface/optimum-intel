@@ -1763,7 +1763,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
 
     # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
     def _prepare_generation_config(
-        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
         using_model_generation_config = False
         if generation_config is None:
@@ -1913,7 +1913,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
     def _set_2d_pos_cache(self, max_size):
         pos_embed = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
-        self._pos_embed = pos_embed
+        self._pos_embeds = pos_embed
 
     def _adjust_pos_cache(self, tgt_sizes):
         max_h = torch.max(tgt_sizes[:, 0])
@@ -2456,13 +2456,59 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
                 self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
             )
             self.get_rope_index = MethodType(Qwen2VLForConditionalGeneration.get_rope_index, self)
-            self.prepare_inputs_for_generation = MethodType(
-                Qwen2VLForConditionalGeneration.prepare_inputs_for_generation, self
-            )
         else:
             raise ValueError(
                 f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
             )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        pixel_values=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
+        if past_key_values is not None:
+            if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
+                inputs_embeds = inputs_embeds[:, -cache_position.shape[0] :]
+            elif inputs_embeds is not None:
+                input_ids = input_ids[:, -cache_position.shape[0] :]
+            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                input_ids = input_ids[:, cache_position]
+
+        if cache_position[0] != 0:
+            pixel_values = None
+            pixel_values_videos = None
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
+            model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
+        else:
+            model_inputs = {"input_ids": input_ids, "inputs_embeds": None}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "pixel_values": pixel_values,
+                "pixel_values_videos": pixel_values_videos,
+                "image_grid_thw": image_grid_thw,
+                "video_grid_thw": video_grid_thw,
+                "cache_position": cache_position,
+            }
+        )
+        return model_inputs
 
     # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
     def _update_model_kwargs_for_generation(

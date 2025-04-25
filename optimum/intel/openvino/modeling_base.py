@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 import warnings
@@ -21,7 +21,6 @@ from typing import Dict, List, Optional, Union
 
 import openvino
 import torch
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core, Model, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
@@ -29,6 +28,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
 from transformers.utils import is_offline_mode
+from transformers.utils.hub import cached_file
 
 from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
@@ -63,6 +63,7 @@ class OVBaseModel(OptimizedModel):
     _supports_cache_class = False
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
+    _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
     def __init__(
         self,
@@ -395,25 +396,37 @@ class OVBaseModel(OptimizedModel):
         compile_only = kwargs.get("compile_only", False)
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
 
-        model = None
         if not compile_only:
-            model = cls.load_model(model_cache_path, quantization_config=quantization_config)
+            ov_model = cls.load_model(
+                model_cache_path, quantization_config=None if is_data_aware_quantization else quantization_config
+            )
         else:
-            model = cls._compile_model(
+            ov_model = cls._compile_model(
                 model_cache_path,
                 kwargs.get("device"),
                 kwargs.get("ov_config"),
                 model_save_dir=model_cache_path.parent,
             )
 
-        return cls(
-            model,
+        model = cls(
+            ov_model,
             config=config,
             model_save_dir=model_cache_path.parent,
             quantization_config=quantization_config,
             **kwargs,
         )
+
+        if is_data_aware_quantization:
+            from optimum.intel import OVQuantizer
+
+            quantizer = OVQuantizer(model)
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+
+        return model
 
     @classmethod
     @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
@@ -459,7 +472,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -540,17 +553,18 @@ class OVBaseModel(OptimizedModel):
             else:
                 model_file_names = [file_name]
             for file_name in model_file_names:
-                model_cache_path = hf_hub_download(
-                    repo_id=model_path.as_posix(),
-                    filename=file_name.as_posix(),
-                    subfolder=subfolder,
-                    token=token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
+                model_cache_path = Path(
+                    cached_file(
+                        model_path.as_posix(),
+                        filename=file_name.as_posix(),
+                        token=token,
+                        revision=revision,
+                        force_download=force_download,
+                        cache_dir=cache_dir,
+                        subfolder=subfolder,
+                        local_files_only=local_files_only,
+                    )
                 )
-            model_cache_path = Path(model_cache_path)
 
         return model_cache_path
 

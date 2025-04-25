@@ -170,6 +170,7 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["fill"] = {"flux": "FluxFillPipeline"}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image", "SanaPipeline")
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana-sprint"] = "SanaSprintPipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -2050,6 +2051,14 @@ class DummyUnetTimestepInputGenerator(DummyTimestepInputGenerator):
         return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
 
 
+class DummySanaTimestepInputGenerator(DummyTimestepInputGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name != "timestep":
+            return super().generate(input_name, framework, int_dtype, float_dtype)
+        shape = [self.batch_size]
+        return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=float_dtype)
+
+
 class DummyUnetEncoderInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
     def __init__(
         self,
@@ -2158,6 +2167,14 @@ class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTe
 
 
 class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_mask",
+        "sample",
+        "latent_sample",
+        "guidance",
+    )
+
     def __init__(
         self,
         task: str,
@@ -2170,6 +2187,11 @@ class DummySanaTransformerVisionInputGenerator(DummyUnetVisionInputGenerator):
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width=width, height=height, **kwargs)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "guidance":
+            return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 @register_in_tasks_manager("sana-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -2184,12 +2206,15 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummySanaTransformerVisionInputGenerator,
         DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
-    ) + UNetOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES[1:-1]
+        DummySanaTimestepInputGenerator,
+    )
 
     @property
     def inputs(self):
         common_inputs = super().inputs
         common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        if getattr(self._normalized_config.config, "guidance_embeds", False):
+            common_inputs["guidance"] = {0: "batch_size"}
         return common_inputs
 
     def rename_ambiguous_inputs(self, inputs):
@@ -2939,6 +2964,21 @@ class GLMOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "glm4",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GLM4OpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.3"
+
+
+@register_in_tasks_manager(
     "granite",
     *[
         "feature-extraction",
@@ -3007,6 +3047,11 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
         common_inputs = super().inputs
         if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
             common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+
+        if self._behavior is not ConfigBehavior.ENCODER and self.use_past_in_inputs:
+            if is_transformers_version(">=", "4.43.0"):
+                # since https://github.com/huggingface/transformers/pull/31166
+                common_inputs["cache_position"] = {0: "decoder_sequence_length"}
         return common_inputs
 
 
