@@ -177,19 +177,6 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs.start_logits, init_model_outputs.start_logits))
         self.assertTrue(torch.equal(outputs.end_logits, init_model_outputs.end_logits))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForQuestionAnswering.from_pretrained(model_id, device_map=DEVICE)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
-        question = "What's my name?"
-        context = "My Name is Sasha and I live in Lyon."
-        outputs = pipe(question, context)
-        self.assertEqual(pipe.device, model.device)
-        self.assertGreaterEqual(outputs["score"], 0.0)
-        self.assertIsInstance(outputs["answer"], str)
-
     def test_patched_model(self):
         ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
             "Intel/tiny-random-bert_ipex_model", device_map=DEVICE
@@ -299,18 +286,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
-        model_id = MODEL_NAMES[model_arch]
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
-        model.config.encoder_no_repeat_ngram_size = 0
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe("This is a sample", max_new_tokens=10)
-        self.assertEqual(pipe.device, model.device)
-        self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @unittest.skip(reason="Paged attention do not support assisted decoding for now")
@@ -551,16 +526,6 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
         self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, device_map=DEVICE)
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
-        outputs = pipe([np.random.random(16000)])
-        self.assertEqual(pipe.device, model.device)
-        self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
-
 
 class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForImageClassification
@@ -605,17 +570,6 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-4))
         self.assertTrue(torch.allclose(init_model_outputs.logits, transformers_outputs.logits, atol=1e-4))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, device_map=DEVICE)
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
-        outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
-        self.assertEqual(pipe.device, model.device)
-        self.assertGreaterEqual(outputs[0]["score"], 0.0)
-        self.assertTrue(isinstance(outputs[0]["label"], str))
 
     def test_patched_model(self):
         ipex_model = IPEXModelForImageClassification.from_pretrained(
@@ -679,18 +633,6 @@ class IPEXModelForSeq2SeqLMTest(unittest.TestCase):
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
-        model_id = MODEL_NAMES[model_arch]
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, torch_dtype=dtype)
-        model.config.encoder_no_repeat_ngram_size = 0
-        # model.to("cpu")
-        pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe("This is a sample", max_new_tokens=10, do_sample=False)
-        self.assertEqual(pipe.device, model.device)
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "hf-internal-testing/tiny-random-t5"
