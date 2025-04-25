@@ -53,21 +53,12 @@ from optimum.intel.utils.import_utils import (
 
 if is_sentence_transformers_available():
     from sentence_transformers import SentenceTransformer
-from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE
+from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE, Timer
 
 
 SEED = 42
 torch.use_deterministic_algorithms(True)
 DEVICE = "xpu:0" if IS_XPU_AVAILABLE else "cpu"
-
-
-class Timer(object):
-    def __enter__(self):
-        self.elapsed = time.perf_counter()
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
 class IPEXModelTest(unittest.TestCase):

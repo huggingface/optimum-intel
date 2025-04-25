@@ -27,13 +27,11 @@ from transformers import (
     set_seed,
 )
 from transformers.utils import is_auto_awq_available, is_bitsandbytes_available
-from utils_tests import IS_XPU_AVAILABLE, MODEL_NAMES
+from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE, Timer
 
 from optimum.intel import IPEXModelForCausalLM
 from optimum.intel.utils.import_utils import is_torch_version
 from optimum.utils.testing_utils import grid_parameters
-
-from .test_modeling import Timer
 
 
 SEED = 42

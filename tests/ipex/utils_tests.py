@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
+import time
 from transformers import is_torch_xpu_available
 
 
@@ -59,3 +61,12 @@ MODEL_NAMES = {
     "patched_llama2": "Intel/tiny-random-llama2_ipex_model",
     "patched_qwen2": "Jiqing/tiny-random-Qwen2_ipex_model",
 }
+
+
+class Timer(object):
+    def __enter__(self):
+        self.elapsed = time.perf_counter()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
