@@ -840,7 +840,9 @@ class OVCalibrationDatasetBuilder:
                     quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
                 )
 
-            seq_len = min(seq_len, self.model.config.max_position_embeddings or seq_len)
+            max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
+            if max_position_embeddings is not None and max_position_embeddings > 0:
+                seq_len = min(seq_len, max_position_embeddings)
 
             random_positions = None
             if isinstance(self.model, OVModelForMaskedLM):
