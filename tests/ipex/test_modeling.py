@@ -88,7 +88,7 @@ class IPEXModelTest(unittest.TestCase):
         "flaubert",
         "roberta",
         "roformer",
-        # "squeezebert", # squeezebert have bug in transformers version 4.49.0, will enable it after we upgrade transformers
+        "squeezebert",
         "xlm",
     )
     IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("bert",)
