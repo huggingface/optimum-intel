@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -83,6 +84,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
+        ("feature-extraction", "sam"),
     ]
 
     if is_transformers_version(">=", "4.45"):
@@ -113,6 +115,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "sam": 0,  # no tokenizer
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -191,11 +194,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"int8": 14}, {"int8": 21}, {"int8": 17}]
+                [{"int8": 8}, {"int8": 11}, {"int8": 9}]
                 if is_transformers_version("<=", "4.36.0")
-                else [{"int8": 14}, {"int8": 22}, {"int8": 18}]
+                else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
             ),
         ),
         (
@@ -203,11 +206,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [14, 22, 21] if is_transformers_version("<=", "4.36.0") else [14, 22, 25],
+            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
             (
-                [{"f8e4m3": 14}, {"f8e4m3": 21}, {"f8e4m3": 17}]
+                [{"f8e4m3": 8}, {"f8e4m3": 11}, {"f8e4m3": 9}]
                 if is_transformers_version("<=", "4.36.0")
-                else [{"f8e4m3": 14}, {"f8e4m3": 22}, {"f8e4m3": 18}]
+                else [{"f8e4m3": 8}, {"f8e4m3": 12}, {"f8e4m3": 18}]
             ),
         ),
         (
@@ -324,6 +327,30 @@ class OVCLIExportTestCase(unittest.TestCase):
                 {"int8": 42},
                 {"int8": 34},
                 {"int8": 40},
+            ],
+        ),
+        (
+            "feature-extraction",
+            "blenderbot",
+            "int8",
+            "--dataset wikitext2 --num-samples 1",
+            [
+                33,
+            ],
+            [
+                {"int8": 35},
+            ],
+        ),
+        (
+            "feature-extraction",
+            "sentence-transformers-bert",
+            "int8",
+            "--library sentence_transformers --dataset c4 --num-samples 1",
+            [
+                12,
+            ],
+            [
+                {"int8": 15},
             ],
         ),
     ]
@@ -761,22 +788,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
+            model_cls = (
+                OVSentenceTransformer
+                if "--library sentence_transformers" in option
+                else eval(_HEAD_TO_AUTOMODELS[task])
+            )
+            model = model_cls.from_pretrained(tmpdir)
 
-            if "automatic-speech-recognition" in task:
-                submodels = [model.encoder, model.decoder]
-                if model.decoder_with_past is not None:
-                    submodels.append(model.decoder_with_past)
-                else:
-                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
-                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
-            elif "text-generation" in task:
-                submodels = [model]
-            elif any(x in task for x in ("stable-diffusion", "latent-consistency")):
-                submodels = model.ov_submodels.values()
-            else:
-                raise Exception("Unexpected task.")
+            if "automatic-speech-recognition" in task and model.decoder_with_past is None:
+                expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
+                expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
 
+            submodels = model.ov_submodels.values()
             check_compression_state_per_model(
                 self,
                 submodels,
@@ -788,8 +811,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
+            with open(Path(tmpdir) / "config.json", "r") as f:
+                config = json.load(f)
+                config["_name_or_path"] = "tiiuae/falcon-7b-instruct"
+
+            with open(Path(tmpdir) / "config.json", "w") as wf:
+                json.dump(config, wf)
 
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",

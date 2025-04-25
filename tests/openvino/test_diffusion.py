@@ -418,7 +418,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     @require_diffusers
     def test_textual_inversion(self):
-        model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
+        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
         ti_id = "katuni4ka/textual_inversion_cat"
 
         inputs = self.generate_inputs()
@@ -715,7 +715,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
     @require_diffusers
     def test_textual_inversion(self):
-        model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
+        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
         ti_id = "katuni4ka/textual_inversion_cat"
 
         inputs = self.generate_inputs(model_type="stable-diffusion")
@@ -988,7 +988,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
     @require_diffusers
     def test_textual_inversion(self):
-        model_id = "hf-internal-testing/tiny-stable-diffusion-torch"
+        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
         ti_id = "katuni4ka/textual_inversion_cat"
 
         inputs = self.generate_inputs()

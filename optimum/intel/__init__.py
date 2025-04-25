@@ -80,6 +80,7 @@ except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
         [
             "OVQuantizer",
+            "OVCalibrationDataset",
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
@@ -90,6 +91,7 @@ else:
     _import_structure["openvino"].extend(
         [
             "OVQuantizer",
+            "OVCalibrationDataset",
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
@@ -189,6 +191,7 @@ else:
             "OVModelOpenCLIPVisual",
             "OVModelOpenCLIPText",
             "OVModelOpenCLIPForZeroShotImageClassification",
+            "OVSamModel",
         ]
     )
 
@@ -268,6 +271,7 @@ if TYPE_CHECKING:
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import (
+            OVCalibrationDataset,
             OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
             OVQuantizationConfig,
@@ -276,6 +280,7 @@ if TYPE_CHECKING:
         )
     else:
         from .openvino import (
+            OVCalibrationDataset,
             OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
             OVQuantizationConfig,

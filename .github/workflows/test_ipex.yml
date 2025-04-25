@@ -52,6 +52,7 @@ jobs:
           git clone https://github.com/casper-hansen/AutoAWQ.git
           cd AutoAWQ
           pip install .
+          pip uninstall triton -y
 
       - name: Assert versions
         run: |

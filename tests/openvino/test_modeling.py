@@ -89,6 +89,7 @@ from optimum.intel import (
     OVModelForVision2Seq,
     OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
+    OVSamModel,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
 )
@@ -102,8 +103,10 @@ from optimum.intel.openvino.modeling_visual_language import (
 )
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
+    OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
     OV_VISION_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_ENCODER_MODEL_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
 )
@@ -153,6 +156,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_SD_DIFFUSION_MODEL_ID = "katuni4ka/tiny-stable-diffusion-openvino"
         self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
+        self.OV_SAM_MODEL_ID = "katuni4ka/sam-vit-tiny-random-ov"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -467,6 +471,71 @@ class OVModelIntegrationTest(unittest.TestCase):
         outputs = pipeline(**inputs).images
         np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
         del pipeline
+        gc.collect()
+
+    def test_load_from_hub_and_save_sam_model(self):
+        loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID)
+        self.assertIsInstance(loaded_model, OVSamModel)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is not set by default
+        self.assertIsNone(loaded_model.ov_config.get("PERFORMANCE_HINT"))
+
+        # Test specifying ov_config with throughput hint and manual cache dir
+        manual_openvino_cache_dir = loaded_model._model_save_dir / "manual_model_cache"
+        ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
+        loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID, ov_config=ov_config)
+
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        self.assertGreaterEqual(num_blobs, 2)
+        self.assertEqual(loaded_model.vision_encoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+        self.assertEqual(
+            loaded_model.prompt_encoder_mask_decoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT"
+        )
+        processor = get_preprocessor(self.OV_SAM_MODEL_ID)
+        img_url = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
+        input_points = [[[450, 600]]]
+        raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
+        inputs = processor(raw_image, input_points=input_points, return_tensors="pt")
+
+        loaded_model_outputs = loaded_model(**inputs)
+
+        # Test compile only
+
+        compile_only_model = OVModelForFeatureExtraction.from_pretrained(
+            self.OV_SAM_MODEL_ID, ov_config=ov_config, compile_only=True
+        )
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        # compile_only get model from cache
+        self.assertGreaterEqual(current_num_blobs, num_blobs)
+        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder.request, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.runtime.CompiledModel)
+        outputs = compile_only_model(**inputs)
+        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
+        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
+        del compile_only_model
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            for ir_file in [OV_VISION_ENCODER_MODEL_NAME, OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME]:
+                self.assertTrue(ir_file in folder_contents)
+                self.assertTrue(ir_file.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForFeatureExtraction.from_pretrained(tmpdirname, ov_config={"NUM_STREAMS": 2})
+            self.assertEqual(loaded_model.vision_encoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+            self.assertEqual(
+                loaded_model.prompt_encoder_mask_decoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT"
+            )
+
+        outputs = model(**inputs)
+        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
+        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
+
+        del loaded_model
+        del model
         gc.collect()
 
     @pytest.mark.run_slow
@@ -1005,7 +1074,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
-        "glm4",
+        "chatglm4",
         "decilm",
     )
 
@@ -1048,6 +1117,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
 
+    if is_transformers_version(">=", "4.51.3"):
+        SUPPORTED_ARCHITECTURES += ("glm4",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1064,7 +1136,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "codegen2",
         "arctic",
-        "glm4",
+        "chatglm4",
         "exaone",
         "decilm",
         "minicpm3",
@@ -1115,7 +1187,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["qwen", "arctic", "glm4"]:
+        if model_arch in ["qwen", "arctic", "chatglm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -1132,7 +1204,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen"]:
             return
 
-        if model_arch not in ["chatglm", "glm4", "persimmon"]:
+        if model_arch not in ["chatglm", "chatglm4", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
 
         if model_arch == "persimmon":
@@ -1147,10 +1219,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=2,
+            num_beams=2 if model_arch != "chatglm4" else 1,
             do_sample=False,
             eos_token_id=None,
         )
+        if is_transformers_version(">=", "4.51"):
+            tokens["use_model_defaults"] = False
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
@@ -1164,6 +1238,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["gemma2", "gemma3-text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
+            transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
@@ -1347,7 +1422,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_kwargs["attn_implementation"] = "sdpa"
 
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
-        if model_arch in ["qwen", "chatglm", "glm4"]:
+        if model_arch in ["qwen", "chatglm", "chatglm4"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
@@ -1445,6 +1520,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
 
+        if is_transformers_version(">=", "4.51"):
+            additional_inputs["use_model_defaults"] = False
+
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
@@ -1509,7 +1587,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "ibert",
         "mobilebert",
         "mpnet",
-        "nystromformer",
         "perceiver_text",
         "roberta",
         "roformer",
@@ -1517,6 +1594,10 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "xlm",
         "xlm_roberta",
     )
+
+    # accuracy issue, need additional investigation
+    if is_transformers_version("<", "4.51.0"):
+        SUPPORTED_ARCHITECTURES += ("nystromformer",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -2284,8 +2365,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.do_sample = False
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
+        ov_model.generation_config.do_sample = False
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
@@ -2302,6 +2385,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "gemma3":
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
+            transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
@@ -2968,4 +3052,93 @@ class OVLangchainTest(unittest.TestCase):
         self.assertTrue(len(stream_results_string.strip()) > 1)
 
         del hf_pipe
+        gc.collect()
+
+
+class OVSamIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["sam"]
+    TASK = "feature-extraction"
+    IMAGE_URL = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+
+        self.assertIsInstance(ov_model.vision_encoder, OVSamVisionEncoder)
+        self.assertIsInstance(ov_model.prompt_encoder_mask_decoder, OVSamPromptEncoder)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        input_points = [[[450, 600]]]
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
+
+        transformers_model = OVSamModel.from_pretrained(model_id)
+
+        # test end-to-end inference
+        ov_outputs = ov_model(**inputs)
+
+        self.assertTrue("pred_masks" in ov_outputs)
+        self.assertIsInstance(ov_outputs.pred_masks, torch.Tensor)
+        self.assertTrue("iou_scores" in ov_outputs)
+        self.assertIsInstance(ov_outputs.iou_scores, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.iou_scores, transformers_outputs.iou_scores, atol=1e-4))
+
+        # test separated image features extraction
+        pixel_values = inputs.pop("pixel_values")
+        features = transformers_model.get_image_features(pixel_values)
+        ov_features = ov_model.get_image_features(pixel_values)
+        self.assertTrue(torch.allclose(ov_features, features, atol=1e-4))
+        ov_outputs = ov_model(**inputs, image_embeddings=ov_features)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, image_embeddings=features)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.iou_scores, transformers_outputs.iou_scores, atol=1e-4))
+
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_reshape(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+        self.assertTrue(ov_model.is_dynamic)
+        input_points = [[[450, 600]]]
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
+        ov_dyn_outputs = ov_model(**inputs)
+        ov_model.reshape(*inputs["input_points"].shape[:-1])
+        self.assertFalse(ov_model.is_dynamic)
+        self.assertIsNone(ov_model.vision_encoder.request)
+        self.assertIsNone(ov_model.prompt_encoder_mask_decoder.request)
+        ov_stat_outputs = ov_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_dyn_outputs.pred_masks, ov_stat_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_dyn_outputs.iou_scores, ov_stat_outputs.iou_scores, atol=1e-4))
+
+        del ov_model
         gc.collect()
