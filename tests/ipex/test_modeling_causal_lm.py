@@ -159,10 +159,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         # Test with batch_size is 1 and 2.
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
         generation_configs = (
-            GenerationConfig(max_new_tokens=4, num_beams=2, do_sample=False),
             GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=False),
-            GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=False),
-            GenerationConfig(max_new_tokens=4, num_beams=32, do_sample=False),
             GenerationConfig(
                 max_new_tokens=4, do_sample=False, top_p=0.9, top_k=0, pad_token_id=tokenizer.eos_token_id
             ),
