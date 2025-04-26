@@ -382,6 +382,9 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
         return model
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L2464
+    # some decoder parts (prenet, wrapper_decoder, and feat_out) are combined into the single piece decoder
+    # Finally, we split the pipeline into four parts: encoder, decoder, postnet, and vocoder
     def generate(
         self,
         input_ids: torch.LongTensor,
