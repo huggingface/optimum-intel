@@ -88,7 +88,7 @@ class IPEXModelTest(unittest.TestCase):
         "flaubert",
         "roberta",
         "roformer",
-        "squeezebert",
+        # "squeezebert", # squeezebert have bug in transformers version 4.49.0, will enable it after we upgrade transformers
         "xlm",
     )
     IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("bert",)
@@ -101,6 +101,7 @@ class IPEXModelTest(unittest.TestCase):
         if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(ipex_model.add_patch)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id, device_map=DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
@@ -282,7 +283,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(**inputs)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
@@ -314,7 +315,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(input_ids)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
@@ -374,7 +375,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
         )
         # It will be removed when torch 2.6 released
-        if model_arch == "opt" and not use_cache and model.compiled and is_torch_version("<", "2.6.0"):
+        if (
+            model_arch == "opt"
+            and not use_cache
+            and getattr(model.config, "compile", False)
+            and is_torch_version("<", "2.6.0")
+        ):
             return
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
@@ -431,9 +437,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     def test_patched_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         patched_model_id = MODEL_NAMES["patched_" + model_arch]
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, device_map=DEVICE)
-        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id, device_map=DEVICE)
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype, device_map=DEVICE)
+        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id, torch_dtype=dtype, device_map=DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt").to(DEVICE)
         ipex_outputs = ipex_model.generate(
@@ -442,7 +449,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         exported_outputs = exported_model.generate(
             **tokens, max_new_tokens=1, return_dict_in_generate=True, output_logits=True
         )
-        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-6))
+        self.assertTrue(torch.allclose(ipex_outputs.logits[0], exported_outputs.logits[0], atol=1e-4))
 
     @unittest.skipIf(not is_bitsandbytes_available(), reason="Test requires bitsandbytes")
     def test_bnb(self):

@@ -47,7 +47,7 @@ if is_nncf_available():
 
     patch_torch_operators()
 
-    from .quantization import OVQuantizer
+    from .quantization import OVCalibrationDataset, OVQuantizer
 
 
 from .configuration import (
@@ -76,6 +76,7 @@ from .modeling_open_clip import (
     OVModelOpenCLIPText,
     OVModelOpenCLIPVisual,
 )
+from .modeling_sam import OVSamModel
 from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
 from .modeling_visual_language import OVModelForVisualCausalLM
 
@@ -93,6 +94,7 @@ if is_diffusers_available():
         OVPipelineForInpainting,
         OVPipelineForText2Image,
         OVSanaPipeline,
+        OVSanaSprintPipeline,
         OVStableDiffusion3Img2ImgPipeline,
         OVStableDiffusion3InpaintPipeline,
         OVStableDiffusion3Pipeline,

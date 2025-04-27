@@ -42,6 +42,7 @@ MODEL_NAMES = {
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "cohere": "hf-internal-testing/tiny-random-CohereForCausalLM",
     "chatglm": "katuni4ka/tiny-random-chatglm2",
+    "chatglm4": "katuni4ka/tiny-random-glm4",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "codegen2": "katuni4ka/tiny-random-codegen2",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
@@ -81,6 +82,7 @@ MODEL_NAMES = {
     "granite-moe": "katuni4ka/tiny-random-granite-moe",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
+    "idefics3": "hf-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
     "internvl2": "katuni4ka/tiny-random-internvl2",
@@ -125,6 +127,7 @@ MODEL_NAMES = {
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
     "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
+    "phi3-moe": "katuni4ka/phi-3.5-moe-tiny-random",
     "phi3_v": "katuni4ka/tiny-random-phi3-vision",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
@@ -137,6 +140,8 @@ MODEL_NAMES = {
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
+    "sam": "fxmarty/sam-vit-tiny-random",
+    "smolvlm": "katuni4ka/tiny-random-smolvlm2",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
@@ -164,18 +169,19 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "wav2vec2-hf": "hf-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
-    "whisper": "yujiepan/whisper-v3-tiny-random",
+    "whisper": "optimum-internal-testing/tiny-random-whisper",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
-    "glm4": "katuni4ka/tiny-random-glm4",
+    "glm4": "snake7gun/tiny-random-glm4",
     "glm": "katuni4ka/tiny-random-glm-edge",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
+    "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
 }
 
 
@@ -210,6 +216,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
+    "sam": (102, 100),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -278,9 +285,8 @@ def patch_awq_for_inference(to_patch):
 
             out_shape = x.shape[:-1] + (out_features,)
             x = x.to(torch.float16)
-
-            out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
-            out = torch.matmul(x, out)
+            out = dequantize_gemm(qweight.to(torch.int32), qzeros.to(torch.int32), scales, w_bit, group_size)
+            out = torch.matmul(x, out.to(x.dtype))
 
             out = out + bias if bias is not None else out
             out = out.reshape(out_shape)

@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  TRANSFORMERS_IS_CI: true
+
 jobs:
   build:
     strategy:
@@ -49,6 +52,7 @@ jobs:
           git clone https://github.com/casper-hansen/AutoAWQ.git
           cd AutoAWQ
           pip install .
+          pip uninstall triton -y
 
       - name: Assert versions
         run: |

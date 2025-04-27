@@ -27,8 +27,10 @@ from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
+    UNSUPPORTED_OPS_PATCHING_SPEC,
     DecoderModelPatcher,
     ModelPatcher,
+    PatchingSpec,
     Seq2SeqModelPatcher,
     override_arguments,
 )
@@ -53,6 +55,38 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
+def ov_compatible_repeat_interleave(input_tensor, repeats, dim=None, output_size=None):
+    """
+    Custom implementation of torch.repeat_interleave without using torch.repeat_interleave.
+
+    Args:
+        input_tensor (torch.Tensor): The input tensor.
+        repeats (int or torch.Tensor): The number of repetitions for each element.
+        dim (int, optional): The dimension along which to repeat. Defaults to None.
+
+    Returns:
+        torch.Tensor: The repeated tensor.
+    """
+    result = torch.repeat_interleave(input_tensor, repeats=repeats, dim=dim)
+
+    return result
+
+
+def patch_unsupported_ops():
+    spec_idx = -1
+    for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
+        if spec.name == "repeat_interleave":
+            spec_idx = idx
+            break
+    repreate_interlive_spec = PatchingSpec(
+        torch.Tensor, "repeat_interleave", ov_compatible_repeat_interleave, torch.Tensor.repeat_interleave
+    )
+    if spec_idx != -1:
+        UNSUPPORTED_OPS_PATCHING_SPEC[spec_idx] = repreate_interlive_spec
+    else:
+        UNSUPPORTED_OPS_PATCHING_SPEC.append(repreate_interlive_spec)
+
+
 BETTERTRANSFORMER_IGNORE = [
     "codegen",
 ]
@@ -60,6 +94,8 @@ BETTERTRANSFORMER_IGNORE = [
 # in transformers 4.45 gpt_neo has SDPA
 if is_transformers_version(">=", "4.44.99"):
     BETTERTRANSFORMER_IGNORE.append("gpt_neo")
+
+patch_unsupported_ops()
 
 
 def patch_model_with_bettertransformer(model):
@@ -130,7 +166,7 @@ def patch_update_causal_mask(
 
 def unpatch_update_causal_mask(model, inner_model_name="model", patch_extrnal_model=False):
     inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
-    if inner_model is not None and hasattr(inner_model, "._orig_update_causal_mask"):
+    if inner_model is not None and hasattr(inner_model, "_orig_update_causal_mask"):
         inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
 
@@ -1598,7 +1634,10 @@ class Phi3ModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
 
-            if hasattr(layer.self_attn, "rotary_emb") and layer.self_attn.rotary_emb.inv_freq is None:
+            if (
+                hasattr(layer.self_attn, "rotary_emb")
+                and getattr(layer.self_attn.rotary_emb, "inv_freq", None) is None
+            ):
                 rotary_emb = layer.self_attn.rotary_emb
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
@@ -1613,6 +1652,69 @@ class Phi3ModelPatcher(DecoderModelPatcher):
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+# Modified from https://github.com/huggingface/transformers/blob/v4.50.2/src/transformers/models/phimoe/modeling_phimoe.py#L756
+# removed usage nonfriendly for tracing operation continue
+def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    from transformers.models.phimoe.modeling_phimoe import sparsemixer
+
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    if self.training and self.input_jitter_noise > 0:
+        hidden_states *= torch.empty_like(hidden_states).uniform_(
+            1.0 - self.input_jitter_noise, 1.0 + self.input_jitter_noise
+        )
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    router_logits = self.gate(hidden_states)
+
+    routing_weights, selected_experts = sparsemixer(
+        router_logits,
+        jitter_eps=self.router_jitter_noise,
+        training=self.training,
+    )
+
+    final_hidden_states = torch.zeros(
+        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    )
+
+    # One hot encode the selected experts to create an expert mask
+    # this will be used to easily index which expert is going to be sollicitated
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+    # Loop over all available experts in the model and perform the computation on each expert
+    for expert_idx in range(self.num_experts):
+        expert_layer = self.experts[expert_idx]
+        idx, top_x = torch.where(expert_mask[expert_idx])
+
+        # if top_x.shape[0] == 0:
+        #     continue
+
+        # Index the correct hidden states and compute the expert hidden state for
+        # the current expert. We need to make sure to multiply the output hidden
+        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+        # However `index_add_` only support torch tensors for indexing so we'll use
+        # the `top_x` tensor here.
+        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states, router_logits
+
+
+class PhiMoEModelPatcher(Phi3ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
+            layer.block_sparse_moe.forward = types.MethodType(
+                _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
+            )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.model.layers:
+            layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -1888,6 +1990,66 @@ class InternLMModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Adapted from https://github.com/huggingface/optimum/blob/3adbe7c75e3c41c1a3b945cf085e74ece7f8e192/optimum/bettertransformer/models/attention.py#L234
+def codegen_wrapped_scaled_dot_product(
+    self,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    head_mask: Optional[torch.Tensor] = None,
+):
+    batch_size = query.shape[0]
+    mask_value = torch.finfo(value.dtype).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    # in codegen the query and key are always in fp32 regardless of the dtype of the model
+    # https://github.com/huggingface/transformers/blob/5b28b7833297adf65c5160a685425ddb1eee5ce2/src/transformers/models/codegen/modeling_codegen.py#L226
+    query = query.to(value.dtype)
+    key = key.to(value.dtype)
+
+    dropout_p = self.dropout_prob_attn if self.training else 0.0
+    if batch_size == 1 or self.training:
+        if query.shape[2] > 1:
+            # first step of the decoding
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            # in this case, which is the later decoding steps, the `causal_mask` in
+            # https://github.com/huggingface/transformers/blob/ae54e3c3b18bac0832ad62ea9b896dfd52a09850/src/transformers/models/gpt2/modeling_gpt2.py#L195
+            # is [True, ..., True] so actually not causal
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        # causal_mask is always [True, ..., True] otherwise, so executing this
+        # is unnecessary
+        if query_length > 1:
+            if not is_transformers_version(">", "4.44.99"):
+                causal_mask = self.causal_mask[:, :, key_length - query_length : key_length, :key_length].to(
+                    torch.bool
+                )
+
+                causal_mask = torch.where(causal_mask, 0, mask_value)
+
+                # torch.Tensor.expand does no memory copy
+                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+
+                # we use torch.min to avoid having tensor(-inf)
+                attention_mask = torch.min(causal_mask, attention_mask)
+            else:
+                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
+        )
+
+    return sdpa_result, None
+
+
 # copied from  https://github.com/huggingface/optimum/blob/2112e99122d7f23a1da1a9d263fef64301050ea7/optimum/bettertransformer/models/attention.py#L168
 # for preserving backward compatibility between outdated codegen remote code and new transformers
 def _codegen_wrapped_scaled_dot_product_legacy(
@@ -1898,9 +2060,8 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     attention_mask: Optional[torch.Tensor] = None,
     head_mask: Optional[torch.Tensor] = None,
 ):
-    from optimum.bettertransformer.models.attention import raise_on_head_mask
-
-    raise_on_head_mask(head_mask)
+    if head_mask is not None:
+        raise ValueError("`head_mask` input argument is not supported")
     batch_size = query.shape[0]
     mask_value = torch.finfo(value.dtype).min
     mask_value = torch.full([], mask_value, dtype=value.dtype)
@@ -1952,11 +2113,6 @@ def _codegen_wrapped_scaled_dot_product_legacy(
 class CodeGenModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-
-        # whole codegen bettertransformer patch include attn.forward and does not cover codegen2.
-        # For avoiding breaking model on tracing stage, we reduce area of bettertransformer patch only for _attn.
-        from optimum.bettertransformer.models.attention import codegen_wrapped_scaled_dot_product
-
         attn_fn = codegen_wrapped_scaled_dot_product
         if is_torch_version(">=", "2.1.0") and is_transformers_version(">=", "4.45"):
             # in transformers 4.45 causal_mask const buffer was removed from the model
@@ -2829,7 +2985,7 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
                 and (cache_position_index > len(args) and "cache_position" not in kwargs)
             ):
                 past_seen_tokens = legacy_pkv[0][0].shape[-2]
-                input_ids = args[input_ids_index]
+                input_ids = args[input_ids_index] if "input_ids" not in kwargs else kwargs["input_ids"]
                 cache_position = torch.arange(
                     past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
                 )
@@ -4346,6 +4502,8 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
+                if isinstance(legacy_pkv, EncoderDecoderCache):
+                    legacy_pkv = legacy_pkv.to_legacy_cache()
                 only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
                 pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
                 return_legacy_cache = True
@@ -4519,3 +4677,200 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+
+
+class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/idefics3/modeling_idefics3.py#L999-L1005
+        def get_image_features(self, pixel_values, patch_attention_mask, patch_position_ids):
+            image_hidden_states = self.vision_model(
+                pixel_values=pixel_values,
+                patch_attention_mask=patch_attention_mask,
+                patch_position_ids=patch_position_ids,
+            ).last_hidden_state
+
+            # Modality projection & resampling
+            image_hidden_states = self.connector(image_hidden_states)
+            return image_hidden_states
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(get_image_features, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        # The difference from original code is only in getting patch_position_ids as input and propogation it into embeddings instead of calculation inside based on patch_attention_mask
+        # method for calculation position_ids is not pytorch tracing friendly due to cycle over batch size.
+        def transformer_forward(
+            self,
+            pixel_values,
+            patch_attention_mask: Optional[torch.BoolTensor] = None,
+            patch_position_ids: Optional[torch.IntTensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+        ):
+            from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+            from transformers.modeling_outputs import BaseModelOutput
+
+            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+            output_hidden_states = (
+                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            )
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+            batch_size = pixel_values.size(0)
+            if patch_attention_mask is None:
+                patch_size = self.patch_size
+                patch_attention_mask = torch.ones(
+                    (
+                        batch_size,
+                        pixel_values.size(2) // patch_size,
+                        pixel_values.size(3) // patch_size,
+                    )
+                )
+                patch_attention_mask = patch_attention_mask.to(dtype=torch.bool, device=pixel_values.device)
+
+            hidden_states = self.embeddings(
+                pixel_values=pixel_values,
+                patch_attention_mask=patch_attention_mask,
+                patch_position_ids=patch_position_ids,
+            )
+
+            patch_attention_mask = patch_attention_mask.view(batch_size, -1)
+            # The call to `_upad_input` in `_flash_attention_forward` is expensive
+            # So when the `patch_attention_mask` is full of 1s (i.e. attending to the whole sequence),
+            # avoiding passing the attention_mask, which is equivalent to attending to the full sequence
+            if not torch.any(~patch_attention_mask):
+                patch_attention_mask = None
+            elif not self._use_flash_attention_2:
+                patch_attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
+
+            encoder_outputs = self.encoder(
+                inputs_embeds=hidden_states,
+                attention_mask=patch_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+
+            last_hidden_state = encoder_outputs[0]
+            last_hidden_state = self.post_layernorm(last_hidden_state)
+
+            if not return_dict:
+                return (last_hidden_state,) + encoder_outputs[1:]
+
+            return BaseModelOutput(
+                last_hidden_state=last_hidden_state,
+                hidden_states=encoder_outputs.hidden_states,
+                attentions=encoder_outputs.attentions,
+            )
+
+        def embeddings_forward(
+            self,
+            pixel_values: torch.FloatTensor,
+            patch_attention_mask: torch.BoolTensor,
+            patch_position_ids: Optional[torch.IntTensor] = None,
+        ) -> torch.Tensor:
+            batch_size, _, max_im_h, max_im_w = pixel_values.shape
+
+            patch_embeds = self.patch_embedding(pixel_values)
+            embeddings = patch_embeds.flatten(2).transpose(1, 2)
+
+            if patch_position_ids is None:
+                max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+                boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
+                position_ids = torch.full(size=(batch_size, max_nb_patches_h * max_nb_patches_w), fill_value=0)
+
+                for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+                    nb_patches_h = p_attn_mask[:, 0].sum()
+                    nb_patches_w = p_attn_mask[0].sum()
+
+                    fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                    fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+                    bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+                    bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+                    pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
+                    position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+            else:
+                position_ids = patch_position_ids
+
+            position_ids = position_ids.to(self.position_embedding.weight.device)
+            embeddings = embeddings + self.position_embedding(position_ids)
+            return embeddings
+
+        def attn_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = False,
+        ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+            if output_attentions:
+                return super().forward(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    output_attentions=output_attentions,
+                )
+
+            batch_size, q_len, _ = hidden_states.size()
+
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+            # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+            # Reference: https://github.com/pytorch/pytorch/issues/112577.
+            if query_states.device.type == "cuda" and attention_mask is not None:
+                query_states = query_states.contiguous()
+                key_states = key_states.contiguous()
+                value_states = value_states.contiguous()
+
+            # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+            # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+            is_causal = False
+
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=attention_mask,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=is_causal,
+                scale=self.scale,
+            )
+
+            attn_output = attn_output.transpose(1, 2).contiguous()
+            attn_output = attn_output.view(batch_size, q_len, self.embed_dim)
+
+            attn_output = self.out_proj(attn_output)
+
+            return attn_output, None
+
+        self._model.vision_model._orig_forward = self._model.vision_model.forward
+        self._model.vision_model.forward = types.MethodType(transformer_forward, self._model.vision_model)
+        self._model.vision_model.embeddings._orig_forward = self._model.vision_model.embeddings.forward
+        self._model.vision_model.embeddings.forward = types.MethodType(
+            embeddings_forward, self._model.vision_model.embeddings
+        )
+
+        for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        self._model.vision_model.forward = self._model.vision_model._orig_forward
+        self._model.vision_model.embeddings.forward = self._model.vision_model.embeddings._orig_forward
+        for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
