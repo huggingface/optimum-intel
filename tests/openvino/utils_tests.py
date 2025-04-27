@@ -135,6 +135,8 @@ MODEL_NAMES = {
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "qwen2_5_vl": "katuni4ka/tiny-random-qwen2.5-vl",
+    "qwen3": "snake7gun/tiny-random-qwen3",
+    "qwen3-moe": "snake7gun/tiny-random-qwen3moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
