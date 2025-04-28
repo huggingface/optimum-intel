@@ -23,6 +23,7 @@ from transformers.utils import is_tf_available
 from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    BloomOnnxConfig,
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
     CLIPTextWithProjectionOnnxConfig,
@@ -71,6 +72,7 @@ from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
     CommonImageEmbeddingsModelPatcher,
@@ -905,6 +907,25 @@ class GPTJOpenVINOConfig(GPTJOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptJModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "bloom",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
+class BloomOpenVINOConfig(BloomOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(

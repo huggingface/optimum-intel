@@ -67,9 +67,9 @@ from transformers.utils import http_user_agent
 from utils_tests import (
     MODEL_NAMES,
     TEST_IMAGE_URL,
+    get_num_sdpa,
     mock_torch_cuda_is_available,
     patch_awq_for_inference,
-    get_num_sdpa,
 )
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
@@ -1156,7 +1156,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "baichuan2-13b": 2,
         "gpt_bigcode": 5,
         "blenderbot": 2,
-        "blenderbot_small": 2,
+        "blenderbot-small": 2,
         "bloom": 5,
         "chatglm": 2,
         "codegen": 5,
@@ -1168,18 +1168,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
-        "mistral": 2,
-        "mixtral": 2,
+        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
         "mpt": 5,
         "opt": 5,
         "pegasus": 2,
         "qwen": 2,
-        "phi": 2,
+        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
         "internlm2": 4,
         "falcon": 2,
         "falcon-40b": 2,
         "persimmon": 2,
-        "biogpt": 5,
+        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
         "aquila": 2,
         "aquila2": 2,
         "xverse": 2,
@@ -1202,14 +1202,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "granite": 6,
         "granite-moe": 6,
         "glm": 28,
-        "mistral_nemo": 8,
+        "mistral-nemo": 8,
         "minicpm3": 6,
         "phi3-moe": 2,
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3-text": 2,
-        "glm4": 2 
+        "glm4": 2,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

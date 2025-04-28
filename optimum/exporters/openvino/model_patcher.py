@@ -2953,6 +2953,98 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
         unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
 
 
+def _bloom_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor,
+    alibi: torch.Tensor,
+    attention_mask: torch.Tensor,
+    layer_past=None,
+    head_mask: Optional[torch.Tensor] = None,
+    use_cache: bool = False,
+    output_attentions: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
+):
+    from transformers.models.bloom.modeling_bloom import dropout_add
+
+    if head_mask is not None or output_attentions:
+        return self._orig_forward(
+            hidden_states,
+            residual,
+            alibi,
+            attention_mask,
+            layer_past=layer_past,
+            head_mask=head_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            cache_position=cache_position,
+        )
+    batch_size, q_length, _ = hidden_states.shape
+    # [batch_size, seq_length, 3 x hidden_size]
+    fused_qkv = self.query_key_value(hidden_states)
+    # 3 x [batch_size, num_heads, seq_length, head_dim]
+    query_layer, key_layer, value_layer = self._reshape(fused_qkv)
+
+    if layer_past is not None:
+        cache_kwargs = {"cache_position": cache_position}
+        key_layer, value_layer = layer_past.update(key_layer, value_layer, self.layer_idx, cache_kwargs)
+
+    alibi = alibi.reshape(batch_size, -1, *alibi.shape[1:])
+
+    if attention_mask is not None:  # no matter the length, we just slice it
+        kv_length = cache_position[-1] + 1  # cache position is 0-indexed while length should start from 1
+        causal_mask = attention_mask[:, :, :, :kv_length]
+        alibi = torch.masked_fill(alibi, causal_mask.bool(), torch.finfo(alibi.dtype).min)
+
+    context_layer = torch.nn.functional.scaled_dot_product_attention(
+        query_layer,
+        key_layer,
+        value_layer,
+        attn_mask=alibi,
+        dropout_p=self.dropout_prob_attn if self.training else 0.0,
+    )
+
+    # Transform [batch_size, num_heads, seq_length, head_dim] to [batch_size, seq_length, num_heads * head_dim]
+    context_layer = context_layer.transpose(1, 2)
+    context_layer = context_layer.reshape(batch_size, q_length, self.hidden_size)
+
+    # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
+    if self.pretraining_tp > 1 and self.slow_but_exact:
+        slices = self.hidden_size / self.pretraining_tp
+        output_tensor = torch.zeros_like(context_layer)
+        for i in range(self.pretraining_tp):
+            output_tensor = output_tensor + F.linear(
+                context_layer[:, :, int(i * slices) : int((i + 1) * slices)],
+                self.dense.weight[:, int(i * slices) : int((i + 1) * slices)],
+            )
+    else:
+        output_tensor = self.dense(context_layer)
+
+    output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
+
+    outputs = (output_tensor, layer_past)
+
+    return outputs
+
+
+class BloomModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">", "4.49.0"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            for block in self._model.transformer.h:
+                block.self_attention._orig_forward = block.self_attention.forward
+                block.self_attention.forward = types.MethodType(_bloom_attn_forward, block.self_attention)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">", "4.49.0"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for block in self._model.transformer.h:
+                block.self_attention.forward = block.self_attention._orig_forward
+
+
 def _gpt_neo_attn_forward(
     self,
     hidden_states,
