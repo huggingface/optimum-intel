@@ -2789,7 +2789,7 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         self.height = height
         self.width = width
         if "image_embd_layer" in normalized_config.config.embd_layer:
-            self.crop_size = normalized_config.config.embd_layer.get("image_embd_layer", {}).get(
+            self.crop_size = normalized_config.config.embd_layer["image_embd_layer"].get(
                 "crop_size", crop_size
             )
         else:
@@ -2932,12 +2932,11 @@ class DummyAudioPhi4MMInputGenerator(DummyInputGenerator):
         self,
         task: str,
         normalized_config: NormalizedVisionConfig,
-        batch_size: int = 1,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
         signal_length=498,
         audio_chunk_size=64,
         **kwargs,
     ):
-        self.batch_size = batch_size
         self.signal_length = signal_length
         self.audio_chunk_size = (
             signal_length // normalized_config.config.audio_processor["config"]["time_reduction"] + 1
