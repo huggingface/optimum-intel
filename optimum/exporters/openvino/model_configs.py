@@ -23,6 +23,8 @@ from transformers.utils import is_tf_available
 from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    BlenderbotOnnxConfig,
+    BlenderbotSmallOnnxConfig,
     BloomOnnxConfig,
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
@@ -37,8 +39,10 @@ from optimum.exporters.onnx.model_configs import (
     GPTNeoXOnnxConfig,
     IBertOnnxConfig,
     LlamaOnnxConfig,
+    MarianOnnxConfig,
     MistralOnnxConfig,
     MPTOnnxConfig,
+    PegasusOnnxConfig,
     PhiOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
@@ -72,6 +76,8 @@ from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BlenderbotModelPatcher,
+    BlenderbotSmallModelPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -101,6 +107,7 @@ from .model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    MarianModelPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -108,6 +115,7 @@ from .model_patcher import (
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
+    PegasusModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
@@ -3302,3 +3310,79 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("smolvlm", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
+
+
+@register_in_tasks_manager(
+    "blenderbot",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "blenderbot-small",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class PegasusOpenVINOConfig(PegasusOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "marian",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class MarianOpenVINOConfig(MarianOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
