@@ -64,7 +64,13 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
+from utils_tests import (
+    MODEL_NAMES,
+    TEST_IMAGE_URL,
+    mock_torch_cuda_is_available,
+    patch_awq_for_inference,
+    get_num_sdpa,
+)
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
@@ -1049,6 +1055,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen",
         "codegen2",
         "gpt2",
+        "gptj",
         "gpt_neo",
         "gpt_neox",
         "llama",
@@ -1143,6 +1150,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "deepseek",
     )
 
+    EXPECTED_NUM_SDPA = {}
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1179,6 +1188,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
+        num_sdpa = get_num_sdpa(ov_model.model)
+        self.assertEqual(
+            expected_num_sdpa,
+            num_sdpa,
+            f"Expected number of SDPA {expected_num_sdpa}, while model contains {num_sdpa}",
+        )
 
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
@@ -2152,12 +2169,12 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
-    IMAGE = Image.open(
-        requests.get(
-            "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg",
-            stream=True,
-        ).raw
-    )
+    # IMAGE = Image.open(
+    #     requests.get(
+    #         "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg",
+    #         stream=True,
+    #     ).raw
+    # )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
