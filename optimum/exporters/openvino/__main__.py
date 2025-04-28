@@ -410,10 +410,10 @@ def main_export(
                     )
                 model.config.pad_token_id = pad_token_id
 
-        if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
+        if hasattr(model.config, "export_model_type"):
             model_type = model.config.export_model_type.replace("_", "-")
         else:
-            model_type = (getattr(model.config, "model_type", "") or "").replace("_", "-")
+            model_type = model.config.model_type.replace("_", "-")
 
         if (
             not custom_architecture

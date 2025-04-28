@@ -1006,7 +1006,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
-@unittest.skipIf(is_transformers_version("<", "4.45"))
+@unittest.skipIf(is_transformers_version("<", "4.45"), "Required transformers >= 4.45")
 class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_transformers_version(">=", "4.45.0"):
@@ -1035,7 +1035,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_cls = self.AUTOMODEL_CLASS
@@ -1049,7 +1049,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_num_videos_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
@@ -1062,7 +1062,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
                         outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
                         self.assertEqual(outputs.shape, (batch_size * num_videos_per_prompt, 1, height, width, 3))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
@@ -1077,7 +1077,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_shape(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
@@ -1093,7 +1093,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             elif output_type == "pt":
                 self.assertEqual(outputs.shape, (batch_size, 1, 3, height, width))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
@@ -1109,7 +1109,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             self.assertFalse(np.array_equal(ov_outputs_1.frames[0], ov_outputs_3.frames[0]))
             np.testing.assert_allclose(ov_outputs_1.frames[0], ov_outputs_2.frames[0], atol=1e-4, rtol=1e-2)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_height_width_properties(self, model_arch: str):
         batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
@@ -1135,7 +1135,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
         self.assertEqual(ov_pipeline.height, height)
         self.assertEqual(ov_pipeline.width, width)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_static_shape_generation(self, model_arch):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False)

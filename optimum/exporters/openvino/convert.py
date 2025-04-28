@@ -18,7 +18,6 @@ import gc
 import inspect
 import logging
 import os
-import types
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -1115,10 +1114,7 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         }
     )
 
-    def _vae_decode_forward(self, latent_sample, timestep=None):
-        return self.decode(z=latent_sample, temb=timestep)
-
-    vae_decoder.forward = types.MethodType(_vae_decode_forward, vae_decoder)
+    vae_decoder.forward = lambda latent_sample, timestep=None: vae_decoder.decode(z=latent_sample, temb=timestep)
 
     vae_config_constructor = TasksManager.get_exporter_config_constructor(
         model=vae_decoder,
