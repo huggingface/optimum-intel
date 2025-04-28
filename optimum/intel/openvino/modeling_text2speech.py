@@ -24,7 +24,12 @@ import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from torch import nn
-from transformers import AutoConfig, GenerationConfig, PretrainedConfig, SpeechT5ForTextToSpeech
+from transformers import (
+    AutoConfig,
+    AutoModelForTextToWaveform,
+    GenerationConfig,
+    PretrainedConfig,
+)
 from transformers.file_utils import add_start_docstrings
 from transformers.utils import ModelOutput
 
@@ -144,19 +149,41 @@ class OVTextToSpeechVocoder(OVModelPart):
 
 @add_start_docstrings(
     """
-    text-to-audio models
+    This class provides interface to export and infer text-to-speech models using OpenVINO.
     """,
     INPUTS_DOCSTRING,
 )
 class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = SpeechT5ForTextToSpeech
-    main_input_name = "input_ids"
+    auto_model_class = AutoModelForTextToWaveform
     export_feature = "text-to-audio"
-    _supports_cache_class = True
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        **kwargs,
+    ):
+        if "SpeechT5ForTextToSpeech" in config.architectures:
+            return _OVModelForSpeechT5ForTextToSpeech._from_pretrained(model_id, config, **kwargs)
+        else:
+            raise ValueError(f"{config.architectures} are not supported text-to-audio model using OpenVINO")
+
+            return super()._from_pretrained(model_id, config, **kwargs)
+
+
+class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
+    """
+    This class implements an own generate method since we split the pipeline more compact
+    to have encoder, decoder, postnet, and vocoder
+    """
+
+    main_input_name = "input_ids"
     OV_ENCODER_MODEL_NAME = "openvino_encoder_model.xml"
     OV_DECODER_MODEL_NAME = "openvino_decoder_model.xml"
     OV_POSTNET_MODEL_NAME = "openvino_postnet.xml"
     OV_VOCODER_MODEL_NAME = "openvino_vocoder.xml"
+    _supports_cache_class = True
 
     def __init__(
         self,
@@ -362,7 +389,7 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
         if to_quantize:
             kwargs["compile"] = False
 
-        model = OVModelForTextToSpeechSeq2Seq(
+        model = _OVModelForSpeechT5ForTextToSpeech(
             encoder_model=encoder_model,
             decoder_model=decoder_model,
             postnet_model=postnet_model,
