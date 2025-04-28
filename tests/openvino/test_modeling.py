@@ -1150,7 +1150,67 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "deepseek",
     )
 
-    EXPECTED_NUM_SDPA = {}
+    EXPECTED_NUM_SDPA = {
+        "bart": 2,
+        "baichuan2": 2,
+        "baichuan2-13b": 2,
+        "gpt_bigcode": 5,
+        "blenderbot": 2,
+        "blenderbot_small": 2,
+        "bloom": 5,
+        "chatglm": 2,
+        "codegen": 5,
+        "codegen2": 2,
+        "gpt2": 5,
+        "gptj": 5,
+        "gpt_neo": 4,
+        "gpt_neox": 5,
+        "llama": 2,
+        "marian": 2,
+        "minicpm": 4,
+        "mistral": 2,
+        "mixtral": 2,
+        "mpt": 5,
+        "opt": 5,
+        "pegasus": 2,
+        "qwen": 2,
+        "phi": 2,
+        "internlm2": 4,
+        "falcon": 2,
+        "falcon-40b": 2,
+        "persimmon": 2,
+        "biogpt": 5,
+        "aquila": 2,
+        "aquila2": 2,
+        "xverse": 2,
+        "internlm": 2,
+        "jais": 2,
+        "chatglm4": 6,
+        "decilm": 4,
+        "gemma": 1,
+        "olmo": 2,
+        "stablelm": 2,
+        "starcoder2": 2,
+        "dbrx": 2,
+        "cohere": 2,
+        "qwen2": 2,
+        "qwen2-moe": 4,
+        "arctic": 4,
+        "phi3": 2,
+        "gemma2": 4,
+        "exaone": 8,
+        "granite": 6,
+        "granite-moe": 6,
+        "glm": 28,
+        "mistral_nemo": 8,
+        "minicpm3": 6,
+        "phi3-moe": 2,
+        "deepseek": 2,
+        "opt_gptq": 12,
+        "mixtral_awq": 2,
+        "gemma3-text": 2,
+        "glm4": 2 
+    }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -2169,12 +2229,12 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
-    # IMAGE = Image.open(
-    #     requests.get(
-    #         "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg",
-    #         stream=True,
-    #     ).raw
-    # )
+    IMAGE = Image.open(
+        requests.get(
+            "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg",
+            stream=True,
+        ).raw
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
