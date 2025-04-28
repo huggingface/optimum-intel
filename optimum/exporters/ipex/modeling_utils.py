@@ -676,13 +676,13 @@ def _mistral_model_forward(
     # create position embeddings to be shared across the decoder layers
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
+    # part of the code that was modified
     input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
     seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
     query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
     max_input_lens = input_lens.max()
     cos = position_embeddings[0]
     sin = position_embeddings[1]
-
     if past_key_values_length == 0 and past_key_values is not None:
         # first token, remove the padding from hidden_states, varlen do not accept attention mask
         hidden_states_copy = hidden_states
