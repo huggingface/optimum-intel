@@ -20,13 +20,12 @@ from transformers.models.llama.modeling_llama import (
     LlamaModel,
     LlamaRMSNorm,
 )
+from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralModel, MistralRMSNorm
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2DecoderLayer,
     Qwen2Model,
     Qwen2RMSNorm,
 )
-from transformers.models.mistral.modeling_mistral import MistralModel, MistralRMSNorm, MistralDecoderLayer
-
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
@@ -41,11 +40,11 @@ from .modeling_utils import (
     _IPEXGPT2Block,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
-    _IPEXQwen2DecoderLayer,
     _IPEXMistralDecoderLayer,
+    _IPEXQwen2DecoderLayer,
     _llama_model_forward,
-    _qwen2_model_forward,
     _mistral_model_forward,
+    _qwen2_model_forward,
 )
 
 
