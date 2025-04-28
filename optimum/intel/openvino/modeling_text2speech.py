@@ -26,7 +26,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from torch import nn
 from transformers import (
     AutoConfig,
-    AutoModelForTextToWaveform,
+    AutoModelForTextToSpectrogram,
     GenerationConfig,
     PretrainedConfig,
 )
@@ -154,7 +154,7 @@ class OVTextToSpeechVocoder(OVModelPart):
     INPUTS_DOCSTRING,
 )
 class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = AutoModelForTextToWaveform
+    auto_model_class = AutoModelForTextToSpectrogram
     export_feature = "text-to-audio"
 
     @classmethod
