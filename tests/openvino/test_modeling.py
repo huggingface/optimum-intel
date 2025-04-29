@@ -1213,6 +1213,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral_awq": 2,
         "gemma3-text": 2,
         "glm4": 2,
+        "qwen3": 2,
+        "qwen3-moe": 2,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
