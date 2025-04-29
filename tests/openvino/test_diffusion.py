@@ -1009,7 +1009,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 @unittest.skipIf(is_transformers_version("<", "4.45"), "Required transformers >= 4.45")
 class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
-    if is_transformers_version(">=", "4.45.0"):
+    if is_diffusers_version(">=", "0.28.2") and is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
 
     OVMODEL_CLASS = OVPipelineForText2Video
