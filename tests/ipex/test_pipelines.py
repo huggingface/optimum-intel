@@ -44,6 +44,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
     COMMON_SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
+        "distilbert",
         "electra",
         "roberta",
         "roformer",
@@ -67,6 +68,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
     )
     QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES = (
         "bert",
+        "distilbert",
         "roberta",
     )
     AUDIO_CLASSIFICATION_SUPPORTED_ARCHITECTURES = (

@@ -28,6 +28,7 @@ MODEL_NAMES = {
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "convnext": "hf-internal-testing/tiny-random-convnext",
+    "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "electra": "hf-internal-testing/tiny-random-electra",
     "falcon": "Intel/tiny-random-falcon",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",

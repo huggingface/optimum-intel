@@ -66,6 +66,7 @@ class IPEXModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
+        "distilbert",
         "electra",
         "roberta",
         "roformer",
@@ -123,6 +124,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForQuestionAnswering
     SUPPORTED_ARCHITECTURES = (
         "bert",
+        "distilbert",
         "roberta",
     )
 
