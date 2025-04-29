@@ -32,6 +32,7 @@ from optimum.intel import (  # noqa
     OVFluxFillPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
+    OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -95,6 +96,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-to-image", "flux"),
                 ("inpainting", "flux-fill"),
                 ("text-to-image", "sana"),
+                ("text-to-video", "ltx-video"),
             ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
@@ -114,6 +116,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
     }
@@ -351,6 +354,30 @@ class OVCLIExportTestCase(unittest.TestCase):
             ],
             [
                 {"int8": 15},
+            ],
+        ),
+        (
+            "fill-mask",
+            "roberta",
+            "int8",
+            "--dataset wikitext2 --num-samples 1",
+            [
+                32,
+            ],
+            [
+                {"int8": 34},
+            ],
+        ),
+        (
+            "fill-mask",
+            "xlm_roberta",
+            "int8",
+            "--library sentence_transformers --dataset c4 --num-samples 1",
+            [
+                14,
+            ],
+            [
+                {"int8": 16},
             ],
         ),
     ]

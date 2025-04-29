@@ -21,8 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transformers-version: ["4.49.0"]
+        transformers-version: ["4.51.3"]
         torch-version: ["2.6.0"]
+        test-file: [test_modeling.py, test_pipelines.py, test_modeling_causal_lm.py]
 
     runs-on: ubuntu-22.04
 
@@ -42,12 +43,14 @@ jobs:
           pip install .[ipex,tests] transformers[testing]==${{ matrix.transformers-version }} intel_extension_for_pytorch==${{ matrix.torch-version }}
 
       - name: Install bitsandbytes
+        if: matrix.test-file == 'test_modeling_causal_lm.py'
         run: |
           git clone --branch multi-backend-refactor https://github.com/bitsandbytes-foundation/bitsandbytes.git
           cd bitsandbytes
           pip install .
 
       - name: Install autoawq
+        if: matrix.test-file == 'test_modeling_causal_lm.py'
         run: |
           git clone https://github.com/casper-hansen/AutoAWQ.git
           cd AutoAWQ
@@ -62,4 +65,4 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/ipex
+          pytest tests/ipex/${{ matrix.test-file }}

@@ -454,7 +454,8 @@ class OVExportCommand(BaseOptimumCLICommand):
         elif (
             quantize_with_dataset
             and (
-                task.startswith("text-generation")
+                task == "fill-mask"
+                or task.startswith("text-generation")
                 or task.startswith("automatic-speech-recognition")
                 or task.startswith("feature-extraction")
             )
@@ -480,6 +481,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from ...intel import OVSentenceTransformer
 
                 model_cls = OVSentenceTransformer
+            elif task == "fill-mask":
+                from ...intel import OVModelForMaskedLM
+
+                model_cls = OVModelForMaskedLM
             else:
                 raise NotImplementedError(
                     f"Unable to find a matching model class for the task={task} and library_name={library_name}."

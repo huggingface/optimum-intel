@@ -23,6 +23,9 @@ from transformers.utils import is_tf_available
 from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    BlenderbotOnnxConfig,
+    BlenderbotSmallOnnxConfig,
+    BloomOnnxConfig,
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
     CLIPTextWithProjectionOnnxConfig,
@@ -36,12 +39,15 @@ from optimum.exporters.onnx.model_configs import (
     GPTNeoXOnnxConfig,
     IBertOnnxConfig,
     LlamaOnnxConfig,
+    MarianOnnxConfig,
     MistralOnnxConfig,
     MPTOnnxConfig,
+    PegasusOnnxConfig,
     PhiOnnxConfig,
     SpeechT5OnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
+    VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
@@ -73,6 +79,9 @@ from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BlenderbotModelPatcher,
+    BlenderbotSmallModelPatcher,
+    BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
     CommonImageEmbeddingsModelPatcher,
@@ -101,6 +110,7 @@ from .model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    MarianModelPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -109,6 +119,7 @@ from .model_patcher import (
     MixtralModelPatcher,
     MPTModelPatcher,
     OVSpeechT5ModelPatcher,
+    PegasusModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
@@ -174,6 +185,9 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["text-to-image"] = ("AutoPipelineForText2Image", "SanaPipeline")
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana"] = "SanaPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-image"]["sana-sprint"] = "SanaSprintPipeline"
+    if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -908,6 +922,25 @@ class GPTJOpenVINOConfig(GPTJOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptJModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "bloom",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
+class BloomOpenVINOConfig(BloomOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -2340,6 +2373,146 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "pixel_mask", "sample", "latent_sample", "timestep")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        num_frames: int = 2,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["sample", "latent_sample"]:
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
+            )
+        if input_name == "timestep":
+            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("ltx-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class LTXVaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("ltx-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class LTXVaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        base_input = {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+        if self._normalized_config.config.timestep_conditioning:
+            base_input["timestep"] = {}
+        return base_input
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
+class LTXTransformerDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "width", "height", "num_frames", "rope_interpolation_scale")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = 16,
+        height: int = 8,
+        num_frames: int = 2,
+        frame_rate: int = 10,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.frame_rate = frame_rate
+        self.vae_spatial_compression_ratio = normalized_config.config.vae_spatial_compression_ratio
+        self.vae_temporal_compression_ratio = normalized_config.config.vae_temporal_compression_ratio
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        import torch
+
+        if input_name == "hidden_states":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_frames * self.height * self.width, self.num_channels]
+            )
+        if input_name == "width":
+            return torch.tensor(self.width)
+        if input_name == "height":
+            return torch.tensor(self.height)
+        if input_name == "num_frames":
+            return torch.tensor(self.num_frames)
+        if input_name == "rope_interpolation_scale":
+            import torch
+
+            return torch.tensor(
+                [
+                    self.vae_temporal_compression_ratio / self.frame_rate,
+                    self.vae_spatial_compression_ratio,
+                    self.vae_spatial_compression_ratio,
+                ]
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+@register_in_tasks_manager("ltx-video-transformer", *["semantic-segmentation"], library_name="diffusers")
+class LTXVideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        LTXTransformerDummyInputGenerator,
+        DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator,
+        DummySanaTimestepInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "video_sequence_length"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "width": {},
+            "height": {},
+            "num_frames": {},
+            "timestep": {0: "batch_size"},
+            "rope_interpolation_scale": {},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 1: "video_sequence_length"},
+        }
+
+
 class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("pixel_values", "patch_attention_mask", "position_ids")
 
@@ -3286,6 +3459,82 @@ class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
 
+@register_in_tasks_manager(
+    "blenderbot",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "blenderbot-small",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class PegasusOpenVINOConfig(PegasusOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "marian",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class MarianOpenVINOConfig(MarianOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
 class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "inputs_embeds",
@@ -3489,3 +3738,4 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
             )
+
