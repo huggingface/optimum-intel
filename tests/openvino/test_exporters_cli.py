@@ -350,6 +350,30 @@ class OVCLIExportTestCase(unittest.TestCase):
                 {"int8": 15},
             ],
         ),
+        (
+            "fill-mask",
+            "roberta",
+            "int8",
+            "--dataset wikitext2 --num-samples 1",
+            [
+                32,
+            ],
+            [
+                {"int8": 34},
+            ],
+        ),
+        (
+            "fill-mask",
+            "xlm_roberta",
+            "int8",
+            "--library sentence_transformers --dataset c4 --num-samples 1",
+            [
+                14,
+            ],
+            [
+                {"int8": 16},
+            ],
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [
