@@ -25,8 +25,8 @@ from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.runtime import Model, save_model
-from openvino.runtime.exceptions import OVTypeError
+from openvino import Model, save_model
+from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.utils import (

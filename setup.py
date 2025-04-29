@@ -65,8 +65,8 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf>=2.14.0"],
-    "openvino": ["nncf>=2.14.0", "openvino>=2024.5.0", "openvino-tokenizers>=2024.5.0"],
+    "nncf": ["nncf>=2.16.0"],
+    "openvino": ["nncf>=2.16.0", "openvino>=2025.1.0", "openvino-tokenizers>=2025.1.0"],
     "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
     "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.49,<4.52", "accelerate"],
     "diffusers": ["diffusers"],

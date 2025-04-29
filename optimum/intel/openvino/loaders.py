@@ -19,9 +19,9 @@ import openvino
 import torch
 from diffusers.loaders.textual_inversion import TextualInversionLoaderMixin, load_textual_inversion_state_dicts
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from openvino.runtime import Type
-from openvino.runtime import opset11 as ops
-from openvino.runtime.passes import Manager, Matcher, MatcherPass, WrapType
+from openvino import Type
+from openvino import opset11 as ops
+from openvino.passes import Manager, Matcher, MatcherPass, WrapType
 from transformers import PreTrainedTokenizer
 
 from .utils import TEXTUAL_INVERSION_EMBEDDING_KEYS
@@ -81,7 +81,7 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
         pretrained_model_name_or_path: Union[str, List[str], Dict[str, torch.Tensor], List[Dict[str, torch.Tensor]]],
         token: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional["PreTrainedTokenizer"] = None,  # noqa: F821
-        text_encoder: Optional["openvino.runtime.Model"] = None,  # noqa: F821
+        text_encoder: Optional["openvino.Model"] = None,  # noqa: F821
         **kwargs,
     ):
         if not hasattr(self, "tokenizer"):
@@ -97,9 +97,9 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
             raise ValueError(
                 f"{self.__class__.__name__} requires `self.text_encoder` for calling `{self.load_textual_inversion.__name__}`"
             )
-        elif not isinstance(self.text_encoder.model, openvino.runtime.Model):
+        elif not isinstance(self.text_encoder.model, openvino.Model):
             raise ValueError(
-                f"{self.__class__.__name__} requires `self.text_encoder` of type `openvino.runtime.Model` for calling `{self.load_textual_inversion.__name__}`"
+                f"{self.__class__.__name__} requires `self.text_encoder` of type `openvino.Model` for calling `{self.load_textual_inversion.__name__}`"
             )
 
         # 1. Set correct tokenizer and text encoder
