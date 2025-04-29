@@ -971,7 +971,7 @@ class OVModelForZeroShotImageClassification(OVModel):
         inputs = {"input_ids": input_ids, "pixel_values": pixel_values}
         # Add the attention_mask when needed
         if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask
+            inputs["attention_mask"] = attention_mask if attention_mask is not None else np.ones_like(input_ids)
         outputs = self._inference(inputs)
         logits_per_image = (
             torch.from_numpy(outputs["logits_per_image"]).to(self.device)

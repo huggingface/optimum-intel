@@ -357,6 +357,7 @@ if TYPE_CHECKING:
             OVModelForTokenClassification,
             OVModelForVision2Seq,
             OVModelForVisualCausalLM,
+            OVModelForZeroShotImageClassification,
             OVModelOpenCLIPForZeroShotImageClassification,
             OVModelOpenCLIPText,
             OVModelOpenCLIPVisual,
