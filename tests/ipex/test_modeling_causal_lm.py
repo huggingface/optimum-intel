@@ -142,14 +142,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
         )
-        # It will be removed when torch 2.6 released
-        if (
-            model_arch == "opt"
-            and not use_cache
-            and getattr(model.config, "compile", False)
-            and is_torch_version("<", "2.6.0")
-        ):
-            return
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
@@ -165,7 +157,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             top_p=0.9,
             top_k=0,
             pad_token_id=tokenizer.eos_token_id,
-            cache_implementation="static",
         )
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
