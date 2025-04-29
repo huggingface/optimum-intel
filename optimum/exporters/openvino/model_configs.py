@@ -44,6 +44,7 @@ from optimum.exporters.onnx.model_configs import (
     MPTOnnxConfig,
     PegasusOnnxConfig,
     PhiOnnxConfig,
+    SpeechT5OnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
@@ -59,6 +60,7 @@ from optimum.utils.input_generators import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
+    DummySeq2SeqPastKeyValuesGenerator,
     DummyTextInputGenerator,
     DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
@@ -116,6 +118,7 @@ from .model_patcher import (
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
+    OVSpeechT5ModelPatcher,
     PegasusModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
@@ -3530,3 +3533,208 @@ class MarianOpenVINOConfig(MarianOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "inputs_embeds",
+        "output_sequence",
+        "speaker_embeddings",
+        "spectrogram",
+        "raw_spectrogram",
+        "encoder_hidden_states",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = 1
+
+        self.sequence_length = sequence_length
+        self.speaker_embedding_dim = normalized_config.speaker_embedding_dim
+        self.num_mel_bins = normalized_config.num_mel_bins
+        self.reduction_factor = normalized_config.config.reduction_factor
+        self.hidden_size = normalized_config.config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["output_sequence", "inputs_embeds"]:
+            shape = [self.batch_size, self.sequence_length, self.num_mel_bins]
+        elif input_name == "speaker_embeddings":
+            shape = [self.batch_size, self.speaker_embedding_dim]
+        elif input_name == "raw_spectrogram":
+            shape = [self.sequence_length, self.batch_size, self.reduction_factor, self.num_mel_bins]
+        elif input_name == "encoder_hidden_states":
+            shape = [self.batch_size, self.sequence_length, self.hidden_size]
+        elif input_name == "spectrogram":
+            shape = [self.batch_size, self.sequence_length, self.num_mel_bins]
+        else:
+            raise ValueError(f"Unsupported input {input_name} for DummySpeechT5InputGenerator")
+
+        return self.random_float_tensor(
+            shape=shape,
+            min_value=0,
+            max_value=1,
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+class SpeechT5ConfigBehavior(str, enum.Enum):
+    ENCODER = "encoder"
+    DECODER = "decoder"
+    POSTNET = "postnet"
+    VOCODER = "vocoder"
+
+
+@register_in_tasks_manager(
+    "speecht5",
+    *["text-to-audio", "text-to-audio-with-past"],
+    library_name="transformers",
+)
+class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTextInputGenerator,
+        DummySeq2SeqPastKeyValuesGenerator,
+        DummySpeechT5OpenVINOInputGenerator,
+    )
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "text-to-audio",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = True,
+        use_past_in_inputs: bool = True,
+        behavior: SpeechT5ConfigBehavior = SpeechT5ConfigBehavior.ENCODER,
+        preprocessors: Optional[List[Any]] = None,
+        legacy: bool = False,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            behavior=behavior,
+            preprocessors=preprocessors,
+            is_postnet_and_vocoder=False,
+            legacy=legacy,
+        )
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return OVSpeechT5ModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_decoder_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_decoder_sequence_length + 1"
+            name = "present"
+
+        for i in range(self._normalized_config.decoder_num_layers):
+            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.encoder.key"] = {0: "batch_size", 2: "encoder_sequence_length_out"}
+            inputs_or_outputs[f"{name}.{i}.encoder.value"] = {0: "batch_size", 2: "encoder_sequence_length_out"}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {}
+        if self._behavior is SpeechT5ConfigBehavior.ENCODER:
+            common_inputs["input_ids"] = {1: "encoder_sequence_length"}
+        elif self._behavior is SpeechT5ConfigBehavior.DECODER:
+            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "decoder_sequence_length"}
+            common_inputs["speaker_embeddings"] = {}  # No dynamic shape here.
+            common_inputs["encoder_hidden_states"] = {0: "batch_size", 1: "encoder_sequence_length"}
+            common_inputs["encoder_attention_mask"] = {0: "batch_size", 1: "encoder_sequence_length"}
+            if self.variant == "with-past" and self.use_past_in_inputs:
+                self.add_past_key_values(common_inputs, direction="inputs")
+        elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
+            common_inputs["raw_spectrogram"] = {
+                0: "n_spectrums",
+                1: "batch_size",
+            }
+        elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
+            common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums"}
+        else:
+            raise ValueError(
+                "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
+            )
+
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = {}
+        if self._behavior == SpeechT5ConfigBehavior.ENCODER:
+            common_outputs = {
+                "last_hidden_state": {1: "encoder_sequence_length"},
+                "encoder_attention_mask": {1: "encoder_sequence_length"},
+            }
+        elif self._behavior is SpeechT5ConfigBehavior.DECODER:
+            common_outputs["output_sequence_out"] = {1: "decoder_sequence_length + 1"}
+            common_outputs["spectrum"] = {}  # No dynamic shape here.
+            common_outputs["prob"] = {}  # No dynamic shape here.
+            if self.variant == "with-past" and self.use_past:
+                self.add_past_key_values(common_outputs, direction="outputs")
+        elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
+            common_outputs["postnet_spectrogram"] = {}
+        elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
+            common_outputs["waveform"] = {}
+        return common_outputs
+
+    def with_behavior(
+        self,
+        behavior: Union[str, SpeechT5ConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, SpeechT5ConfigBehavior):
+            behavior = SpeechT5ConfigBehavior(behavior)
+
+        if behavior == SpeechT5ConfigBehavior.ENCODER:
+            return self.__class__(
+                self._config,
+                use_past=False,
+                use_past_in_inputs=False,
+                behavior=behavior,
+            )
+        elif behavior == SpeechT5ConfigBehavior.DECODER:
+            return self.__class__(
+                self._config,
+                use_past=True,
+                use_past_in_inputs=True,
+                behavior=behavior,
+            )
+        elif behavior == SpeechT5ConfigBehavior.POSTNET:
+            return self.__class__(
+                self._config,
+                use_past=False,
+                use_past_in_inputs=False,
+                behavior=behavior,
+            )
+        elif behavior == SpeechT5ConfigBehavior.VOCODER:
+            return self.__class__(
+                self._config,
+                use_past=False,
+                use_past_in_inputs=False,
+                behavior=behavior,
+            )
+        else:
+            raise ValueError(
+                "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
+            )

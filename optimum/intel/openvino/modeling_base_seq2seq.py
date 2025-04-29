@@ -417,6 +417,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         stateful = kwargs.get("stateful", True)
         variant = kwargs.pop("variant", None)
 
+        # now we use model_kwargs only for text-to-speech models to specify vocoder
+        model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -431,6 +433,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config=ov_config,
             stateful=stateful,
             variant=variant,
+            model_kwargs=model_kwargs,
         )
 
         return cls._from_pretrained(

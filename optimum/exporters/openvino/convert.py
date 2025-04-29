@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.generation import GenerationMixin
+from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import Model, save_model
@@ -999,6 +1000,10 @@ def _get_submodels_and_export_configs(
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
         )
+    elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
+        return _get_speecht5_tss_model_for_export(
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs
+        )
 
     export_config, models_for_export = _default_get_submodels_and_export_configs(
         model,
@@ -1421,3 +1426,49 @@ def _get_encoder_decoder_stateful_models_for_export(
         decoder_export_config_with_past,
     )
     return None, models_for_export
+
+
+def _get_speecht5_tss_model_for_export(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    library_name: str,
+    int_dtype: str,
+    float_dtype: str,
+    preprocessors: Optional[List[Any]] = None,
+    model_kwargs: Optional[Dict] = None,
+):
+    if model_kwargs is None or "vocoder" not in model_kwargs:
+        raise ValueError(
+            'The export of SpeechT5 requires a vocoder. Please pass `--model-kwargs \'{"vocoder": "vocoder_model_name_or_path"}\'` from the command line, or `model_kwargs={"vocoder": "vocoder_model_name_or_path"}` if calling main_export.'
+        )
+    vocoder_id = model_kwargs["vocoder"]
+
+    # prepare export config
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name=library_name
+    )
+    export_config = export_config_constructor(
+        model.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        preprocessors=preprocessors,
+        legacy=False,
+    )
+    export_config.variant = "default"
+
+    models_for_export = {}
+    encoder_export_config = export_config.with_behavior("encoder")
+    decoder_export_config = export_config.with_behavior("decoder")
+    postnet_export_config = export_config.with_behavior("postnet")
+    vocoder_export_config = export_config.with_behavior("vocoder")
+
+    vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id).eval()
+
+    models_for_export[ENCODER_NAME] = (model.speecht5.encoder, encoder_export_config)
+    models_for_export[DECODER_NAME] = (model, decoder_export_config)
+    models_for_export["postnet"] = (model, postnet_export_config)
+    models_for_export["vocoder"] = (vocoder, vocoder_export_config)
+
+    stateful_per_model = [False, True, False, False]
+
+    return export_config, models_for_export, stateful_per_model

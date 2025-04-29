@@ -13,6 +13,7 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -261,6 +262,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and "
             "reduces quantization error. Valid only when activations quantization is enabled."
         ),
+    )
+    optional_group.add_argument(
+        "--model-kwargs",
+        type=json.loads,
+        help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
     )
 
 
@@ -515,6 +521,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
                 variant=self.args.variant,
+                model_kwargs=self.args.model_kwargs,
                 # **input_shapes,
             )
 

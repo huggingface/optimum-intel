@@ -23,6 +23,7 @@ import torch
 import torch.nn.functional as F
 from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
+from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.base import OnnxConfig
@@ -5238,3 +5239,376 @@ class MarianModelPatcher(Seq2SeqModelPatcher):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_unpatch(self._model, MarianAttention)
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
+# this is a patch to avoid PyTorch FE issue
+# with the same tensor names on input and intermediate tensor for speaker_embeddings
+def speecht5_decoder_prenet_forward(
+    self,
+    input_values: torch.Tensor,
+    speaker_embeddings: Optional[torch.Tensor] = None,
+):
+    inputs_embeds = input_values
+    for layer in self.layers:
+        inputs_embeds = torch.nn.functional.relu(layer(inputs_embeds))
+        inputs_embeds = self._consistent_dropout(inputs_embeds, self.config.speech_decoder_prenet_dropout)
+
+    inputs_embeds = self.final_layer(inputs_embeds)
+    inputs_embeds = self.encode_positions(inputs_embeds)
+
+    if speaker_embeddings is not None:
+        # this is a patch to avoid for PyTorch FE issue!!!
+        # with the same tensor names on input and intermediate tensor in a model
+        speaker_embeddings_norm = torch.nn.functional.normalize(speaker_embeddings)
+        speaker_embeddings_unsqueeze = speaker_embeddings_norm.unsqueeze(1).expand(-1, inputs_embeds.size(1), -1)
+        inputs_embeds = torch.cat([inputs_embeds, speaker_embeddings_unsqueeze], dim=-1)
+        inputs_embeds = torch.nn.functional.relu(self.speaker_embeds_layer(inputs_embeds))
+
+    return inputs_embeds
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L993
+# this is a patch to avoid CPU plugin issue that is happened on 16-th iteration of token generation
+# values computed by self-attention attn_output = torch.bmm(attn_probs, value_states) in a decoder gets incorrect
+def speecht5_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    position_bias: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+    serialize: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    is_cross_attention = key_value_states is not None
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states) * self.scaling
+    # get key, value proj
+    if is_cross_attention and past_key_value is not None:
+        # reuse k,v, cross_attentions
+        key_states = past_key_value[0]
+        value_states = past_key_value[1]
+    elif is_cross_attention:
+        # cross_attentions
+        key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
+        value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
+    elif past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+    else:
+        # self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+    if self.is_decoder:
+        # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+        # Further calls to cross_attention layer can then reuse all cross-attention
+        # key/value_states (first "if" case)
+        # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+        # all previous decoder key/value_states. Further calls to uni-directional self-attention
+        # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+        # if encoder bi-directional self-attention `past_key_value` is always `None`
+        past_key_value = (key_states, value_states)
+
+    proj_shape = (bsz * self.num_heads, -1, self.head_dim)
+    query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+    key_states = key_states.view(*proj_shape)
+    value_states = value_states.view(*proj_shape)
+
+    src_len = key_states.size(1)
+    attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+
+    if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
+        raise ValueError(
+            f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is"
+            f" {attn_weights.size()}"
+        )
+
+    # relative attention bias
+    if position_bias is not None:
+        reshape_q = query_states.contiguous().view(bsz * self.num_heads, -1, self.head_dim).transpose(0, 1)
+        rel_pos_bias = torch.matmul(reshape_q, position_bias.transpose(-2, -1))
+        rel_pos_bias = rel_pos_bias.transpose(0, 1).view(
+            bsz * self.num_heads, position_bias.size(0), position_bias.size(1)
+        )
+        attn_weights += rel_pos_bias
+
+    if attention_mask is not None:
+        if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+            raise ValueError(
+                f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+            )
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+
+    if layer_head_mask is not None:
+        if layer_head_mask.size() != (self.num_heads,):
+            raise ValueError(
+                f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
+                f" {layer_head_mask.size()}"
+            )
+        attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+    if output_attentions:
+        # this operation is a bit awkward, but it's required to
+        # make sure that attn_weights keeps its gradient.
+        # In order to do so, attn_weights have to be reshaped
+        # twice and have to be reused in the following
+        attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+        attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+    else:
+        attn_weights_reshaped = None
+
+    attn_probs = torch.nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+
+    # this is a patch to avoid CPU plugin issue!!!
+    # issue is happened on 16-th iteration of token generation
+    # since 16-th iteration of token generation, values computed by self-attention in a decoder gets incorrect
+    eps = 1e-30
+    attn_output = torch.bmm(attn_probs + eps, value_states)
+
+    if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned across GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, attn_weights_reshaped, past_key_value
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1175
+# this is a patch for a model to avoid incorrect tracing
+# cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple are computed using encoder_hidden_states
+def speecht5_decoder_layer_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: Optional[bool] = False,
+    use_cache: Optional[bool] = True,
+    serialize: bool = False,
+):
+    residual = hidden_states
+
+    # Self Attention
+    # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
+    self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
+    # add present self-attn cache to positions 1,2 of present_key_value tuple
+    hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states=hidden_states,
+        past_key_value=self_attn_past_key_value,
+        attention_mask=attention_mask,
+        layer_head_mask=layer_head_mask,
+        output_attentions=output_attentions,
+        serialize=serialize,
+    )
+
+    hidden_states = self.dropout(hidden_states)
+    hidden_states = residual + hidden_states
+    hidden_states = self.self_attn_layer_norm(hidden_states)
+
+    # Cross-Attention Block
+    cross_attn_present_key_value = None
+    cross_attn_weights = None
+    if encoder_hidden_states is not None:
+        residual = hidden_states
+
+        # this is a patch for a model to avoid incorrect tracing!!!
+        # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
+        # are computed using encoder_hidden_states
+        if past_key_value is not None and len(past_key_value) > 3:
+            cross_attn_past_key_value = past_key_value[-2:]
+        else:
+            cross_attn_past_key_value = None
+        hidden_states, cross_attn_weights, cross_attn_present_key_value = self.encoder_attn(
+            hidden_states=hidden_states,
+            key_value_states=encoder_hidden_states,
+            attention_mask=encoder_attention_mask,
+            layer_head_mask=cross_attn_layer_head_mask,
+            past_key_value=cross_attn_past_key_value,
+            output_attentions=output_attentions,
+        )
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = residual + hidden_states
+        hidden_states = self.encoder_attn_layer_norm(hidden_states)
+
+        # add cross-attn to positions 3,4 of present_key_value tuple
+        present_key_value = present_key_value + cross_attn_present_key_value
+
+    # Fully Connected
+    hidden_states = hidden_states + self.feed_forward(hidden_states)
+    hidden_states = self.final_layer_norm(hidden_states)
+
+    outputs = (hidden_states,)
+
+    if output_attentions:
+        outputs += (self_attn_weights, cross_attn_weights)
+
+    if use_cache:
+        outputs += (present_key_value,)
+
+    return outputs
+
+
+class OVSpeechT5ModelPatcher(ModelPatcher):
+    def __enter__(self):
+        if self.real_config._behavior != "vocoder":
+            setattr(self._model, self.orig_forward_name, self.patched_forward)
+        if self.real_config._behavior == "decoder":
+            self._model.speecht5.decoder.prenet.__orig_forward = self._model.speecht5.decoder.prenet.forward
+            self._model.speecht5.decoder.prenet.forward = types.MethodType(
+                speecht5_decoder_prenet_forward, self._model.speecht5.decoder.prenet
+            )
+            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                layer.__orig_forward = layer.forward
+                layer.forward = types.MethodType(speecht5_decoder_layer_forward, layer)
+                layer.self_attn.__orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.real_config._behavior != "vocoder":
+            setattr(self._model, self.orig_forward_name, self.orig_forward)
+        if self.real_config._behavior == "decoder":
+            self._model.speecht5.decoder.prenet.forward = types.MethodType(
+                self._model.speecht5.decoder.prenet.__orig_forward, self._model.speecht5.decoder.prenet
+            )
+            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                layer.forward = types.MethodType(layer.__orig_forward, layer)
+                layer.self_attn.forward = types.MethodType(layer.self_attn.__orig_forward, layer.self_attn)
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        def patched_encoder_forward(
+            input_ids: torch.FloatTensor = None,
+        ):
+            encoder_attention_mask = torch.ones_like(input_ids)
+
+            hidden_states = self._model.prenet(input_ids)
+
+            encoder_out = self._model.wrapped_encoder(
+                hidden_states=hidden_states,
+                attention_mask=encoder_attention_mask,
+                return_dict=True,
+            )
+            # downsample encoder attention mask
+            if isinstance(model, SpeechT5EncoderWithSpeechPrenet):
+                encoder_attention_mask = model.prenet._get_feature_vector_attention_mask(
+                    encoder_out[0].shape[1], encoder_attention_mask
+                )
+
+            result = {
+                "encoder_outputs": encoder_out.last_hidden_state,
+                "encoder_attention_mask": encoder_attention_mask,
+            }
+            return result
+
+        def patched_decoder_forward(
+            inputs_embeds=None,
+            speaker_embeddings=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
+            past_key_values=None,
+        ):
+            return_legacy_cache = False
+
+            if past_key_values is not None:
+                only_self_cache = [cache_item[:2] for cache_item in past_key_values]
+                past_key_values = only_self_cache
+                return_legacy_cache = True
+
+            output_sequence = inputs_embeds
+            output_cross_attentions = False
+            bsz = output_sequence.size(0)
+
+            # Run the decoder prenet on the entire output sequence.
+            decoder_hidden_states = model.speecht5.decoder.prenet(output_sequence, speaker_embeddings)
+            # Run the decoder layers on the last element of the prenet output.
+            decoder_out = model.speecht5.decoder.wrapped_decoder(
+                hidden_states=decoder_hidden_states[:, -1:],
+                attention_mask=None,
+                encoder_hidden_states=encoder_hidden_states[0],
+                encoder_attention_mask=encoder_attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+                output_attentions=output_cross_attentions,
+                return_dict=True,
+            )
+
+            # if output_cross_attentions:
+            #    cross_attentions.append(torch.cat(decoder_out.cross_attentions, dim=0))
+
+            last_decoder_output = decoder_out.last_hidden_state.squeeze(1)
+
+            # Predict the new mel spectrum for this step in the sequence.
+            spectrum = model.speech_decoder_postnet.feat_out(last_decoder_output)
+            spectrum = spectrum.view(bsz, model.config.reduction_factor, model.config.num_mel_bins)
+
+            # Extend the output sequence with the new mel spectrum.
+            new_spectrogram = spectrum[:, -1, :].view(bsz, 1, model.config.num_mel_bins)
+            output_sequence_out = torch.cat((output_sequence, new_spectrogram), dim=1)
+            # Predict the probability that this is the stop token.
+            prob = torch.sigmoid(model.speech_decoder_postnet.prob_out(last_decoder_output))
+
+            if return_legacy_cache:
+                only_self_cache = [cache_item[:2] for cache_item in decoder_out.past_key_values]
+                past_key_values = only_self_cache
+
+            result = {
+                "output_sequence_out": output_sequence_out,
+                "spectrum": spectrum,
+                "prob": prob,
+                "past_key_values": past_key_values,
+            }
+            return result
+
+        def patched_postnet_forward(raw_spectrogram: torch.FloatTensor):
+            raw_spectrogram = raw_spectrogram.transpose(0, 1).flatten(1, 2)
+            spectrogram = model.speech_decoder_postnet.postnet(raw_spectrogram)
+            result = {"postnet_spectrogram": spectrogram}
+            return result
+
+        def patched_vocoder_forward(spectrogram: torch.FloatTensor):
+            waveform = model(spectrogram)
+            result = {"waveform": waveform}
+            return result
+
+        if self.real_config._behavior == "encoder":
+            self.patched_forward = patched_encoder_forward
+        elif self.real_config._behavior == "decoder":
+            self.patched_forward = patched_decoder_forward
+        elif self.real_config._behavior == "postnet":
+            self.patched_forward = patched_postnet_forward
+        elif self.real_config._behavior == "vocoder":
+            self.patched_forward = patched_vocoder_forward
+        else:
+            raise ValueError("Unknown ")
+        self.orig_forward = self.patched_forward
