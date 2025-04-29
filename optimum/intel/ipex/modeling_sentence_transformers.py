@@ -46,11 +46,6 @@ class IPEXTransformer(Transformer):
         if isinstance(config, T5Config) or isinstance(config, MT5Config):
             raise ValueError("T5 models are not yet supported by the IPEX backend.")
 
-        export = model_args.pop("export", None)
-
-        if export is None:
-            export = not getattr(config, "torchscript", False)
-
         load_path = Path(model_name_or_path)
         is_local = load_path.exists()
 
@@ -58,16 +53,11 @@ class IPEXTransformer(Transformer):
             model_name_or_path,
             config=config,
             cache_dir=cache_dir,
-            export=export,
             **model_args,
         )
 
         # Wrap the save_pretrained method to save the model in the correct subfolder
         self.auto_model._save_pretrained = _save_pretrained_wrapper(self.auto_model._save_pretrained, "ipex")
-
-        # Warn the user to save the model if they haven't already
-        if export:
-            self._backend_warn_to_save(model_name_or_path, is_local, "IPEX")
 
 
 class IPEXSentenceTransformer(SentenceTransformer):
