@@ -11,6 +11,9 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
+import time
+
 from transformers import is_torch_xpu_available
 
 
@@ -21,16 +24,12 @@ MODEL_NAMES = {
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
-    "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
-    "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "convnext": "hf-internal-testing/tiny-random-convnext",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
-    "distilgpt2": "Intel/tiny-random-distilgpt2",
     "electra": "hf-internal-testing/tiny-random-electra",
-    "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "falcon": "Intel/tiny-random-falcon",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "Intel/tiny-random-gpt2",
@@ -38,12 +37,10 @@ MODEL_NAMES = {
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "llama2": "Intel/tiny-random-llama2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
-    "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
     "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
@@ -56,7 +53,6 @@ MODEL_NAMES = {
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "st-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
-    "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "t5": "hf-internal-testing/tiny-random-t5",
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
     "vit": "hf-internal-testing/tiny-random-vit",
@@ -67,3 +63,12 @@ MODEL_NAMES = {
     "patched_llama2": "Intel/tiny-random-llama2_ipex_model",
     "patched_qwen2": "Jiqing/tiny-random-Qwen2_ipex_model",
 }
+
+
+class Timer(object):
+    def __enter__(self):
+        self.elapsed = time.perf_counter()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
