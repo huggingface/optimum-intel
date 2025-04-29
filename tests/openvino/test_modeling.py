@@ -59,7 +59,6 @@ from transformers import (
     GenerationConfig,
     Pix2StructForConditionalGeneration,
     PretrainedConfig,
-    SamModel,
     pipeline,
     set_seed,
 )
@@ -3168,7 +3167,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         ).convert("RGB")
         inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
 
-        transformers_model = SamModel.from_pretrained(model_id)
+        transformers_model = OVSamModel.from_pretrained(model_id)
 
         # test end-to-end inference
         ov_outputs = ov_model(**inputs)
@@ -3302,7 +3301,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
 
 class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["clip", "siglip"]
+    SUPPORTED_ARCHITECTURES = ["clip"]
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_ARCHITECTURES.append("siglip")
     TASK = "zero-shot-image-classification"
     IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
