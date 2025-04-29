@@ -329,28 +329,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if self.add_patch:
             if input_ids is not None and attention_mask is None:
                 attention_mask = torch.ones_like(input_ids)
-            if not hasattr(self, "decode_index"):
-                self.decode_index = torch.arange(input_ids.shape[0], dtype=torch.int).to(input_ids.device)
-            if not hasattr(self, "decode_query_len_tensor"):
-                self.decode_query_len_tensor = torch.arange(input_ids.shape[0] + 1, dtype=torch.int).to(
-                    input_ids.device
-                )
-            kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
-            kwargs["seq_len_tensor"] = torch.cat(
-                (kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int())
-            )
-            kwargs["query_len_tensor"] = (
-                kwargs["seq_len_tensor"].clone() if input_ids.shape[-1] != 1 else self.decode_query_len_tensor
-            )
-            if self.use_cache and kwargs.get("past_key_values", None) is not None:
-                self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
 
-            kwargs["index"] = (
-                attention_mask.view(-1).nonzero().squeeze().int() if input_ids.shape[-1] != 1 else self.decode_index
-            )
-            # The int value will be recognized as constant if we pass it in the forward.
-            # To avoid recompile, we pass the int value through config so the torch.compile will not recognize it as constant.
-            self.model.config.max_input_lens = kwargs["input_lens"].max().item()
+            kwargs = self.prepare_page_attn_inputs(input_ids, attention_mask, **kwargs)
 
         results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
@@ -358,6 +338,31 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self.postprocess_ipex_paged_cache(results["past_key_values"], kwargs["input_lens"])
 
         return results
+
+    def prepare_page_attn_inputs(self, input_ids, attention_mask, **kwargs):
+        if not hasattr(self, "batch_size") or (input_ids.shape[0] != getattr(self, "batch_size", 0)):
+            self.batch_size = input_ids.shape[0]
+            self.decode_index = torch.arange(self.batch_size, dtype=torch.int).to(input_ids.device)
+            self.decode_query_len_tensor = torch.arange(self.batch_size + 1, dtype=torch.int).to(input_ids.device)
+
+        kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
+        kwargs["seq_len_tensor"] = torch.cat(
+            (kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int())
+        )
+        kwargs["query_len_tensor"] = (
+            kwargs["seq_len_tensor"].clone() if input_ids.shape[-1] != 1 else self.decode_query_len_tensor
+        )
+        if self.use_cache and kwargs.get("past_key_values", None) is not None:
+            self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
+
+        kwargs["index"] = (
+            attention_mask.view(-1).nonzero().squeeze().int() if input_ids.shape[-1] != 1 else self.decode_index
+        )
+        # The int value will be recognized as constant if we pass it in the forward.
+        # To avoid recompile, we pass the int value through config so the torch.compile will not recognize it as constant.
+        self.model.config.max_input_lens = kwargs["input_lens"].max().item()
+
+        return kwargs
 
     def preprocess_ipex_paged_cache(self, past_key_values, input_lens):
         batch_size = input_lens.shape[0]

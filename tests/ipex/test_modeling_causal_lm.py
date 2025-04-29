@@ -158,19 +158,21 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
         # Test with batch_size is 1 and 2.
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
-        generation_configs = (
-            GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=False),
-            GenerationConfig(
-                max_new_tokens=4, do_sample=False, top_p=0.9, top_k=0, pad_token_id=tokenizer.eos_token_id
-            ),
+        generation_config = GenerationConfig(
+            max_new_tokens=4,
+            num_beams=4,
+            do_sample=False,
+            top_p=0.9,
+            top_k=0,
+            pad_token_id=tokenizer.eos_token_id,
+            cache_implementation="static",
         )
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
-            for generation_config in generation_configs:
-                outputs = model.generate(**tokens, generation_config=generation_config)
-                transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
-                self.assertIsInstance(outputs, torch.Tensor)
-                self.assertTrue(torch.equal(outputs, transformers_outputs))
+            outputs = model.generate(**tokens, generation_config=generation_config)
+            transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
+            self.assertTrue(torch.equal(outputs, transformers_outputs))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "Intel/tiny_random_llama2_ipex_model"
