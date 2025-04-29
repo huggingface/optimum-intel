@@ -52,6 +52,7 @@ from transformers.modeling_outputs import (
 
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
+from .modeling_sam import OVSamModel
 from .utils import _is_timm_ov_dir
 
 
@@ -399,6 +400,13 @@ class OVModelForFeatureExtraction(OVModel):
             else outputs["last_hidden_state"]
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
+
+    @classmethod
+    def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
+        if config.model_type == "sam":
+            return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        else:
+            return super()._from_pretrained(model_id, config, *args, **kwargs)
 
 
 MASKED_LM_EXAMPLE = r"""

@@ -83,6 +83,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
+        ("feature-extraction", "sam"),
     ]
 
     if is_transformers_version(">=", "4.45"):
@@ -111,6 +112,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "sam": 0,  # no tokenizer
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -322,6 +324,30 @@ class OVCLIExportTestCase(unittest.TestCase):
                 {"int8": 42},
                 {"int8": 34},
                 {"int8": 40},
+            ],
+        ),
+        (
+            "feature-extraction",
+            "blenderbot",
+            "int8",
+            "--dataset wikitext2 --num-samples 1",
+            [
+                33,
+            ],
+            [
+                {"int8": 35},
+            ],
+        ),
+        (
+            "feature-extraction",
+            "sentence-transformers-bert",
+            "int8",
+            "--library sentence_transformers --dataset c4 --num-samples 1",
+            [
+                12,
+            ],
+            [
+                {"int8": 15},
             ],
         ),
     ]
@@ -759,22 +785,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(tmpdir)
+            model_cls = (
+                OVSentenceTransformer
+                if "--library sentence_transformers" in option
+                else eval(_HEAD_TO_AUTOMODELS[task])
+            )
+            model = model_cls.from_pretrained(tmpdir)
 
-            if "automatic-speech-recognition" in task:
-                submodels = [model.encoder, model.decoder]
-                if model.decoder_with_past is not None:
-                    submodels.append(model.decoder_with_past)
-                else:
-                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
-                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
-            elif "text-generation" in task:
-                submodels = [model]
-            elif any(x in task for x in ("stable-diffusion", "latent-consistency")):
-                submodels = model.ov_submodels.values()
-            else:
-                raise Exception("Unexpected task.")
+            if "automatic-speech-recognition" in task and model.decoder_with_past is None:
+                expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
+                expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
 
+            submodels = model.ov_submodels.values()
             check_compression_state_per_model(
                 self,
                 submodels,
