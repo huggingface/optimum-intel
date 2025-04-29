@@ -2830,14 +2830,113 @@ class GptNeoxModelPatcher(DecoderModelPatcher):
         unpatch_update_causal_mask(self._model, "gpt_neox")
 
 
+# Adopted from https://github.com/huggingface/optimum/blob/v1.24.0/optimum/bettertransformer/models/attention.py#L96
+def _gptj_attn(self, query, key, value, attention_mask=None, head_mask=None):
+    if head_mask is not None:
+        return self._orig_attn(query, key, value, attention_mask, head_mask)
+
+    batch_size = query.shape[0]
+
+    mask_value = torch.finfo(value.dtype).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    # in gpt-neo-x and gpt-j the query and keys are always in fp32
+    # thus we need to cast them to the value dtype
+    if getattr(self, "downcast_qk", False):
+        query = query.to(value.dtype)
+        key = key.to(value.dtype)
+
+    if batch_size == 1 and attention_mask is not None and attention_mask[0, 0, -1, -1] < -1:
+        return self._orig_attn(query, key, value, attention_mask, head_mask)
+
+    dropout_p = self.dropout_prob_attn if self.training else 0.0
+    if batch_size == 1 or self.training:
+        if query.shape[2] > 1:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        # causal_mask is always [True, ..., True] otherwise, so executing this
+        # is unnecessary
+        if query_length > 1:
+            if not is_transformers_version(">=", "4.44.99"):
+                causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].to(torch.bool)
+
+                causal_mask = torch.where(causal_mask, 0, mask_value)
+
+                # torch.Tensor.expand does no memory copy
+                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+                if attention_mask is not None:
+                    attention_mask = causal_mask + attention_mask
+
+            else:
+                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
+        )
+
+    # in gpt-neo-x and gpt-j the query and keys are always in fp32
+    # thus we need to cast them to the value dtype
+    if getattr(self, "downcast_qk", False):
+        sdpa_result = sdpa_result.to(value.dtype)
+
+    return sdpa_result, None
+
+
+def gptj_attn_forward(
+    self,
+    hidden_states: torch.FloatTensor,
+    layer_past: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = False,
+    output_attentions: Optional[bool] = False,
+    cache_position: Optional[torch.LongTensor] = None,
+):
+    if output_attentions:
+        self._attn = self._orig_attn
+
+    return self._orig_forward(
+        hidden_states,
+        layer_past,
+        attention_mask,
+        position_ids,
+        head_mask,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        cache_position=cache_position,
+    )
+
+
 class GptJModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.45.0", "transformer")
+        if is_transformers_version(">=", "4.49"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            for block in self._model.transformer.h:
+                block.attn._orig_forward = block.attn.forward
+                block.attn.forward = types.MethodType(gptj_attn_forward, block.attn)
+                block.attn._orig_attn = block.attn._attn
+                block.attn._attn = types.MethodType(_gptj_attn, block.attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         unpatch_update_causal_mask(self._model, "transformer")
+        if is_transformers_version(">=", "4.49"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for block in self._model.transformer.h:
+                block.attn.forward = block.attn._orig_forward
+                block.attn._attn = block.attn._orig_attn
 
 
 class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
@@ -2852,6 +2951,99 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
+
+
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/attention.py#L721
+def _bloom_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor,
+    alibi: torch.Tensor,
+    attention_mask: torch.Tensor,
+    layer_past=None,
+    head_mask: Optional[torch.Tensor] = None,
+    use_cache: bool = False,
+    output_attentions: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
+):
+    from transformers.models.bloom.modeling_bloom import dropout_add
+
+    if head_mask is not None or output_attentions:
+        return self._orig_forward(
+            hidden_states,
+            residual,
+            alibi,
+            attention_mask,
+            layer_past=layer_past,
+            head_mask=head_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            cache_position=cache_position,
+        )
+    batch_size, q_length, _ = hidden_states.shape
+    # [batch_size, seq_length, 3 x hidden_size]
+    fused_qkv = self.query_key_value(hidden_states)
+    # 3 x [batch_size, num_heads, seq_length, head_dim]
+    query_layer, key_layer, value_layer = self._reshape(fused_qkv)
+
+    if layer_past is not None:
+        cache_kwargs = {"cache_position": cache_position}
+        key_layer, value_layer = layer_past.update(key_layer, value_layer, self.layer_idx, cache_kwargs)
+
+    alibi = alibi.reshape(batch_size, -1, *alibi.shape[1:])
+
+    if attention_mask is not None:  # no matter the length, we just slice it
+        kv_length = cache_position[-1] + 1  # cache position is 0-indexed while length should start from 1
+        causal_mask = attention_mask[:, :, :, :kv_length]
+        alibi = torch.masked_fill(alibi, causal_mask.bool(), torch.finfo(alibi.dtype).min)
+
+    context_layer = torch.nn.functional.scaled_dot_product_attention(
+        query_layer,
+        key_layer,
+        value_layer,
+        attn_mask=alibi,
+        dropout_p=self.dropout_prob_attn if self.training else 0.0,
+    )
+
+    # Transform [batch_size, num_heads, seq_length, head_dim] to [batch_size, seq_length, num_heads * head_dim]
+    context_layer = context_layer.transpose(1, 2)
+    context_layer = context_layer.reshape(batch_size, q_length, self.hidden_size)
+
+    # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
+    if self.pretraining_tp > 1 and self.slow_but_exact:
+        slices = self.hidden_size / self.pretraining_tp
+        output_tensor = torch.zeros_like(context_layer)
+        for i in range(self.pretraining_tp):
+            output_tensor = output_tensor + F.linear(
+                context_layer[:, :, int(i * slices) : int((i + 1) * slices)],
+                self.dense.weight[:, int(i * slices) : int((i + 1) * slices)],
+            )
+    else:
+        output_tensor = self.dense(context_layer)
+
+    output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
+
+    outputs = (output_tensor, layer_past)
+
+    return outputs
+
+
+class BloomModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            for block in self._model.transformer.h:
+                block.self_attention._orig_forward = block.self_attention.forward
+                block.self_attention.forward = types.MethodType(_bloom_attn_forward, block.self_attention)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for block in self._model.transformer.h:
+                block.self_attention.forward = block.self_attention._orig_forward
 
 
 def _gpt_neo_attn_forward(
@@ -4874,3 +5066,175 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.vision_model.embeddings.forward = self._model.vision_model.embeddings._orig_forward
         for layer in self._model.vision_model.encoder.layers:
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/decoder_models.py#L367
+def _blenderbot_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    if output_attentions or layer_head_mask is not None:
+        return self._orig_forward(
+            hidden_states, key_value_states, past_key_value, attention_mask, layer_head_mask, output_attentions
+        )
+    """Input shape: Batch x Time x Channel"""
+
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    is_cross_attention = key_value_states is not None
+
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states)
+    # get key, value proj
+    # `past_key_value[0].shape[2] == key_value_states.shape[1]`
+    # is checking that the `sequence_length` of the `past_key_value` is the same as
+    # the provided `key_value_states` to support prefix tuning
+    if is_cross_attention and past_key_value is not None and past_key_value[0].shape[2] == key_value_states.shape[1]:
+        # reuse k,v, cross_attentions
+        key_states = past_key_value[0]
+        value_states = past_key_value[1]
+    elif is_cross_attention:
+        # cross_attentions
+        key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
+        value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
+    elif past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+    else:
+        # self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+    if self.is_decoder:
+        # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+        # Further calls to cross_attention layer can then reuse all cross-attention
+        # key/value_states (first "if" case)
+        # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+        # all previous decoder key/value_states. Further calls to uni-directional self-attention
+        # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+        # if encoder bi-directional self-attention `past_key_value` is always `None`
+        past_key_value = (key_states, value_states)
+
+    query_states = self._shape(query_states, tgt_len, bsz)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        dropout_p=self.dropout if self.training else 0.0,
+        is_causal=False,
+    )
+
+    if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned aross GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+def modulewise_patch(model, module_cls, patch_forward):
+    for _, module in model.named_children():
+        if isinstance(module, module_cls):
+            module._orig_forward = module.forward
+            module.forward = types.MethodType(patch_forward, module)
+            return
+        else:
+            if len(list(module.children())) > 0:
+                modulewise_patch(module, module_cls, patch_forward)
+
+
+def modulewise_unpatch(model, module_cls):
+    for _, module in model.named_children():
+        if isinstance(module, module_cls):
+            if hasattr(module, "_orig_forward"):
+                module.forward = module._orig_forward
+        else:
+            if len(list(module.children())) > 0:
+                modulewise_unpatch(module, module_cls)
+
+
+class BlenderbotModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+
+            modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+
+            modulewise_unpatch(self._model, BlenderbotAttention)
+
+
+class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
+
+            modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
+
+            modulewise_unpatch(self._model, BlenderbotSmallAttention)
+
+
+class PegasusModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
+
+            modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
+
+            modulewise_unpatch(self._model, PegasusAttention)
+
+
+class MarianModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.marian.modeling_marian import MarianAttention
+
+            modulewise_patch(self._model, MarianAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.marian.modeling_marian import MarianAttention
+
+            modulewise_unpatch(self._model, MarianAttention)

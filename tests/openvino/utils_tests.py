@@ -331,3 +331,12 @@ def check_compression_state_per_model(
     # Check fake nodes
     if expected_num_fake_nodes_per_model is not None:
         test_case.assertEqual(expected_num_fake_nodes_per_model, actual_num_fake_nodes_per_model)
+
+
+def get_num_sdpa(model):
+    ov_model = model if isinstance(model, ov.Model) else model.model
+    num_sdpa = 0
+    for op in ov_model.get_ops():
+        if op.type_info.name == "ScaledDotProductAttention":
+            num_sdpa += 1
+    return num_sdpa

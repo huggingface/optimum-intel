@@ -64,7 +64,13 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
+from utils_tests import (
+    MODEL_NAMES,
+    TEST_IMAGE_URL,
+    get_num_sdpa,
+    mock_torch_cuda_is_available,
+    patch_awq_for_inference,
+)
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
@@ -1049,6 +1055,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen",
         "codegen2",
         "gpt2",
+        "gptj",
         "gpt_neo",
         "gpt_neox",
         "llama",
@@ -1143,6 +1150,68 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "deepseek",
     )
 
+    EXPECTED_NUM_SDPA = {
+        "bart": 2,
+        "baichuan2": 2,
+        "baichuan2-13b": 2,
+        "gpt_bigcode": 5,
+        "blenderbot": 2,
+        "blenderbot-small": 2,
+        "bloom": 5,
+        "chatglm": 2,
+        "codegen": 5,
+        "codegen2": 2,
+        "gpt2": 5,
+        "gptj": 5,
+        "gpt_neo": 4,
+        "gpt_neox": 5,
+        "llama": 2,
+        "marian": 2,
+        "minicpm": 4,
+        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mpt": 5,
+        "opt": 5,
+        "pegasus": 2,
+        "qwen": 2,
+        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "internlm2": 4,
+        "falcon": 2,
+        "falcon-40b": 2,
+        "persimmon": 2,
+        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
+        "aquila": 2,
+        "aquila2": 2,
+        "xverse": 2,
+        "internlm": 2,
+        "jais": 2,
+        "chatglm4": 6,
+        "decilm": 4,
+        "gemma": 1,
+        "olmo": 2,
+        "stablelm": 2,
+        "starcoder2": 2,
+        "dbrx": 2,
+        "cohere": 2,
+        "qwen2": 2,
+        "qwen2-moe": 4,
+        "arctic": 4,
+        "phi3": 2,
+        "gemma2": 4,
+        "exaone": 8,
+        "granite": 6,
+        "granite-moe": 6,
+        "glm": 28,
+        "mistral-nemo": 8,
+        "minicpm3": 6,
+        "phi3-moe": 2,
+        "deepseek": 2,
+        "opt_gptq": 12,
+        "mixtral_awq": 2,
+        "gemma3-text": 2,
+        "glm4": 2,
+    }
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1179,6 +1248,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
+        num_sdpa = get_num_sdpa(ov_model.model)
+        self.assertEqual(
+            expected_num_sdpa,
+            num_sdpa,
+            f"Expected number of SDPA {expected_num_sdpa}, while model contains {num_sdpa}",
+        )
 
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
