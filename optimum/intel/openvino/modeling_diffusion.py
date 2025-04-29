@@ -49,8 +49,8 @@ from diffusers.utils.constants import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
+from openvino import Core
 from openvino._offline_transformations import compress_model_transformation
-from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import http_user_agent
@@ -141,14 +141,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def __init__(
         self,
         scheduler: SchedulerMixin,
-        unet: Optional[openvino.runtime.Model] = None,
-        vae_decoder: Optional[openvino.runtime.Model] = None,
+        unet: Optional[openvino.Model] = None,
+        vae_decoder: Optional[openvino.Model] = None,
         # optional pipeline models
-        vae_encoder: Optional[openvino.runtime.Model] = None,
-        text_encoder: Optional[openvino.runtime.Model] = None,
-        text_encoder_2: Optional[openvino.runtime.Model] = None,
-        text_encoder_3: Optional[openvino.runtime.Model] = None,
-        transformer: Optional[openvino.runtime.Model] = None,
+        vae_encoder: Optional[openvino.Model] = None,
+        text_encoder: Optional[openvino.Model] = None,
+        text_encoder_2: Optional[openvino.Model] = None,
+        text_encoder_3: Optional[openvino.Model] = None,
+        transformer: Optional[openvino.Model] = None,
         # optional pipeline submodels
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
@@ -183,7 +183,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 )
 
             main_model = unet if unet is not None else transformer
-            if not isinstance(main_model, openvino.runtime.CompiledModel):
+            if not isinstance(main_model, openvino.CompiledModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
             model_is_dynamic = model_has_dynamic_inputs(main_model)
@@ -278,7 +278,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.compile()
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.runtime.Model]:
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {name: getattr(getattr(self, name), "model") for name in self._ov_submodel_names}
 
     @property
@@ -709,7 +709,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def _reshape_unet(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int = -1,
         height: int = -1,
         width: int = -1,
@@ -757,7 +757,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def _reshape_transformer(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int = -1,
         height: int = -1,
         width: int = -1,
@@ -824,9 +824,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         model.reshape(shapes)
         return model
 
-    def _reshape_text_encoder(
-        self, model: openvino.runtime.Model, batch_size: int = -1, tokenizer_max_length: int = -1
-    ):
+    def _reshape_text_encoder(self, model: openvino.Model, batch_size: int = -1, tokenizer_max_length: int = -1):
         if batch_size != -1:
             shapes = {input_tensor: [batch_size, tokenizer_max_length] for input_tensor in model.inputs}
             model.reshape(shapes)
@@ -834,7 +832,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def _reshape_vae_encoder(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int = -1,
         height: int = -1,
         width: int = -1,
@@ -858,7 +856,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def _reshape_vae_decoder(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         height: int = -1,
         width: int = -1,
         num_images_per_prompt: int = -1,
@@ -1098,7 +1096,7 @@ class OVPipelinePart(ConfigMixin):
 
     def __init__(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         parent_pipeline: OVDiffusionPipeline,
         model_name: str = "",
     ):
@@ -1184,7 +1182,7 @@ class OVPipelinePart(ConfigMixin):
 
 
 class OVModelTextEncoder(OVPipelinePart):
-    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
+    def __init__(self, model: openvino.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
         super().__init__(model, parent_pipeline, model_name)
         self.hidden_states_output_names = [
             name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")

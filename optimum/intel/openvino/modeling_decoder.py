@@ -103,7 +103,7 @@ TEXT_GENERATION_EXAMPLE = r"""
 class OVBaseDecoderModel(OVModel):
     def __init__(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -360,7 +360,7 @@ class OVBaseDecoderModel(OVModel):
 
     def _reshape(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int,
         sequence_length: int,
         height: int = None,

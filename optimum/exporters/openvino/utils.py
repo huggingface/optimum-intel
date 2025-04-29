@@ -21,8 +21,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from transformers import PretrainedConfig
 from transformers.utils import is_torch_available
 
-from openvino.runtime import Dimension, PartialShape, Symbol
-from openvino.runtime.utils.types import get_element_type
+from openvino import Dimension, PartialShape, Symbol
+from openvino.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version

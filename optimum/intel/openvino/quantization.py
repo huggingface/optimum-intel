@@ -32,8 +32,8 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
+from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core, Tensor
 from PIL import Image
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
@@ -1290,7 +1290,7 @@ class OVQuantizer(OptimumQuantizer):
         ov_config.save_pretrained(save_directory)
 
     @staticmethod
-    def _save_pretrained(model: openvino.runtime.Model, output_path: str):
+    def _save_pretrained(model: openvino.Model, output_path: str):
         compress_quantize_weights_transformation(model)
         openvino.save_model(model, output_path, compress_to_fp16=False)
 
@@ -1390,11 +1390,11 @@ def _quantize_whisper_model(
 
 
 def _weight_only_quantization(
-    model: openvino.runtime.Model,
+    model: openvino.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
     **kwargs,
-) -> openvino.runtime.Model:
+) -> openvino.Model:
     _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
@@ -1445,7 +1445,7 @@ def _weight_only_quantization(
 
 
 def _full_quantization(
-    model: openvino.runtime.Model,
+    model: openvino.Model,
     quantization_config: OVQuantizationConfig,
     calibration_dataset: nncf.Dataset,
     verify_not_optimized: bool = True,
@@ -1525,15 +1525,15 @@ def _collect_ops_with_weights(model):
 
 
 def _hybrid_quantization(
-    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig, dataset: nncf.Dataset, **kwargs
-) -> openvino.runtime.Model:
+    model: openvino.Model, quantization_config: OVWeightQuantizationConfig, dataset: nncf.Dataset, **kwargs
+) -> openvino.Model:
     """
     Quantize a model in hybrid mode with NNCF which means that we quantize:
     weights of MatMul and Embedding layers and activations of other layers.
     The optimization specifications defined in `quantization_config`.
 
     Args:
-        model (`openvino.runtime.Model`):
+        model (`openvino.Model`):
             The OpenVINO Runtime model for applying hybrid quantization.
         quantization_config (`OVWeightQuantizationConfig`):
             The configuration containing the parameters related to quantization.
@@ -1583,7 +1583,7 @@ def _mixed_quantization(
     quantized to the precision given in the `full_quantization_config`.
 
     Args:
-        model (`openvino.runtime.Model`):
+        model (`openvino.Model`):
             The OpenVINO Runtime model for applying quantization.
         quantization_config (`OVMixedQuantizationConfig`):
             The configuration containing the parameters related to quantization.

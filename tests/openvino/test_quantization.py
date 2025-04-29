@@ -1204,7 +1204,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             return compressed_model_mock_obj
 
         with unittest.mock.patch(
-            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch(
@@ -1235,7 +1235,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
         with unittest.mock.patch(
-            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
@@ -1255,7 +1255,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             return compressed_model_mock_obj
 
         with unittest.mock.patch(
-            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch(

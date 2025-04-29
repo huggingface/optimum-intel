@@ -53,9 +53,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
     def __init__(
         self,
-        encoder: openvino.runtime.Model,
-        decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
+        encoder: openvino.Model,
+        decoder: openvino.Model,
+        decoder_with_past: openvino.Model = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -446,7 +446,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
