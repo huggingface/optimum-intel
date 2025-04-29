@@ -1125,6 +1125,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
 
+    if is_transformers_version(">=", "4.51.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe")
+
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
@@ -1211,6 +1214,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral_awq": 2,
         "gemma3-text": 2,
         "glm4": 2,
+        "qwen3": 2,
+        "qwen3-moe": 2,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

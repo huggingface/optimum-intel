@@ -65,6 +65,7 @@ from optimum.utils.input_generators import (
     DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
+    GemmaDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
@@ -255,6 +256,21 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager("qwen3-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
     def patch_model_for_export(
