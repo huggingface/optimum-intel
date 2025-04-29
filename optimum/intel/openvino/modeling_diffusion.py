@@ -824,9 +824,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         model.reshape(shapes)
         return model
 
-    def _reshape_text_encoder(
-        self, model: openvino.Model, batch_size: int = -1, tokenizer_max_length: int = -1
-    ):
+    def _reshape_text_encoder(self, model: openvino.Model, batch_size: int = -1, tokenizer_max_length: int = -1):
         if batch_size != -1:
             shapes = {input_tensor: [batch_size, tokenizer_max_length] for input_tensor in model.inputs}
             model.reshape(shapes)
