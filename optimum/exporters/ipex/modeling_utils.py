@@ -1024,7 +1024,8 @@ class _IPEXLlamaMLP(nn.Module):
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
-            self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+            if isinstance(self.act_fn, nn.SiLU):
+                self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
