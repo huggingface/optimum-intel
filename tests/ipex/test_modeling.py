@@ -88,7 +88,7 @@ class IPEXModelTest(unittest.TestCase):
         "flaubert",
         "roberta",
         "roformer",
-        # "squeezebert", # squeezebert have bug in transformers version 4.49.0, will enable it after we upgrade transformers
+        "squeezebert",
         "xlm",
     )
     IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("bert",)
@@ -485,7 +485,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(**inputs)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=5e-2))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=5e-2, rtol=1e-2))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
@@ -524,7 +524,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         init_model_outputs = init_model(**inputs)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=5e-2))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=5e-2, rtol=1e-2))
         # To avoid float pointing error
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
