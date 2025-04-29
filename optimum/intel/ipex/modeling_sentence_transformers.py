@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
@@ -45,9 +44,6 @@ class IPEXTransformer(Transformer):
     def _load_ipex_model(self, model_name_or_path, config, cache_dir, **model_args) -> None:
         if isinstance(config, T5Config) or isinstance(config, MT5Config):
             raise ValueError("T5 models are not yet supported by the IPEX backend.")
-
-        load_path = Path(model_name_or_path)
-        is_local = load_path.exists()
 
         self.auto_model = IPEXModel.from_pretrained(
             model_name_or_path,
