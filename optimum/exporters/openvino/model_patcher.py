@@ -2953,6 +2953,7 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
         unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
 
 
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/attention.py#L721
 def _bloom_attn_forward(
     self,
     hidden_states: torch.Tensor,
@@ -5127,8 +5128,6 @@ def _blenderbot_attn_forward(
         past_key_value = (key_states, value_states)
 
     query_states = self._shape(query_states, tgt_len, bsz)
-    key_states = key_states
-    value_states = value_states
 
     attn_output = torch.nn.functional.scaled_dot_product_attention(
         query_states,
