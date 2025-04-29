@@ -32,8 +32,8 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
-from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino import Core, Tensor
+from openvino._offline_transformations import compress_quantize_weights_transformation
 from PIL import Image
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
