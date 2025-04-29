@@ -35,6 +35,7 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForZeroShotImageClassification,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
@@ -49,6 +50,7 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
     XVectorOutput,
 )
+from transformers.models.clip.modeling_clip import CLIPOutput
 
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
@@ -952,3 +954,45 @@ class OVModelForCustomTasks(OVModel):
                 model_outputs[key_name] = torch.from_numpy(value).to(self.device) if not np_inputs else value
 
         return ModelOutput(**model_outputs)
+
+
+class OVModelForZeroShotImageClassification(OVModel):
+    auto_model_class = AutoModelForZeroShotImageClassification
+    export_feature = "zero-shot-image-classification"
+
+    def forward(self, input_ids, pixel_values, attention_mask: Optional[torch.Tensor] = None, **kwargs):
+        self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = input_ids.cpu().numpy()
+            pixel_values = pixel_values.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+        inputs = {"input_ids": input_ids, "pixel_values": pixel_values}
+        # Add the attention_mask when needed
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+        outputs = self._inference(inputs)
+        logits_per_image = (
+            torch.from_numpy(outputs["logits_per_image"]).to(self.device)
+            if not np_inputs
+            else outputs["logits_per_image"]
+        )
+        logits_per_text = (
+            torch.from_numpy(outputs["logits_per_text"]).to(self.device)
+            if not np_inputs
+            else outputs["logits_per_text"]
+        )
+        text_embeds = (
+            torch.from_numpy(outputs["text_embeds"]).to(self.device) if not np_inputs else outputs["text_embeds"]
+        )
+        image_embeds = (
+            torch.from_numpy(outputs["image_embeds"]).to(self.device) if not np_inputs else outputs["image_embeds"]
+        )
+
+        return CLIPOutput(
+            logits_per_image=logits_per_image,
+            logits_per_text=logits_per_text,
+            text_embeds=text_embeds,
+            image_embeds=image_embeds,
+        )
