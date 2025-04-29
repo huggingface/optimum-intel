@@ -207,11 +207,6 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
-        self.encoder_model = encoder_model
-        self.decoder_model = decoder_model
-        self.postnet_model = postnet_model
-        self.vocoder_model = vocoder_model
-
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
@@ -222,10 +217,10 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
-        self.encoder_model = OVTextToSpeechEncoder(self.encoder_model, self)
-        self.decoder_model = OVTextToSpeechDecoder(self.decoder_model, self)
-        self.postnet_model = OVTextToSpeechPostNet(self.postnet_model, self)
-        self.vocoder_model = OVTextToSpeechVocoder(self.vocoder_model, self)
+        self.encoder_model = OVTextToSpeechEncoder(encoder_model, self)
+        self.decoder_model = OVTextToSpeechDecoder(decoder_model, self)
+        self.postnet_model = OVTextToSpeechPostNet(postnet_model, self)
+        self.vocoder_model = OVTextToSpeechVocoder(vocoder_model, self)
 
         if enable_compilation and not self._compile_only:
             self.compile()
