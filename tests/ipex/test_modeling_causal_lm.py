@@ -166,7 +166,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             self.assertTrue(torch.equal(outputs, transformers_outputs))
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = "Intel/tiny_random_llama2_ipex_model"
+        model_id = "echarlaix/tiny-random-PhiForCausalLM"
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         model_with_pkv = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=True, torch_dtype=dtype, device_map=DEVICE
