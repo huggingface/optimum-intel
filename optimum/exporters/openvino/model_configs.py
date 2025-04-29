@@ -3738,4 +3738,3 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
             )
-
