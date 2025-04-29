@@ -144,6 +144,7 @@ _HEAD_TO_AUTOMODELS = {
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
+    "ltx-video": "OVLTXPipeline",
 }
 
 PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}

@@ -182,6 +182,7 @@ MODEL_NAMES = {
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
     "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
+    "ltx-video": "katuni4ka/tiny-random-ltx-video",
 }
 
 
@@ -216,6 +217,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
+    "ltx-video": (34, 28, 28, 64),
     "sam": (102, 100),
 }
 
