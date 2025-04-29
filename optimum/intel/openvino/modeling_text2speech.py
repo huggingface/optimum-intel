@@ -249,17 +249,17 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 component.compile()
 
     @property
-    def _component_names(self):
+    def _ov_submodel_names(self):
         component_names = ["encoder_model", "decoder_model", "postnet_model", "vocoder_model"]
         return component_names
 
     @property
     def components(self):
-        return {component_name: getattr(self, component_name) for component_name in self._component_names}
+        return {component_name: getattr(self, component_name) for component_name in self._ov_submodel_names}
 
     @property
     def ov_submodels(self) -> Dict[str, ov.runtime.Model]:
-        return {component_name: getattr(self, component_name).model for component_name in self._component_names}
+        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
