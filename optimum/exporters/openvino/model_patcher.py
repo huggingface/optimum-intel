@@ -5241,8 +5241,6 @@ class MarianModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, MarianAttention)
 
 
-
-
 # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
 # this is a patch to avoid PyTorch FE issue
 # with the same tensor names on input and intermediate tensor for speaker_embeddings
