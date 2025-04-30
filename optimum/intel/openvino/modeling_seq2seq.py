@@ -23,10 +23,9 @@ import openvino
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from openvino import Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
-import transformers
-from openvino import Core
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,

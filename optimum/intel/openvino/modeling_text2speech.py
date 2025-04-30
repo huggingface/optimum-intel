@@ -39,9 +39,7 @@ from .modeling_seq2seq import (
     INPUTS_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
-from .utils import (
-    TemporaryDirectory,
-)
+from .utils import TemporaryDirectory
 
 
 logger = logging.getLogger(__name__)
