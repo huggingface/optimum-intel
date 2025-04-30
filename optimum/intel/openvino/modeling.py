@@ -66,7 +66,7 @@ MODEL_START_DOCSTRING = r"""
     This model inherits from [`optimum.intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
-        model (`openvino.runtime.Model`): is the main class used to run OpenVINO Runtime inference.
+        model (`openvino.Model`): is the main class used to run OpenVINO Runtime inference.
         config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
             is the Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the configuration.
@@ -119,7 +119,7 @@ class OVModel(OVBaseModel):
     base_model_prefix = "openvino_model"
     auto_model_class = AutoModel
 
-    def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
+    def __init__(self, model: openvino.Model, config: transformers.PretrainedConfig = None, **kwargs):
         super().__init__(model, config, **kwargs)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)

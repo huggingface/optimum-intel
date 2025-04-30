@@ -61,16 +61,16 @@ from ..utils.modeling_utils import recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2", "mistral")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
 # Page attention model cannot use torch.compile for now.
 if is_torch_version("<", "2.6"):
     _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
 elif is_torch_version("<", "2.7"):
-    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
+    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2", "mistral")
 else:
-    _COMPILE_NOT_READY_MODEL_TYPES = ()
+    _COMPILE_NOT_READY_MODEL_TYPES = ("mistral"，)
 
 
 try:

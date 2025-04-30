@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.generation import GenerationMixin
+from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.runtime import Model, save_model
-from openvino.runtime.exceptions import OVTypeError
+from openvino import Model, save_model
+from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.utils import (
@@ -461,7 +462,6 @@ def export_pytorch(
                     example_input=dummy_inputs,
                     input=[(item.shape, item.type) for item in input_info],
                 )
-
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
 
@@ -628,10 +628,10 @@ def export_from_model(
     if library_name != "open_clip":
         TasksManager.standardize_model_attributes(model)
 
-    if hasattr(model.config, "export_model_type"):
+    if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
         model_type = model.config.export_model_type.replace("_", "-")
     else:
-        model_type = model.config.model_type.replace("_", "-")
+        model_type = (getattr(model.config, "model_type", None) or "").replace("_", "-")
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
@@ -657,7 +657,6 @@ def export_from_model(
         logger.info(f"Automatic task detection to: {task}.")
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
-    model_type = getattr(getattr(model, "config", {}), "model_type", "")
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
@@ -1001,6 +1000,10 @@ def _get_submodels_and_export_configs(
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
         )
+    elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
+        return _get_speecht5_tss_model_for_export(
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs
+        )
 
     export_config, models_for_export = _default_get_submodels_and_export_configs(
         model,
@@ -1029,6 +1032,7 @@ def get_diffusion_models_for_export_ext(
     is_sd3 = pipeline.__class__.__name__.startswith("StableDiffusion3")
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
+    is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
@@ -1052,9 +1056,85 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_sana:
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_ltx_video:
+        models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
+
+
+def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
+    models_for_export = {}
+    text_encoder = pipeline.text_encoder
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=text_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="feature-extraction",
+        model_type="t5-encoder-model",
+    )
+    export_config = export_config_constructor(
+        text_encoder.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+    )
+    export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["text_encoder"] = (text_encoder, export_config)
+    transformer = pipeline.transformer
+    transformer.config.vae_temporal_compression_ratio = pipeline.vae_temporal_compression_ratio
+    transformer.config.vae_spatial_compression_ratio = pipeline.vae_spatial_compression_ratio
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=transformer,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx-video-transformer",
+    )
+    transformer_export_config = export_config_constructor(
+        transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    models_for_export["transformer"] = (transformer, transformer_export_config)
+    # VAE Encoder https://github.com/huggingface/diffusers/blob/v0.11.1/src/diffusers/models/vae.py#L565
+    vae_encoder = copy.deepcopy(pipeline.vae)
+    vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_encoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx-vae-encoder",
+    )
+    vae_encoder_export_config = vae_config_constructor(
+        vae_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_encoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_encoder"] = (vae_encoder, vae_encoder_export_config)
+
+    # VAE Decoder
+    vae_decoder = copy.deepcopy(pipeline.vae)
+    vae_decoder.register_to_config(
+        **{
+            "latents_mean_data": vae_decoder.latents_mean.tolist(),
+            "latents_std_data": vae_decoder.latents_std.tolist(),
+        }
+    )
+
+    vae_decoder.forward = lambda latent_sample, timestep=None: vae_decoder.decode(z=latent_sample, temb=timestep)
+
+    vae_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=vae_decoder,
+        exporter=exporter,
+        library_name="diffusers",
+        task="semantic-segmentation",
+        model_type="ltx-vae-decoder",
+    )
+    vae_decoder_export_config = vae_config_constructor(
+        vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+    )
+    vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
+
+    return models_for_export
 
 
 def get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype):
@@ -1346,3 +1426,49 @@ def _get_encoder_decoder_stateful_models_for_export(
         decoder_export_config_with_past,
     )
     return None, models_for_export
+
+
+def _get_speecht5_tss_model_for_export(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    library_name: str,
+    int_dtype: str,
+    float_dtype: str,
+    preprocessors: Optional[List[Any]] = None,
+    model_kwargs: Optional[Dict] = None,
+):
+    if model_kwargs is None or "vocoder" not in model_kwargs:
+        raise ValueError(
+            'The export of SpeechT5 requires a vocoder. Please pass `--model-kwargs \'{"vocoder": "vocoder_model_name_or_path"}\'` from the command line, or `model_kwargs={"vocoder": "vocoder_model_name_or_path"}` if calling main_export.'
+        )
+    vocoder_id = model_kwargs["vocoder"]
+
+    # prepare export config
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name=library_name
+    )
+    export_config = export_config_constructor(
+        model.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        preprocessors=preprocessors,
+        legacy=False,
+    )
+    export_config.variant = "default"
+
+    models_for_export = {}
+    encoder_export_config = export_config.with_behavior("encoder")
+    decoder_export_config = export_config.with_behavior("decoder")
+    postnet_export_config = export_config.with_behavior("postnet")
+    vocoder_export_config = export_config.with_behavior("vocoder")
+
+    vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id).eval()
+
+    models_for_export[ENCODER_NAME] = (model.speecht5.encoder, encoder_export_config)
+    models_for_export[DECODER_NAME] = (model, decoder_export_config)
+    models_for_export["postnet"] = (model, postnet_export_config)
+    models_for_export["vocoder"] = (vocoder, vocoder_export_config)
+
+    stateful_per_model = [False, True, False, False]
+
+    return export_config, models_for_export, stateful_per_model

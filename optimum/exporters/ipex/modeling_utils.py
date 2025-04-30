@@ -763,6 +763,126 @@ def _qwen2_model_forward(
     return output if return_dict else output.to_tuple()
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/mistral/modeling_mistral.py#L459
+def _mistral_model_forward(
+    self,
+    input_ids: torch.LongTensor = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_values: Optional[Cache] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> Union[Tuple, BaseModelOutputWithPast]:
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    use_cache = use_cache if use_cache is not None else self.config.use_cache
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+
+    batch_size, seq_length = inputs_embeds.shape[:2]
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+    past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+    if cache_position is None:
+        cache_position = torch.arange(
+            past_key_values_length, past_key_values_length + inputs_embeds.shape[1], device=device
+        )
+
+    if position_ids is None:
+        position_ids = cache_position.unsqueeze(0)
+
+    causal_mask = self._update_causal_mask(
+        attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+    )
+
+    hidden_states = inputs_embeds
+
+    # create position embeddings to be shared across the decoder layers
+    position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
+    # part of the code that was modified below
+    input_lens = attention_mask.cumsum(-1)[:, -1].to(torch.int32)
+    seq_len_tensor = torch.cat((input_lens.new_tensor([0]), input_lens.cumsum(-1).int()))
+    query_len_tensor = torch.arange(seq_len_tensor.shape[0], device=device).int()
+    max_input_lens = input_lens.max()
+    cos = position_embeddings[0]
+    sin = position_embeddings[1]
+    if past_key_values_length == 0 and past_key_values is not None:
+        # first token, remove the padding from hidden_states, varlen do not accept attention mask
+        hidden_states_copy = hidden_states
+        index = attention_mask.view(-1) != 0
+        hidden_states = (hidden_states.view(-1, hidden_states.shape[-1]))[index]
+        cos = (cos.reshape(-1, cos.shape[-1]))[index]
+        sin = (sin.reshape(-1, sin.shape[-1]))[index]
+        position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    else:
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        # TODO: remove this WA after IPEX 2.7
+        if device.type == "xpu":
+            cos = cos.reshape(-1, cos.shape[-1])
+            sin = sin.reshape(-1, sin.shape[-1])
+            position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
+    if past_key_values is None:
+        attention_mask = causal_mask
+    # part of the code that was modified above
+
+    # decoder layers
+    all_hidden_states = () if output_hidden_states else None
+    all_self_attns = () if output_attentions else None
+
+    for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_values,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            input_lens=input_lens,
+            max_input_lens=max_input_lens,
+            seq_len_tensor=seq_len_tensor,
+            query_len_tensor=query_len_tensor,
+            **kwargs,
+        )
+
+        hidden_states = layer_outputs[0]
+
+        if output_attentions:
+            all_self_attns += (layer_outputs[1],)
+
+    hidden_states = self.norm(hidden_states)
+
+    if hidden_states.shape[0] != batch_size * seq_length:
+        (hidden_states_copy.view(-1, hidden_states.shape[-1]))[attention_mask.view(-1) != 0] = hidden_states
+        hidden_states = hidden_states_copy
+    hidden_states = hidden_states.view(batch_size, -1, hidden_states.shape[-1])
+    # add hidden states from the last decoder layer
+    if output_hidden_states:
+        all_hidden_states += (hidden_states,)
+
+    output = BaseModelOutputWithPast(
+        last_hidden_state=hidden_states,
+        past_key_values=past_key_values if use_cache else None,
+        hidden_states=all_hidden_states,
+        attentions=all_self_attns,
+    )
+    return output if return_dict else output.to_tuple()
+
+
 class _IPEXAttention(nn.Module):
     def __init__(self, module, device, config) -> None:
         super().__init__()
@@ -1036,7 +1156,8 @@ class _IPEXLlamaMLP(nn.Module):
             # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
-            self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+            if isinstance(self.act_fn, nn.SiLU):
+                self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
@@ -1264,6 +1385,11 @@ class _IPEXGPT2Block(nn.Module):
 
 # Currently can just apply llama decoder layer.
 class _IPEXQwen2DecoderLayer(_IPEXLlamaDecoderLayer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+class _IPEXMistralDecoderLayer(_IPEXLlamaDecoderLayer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

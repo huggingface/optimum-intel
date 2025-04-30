@@ -116,6 +116,8 @@ except OptionalDependencyNotAvailable:
         "OVStableDiffusion3InpaintPipeline",
         "OVLatentConsistencyModelPipeline",
         "OVLatentConsistencyModelImg2ImgPipeline",
+        "OVLTXPipeline",
+        "OVLTXImage2VideoPipeline",
         "OVFluxPipeline",
         "OVFluxImg2ImgPipeline",
         "OVFluxInpaintPipeline",
@@ -124,6 +126,7 @@ except OptionalDependencyNotAvailable:
         "OVPipelineForImage2Image",
         "OVPipelineForText2Image",
         "OVPipelineForInpainting",
+        "OVPipelineForText2Video",
         "OVDiffusionPipeline",
     ]
 else:
@@ -140,6 +143,7 @@ else:
             "OVStableDiffusion3InpaintPipeline",
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXPipeline",
             "OVFluxPipeline",
             "OVFluxImg2ImgPipeline",
             "OVFluxInpaintPipeline",
@@ -148,6 +152,7 @@ else:
             "OVPipelineForImage2Image",
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
+            "OVPipelineForText2Video",
             "OVDiffusionPipeline",
         ]
     )
@@ -177,6 +182,7 @@ else:
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
             "OVModelForSpeechSeq2Seq",
+            "OVModelForTextToSpeechSeq2Seq",
             "OVModelForVision2Seq",
             "OVModelForVisualCausalLM",
             "OVModelForSequenceClassification",
@@ -346,6 +352,7 @@ if TYPE_CHECKING:
             OVModelForSeq2SeqLM,
             OVModelForSequenceClassification,
             OVModelForSpeechSeq2Seq,
+            OVModelForTextToSpeechSeq2Seq,
             OVModelForTokenClassification,
             OVModelForVision2Seq,
             OVModelForVisualCausalLM,

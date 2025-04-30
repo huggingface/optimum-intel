@@ -32,6 +32,7 @@ from optimum.intel import (  # noqa
     OVFluxFillPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
+    OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -41,6 +42,7 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelOpenCLIPForZeroShotImageClassification,
@@ -84,6 +86,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
         ("feature-extraction", "sam"),
+        ("text-to-audio", "speecht5"),
     ]
 
     if is_transformers_version(">=", "4.45"):
@@ -93,6 +96,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-to-image", "flux"),
                 ("inpainting", "flux-fill"),
                 ("text-to-image", "sana"),
+                ("text-to-video", "ltx-video"),
             ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
@@ -112,7 +116,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "sam": 0,  # no tokenizer
+        "speecht5": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -517,23 +523,25 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    def _openvino_export(self, model_name: str, task: str):
+    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
-            main_export(
-                model_name_or_path=model_name,
-                output=tmpdir,
-                task=task,
-            )
+            main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, task: str, model_type: str):
-        self._openvino_export(MODEL_NAMES[model_type], task)
+        model_kwargs = None
+        if task == "text-to-audio" and model_type == "speecht5":
+            model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
+        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
+            add_ops = ""
+            if task == "text-to-audio" and model_type == "speecht5":
+                add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -551,8 +559,11 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
+            add_ops = ""
+            if task == "text-to-audio" and model_type == "speecht5":
+                add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             output = subprocess.check_output(
-                f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
+                f"TRANSFORMERS_VERBOSITY=debug optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
                 stderr=subprocess.STDOUT,
             ).decode()
@@ -713,8 +724,11 @@ class OVCLIExportTestCase(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
+            add_ops = ""
+            if task == "text-to-audio" and model_type == "speecht5":
+                add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format fp16 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -728,8 +742,11 @@ class OVCLIExportTestCase(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
+            add_ops = ""
+            if task == "text-to-audio" and model_type == "speecht5":
+                add_ops = '--model-kwargs "{\\"vocoder\\": \\"fxmarty/speecht5-hifigan-tiny\\"}"'
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )

@@ -53,9 +53,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
     def __init__(
         self,
-        encoder: openvino.runtime.Model,
-        decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
+        encoder: openvino.Model,
+        decoder: openvino.Model,
+        decoder_with_past: openvino.Model = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -417,6 +417,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         stateful = kwargs.get("stateful", True)
         variant = kwargs.pop("variant", None)
 
+        # now we use model_kwargs only for text-to-speech models to specify vocoder
+        model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -431,6 +433,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config=ov_config,
             stateful=stateful,
             variant=variant,
+            model_kwargs=model_kwargs,
         )
 
         return cls._from_pretrained(
@@ -443,7 +446,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()

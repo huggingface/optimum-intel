@@ -64,7 +64,13 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
+from utils_tests import (
+    MODEL_NAMES,
+    TEST_IMAGE_URL,
+    get_num_sdpa,
+    mock_torch_cuda_is_available,
+    patch_awq_for_inference,
+)
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
@@ -85,6 +91,7 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
     OVModelForVisualCausalLM,
@@ -1049,6 +1056,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen",
         "codegen2",
         "gpt2",
+        "gptj",
         "gpt_neo",
         "gpt_neox",
         "llama",
@@ -1117,6 +1125,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
 
+    if is_transformers_version(">=", "4.51.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe")
+
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
@@ -1142,6 +1153,70 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3",
         "deepseek",
     )
+
+    EXPECTED_NUM_SDPA = {
+        "bart": 2,
+        "baichuan2": 2,
+        "baichuan2-13b": 2,
+        "gpt_bigcode": 5,
+        "blenderbot": 2,
+        "blenderbot-small": 2,
+        "bloom": 5,
+        "chatglm": 2,
+        "codegen": 5,
+        "codegen2": 2,
+        "gpt2": 5,
+        "gptj": 5,
+        "gpt_neo": 4,
+        "gpt_neox": 5,
+        "llama": 2,
+        "marian": 2,
+        "minicpm": 4,
+        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mpt": 5,
+        "opt": 5,
+        "pegasus": 2,
+        "qwen": 2,
+        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "internlm2": 4,
+        "falcon": 2,
+        "falcon-40b": 2,
+        "persimmon": 2,
+        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
+        "aquila": 2,
+        "aquila2": 2,
+        "xverse": 2,
+        "internlm": 2,
+        "jais": 2,
+        "chatglm4": 6,
+        "decilm": 4,
+        "gemma": 1,
+        "olmo": 2,
+        "stablelm": 2,
+        "starcoder2": 2,
+        "dbrx": 2,
+        "cohere": 2,
+        "qwen2": 2,
+        "qwen2-moe": 4,
+        "arctic": 4,
+        "phi3": 2,
+        "gemma2": 4,
+        "exaone": 8,
+        "granite": 6,
+        "granite-moe": 6,
+        "glm": 28,
+        "mistral-nemo": 8,
+        "minicpm3": 6,
+        "phi3-moe": 2,
+        "deepseek": 2,
+        "opt_gptq": 12,
+        "mixtral_awq": 2,
+        "gemma3-text": 2,
+        "glm4": 2,
+        "qwen3": 2,
+        "qwen3-moe": 2,
+    }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1179,6 +1254,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
+        num_sdpa = get_num_sdpa(ov_model.model)
+        self.assertEqual(
+            expected_num_sdpa,
+            num_sdpa,
+            f"Expected number of SDPA {expected_num_sdpa}, while model contains {num_sdpa}",
+        )
 
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
@@ -3141,4 +3224,76 @@ class OVSamIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(ov_dyn_outputs.iou_scores, ov_stat_outputs.iou_scores, atol=1e-4))
 
         del ov_model
+        gc.collect()
+
+
+class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("speecht5",)
+
+    def _generate_text(self):
+        return "This text is converted to speech using OpenVINO backend"
+
+    def _generate_speaker_embedding(self):
+        np.random.seed(42)
+        speaker_embedding = np.random.randn(1, 512).astype(np.float32)
+        return torch.tensor(speaker_embedding)
+
+    def _get_processor(self, model_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5Processor
+
+            processor = SpeechT5Processor.from_pretrained(model_id)
+            return processor
+        else:
+            raise Exception("{} unknown processor for text-to-speech".format(model_arch))
+
+    def _get_model(self, model_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5ForTextToSpeech
+
+            model = SpeechT5ForTextToSpeech.from_pretrained(model_id)
+            return model
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+    def _get_vocoder(self, vocoder_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5HifiGan
+
+            vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id)
+            return vocoder
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        set_seed(SEED)
+        text_data = self._generate_text()
+        speaker_embeddings = self._generate_speaker_embedding()
+        model_id = MODEL_NAMES[model_arch]
+
+        if model_arch == "speecht5":
+            # since Auto class for text-to-audio is not implemented in optimum
+            # generate model classes for reference generation
+            vocoder_id = "fxmarty/speecht5-hifigan-tiny"
+            processor = self._get_processor(model_id, model_arch)
+            model = self._get_model(model_id, model_arch)
+            vocoder = self._get_vocoder(vocoder_id, model_arch)
+            inputs = processor(text=text_data, return_tensors="pt")
+            ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
+            ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+        ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(model_id, vocoder=vocoder_id)
+        ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+
+        self.assertIsInstance(ov_pipe.config, PretrainedConfig)
+        self.assertTrue(model_has_state(ov_pipe.decoder_model.model))
+        self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
+
+        del vocoder
+        del model
+        del processor
+
         gc.collect()

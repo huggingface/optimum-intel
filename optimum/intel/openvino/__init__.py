@@ -78,6 +78,7 @@ from .modeling_open_clip import (
 )
 from .modeling_sam import OVSamModel
 from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
+from .modeling_text2speech import OVModelForTextToSpeechSeq2Seq
 from .modeling_visual_language import OVModelForVisualCausalLM
 
 
@@ -90,9 +91,11 @@ if is_diffusers_available():
         OVFluxPipeline,
         OVLatentConsistencyModelImg2ImgPipeline,
         OVLatentConsistencyModelPipeline,
+        OVLTXPipeline,
         OVPipelineForImage2Image,
         OVPipelineForInpainting,
         OVPipelineForText2Image,
+        OVPipelineForText2Video,
         OVSanaPipeline,
         OVSanaSprintPipeline,
         OVStableDiffusion3Img2ImgPipeline,

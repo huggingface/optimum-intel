@@ -135,6 +135,8 @@ MODEL_NAMES = {
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "qwen2_5_vl": "katuni4ka/tiny-random-qwen2.5-vl",
+    "qwen3": "snake7gun/tiny-random-qwen3",
+    "qwen3-moe": "snake7gun/tiny-random-qwen3moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -142,6 +144,7 @@ MODEL_NAMES = {
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
     "sam": "fxmarty/sam-vit-tiny-random",
     "smolvlm": "katuni4ka/tiny-random-smolvlm2",
+    "speecht5": "hf-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
@@ -182,6 +185,7 @@ MODEL_NAMES = {
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
     "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
+    "ltx-video": "katuni4ka/tiny-random-ltx-video",
 }
 
 
@@ -216,7 +220,9 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "nanollava": (30, 1, 15),
     "qwen2_vl": (30, 1, 1, 10),
     "sana": (58, 28, 28, 18),
+    "ltx-video": (34, 28, 28, 64),
     "sam": (102, 100),
+    "speecht5": (28, 52, 10, 80),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -329,3 +335,12 @@ def check_compression_state_per_model(
     # Check fake nodes
     if expected_num_fake_nodes_per_model is not None:
         test_case.assertEqual(expected_num_fake_nodes_per_model, actual_num_fake_nodes_per_model)
+
+
+def get_num_sdpa(model):
+    ov_model = model if isinstance(model, ov.Model) else model.model
+    num_sdpa = 0
+    for op in ov_model.get_ops():
+        if op.type_info.name == "ScaledDotProductAttention":
+            num_sdpa += 1
+    return num_sdpa

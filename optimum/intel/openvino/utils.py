@@ -28,8 +28,8 @@ from typing import Tuple, Type, Union
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, Model, properties
-from openvino.runtime import Type as OVType
+from openvino import Core, Model, properties
+from openvino import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
@@ -144,6 +144,8 @@ _HEAD_TO_AUTOMODELS = {
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
+    "ltx-video": "OVLTXPipeline",
+    "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
 PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}

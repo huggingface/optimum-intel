@@ -81,7 +81,7 @@ _openvino_available = importlib.util.find_spec("openvino") is not None
 _openvino_version = "N/A"
 if _openvino_available:
     try:
-        from openvino.runtime import get_version
+        from openvino import get_version
 
         version = get_version()
         # avoid invalid format

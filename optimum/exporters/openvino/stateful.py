@@ -19,7 +19,7 @@ import numpy as np
 from transformers import PretrainedConfig
 
 import openvino as ov
-from openvino.runtime import opset13
+from openvino import opset13
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
 from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS
