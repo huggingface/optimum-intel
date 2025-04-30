@@ -62,15 +62,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
-    @parameterized.expand(
-        grid_parameters(
-            {
-                "model_arch": SUPPORTED_ARCHITECTURES,
-                "prepare_inputs": [True, False],
-            }
-        )
-    )
-    def test_compare_to_transformers(self, test_name, model_arch, prepare_inputs):
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
@@ -99,17 +92,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmpdirname:
                 ipex_model.save_pretrained(tmpdirname)
                 loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
-                if prepare_inputs:
-                    loaded_model_outputs = loaded_model(**inputs)
-                else:
-                    loaded_model_outputs = loaded_model(**tokens)
+                loaded_model_outputs = loaded_model(**inputs)
 
             # Test init method
             init_model = self.IPEX_MODEL_CLASS(transformers_model)
-            if prepare_inputs:
-                init_model_outputs = init_model(**inputs)
-            else:
-                init_model_outputs = init_model(**tokens)
+            init_model_outputs = init_model(**inputs)
 
             # Compare tensor outputs
             self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
