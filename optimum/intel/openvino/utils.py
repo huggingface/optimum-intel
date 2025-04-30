@@ -28,8 +28,8 @@ from typing import Tuple, Type, Union
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, Model, properties
-from openvino.runtime import Type as OVType
+from openvino import Core, Model, properties
+from openvino import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
@@ -46,6 +46,10 @@ OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
 OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
 OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
 OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
+OV_VISION_ENCODER_MODEL_NAME = "openvino_vision_encoder.xml"
+ONNX_VISION_ENCODER_MODEL_NAME = "vision_encoder.onnx"
+ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME = "prompt_encoder_mask_decoder.onnx"
+OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME = "openvino_prompt_encoder_mask_decoder.xml"
 
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
 OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
@@ -125,10 +129,12 @@ _HEAD_TO_AUTOMODELS = {
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",
     "image-text-to-text": "OVModelForVisualCausalLM",
+    "zero-shot-image-classification": "OVModelForZeroShotImageClassification",
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "sam": "OVSamModel",
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
     "flux-fill": "OVFluxFillPipeline",
@@ -139,6 +145,8 @@ _HEAD_TO_AUTOMODELS = {
     "open_clip": "OVModelOpenCLIPForZeroShotImageClassification",
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
+    "ltx-video": "OVLTXPipeline",
+    "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
 PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}

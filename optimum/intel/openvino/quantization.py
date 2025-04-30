@@ -17,6 +17,7 @@ import inspect
 import logging
 import os
 from collections import UserDict, deque
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -31,8 +32,8 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
+from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core, Tensor
 from PIL import Image
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
@@ -265,6 +266,7 @@ class OVCalibrationDatasetBuilder:
         from optimum.intel import (
             OVModelForCausalLM,
             OVModelForFeatureExtraction,
+            OVModelForMaskedLM,
             OVModelForVisualCausalLM,
             OVSentenceTransformer,
         )
@@ -326,7 +328,7 @@ class OVCalibrationDatasetBuilder:
                 )
 
             return self.build_from_dataset(config, dataset)
-        elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer)):
+        elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer, OVModelForMaskedLM)):
             if isinstance(config.dataset, str):
                 dataset = self.load_dataset(
                     PREDEFINED_LANGUAGE_DATASETS[config.dataset]["path"],
@@ -443,7 +445,12 @@ class OVCalibrationDatasetBuilder:
         Returns:
             A calibration dataset as an instance of `OVCalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import OVModelForFeatureExtraction, OVModelForVisualCausalLM, OVSentenceTransformer
+        from optimum.intel import (
+            OVModelForFeatureExtraction,
+            OVModelForMaskedLM,
+            OVModelForVisualCausalLM,
+            OVSentenceTransformer,
+        )
         from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
 
@@ -458,7 +465,13 @@ class OVCalibrationDatasetBuilder:
 
         if isinstance(
             self.model,
-            (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForFeatureExtraction, OVSentenceTransformer),
+            (
+                OVModelForVisualCausalLM,
+                _OVModelForWhisper,
+                OVModelForFeatureExtraction,
+                OVModelForMaskedLM,
+                OVSentenceTransformer,
+            ),
         ) or (is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)):
             # Prepare from raw dataset avoiding dataloader creation
             if batch_size != 1 or data_collator is not None or remove_unused_columns:
@@ -472,8 +485,8 @@ class OVCalibrationDatasetBuilder:
                 return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
             elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 return self._prepare_diffusion_calibration_data(quantization_config, dataset)
-            elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer)):
-                return self._prepare_feature_extraction_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer, OVModelForMaskedLM)):
+                return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset)
             else:
                 raise RuntimeError("Unsupported model type for calibration dataset collection.")
         else:
@@ -784,39 +797,57 @@ class OVCalibrationDatasetBuilder:
         else:
             self.model._progress_bar_config["disable"] = disable
 
-    def _prepare_feature_extraction_calibration_data(
+    def _prepare_text_encoder_model_calibration_data(
         self,
         quantization_config: OVQuantizationConfigBase,
         dataset: "Dataset",
         seq_len: int = 128,
     ) -> OVCalibrationDataset:
-        from optimum.intel import OVModelForFeatureExtraction, OVSentenceTransformer
+        """
+        Prepares calibration data for text-encoder-like models.
+        Supports OVModelForFeatureExtraction, OVModelForMaskedLM and OVSentenceTransformer.
+        """
+        from optimum.intel import OVModelForFeatureExtraction, OVModelForMaskedLM, OVSentenceTransformer
 
         self.model.compile()
 
         num_samples = quantization_config.num_samples or 128
         calibration_data = []
         try:
-            self.model.request = InferRequestWrapper(
-                self.model.request,
-                calibration_data,
-                inference_result_mock={
-                    "last_hidden_state": np.empty((1,), np.float32),
-                    "token_embeddings": np.empty((1,), np.float32),
-                    "sentence_embedding": np.empty((1,), np.float32),
-                },
-            )
-
+            inference_result_mock = {}
             if isinstance(self.model, OVModelForFeatureExtraction):
-                tokenizer = AutoTokenizer.from_pretrained(
-                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
-                )
+                inference_result_mock["last_hidden_state"] = np.empty((1,), np.float32)
+            elif isinstance(self.model, OVModelForMaskedLM):
+                inference_result_mock["logits"] = np.empty((1,), np.float32)
             elif isinstance(self.model, OVSentenceTransformer):
-                tokenizer = self.model.tokenizer
+                inference_result_mock["token_embeddings"] = np.empty((1,), np.float32)
+                inference_result_mock["sentence_embedding"] = np.empty((1,), np.float32)
             else:
                 raise RuntimeError(
                     f"Unsupported model type {type(self.model).__name__} for calibration dataset collection."
                 )
+
+            self.model.request = InferRequestWrapper(
+                self.model.request,
+                calibration_data,
+                inference_result_mock=inference_result_mock,
+            )
+
+            if isinstance(self.model, OVSentenceTransformer):
+                tokenizer = self.model.tokenizer
+            else:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+                )
+
+            max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
+            if max_position_embeddings is not None and max_position_embeddings > 0:
+                seq_len = min(seq_len, max_position_embeddings)
+
+            random_positions = None
+            if isinstance(self.model, OVModelForMaskedLM):
+                with numpy_seed(self.seed):
+                    random_positions = np.random.randint(0, seq_len, num_samples)
 
             pbar = tqdm(total=num_samples, desc="Collecting calibration data")
             for item in dataset:
@@ -824,7 +855,11 @@ class OVCalibrationDatasetBuilder:
                 if inputs["input_ids"].shape[1] < seq_len:
                     continue
 
-                self.model(**inputs) if isinstance(self.model, OVModelForFeatureExtraction) else self.model(inputs)
+                if isinstance(self.model, OVModelForMaskedLM):
+                    # Replace a random token with a mask token
+                    inputs["input_ids"][0, random_positions[len(calibration_data)]] = tokenizer.mask_token_id
+
+                self.model(inputs) if isinstance(self.model, OVSentenceTransformer) else self.model(**inputs)
 
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
@@ -1255,7 +1290,7 @@ class OVQuantizer(OptimumQuantizer):
         ov_config.save_pretrained(save_directory)
 
     @staticmethod
-    def _save_pretrained(model: openvino.runtime.Model, output_path: str):
+    def _save_pretrained(model: openvino.Model, output_path: str):
         compress_quantize_weights_transformation(model)
         openvino.save_model(model, output_path, compress_to_fp16=False)
 
@@ -1355,11 +1390,11 @@ def _quantize_whisper_model(
 
 
 def _weight_only_quantization(
-    model: openvino.runtime.Model,
+    model: openvino.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
     **kwargs,
-) -> openvino.runtime.Model:
+) -> openvino.Model:
     _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
@@ -1410,7 +1445,7 @@ def _weight_only_quantization(
 
 
 def _full_quantization(
-    model: openvino.runtime.Model,
+    model: openvino.Model,
     quantization_config: OVQuantizationConfig,
     calibration_dataset: nncf.Dataset,
     verify_not_optimized: bool = True,
@@ -1490,15 +1525,15 @@ def _collect_ops_with_weights(model):
 
 
 def _hybrid_quantization(
-    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig, dataset: nncf.Dataset, **kwargs
-) -> openvino.runtime.Model:
+    model: openvino.Model, quantization_config: OVWeightQuantizationConfig, dataset: nncf.Dataset, **kwargs
+) -> openvino.Model:
     """
     Quantize a model in hybrid mode with NNCF which means that we quantize:
     weights of MatMul and Embedding layers and activations of other layers.
     The optimization specifications defined in `quantization_config`.
 
     Args:
-        model (`openvino.runtime.Model`):
+        model (`openvino.Model`):
             The OpenVINO Runtime model for applying hybrid quantization.
         quantization_config (`OVWeightQuantizationConfig`):
             The configuration containing the parameters related to quantization.
@@ -1548,7 +1583,7 @@ def _mixed_quantization(
     quantized to the precision given in the `full_quantization_config`.
 
     Args:
-        model (`openvino.runtime.Model`):
+        model (`openvino.Model`):
             The OpenVINO Runtime model for applying quantization.
         quantization_config (`OVMixedQuantizationConfig`):
             The configuration containing the parameters related to quantization.
@@ -1612,3 +1647,16 @@ def _remove_f16_kv_cache_precision_flag(model: openvino.Model) -> openvino.Model
 def _add_nncf_version_flag(model: openvino.Model) -> openvino.Model:
     model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
     return model
+
+
+@contextmanager
+def numpy_seed(seed: int):
+    """
+    Context manager to set the numpy random seed.
+    """
+    old_state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(old_state)

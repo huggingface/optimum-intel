@@ -338,6 +338,36 @@ class OVQuantizerTest(unittest.TestCase):
                 {"int8": 15},
             ],
         ),
+        (
+            OVModelForMaskedLM,
+            "roberta",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            [
+                32,
+            ],
+            [
+                {"int8": 34},
+            ],
+        ),
+        (
+            OVModelForMaskedLM,
+            "xlm_roberta",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="c4",
+                num_samples=1,
+            ),
+            [
+                14,
+            ],
+            [
+                {"int8": 16},
+            ],
+        ),
     ]
 
     @staticmethod
@@ -495,11 +525,11 @@ class OVQuantizerTest(unittest.TestCase):
 
                 input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
-            elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction):
+            elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
                     tokenizer.pad_token = tokenizer.eos_token
-                tokens = tokenizer("This is a sample input", return_tensors="pt")
+                tokens = tokenizer("This is a sample <mask>", return_tensors="pt")
                 ov_model(**tokens)
             elif model_cls in (
                 OVStableDiffusionPipeline,
@@ -1174,7 +1204,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             return compressed_model_mock_obj
 
         with unittest.mock.patch(
-            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch(
@@ -1205,7 +1235,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
         with unittest.mock.patch(
-            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
@@ -1225,7 +1255,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             return compressed_model_mock_obj
 
         with unittest.mock.patch(
-            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+            "openvino.op.Constant.shape", new_callable=unittest.mock.PropertyMock
         ) as ov_constant_shape:
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch(

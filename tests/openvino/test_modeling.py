@@ -53,6 +53,7 @@ from transformers import (
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    AutoModelForZeroShotImageClassification,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -64,7 +65,13 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL, mock_torch_cuda_is_available, patch_awq_for_inference
+from utils_tests import (
+    MODEL_NAMES,
+    TEST_IMAGE_URL,
+    get_num_sdpa,
+    mock_torch_cuda_is_available,
+    patch_awq_for_inference,
+)
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
@@ -85,10 +92,13 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
     OVModelForVisualCausalLM,
+    OVModelForZeroShotImageClassification,
     OVModelOpenCLIPForZeroShotImageClassification,
+    OVSamModel,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
 )
@@ -102,8 +112,10 @@ from optimum.intel.openvino.modeling_visual_language import (
 )
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
+    OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
     OV_VISION_EMBEDDINGS_MODEL_NAME,
+    OV_VISION_ENCODER_MODEL_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
 )
@@ -153,6 +165,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_SD_DIFFUSION_MODEL_ID = "katuni4ka/tiny-stable-diffusion-openvino"
         self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
+        self.OV_SAM_MODEL_ID = "katuni4ka/sam-vit-tiny-random-ov"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -467,6 +480,71 @@ class OVModelIntegrationTest(unittest.TestCase):
         outputs = pipeline(**inputs).images
         np.testing.assert_allclose(pipeline_outputs, outputs, atol=1e-4, rtol=1e-4)
         del pipeline
+        gc.collect()
+
+    def test_load_from_hub_and_save_sam_model(self):
+        loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID)
+        self.assertIsInstance(loaded_model, OVSamModel)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is not set by default
+        self.assertIsNone(loaded_model.ov_config.get("PERFORMANCE_HINT"))
+
+        # Test specifying ov_config with throughput hint and manual cache dir
+        manual_openvino_cache_dir = loaded_model._model_save_dir / "manual_model_cache"
+        ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
+        loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID, ov_config=ov_config)
+
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        self.assertGreaterEqual(num_blobs, 2)
+        self.assertEqual(loaded_model.vision_encoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+        self.assertEqual(
+            loaded_model.prompt_encoder_mask_decoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT"
+        )
+        processor = get_preprocessor(self.OV_SAM_MODEL_ID)
+        img_url = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
+        input_points = [[[450, 600]]]
+        raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
+        inputs = processor(raw_image, input_points=input_points, return_tensors="pt")
+
+        loaded_model_outputs = loaded_model(**inputs)
+
+        # Test compile only
+
+        compile_only_model = OVModelForFeatureExtraction.from_pretrained(
+            self.OV_SAM_MODEL_ID, ov_config=ov_config, compile_only=True
+        )
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        # compile_only get model from cache
+        self.assertGreaterEqual(current_num_blobs, num_blobs)
+        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder.request, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.runtime.CompiledModel)
+        outputs = compile_only_model(**inputs)
+        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
+        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
+        del compile_only_model
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            for ir_file in [OV_VISION_ENCODER_MODEL_NAME, OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME]:
+                self.assertTrue(ir_file in folder_contents)
+                self.assertTrue(ir_file.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForFeatureExtraction.from_pretrained(tmpdirname, ov_config={"NUM_STREAMS": 2})
+            self.assertEqual(loaded_model.vision_encoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+            self.assertEqual(
+                loaded_model.prompt_encoder_mask_decoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT"
+            )
+
+        outputs = model(**inputs)
+        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
+        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
+
+        del loaded_model
+        del model
         gc.collect()
 
     @pytest.mark.run_slow
@@ -980,6 +1058,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen",
         "codegen2",
         "gpt2",
+        "gptj",
         "gpt_neo",
         "gpt_neox",
         "llama",
@@ -1048,6 +1127,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
 
+    if is_transformers_version(">=", "4.51.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe")
+
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
@@ -1073,6 +1155,70 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3",
         "deepseek",
     )
+
+    EXPECTED_NUM_SDPA = {
+        "bart": 2,
+        "baichuan2": 2,
+        "baichuan2-13b": 2,
+        "gpt_bigcode": 5,
+        "blenderbot": 2,
+        "blenderbot-small": 2,
+        "bloom": 5,
+        "chatglm": 2,
+        "codegen": 5,
+        "codegen2": 2,
+        "gpt2": 5,
+        "gptj": 5,
+        "gpt_neo": 4,
+        "gpt_neox": 5,
+        "llama": 2,
+        "marian": 2,
+        "minicpm": 4,
+        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mpt": 5,
+        "opt": 5,
+        "pegasus": 2,
+        "qwen": 2,
+        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "internlm2": 4,
+        "falcon": 2,
+        "falcon-40b": 2,
+        "persimmon": 2,
+        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
+        "aquila": 2,
+        "aquila2": 2,
+        "xverse": 2,
+        "internlm": 2,
+        "jais": 2,
+        "chatglm4": 6,
+        "decilm": 4,
+        "gemma": 1,
+        "olmo": 2,
+        "stablelm": 2,
+        "starcoder2": 2,
+        "dbrx": 2,
+        "cohere": 2,
+        "qwen2": 2,
+        "qwen2-moe": 4,
+        "arctic": 4,
+        "phi3": 2,
+        "gemma2": 4,
+        "exaone": 8,
+        "granite": 6,
+        "granite-moe": 6,
+        "glm": 28,
+        "mistral-nemo": 8,
+        "minicpm3": 6,
+        "phi3-moe": 2,
+        "deepseek": 2,
+        "opt_gptq": 12,
+        "mixtral_awq": 2,
+        "gemma3-text": 2,
+        "glm4": 2,
+        "qwen3": 2,
+        "qwen3-moe": 2,
+    }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1110,6 +1256,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
+        num_sdpa = get_num_sdpa(ov_model.model)
+        self.assertEqual(
+            expected_num_sdpa,
+            num_sdpa,
+            f"Expected number of SDPA {expected_num_sdpa}, while model contains {num_sdpa}",
+        )
 
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
@@ -2665,7 +2819,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         ov_model.reshape(1, -1)
         ov_model.compile()
 
-        # Speech recogition generation
+        # Image caption generation
         pipe = pipeline(
             "image-to-text",
             model=ov_model,
@@ -2983,4 +3137,216 @@ class OVLangchainTest(unittest.TestCase):
         self.assertTrue(len(stream_results_string.strip()) > 1)
 
         del hf_pipe
+        gc.collect()
+
+
+class OVSamIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["sam"]
+    TASK = "feature-extraction"
+    IMAGE_URL = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
+
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+
+        self.assertIsInstance(ov_model.vision_encoder, OVSamVisionEncoder)
+        self.assertIsInstance(ov_model.prompt_encoder_mask_decoder, OVSamPromptEncoder)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        input_points = [[[450, 600]]]
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
+
+        transformers_model = OVSamModel.from_pretrained(model_id)
+
+        # test end-to-end inference
+        ov_outputs = ov_model(**inputs)
+
+        self.assertTrue("pred_masks" in ov_outputs)
+        self.assertIsInstance(ov_outputs.pred_masks, torch.Tensor)
+        self.assertTrue("iou_scores" in ov_outputs)
+        self.assertIsInstance(ov_outputs.iou_scores, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.iou_scores, transformers_outputs.iou_scores, atol=1e-4))
+
+        # test separated image features extraction
+        pixel_values = inputs.pop("pixel_values")
+        features = transformers_model.get_image_features(pixel_values)
+        ov_features = ov_model.get_image_features(pixel_values)
+        self.assertTrue(torch.allclose(ov_features, features, atol=1e-4))
+        ov_outputs = ov_model(**inputs, image_embeddings=ov_features)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, image_embeddings=features)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.pred_masks, transformers_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.iou_scores, transformers_outputs.iou_scores, atol=1e-4))
+
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_reshape(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+        self.assertTrue(ov_model.is_dynamic)
+        input_points = [[[450, 600]]]
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
+        ov_dyn_outputs = ov_model(**inputs)
+        ov_model.reshape(*inputs["input_points"].shape[:-1])
+        self.assertFalse(ov_model.is_dynamic)
+        self.assertIsNone(ov_model.vision_encoder.request)
+        self.assertIsNone(ov_model.prompt_encoder_mask_decoder.request)
+        ov_stat_outputs = ov_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_dyn_outputs.pred_masks, ov_stat_outputs.pred_masks, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_dyn_outputs.iou_scores, ov_stat_outputs.iou_scores, atol=1e-4))
+
+        del ov_model
+        gc.collect()
+
+
+class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("speecht5",)
+
+    def _generate_text(self):
+        return "This text is converted to speech using OpenVINO backend"
+
+    def _generate_speaker_embedding(self):
+        np.random.seed(42)
+        speaker_embedding = np.random.randn(1, 512).astype(np.float32)
+        return torch.tensor(speaker_embedding)
+
+    def _get_processor(self, model_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5Processor
+
+            processor = SpeechT5Processor.from_pretrained(model_id)
+            return processor
+        else:
+            raise Exception("{} unknown processor for text-to-speech".format(model_arch))
+
+    def _get_model(self, model_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5ForTextToSpeech
+
+            model = SpeechT5ForTextToSpeech.from_pretrained(model_id)
+            return model
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+    def _get_vocoder(self, vocoder_id, model_arch):
+        if model_arch == "speecht5":
+            from transformers import SpeechT5HifiGan
+
+            vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id)
+            return vocoder
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        set_seed(SEED)
+        text_data = self._generate_text()
+        speaker_embeddings = self._generate_speaker_embedding()
+        model_id = MODEL_NAMES[model_arch]
+
+        if model_arch == "speecht5":
+            # since Auto class for text-to-audio is not implemented in optimum
+            # generate model classes for reference generation
+            vocoder_id = "fxmarty/speecht5-hifigan-tiny"
+            processor = self._get_processor(model_id, model_arch)
+            model = self._get_model(model_id, model_arch)
+            vocoder = self._get_vocoder(vocoder_id, model_arch)
+            inputs = processor(text=text_data, return_tensors="pt")
+            ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
+            ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
+        else:
+            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+
+        ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(model_id, vocoder=vocoder_id)
+        ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+
+        self.assertIsInstance(ov_pipe.config, PretrainedConfig)
+        self.assertTrue(model_has_state(ov_pipe.decoder_model.model))
+        self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
+
+        del vocoder
+        del model
+        del processor
+        gc.collect()
+
+
+class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["clip"]
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_ARCHITECTURES.append("siglip")
+    TASK = "zero-shot-image-classification"
+    IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForZeroShotImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        labels = ["a photo of a cat", "a photo of a dog"]
+        inputs = processor(images=IMAGE, text=labels, return_tensors="pt")
+
+        transformers_model = AutoModelForZeroShotImageClassification.from_pretrained(model_id)
+
+        # test end-to-end inference
+        ov_outputs = ov_model(**inputs)
+
+        self.assertTrue("logits_per_image" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits_per_image, torch.Tensor)
+        self.assertTrue("logits_per_text" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits_per_text, torch.Tensor)
+        self.assertTrue("text_embeds" in ov_outputs)
+        self.assertIsInstance(ov_outputs.text_embeds, torch.Tensor)
+        self.assertTrue("image_embeds" in ov_outputs)
+        self.assertIsInstance(ov_outputs.image_embeds, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.logits_per_image, transformers_outputs.logits_per_image, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits_per_text, transformers_outputs.logits_per_text, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.text_embeds, transformers_outputs.text_embeds, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.image_embeds, transformers_outputs.image_embeds, atol=1e-4))
+
+        del transformers_model
+        del ov_model
         gc.collect()

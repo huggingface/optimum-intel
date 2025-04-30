@@ -63,10 +63,11 @@ class OVBaseModel(OptimizedModel):
     _supports_cache_class = False
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
+    _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
     def __init__(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -205,7 +206,7 @@ class OVBaseModel(OptimizedModel):
         return None
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.runtime.Model]:
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {submodel_name: getattr(self, submodel_name) for submodel_name in self._ov_submodel_names}
 
     @property
@@ -219,7 +220,7 @@ class OVBaseModel(OptimizedModel):
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-    ) -> openvino.runtime.Model:
+    ) -> openvino.Model:
         """
         Loads the model.
 
@@ -230,7 +231,7 @@ class OVBaseModel(OptimizedModel):
                 Quantization config to apply after model is loaded.
         """
 
-        def fix_op_names_duplicates(model: openvino.runtime.Model):
+        def fix_op_names_duplicates(model: openvino.Model):
             names = set()
             for op in model.get_ops():
                 friendly_name = op.get_friendly_name()
@@ -471,7 +472,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -704,7 +705,7 @@ class OVBaseModel(OptimizedModel):
 
     def _reshape(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int,
         sequence_length: int,
         height: int = None,

@@ -25,6 +25,8 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
+import transformers
+from openvino import Core
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
@@ -67,11 +69,11 @@ _TOKENIZER_FOR_DOC = "AutoTokenizer"
 
 INPUTS_DOCSTRING = r"""
     Arguments:
-        encoder (`openvino.runtime.Model`):
+        encoder (`openvino.Model`):
             The OpenVINO Runtime model associated to the encoder.
-        decoder (`openvino.runtime.Model`):
+        decoder (`openvino.Model`):
             The OpenVINO Runtime model associated to the decoder.
-        decoder_with_past (`openvino.runtime.Model`):
+        decoder_with_past (`openvino.Model`):
             The OpenVINO Runtime model associated  to the decoder with past key values.
         config (`transformers.PretrainedConfig`):
             [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
@@ -880,11 +882,11 @@ class OVEncoder:
     Encoder model for OpenVINO inference.
 
     Arguments:
-        request (`openvino.runtime.ie_api.InferRequest`):
+        request (`openvino.ie_api.InferRequest`):
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
+    def __init__(self, model: openvino.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
         self._comple_only = parent_model._compile_only
@@ -965,13 +967,13 @@ class OVDecoder:
     Decoder model for OpenVINO inference.
 
     Arguments:
-        request (`openvino.runtime.ie_api.InferRequest`):
+        request (`openvino.ie_api.InferRequest`):
             The OpenVINO inference request associated to the decoder.
         device (`torch.device`):
             The device type used by this process.
     """
 
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
+    def __init__(self, model: openvino.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
         self._compile_only = parent_model._compile_only
@@ -1161,9 +1163,9 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
 
     def __init__(
         self,
-        encoder: openvino.runtime.Model,
-        decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
+        encoder: openvino.Model,
+        decoder: openvino.Model,
+        decoder_with_past: openvino.Model = None,
         config: PretrainedConfig = None,
         **kwargs,
     ):
@@ -1230,7 +1232,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
@@ -1315,7 +1317,7 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()

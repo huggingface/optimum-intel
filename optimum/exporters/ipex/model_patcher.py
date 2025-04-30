@@ -20,6 +20,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaModel,
     LlamaRMSNorm,
 )
+from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralModel, MistralRMSNorm
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2DecoderLayer,
     Qwen2Model,
@@ -39,15 +40,17 @@ from .modeling_utils import (
     _IPEXGPT2Block,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
+    _IPEXMistralDecoderLayer,
     _IPEXQwen2DecoderLayer,
     _llama_model_forward,
+    _mistral_model_forward,
     _qwen2_model_forward,
 )
 
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
-_TRANSFORMERS_MIN_VERSION = "4.49.0"
-_TRANSFORMERS_MAX_VERSION = "4.49.0"
+_TRANSFORMERS_MIN_VERSION = "4.50.0"
+_TRANSFORMERS_MAX_VERSION = "4.51.3"
 
 _IPEX_EXPORTED_GENERATION_TASKS = ("text-generation",)
 
@@ -132,6 +135,18 @@ def _patch_qwen2_model(model):
     return model
 
 
+def _patch_mistral_model(model):
+    """
+    Patch mistral model:
+        1. Use IPEX rope and paged cache
+        2. Linear fusion with (Linear + Add)
+    """
+    convert_functions(model, MistralModel, "forward", _mistral_model_forward)
+    convert_functions(model, MistralRMSNorm, "forward", _ipex_rms_layer_norm_forward)
+    convert_class(model, MistralDecoderLayer, _IPEXMistralDecoderLayer, model.device, model.config)
+    return model
+
+
 def _patch_bert_model(model):
     """
     Patch bert model:
@@ -167,6 +182,8 @@ def _patch_model(model):
         model = _patch_gpt2_model(model)
     elif model.config.model_type == "qwen2":
         model = _patch_qwen2_model(model)
+    elif model.config.model_type == "mistral":
+        model = _patch_mistral_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
     elif model.config.model_type == "vit":
