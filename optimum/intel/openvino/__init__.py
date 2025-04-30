@@ -69,6 +69,7 @@ from .modeling import (
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForZeroShotImageClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
 from .modeling_open_clip import (

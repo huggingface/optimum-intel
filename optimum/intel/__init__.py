@@ -191,6 +191,7 @@ else:
             "OVModelOpenCLIPVisual",
             "OVModelOpenCLIPText",
             "OVModelOpenCLIPForZeroShotImageClassification",
+            "OVModelForZeroShotImageClassification",
             "OVSamModel",
         ]
     )
@@ -356,6 +357,7 @@ if TYPE_CHECKING:
             OVModelForTokenClassification,
             OVModelForVision2Seq,
             OVModelForVisualCausalLM,
+            OVModelForZeroShotImageClassification,
             OVModelOpenCLIPForZeroShotImageClassification,
             OVModelOpenCLIPText,
             OVModelOpenCLIPVisual,

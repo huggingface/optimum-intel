@@ -39,6 +39,7 @@ MODEL_NAMES = {
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
+    "clip": "hf-tiny-model-private/tiny-random-CLIPModel",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "cohere": "hf-internal-testing/tiny-random-CohereForCausalLM",
     "chatglm": "katuni4ka/tiny-random-chatglm2",
@@ -154,6 +155,7 @@ MODEL_NAMES = {
     "stable-diffusion-3": "yujiepan/stable-diffusion-3-tiny-random",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
     "starcoder2": "hf-internal-testing/tiny-random-Starcoder2ForCausalLM",
+    "siglip": "katuni4ka/tiny-random-SiglipModel",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
@@ -223,6 +225,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "ltx-video": (34, 28, 28, 64),
     "sam": (102, 100),
     "speecht5": (28, 52, 10, 80),
+    "clip": (130,),
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"

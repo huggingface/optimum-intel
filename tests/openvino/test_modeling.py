@@ -53,6 +53,7 @@ from transformers import (
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    AutoModelForZeroShotImageClassification,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -95,6 +96,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVision2Seq,
     OVModelForVisualCausalLM,
+    OVModelForZeroShotImageClassification,
     OVModelOpenCLIPForZeroShotImageClassification,
     OVSamModel,
     OVSentenceTransformer,
@@ -2817,7 +2819,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         ov_model.reshape(1, -1)
         ov_model.compile()
 
-        # Speech recogition generation
+        # Image caption generation
         pipe = pipeline(
             "image-to-text",
             model=ov_model,
@@ -3295,5 +3297,56 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         del vocoder
         del model
         del processor
+        gc.collect()
 
+
+class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["clip"]
+    if is_transformers_version(">=", "4.45"):
+        SUPPORTED_ARCHITECTURES.append("siglip")
+    TASK = "zero-shot-image-classification"
+    IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForZeroShotImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        processor = get_preprocessor(model_id)
+
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        IMAGE = Image.open(
+            requests.get(
+                self.IMAGE_URL,
+                stream=True,
+            ).raw
+        ).convert("RGB")
+        labels = ["a photo of a cat", "a photo of a dog"]
+        inputs = processor(images=IMAGE, text=labels, return_tensors="pt")
+
+        transformers_model = AutoModelForZeroShotImageClassification.from_pretrained(model_id)
+
+        # test end-to-end inference
+        ov_outputs = ov_model(**inputs)
+
+        self.assertTrue("logits_per_image" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits_per_image, torch.Tensor)
+        self.assertTrue("logits_per_text" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits_per_text, torch.Tensor)
+        self.assertTrue("text_embeds" in ov_outputs)
+        self.assertIsInstance(ov_outputs.text_embeds, torch.Tensor)
+        self.assertTrue("image_embeds" in ov_outputs)
+        self.assertIsInstance(ov_outputs.image_embeds, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.logits_per_image, transformers_outputs.logits_per_image, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits_per_text, transformers_outputs.logits_per_text, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.text_embeds, transformers_outputs.text_embeds, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.image_embeds, transformers_outputs.image_embeds, atol=1e-4))
+
+        del transformers_model
+        del ov_model
         gc.collect()

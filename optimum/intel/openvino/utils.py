@@ -129,6 +129,7 @@ _HEAD_TO_AUTOMODELS = {
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",
     "image-text-to-text": "OVModelForVisualCausalLM",
+    "zero-shot-image-classification": "OVModelForZeroShotImageClassification",
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",

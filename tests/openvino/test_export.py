@@ -44,6 +44,7 @@ from optimum.intel import (
     OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
+    OVModelForZeroShotImageClassification,
     OVSamModel,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
@@ -78,6 +79,7 @@ class ExportModelTest(unittest.TestCase):
         "llava": OVModelForVisualCausalLM,
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
+        "clip": OVModelForZeroShotImageClassification,
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
