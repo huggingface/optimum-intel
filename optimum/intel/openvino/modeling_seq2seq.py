@@ -25,7 +25,6 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from openvino.runtime import Core
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
@@ -44,8 +43,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig, OVQuantizer
 from ..utils import is_transformers_version
-from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, OVQuantizationConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
+from .configuration import OVQuantizationConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -805,7 +803,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def _reorder_cache(self, past, beam_idx) -> Tuple[Tuple[torch.FloatTensor]]:
         return self.decoder._reorder_cache(past, beam_idx)
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
