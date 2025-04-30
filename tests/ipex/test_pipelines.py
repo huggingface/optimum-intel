@@ -56,15 +56,18 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "blenderbot",
         "bloom",
         "codegen",
-        "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "llama2",
-        "mistral",
         "mpt",
         "opt",
         "phi",
+    )
+    IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "gpt2",
+        "llams2",
+        "falcon",
         "qwen2",
+        "mistral",
     )
     QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES = (
         "bert",
@@ -149,6 +152,23 @@ class PipelinesIntegrationTest(unittest.TestCase):
         )
         inputs = "This is a sample"
         max_new_tokens = 6
+        transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
+        ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
+        self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
+
+    @parameterized.expand(IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_text_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        transformers_generator = transformers_pipeline(
+            "text-generation", model_id, torch_dtype=dtype, device_map=DEVICE
+        )
+        ipex_generator = ipex_pipeline(
+            "text-generation", model_id, accelerator="ipex", torch_dtype=dtype, device_map=DEVICE
+        )
+        inputs = "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."
+        max_new_tokens = 4
         transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
         ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))

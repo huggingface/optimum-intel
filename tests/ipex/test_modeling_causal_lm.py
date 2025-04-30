@@ -47,22 +47,23 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "blenderbot",
         "bloom",
         "codegen",
-        "falcon",
-        "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "mistral",
-        "llama2",
         "mpt",
         "opt",
         "phi",
-        "qwen2",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "falcon", "gpt2", "qwen2")
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = (
+        "llama2",
+        "falcon",
+        "gpt2",
+        "qwen2",
+        "mistral",
+    )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES + IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -164,6 +165,50 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
             self.assertIsInstance(outputs, torch.Tensor)
             self.assertTrue(torch.equal(outputs, transformers_outputs))
+
+    @parameterized.expand(
+        grid_parameters(
+            {
+                "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
+                "use_cache": [True, False],
+                "batch_size": [1, 2],
+            }
+        )
+    )
+    def test_ipex_patched_beam_search(self, test_name, model_arch, use_cache, batch_size):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        model = IPEXModelForCausalLM.from_pretrained(
+            model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
+        )
+        if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
+            self.assertTrue(model.add_patch)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+        self.assertEqual(model.use_cache, use_cache)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        # Test with batch_size is 1 and 2.
+        if batch_size == 1:
+            text = "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."
+        elif batch_size == 2:
+            text = [
+                "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun.",
+                "It is done, and submitted. You can play 'Survival of the Tastiest' on Android,",
+            ]
+        generation_config = GenerationConfig(
+            max_new_tokens=4,
+            num_beams=4,
+            do_sample=False,
+            top_p=0.9,
+            top_k=0,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
+        outputs = model.generate(**tokens, generation_config=generation_config)
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
+        self.assertIsInstance(outputs, torch.Tensor)
+        self.assertTrue(torch.equal(outputs, transformers_outputs))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
