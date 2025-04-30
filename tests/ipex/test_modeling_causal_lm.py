@@ -60,11 +60,23 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mistral",
     )
     PATCHHED_MODELS_RESULTS = {
-        "llama2": "",
-        "gpt2": "",
-        "falcon": "",
-        "qwen2": "",
-        "mistral": "",
+        "llama2": [
+            [[11095, 11095, 11095, 11095], [25853, 25125, 23858, 951]],
+            [[11095, 11095, 11095, 11095], [951, 951, 951, 951]],
+        ],
+        "gpt2": [[[14, 39907, 39907, 39907], [0, 33877, 27148, 16673]], [[14, 39907, 39907, 39907], [0, 0, 0, 0]]],
+        "falcon": [
+            [[36216, 57822, 57822, 57822], [6323, 6323, 6323, 6323]],
+            [[6310, 6310, 6310, 6310], [37802, 7699, 7699, 7699]],
+        ],
+        "qwen2": [
+            [[44995, 87732, 53511, 44995], [2926, 30587, 110888, 139440]],
+            [[44995, 87732, 53511, 44995], [30587, 46027, 139440, 46027]],
+        ],
+        "mistral": [
+            [[20336, 310, 27671, 17546], [26322, 3901, 469, 14865]],
+            [[20336, 310, 27671, 17546], [26322, 3901, 469, 14865]],
+        ],
     }
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
@@ -210,7 +222,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
         outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
-        self.assertTrue(torch.equal(outputs[..., -4:], self.PATCHHED_MODELS_RESULTS[model_arch]))
+        results = self.PATCHHED_MODELS_RESULTS[model_arch]
+        results = results[0] if use_cache else results[1]
+        for i in range(outputs.shape[0]):
+            self.assertEqual(outputs[..., -4:].tolist()[i], results[i])
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
