@@ -62,43 +62,61 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_compare_to_transformers(self, model_arch):
+    @parameterized.expand(
+        grid_parameters(
+            {
+                "model_arch": SUPPORTED_ARCHITECTURES,
+                "prepare_inputs": [True, False],
+            }
+        )
+    )
+    def test_compare_to_transformers(self, test_name, model_arch, prepare_inputs):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(
-            "This is a sample",
-            return_tensors="pt",
-            return_token_type_ids=False if model_arch in ("llama2",) else None,
-        ).to(DEVICE)
-        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
-        outputs = ipex_model(**inputs)
+        texts = ["This is a sample", ["This is the first input", "This is the second input"]]
+        for text in texts:
+            tokens = tokenizer(
+                text,
+                return_tensors="pt",
+                return_token_type_ids=False if model_arch in ("llama2",) else None,
+            ).to(DEVICE)
+            if prepare_inputs:
+                inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+                outputs = ipex_model(**inputs)
+            else:
+                outputs = ipex_model(**tokens)
 
-        self.assertIsInstance(outputs.logits, torch.Tensor)
+            self.assertIsInstance(outputs.logits, torch.Tensor)
 
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
 
-        # Test re-load model
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            ipex_model.save_pretrained(tmpdirname)
-            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
-            loaded_model_outputs = loaded_model(**inputs)
+            # Test re-load model
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                ipex_model.save_pretrained(tmpdirname)
+                loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
+                if prepare_inputs:
+                    loaded_model_outputs = loaded_model(**inputs)
+                else:
+                    loaded_model_outputs = loaded_model(**tokens)
 
-        # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
-        init_model_outputs = init_model(**inputs)
+            # Test init method
+            init_model = self.IPEX_MODEL_CLASS(transformers_model)
+            if prepare_inputs:
+                init_model_outputs = init_model(**inputs)
+            else:
+                init_model_outputs = init_model(**tokens)
 
-        # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
-        # To avoid float pointing error
-        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
-        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
+            # To avoid float pointing error
+            self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+            self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @unittest.skip(reason="Paged attention do not support assisted decoding for now")
