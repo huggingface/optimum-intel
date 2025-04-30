@@ -665,7 +665,10 @@ def _mistral_model_forward(
         )
 
     if position_ids is None:
-        position_ids = cache_position.unsqueeze(0)
+        position_ids = torch.arange(
+            past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+        )
+        position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
     causal_mask = self._update_causal_mask(
         attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
@@ -1021,7 +1024,7 @@ class _IPEXLlamaMLP(nn.Module):
         self.module_device = device
 
         if not config.compile and getattr(config, "quantization_config", None) is None:
-            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+            # LinearAllreduce cannot use fused op LinearAdd
             if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
             if isinstance(self.act_fn, nn.SiLU):
@@ -1049,7 +1052,7 @@ class _IPEXFalconMLP(nn.Module):
         self.config = config
         self.module_device = device
         if not config.compile and getattr(config, "quantization_config", None) is None:
-            # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+            # LinearAllreduce cannot use fused op LinearAdd
             self.linear_gelu = LinearGelu(module.dense_h_to_4h)
 
             if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:

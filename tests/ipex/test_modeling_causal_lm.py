@@ -70,35 +70,39 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(
-            "This is a sample",
-            return_tensors="pt",
-            return_token_type_ids=False if model_arch in ("llama2",) else None,
-        ).to(DEVICE)
-        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
-        outputs = ipex_model(**inputs)
+        texts = ["This is a sample", ["This is the first input", "This is the second input"]]
+        for text in texts:
+            tokens = tokenizer(
+                text,
+                return_tensors="pt",
+                return_token_type_ids=False if model_arch in ("llama2",) else None,
+            ).to(DEVICE)
+            outputs = ipex_model(**tokens)
+            inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+            outputs_2 = ipex_model(**inputs)
+            self.assertTrue(torch.allclose(outputs.logits, outputs_2.logits, atol=1e-3))
 
-        self.assertIsInstance(outputs.logits, torch.Tensor)
+            self.assertIsInstance(outputs.logits, torch.Tensor)
 
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
+            transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
 
-        # Test re-load model
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            ipex_model.save_pretrained(tmpdirname)
-            loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
-            loaded_model_outputs = loaded_model(**inputs)
+            # Test re-load model
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                ipex_model.save_pretrained(tmpdirname)
+                loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname, torch_dtype=dtype, device_map=DEVICE)
+                loaded_model_outputs = loaded_model(**inputs)
 
-        # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
-        init_model_outputs = init_model(**inputs)
+            # Test init method
+            init_model = self.IPEX_MODEL_CLASS(transformers_model)
+            init_model_outputs = init_model(**inputs)
 
-        # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
-        # To avoid float pointing error
-        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
-        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
+            # To avoid float pointing error
+            self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+            self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @unittest.skip(reason="Paged attention do not support assisted decoding for now")
