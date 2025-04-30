@@ -64,7 +64,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
     )
     IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
         "gpt2",
-        "llams2",
+        "llama2",
         "falcon",
         "qwen2",
         "mistral",
