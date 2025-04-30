@@ -210,7 +210,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
         outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
-        self.assertTrue(torch.equal(outputs[..., -4], self.PATCHHED_MODELS_RESULTS[model_arch]))
+        self.assertTrue(torch.equal(outputs[..., -4:], self.PATCHHED_MODELS_RESULTS[model_arch]))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
