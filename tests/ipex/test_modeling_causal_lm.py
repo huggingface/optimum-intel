@@ -84,11 +84,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 return_tensors="pt",
                 return_token_type_ids=False if model_arch in ("llama2",) else None,
             ).to(DEVICE)
-            if prepare_inputs:
-                inputs = ipex_model.prepare_inputs_for_generation(**tokens)
-                outputs = ipex_model(**inputs)
-            else:
-                outputs = ipex_model(**tokens)
+            outputs = ipex_model(**tokens)
+            inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+            outputs_2 = ipex_model(**inputs)
+            self.assertTrue(torch.allclose(outputs.logits, outputs_2.logits, atol=1e-3))
 
             self.assertIsInstance(outputs.logits, torch.Tensor)
 
