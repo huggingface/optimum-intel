@@ -927,31 +927,12 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
-
-        for component in [
-            self.unet,
-            self.transformer,
-            self.vae_encoder,
-            self.vae_decoder,
-            self.text_encoder,
-            self.text_encoder_2,
-            self.text_encoder_3,
-        ]:
-            if component is not None:
-                component.request = None
+        for submodel in self.ov_submodels.values():
+            submodel.request = None
 
     def compile(self):
-        for component in [
-            self.unet,
-            self.transformer,
-            self.vae_encoder,
-            self.vae_decoder,
-            self.text_encoder,
-            self.text_encoder_2,
-            self.text_encoder_3,
-        ]:
-            if component is not None:
-                component._compile()
+        for submodel in self.ov_submodels.values():
+            submodel._compile()
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
