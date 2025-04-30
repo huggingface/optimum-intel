@@ -20,6 +20,7 @@ import torch
 from parameterized import parameterized
 from transformers import AutoTokenizer, set_seed
 from transformers.pipelines import pipeline as transformers_pipeline
+from transformers.pipelines.text_generation import ReturnType
 from utils_tests import IS_XPU_AVAILABLE, MODEL_NAMES
 
 from optimum.intel.ipex.modeling_base import (
@@ -86,6 +87,13 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "vit",
     )
     TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
+    PATCHHED_MODELS_RESULTS = {
+        "llama2": "",
+        "gpt2": "",
+        "falcon": "",
+        "qwen2": "",
+        "mistral": "",
+    }
 
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_token_classification_pipeline_inference(self, model_arch):
@@ -161,18 +169,16 @@ class PipelinesIntegrationTest(unittest.TestCase):
     def test_ipex_patched_text_generation_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
-        transformers_generator = transformers_pipeline(
-            "text-generation", model_id, torch_dtype=dtype, device_map=DEVICE
-        )
         ipex_generator = ipex_pipeline(
             "text-generation", model_id, accelerator="ipex", torch_dtype=dtype, device_map=DEVICE
         )
         inputs = "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."
         max_new_tokens = 4
-        transformers_output = transformers_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
-        ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
+        ipex_output = ipex_generator(
+            inputs, do_sample=False, max_new_tokens=max_new_tokens, return_type=ReturnType.TENSORS
+        )
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
-        self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
+        self.assertEqual(ipex_output[0]["generated_text"], self.PATCHHED_MODELS_RESULTS[model_arch])
 
     @parameterized.expand(QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):

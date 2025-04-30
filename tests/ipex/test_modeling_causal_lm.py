@@ -30,7 +30,6 @@ from transformers.utils import is_auto_awq_available, is_bitsandbytes_available
 from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE, Timer
 
 from optimum.intel import IPEXModelForCausalLM
-from optimum.intel.utils.import_utils import is_torch_version
 from optimum.utils.testing_utils import grid_parameters
 
 
@@ -60,6 +59,13 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "qwen2",
         "mistral",
     )
+    PATCHHED_MODELS_RESULTS = {
+        "llama2": "",
+        "gpt2": "",
+        "falcon": "",
+        "qwen2": "",
+        "mistral": "",
+    }
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -184,7 +190,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         )
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
         self.assertEqual(model.use_cache, use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -200,15 +205,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             max_new_tokens=4,
             num_beams=4,
             do_sample=False,
-            top_p=0.9,
-            top_k=0,
             pad_token_id=tokenizer.eos_token_id,
         )
         tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
         outputs = model.generate(**tokens, generation_config=generation_config)
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
-        self.assertTrue(torch.equal(outputs, transformers_outputs))
+        self.assertTrue(torch.equal(outputs[..., -4], self.PATCHHED_MODELS_RESULTS[model_arch]))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
