@@ -158,7 +158,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
         self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
 
     @parameterized.expand(IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
-    def test_text_generation_pipeline_inference(self, model_arch):
+    def test_ipex_patched_text_generation_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         transformers_generator = transformers_pipeline(
