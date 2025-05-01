@@ -428,7 +428,11 @@ def export_pytorch(
         @functools.wraps(patched_forward)
         def ts_patched_forward(*args, **kwargs):
             ordered_example_inputs = [
-                param for param in inspect.signature(patcher.orig_forward).parameters if param in dummy_input_keys
+                param
+                for param in inspect.signature(
+                    patcher.orig_forward if library_name != "sentence_transformers" else patcher.patched_forward
+                ).parameters
+                if param in dummy_input_keys
             ]
             kwargs.update(zip(ordered_example_inputs, args))
             for i in range(len(dict_inputs)):

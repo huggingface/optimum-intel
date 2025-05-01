@@ -321,6 +321,7 @@ class CustomExportModelTest(unittest.TestCase):
             out_features=256,
         )
         model = SentenceTransformer(modules=[word_embedding_model, pooling_model, dense_model])
+        model.to(torch.device("cpu"))
 
         with TemporaryDirectory() as tmpdirname:
             export_from_model(model, output=tmpdirname, task="feature-extraction")
