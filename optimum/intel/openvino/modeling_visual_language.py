@@ -1,5 +1,6 @@
 import copy
 import enum
+import inspect
 import logging
 import math
 import os
@@ -750,14 +751,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         token_type_ids=None,
         pixel_attention_mask=None,
         input_image_embeds: Optional[torch.FloatTensor] = None,
+        image_pixel_values: Optional[torch.FloatTensor] = None,
         image_attention_mask=None,
+        audio_input_features: Optional[torch.FloatTensor] = None,
         input_audio_embeds: Optional[torch.FloatTensor] = None,
         audio_embed_sizes=None,
         audio_attention_mask=None,
         input_mode=None,
         **kwargs,
     ):
-        pixel_values = pixel_values if pixel_values is not None else images
+        if pixel_values is None:
+            pixel_values = images if images is not None else image_pixel_values
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -775,7 +779,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             pixel_attention_mask=pixel_attention_mask,
             input_image_embeds=input_image_embeds,
             image_attention_mask=image_attention_mask,
-            input_audio_embeds=input_audio_embeds,
+            input_audio_embeds=input_audio_embeds if input_audio_embeds is not None else audio_input_features,
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
@@ -870,7 +874,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_inputs = {"input_ids": input_ids}
 
         if pixel_values is None:
-            pixel_values = kwargs.get("input_image_embeds", kwargs.get("images"))
+            pixel_values = kwargs.get("input_image_embeds", kwargs.get("images", kwargs.get("image_pixel_values")))
 
         model_inputs.update(
             {
@@ -888,7 +892,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "token_type_ids": kwargs.get("token_type_ids"),
                 "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
-                "input_audio_embeds": kwargs.get("input_audio_embeds"),
+                "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
                 "input_mode": kwargs.get("input_mode"),
             }
@@ -2343,11 +2347,12 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         )
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
+        self.image_dim_out = self.config.img_processor["image_dim_out"]
 
     def get_vision_embeddings(self, pixel_values, image_sizes, **kwargs):
         num_images, num_crops, c, h, w = pixel_values.shape
         img_features = self.vision_embeddings(pixel_values.flatten(0, 1)).last_hidden_state.reshape(
-            num_images, num_crops, -1, self.config.img_processor["image_dim_out"]
+            num_images, num_crops, -1, self.image_dim_out
         )
         image_features_proj = self.hd_feature_transform(img_features, image_sizes)
         return image_features_proj
@@ -3549,254 +3554,110 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         )
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
-        self.chunk_size = config.audio_processor["config"].get("chunk_size", -1)
-        self.left_chunk = config.audio_processor["config"].get("left_chunk", 18)
-        self.time_reduction = config.audio_processor["config"].get("time_reduction", 8)
-        self.image_size = config.img_processor.get("image_size", 448)
-        self.patch_size = config.img_processor.get("patch_size", 14)
+        self.audio_config = (
+            config.audio_processor["config"] if hasattr(config, "audio_processor") else config.audio_config.to_dict()
+        )
+        self.chunk_size = self.audio_config.get("chunk_size", -1)
+        self.left_chunk = self.audio_config.get("left_chunk", 18)
+        self.time_reduction = self.audio_config.get("time_reduction", 8)
+        self.image_config = (
+            config.img_processor if hasattr(config, "img_processor") else config.vision_config.to_dict()
+        )
+        self.image_size = self.image_config.get("crop_size", 448)
+        self.patch_size = self.image_config.get("patch_size", 14)
         self.num_patches_per_side = self.image_size // self.patch_size
         self._IMAGE_SPECIAL_TOKEN_ID = (
-            200010  # '<|endoftext10|>', or we can better name it (in `tokenizer_config.json`)
+            200010 if "image_token_id" not in self.image_config else self.image_config["image_token_id"]
         )
-        self._AUDIO_SPECIAL_TOKEN_ID = 200011  # '<|endoftext11|>'
+        self._AUDIO_SPECIAL_TOKEN_ID = (
+            200011 if "audio_token_id" not in self.audio_config else self.audio_config["audio_token_id"]
+        )
         self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE = [-9999, -1]  # For backward compatibility
         self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE = [float("-inf"), -10000]  # For backward compatibility
+        self.image_dim_out = self.image_config.get("image_dim_out", self.image_config["hidden_size"])
 
-    def image_embed(self, input_ids: torch.LongTensor, input_embeds: torch.FloatTensor, image_sizes=None, **kwargs):
-        if isinstance(input_ids, tuple):
-            # pipeline parallel
-            input_ids, input_embeds = input_ids
-
-        img_embeds = input_embeds
-        if image_sizes is None and "image_sizes" in kwargs:
-            image_sizes = kwargs["image_sizes"]
-        img_sizes = image_sizes
-        if "image_attention_mask" in kwargs:
-            image_attention_mask = kwargs["image_attention_mask"]
-        else:
-            image_attention_mask = None
+    def image_embed(
+        self,
+        input_ids: torch.LongTensor,
+        image_pixel_values: torch.FloatTensor,
+        image_attention_mask,
+        inputs_embeds,
+        image_sizes=None,
+        **kwargs,
+    ):
         input_shape = input_ids.size()
         input_ids = input_ids.view(-1, input_shape[-1])
+        positions_tuple = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=True)
 
-        with torch.no_grad():
-            positions = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=False)
-            positions_tuple = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=True)
+        if len(positions_tuple[-1]) == 0:
+            return inputs_embeds
+        batch_size = image_pixel_values.shape[0]
 
-        select = False
-        hd_transform = False
-        if len(positions.tolist()) > 0:
-            if (
-                self.config.embd_layer["image_embd_layer"]["use_hd_transform"]
-                and img_sizes is not None
-                and len(img_sizes)
-            ):
-                hd_transform = True
-                assert (
-                    img_embeds.ndim == 5
-                ), f"(branch 1) img_embeds size: {img_embeds.size()}, expect 5D tensor for hd transform"
-                # img_embeds: (num_images, max_num_crops, 3, H, W)
-                # img_sizes: (num_images, 2).view(1, -1)
+        img_features = self.get_img_features(
+            image_pixel_values.flatten(0, 1),
+            image_attention_mask=image_attention_mask.flatten(0, 1).to(dtype=bool),
+        )
 
-                bs = img_embeds.shape[0]
-                pixel_values = img_embeds.flatten(0, 1)
-                patch_attn_mask = image_attention_mask.type(torch.BoolTensor).flatten(0, 1)
-                v_position_ids = self.get_vision_position_ids(
-                    pixel_values, patch_attn_mask, self.patch_size, self.num_patches_per_side
+        base_feat_size = int(np.sqrt(img_features.shape[1]))
+        img_features = img_features.view(batch_size, -1, base_feat_size**2, self.image_dim_out)
+        image_sizes = image_sizes.view(-1, 2)
+
+        output_imgs = []
+        for idx in range(batch_size):
+            height, width = image_sizes[idx]
+            height_ratio = height // self.image_size
+            width_ratio = width // self.image_size
+            area_ratio = height_ratio * width_ratio
+
+            global_img = img_features[idx, :1]
+            global_img = global_img.reshape(1, base_feat_size, base_feat_size, self.image_dim_out).contiguous()
+            temporary_extensor = self.sub_GN.repeat(1, base_feat_size, 1, 1)
+            global_img = torch.cat([global_img, temporary_extensor], dim=2).reshape(1, -1, self.image_dim_out)
+
+            sub_img = img_features[idx, 1:]
+            sub_img = sub_img[:area_ratio]
+            sub_img = (
+                sub_img.reshape(height_ratio, width_ratio, base_feat_size, base_feat_size, self.image_dim_out)
+                .transpose(1, 2)
+                .reshape(1, height_ratio * base_feat_size, width_ratio * base_feat_size, self.image_dim_out)
+                .contiguous()
+            )
+
+            if image_attention_mask is not None:
+                reshaped_image_attention_mask = (
+                    image_attention_mask[idx, 1 : area_ratio + 1, 0::2, 0::2]
+                    .reshape(height_ratio, width_ratio, base_feat_size, base_feat_size)
+                    .transpose(1, 2)
+                    .reshape(1, height_ratio * base_feat_size, width_ratio * base_feat_size)
                 )
-                # Nx(HW)xC
-                img_features = torch.from_numpy(
-                    self.vision_embeddings(
-                        pixel_values=pixel_values,
-                        patch_attention_mask=patch_attn_mask,
-                        patch_position_ids=v_position_ids,
-                    ).last_hidden_state
-                )
-
-                base_feat_height_target = self.config.base_vision_feat_height_target
-                base_resolution = self.config.crop_size
-                base_feat_height_reduction = self.config.base_vision_feat_height_reduction
-
-                base_feat_height = base_feat_width = int(np.sqrt(img_features.shape[1]))
-
-                assert (
-                    base_feat_height == base_feat_height_target and base_feat_width == base_feat_height_target
-                ), f"base_feat_height: {base_feat_height}, base_feat_width: {base_feat_width}, expect {base_feat_height_target} features for hd transform"
-
-                # bs x max_num_crops x (24x24) x C
-                img_features = img_features.view(bs, -1, base_feat_height * base_feat_width, self.config.image_dim_out)
-                C = self.config.image_dim_out
-                H = base_feat_height
-
-                output_imgs = []
-                output_len = []
-                # training is tensor, inference is list
-                if isinstance(img_sizes, torch.Tensor):
-                    img_sizes = img_sizes.view(-1, 2)
-                for _bs in range(bs):
-                    h, w = img_sizes[_bs]
-                    h = h // base_resolution
-                    w = w // base_resolution
-                    B_ = h * w
-
-                    # 1 x (24x24) x 1024
-                    global_img_feature = img_features[_bs, :1]
-
-                    # 1 x 12 x 12 x 4096
-                    glb_img = (
-                        global_img_feature.reshape(1, H, H, C)
-                        .reshape(
-                            1,
-                            H // base_feat_height_reduction,
-                            base_feat_height_reduction,
-                            H // base_feat_height_reduction,
-                            base_feat_height_reduction,
-                            C,
-                        )
-                        .contiguous()
-                        .permute(0, 1, 3, 2, 4, 5)
-                        .reshape(
-                            1,
-                            H // base_feat_height_reduction,
-                            H // base_feat_height_reduction,
-                            base_feat_height_reduction * base_feat_height_reduction * C,
-                        )
-                        .contiguous()
-                    )
-                    temp_glb_GN = self.sub_GN.repeat(1, H // base_feat_height_reduction, 1, 1)
-
-                    # 1 x 156 x 4096
-                    glb_img = torch.cat([glb_img, temp_glb_GN], dim=2).reshape(
-                        1, -1, base_feat_height_reduction * base_feat_height_reduction * C
-                    )
-
-                    # (max_num_crops-1) x (12x12) x C
-                    sub_img = img_features[_bs, 1:]
-                    # 16x574x1024
-                    # get rid of padding sub_img
-                    sub_img = sub_img[:B_]
-
-                    # (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
-                    sub_img = (
-                        sub_img.reshape(B_, H, H, C)
-                        .reshape(
-                            B_,
-                            H // base_feat_height_reduction,
-                            base_feat_height_reduction,
-                            H // base_feat_height_reduction,
-                            base_feat_height_reduction,
-                            C,
-                        )
-                        .contiguous()
-                        .permute(0, 1, 3, 2, 4, 5)
-                        .reshape(B_, -1, base_feat_height_reduction * base_feat_height_reduction * C)
-                        .contiguous()
-                    )
-                    sub_img = (
-                        sub_img.reshape(
-                            1,
-                            h,
-                            w,
-                            base_feat_height // base_feat_height_reduction,
-                            base_feat_width // base_feat_height_reduction,
-                            -1,
-                        )
-                        .permute(0, 1, 3, 2, 4, 5)
-                        .reshape(
-                            1,
-                            h * base_feat_height // base_feat_height_reduction,
-                            w * base_feat_width // base_feat_height_reduction,
-                            base_feat_height_reduction * base_feat_height_reduction * C,
-                        )
-                    )
-
-                    if image_attention_mask is not None and len(image_attention_mask) > 0:
-                        reshaped_image_attention_mask = (
-                            image_attention_mask[_bs, 1 : B_ + 1, 0::2, 0::2]
-                            .reshape(
-                                1,
-                                h,
-                                w,
-                                base_feat_height // base_feat_height_reduction,
-                                base_feat_width // base_feat_height_reduction,
-                            )
-                            .permute(0, 1, 3, 2, 4)
-                            .reshape(
-                                1,
-                                h * base_feat_height // base_feat_height_reduction,
-                                w * base_feat_width // base_feat_height_reduction,
-                            )
-                        )
-                        useful_height = int(reshaped_image_attention_mask[0, :, 0].sum().item())
-                        useful_width = int(reshaped_image_attention_mask[0, 0, :].sum().item())
-                        sub_img = sub_img[:, :useful_height, :useful_width]
-                        temp_sub_GN = self.sub_GN.repeat(1, useful_height, 1, 1)
-                        temp_len = (
-                            int(image_attention_mask[_bs, : B_ + 1, 0::2, 0::2].sum().item())
-                            + (useful_height + 1)
-                            + base_feat_height // base_feat_height_reduction
-                        )
-                    else:
-                        temp_sub_GN = self.sub_GN.repeat(1, h * base_feat_height // base_feat_height_reduction, 1, 1)
-                        temp_len = int(
-                            (h * w + 1) * self.num_img_tokens
-                            + 1
-                            + (h + 1) * base_feat_height // base_feat_height_reduction
-                        )
-
-                    sub_img = torch.cat([sub_img, temp_sub_GN], dim=2).reshape(
-                        1, -1, base_feat_height_reduction * base_feat_height_reduction * C
-                    )
-                    # (1, num_img_tokens, 1024*4)
-
-                    # glb + sub
-                    if self.config.hd_transform_order == "glb_sub":
-                        output_imgs.append(torch.cat([glb_img, self.glb_GN, sub_img], dim=1))
-                    elif self.config.hd_transform_order == "sub_glb":
-                        output_imgs.append(torch.cat([sub_img, self.glb_GN, glb_img], dim=1))
-                    else:
-                        raise NotImplementedError(f"hd_transform_order = {self.hd_transform_order}, not implemented")
-
-                    # temp_len = int((h*w+1)*144 + 1 + (h+1)*12)
-                    assert (
-                        temp_len == output_imgs[-1].shape[1]
-                    ), f"temp_len: {temp_len}, output_imgs[-1].shape[1]: {output_imgs[-1].shape[1]}"
-                    output_len.append(temp_len)
-
-                img_set_tensor = torch.from_numpy(self.vision_projection(output_imgs))
-
+                useful_height = int(reshaped_image_attention_mask[0, :, 0].sum().item())
+                useful_width = int(reshaped_image_attention_mask[0, 0, :].sum().item())
+                sub_img = sub_img[:, :useful_height, :useful_width]
+                temporary_extensor = self.sub_GN.repeat(1, useful_height, 1, 1)
             else:
-                raise NotImplementedError
-            select = True
+                temporary_extensor = self.sub_GN.repeat(1, height_ratio * base_feat_size, 1, 1)
 
-        # we use the token embedding layer from the huggingface model, this is REQUIRED to make sure we are using the loaded weights.
-        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
+            sub_img = torch.cat([sub_img, temporary_extensor], dim=2).reshape(1, -1, self.image_dim_out)
 
-        if select:
-            if hd_transform:
-                # new implementation without in-place operation
-                # Ref: https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/4a0d683eba9f1d0cbfb6151705d1ee73c25a80ca/modeling_phi3_v.py#L233
-                # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put.html
-                # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put_.html#torch.Tensor.index_put_
-                # img_set_tensor: a list of tensors, each tensor has shape (1, N_tokens, C)
-                # assert all([_img_set_tensor.shape[0] == 1 for _img_set_tensor in img_set_tensor]), 'img_set_tensor should have shape (1, N_tokens, C)'
-                # Shape: (merged_N_tokens, C)
-                merged_img_set_tensor = img_set_tensor.squeeze(0)  # torch.cat(img_set_tensor, dim=1).squeeze(0)
-                merged_img_set_tensor = merged_img_set_tensor.to(hidden_states.dtype).to(hidden_states.device)
-                # Temporarily disable autocast to avoid issue on bf16 tensors
-                # Ref: https://github.com/pytorch/pytorch/issues/132715
-                new_hidden_states = hidden_states.index_put(
-                    indices=positions_tuple, values=merged_img_set_tensor, accumulate=False
-                )
-                hidden_states = new_hidden_states
-            else:
-                raise NotImplementedError
+            # Merge global and sub
+            output_imgs.append(torch.cat([sub_img, self.glb_GN, global_img], dim=1))
 
-        return hidden_states
+        img_set_tensor = []
+        for output_img in output_imgs:
+            img_feature_proj = torch.from_numpy(self.vision_projection(output_img))
+            img_set_tensor.append(img_feature_proj)
+
+        merged_img_set_tensor = torch.cat(img_set_tensor, dim=1).squeeze(0)
+
+        image_embeds = inputs_embeds.index_put(indices=positions_tuple, values=merged_img_set_tensor, accumulate=False)
+
+        return image_embeds
 
     def audio_embed(
         self,
         input_ids: torch.LongTensor,
-        input_embeds: torch.FloatTensor,
+        audio_input_embeds: torch.FloatTensor,
+        inputs_embeds,
         audio_embed_sizes=None,
         audio_projection_mode="speech",
         **kwargs,
@@ -3804,30 +3665,19 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         input_shape = input_ids.size()
         input_ids = input_ids.view(-1, input_shape[-1])
 
-        positions = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=False)
         positions_tuple = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=True)
-        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
-        if len(positions.tolist()) > 0:
-            audio_set_tensor = self.get_audio_features(input_embeds, audio_projection_mode)
-            assert audio_embed_sizes.sum().item() == len(
-                positions
-            ), f"please ensure the encoder outputs have the same length as defined in input_ids! \n audio_embed_sizes.sum().item(): {audio_embed_sizes.sum().item()} \n len(positions): {len(positions)} \n audio_embed_sizes: {audio_embed_sizes} \n positions: {positions} \n input_ids.shape \n {input_ids.shape}"
 
-            # new implementation without in-place operation
-            # Ref: https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/4a0d683eba9f1d0cbfb6151705d1ee73c25a80ca/modeling_phi3_v.py#L233
-            # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put.html
-            # Ref: https://pytorch.org/docs/stable/generated/torch.Tensor.index_put_.html#torch.Tensor.index_put_
-            # audio_set_tensor: shape (N_audios, N_padded_tokens, C)
-            # Shape: (merged_N_tokens, C)
-            merged_audio_set_tensor = torch.cat(
-                [audio_set_tensor[i, : audio_embed_sizes[i], :] for i in range(len(audio_embed_sizes))], dim=0
-            )
-            new_hidden_states = hidden_states.index_put(
-                indices=positions_tuple, values=merged_audio_set_tensor, accumulate=False
-            )
-            hidden_states = new_hidden_states
+        if len(positions_tuple[-1]) == 0:
+            return inputs_embeds
 
-        return hidden_states
+        audio_embeds = self.get_audio_features(audio_input_embeds, audio_projection_mode)
+
+        merged_audio_embeds = torch.cat(
+            [audio_embeds[i, : audio_embed_sizes[i], :] for i in range(len(audio_embed_sizes))], dim=0
+        )
+        inputs_embeds = inputs_embeds.index_put(indices=positions_tuple, values=merged_audio_embeds, accumulate=False)
+
+        return inputs_embeds
 
     def get_audio_features(
         self,
@@ -3973,29 +3823,30 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         need this to be faster, create nn.Module()-s for all the cases and return
         one of them.  Torchscript does support that.
         """
-        if self.config.audio_processor["config"]["input_layer"] == "nemo_conv":
-            nemo_conv_settings = self.config.audio_processor["config"]["nemo_conv_settings"]
-            # Handle the special causal case
-            subsampling_causal_cond = nemo_conv_settings.get("subsampling", "dw_striding") in [
-                "dw_striding",
-                "striding",
-                "striding_conv1d",
-            ]
-            is_causal = nemo_conv_settings.get("is_causal", False)
-            if is_causal and subsampling_causal_cond:
-                lens_change = (
-                    torch.ceil(feature_lens / self.time_reduction).long()
-                    if isinstance(feature_lens, torch.Tensor)
-                    else math.ceil(feature_lens / self.time_reduction)
-                )
-                feature_lens_remainder = feature_lens % self.time_reduction
-                if isinstance(feature_lens, torch.Tensor):
-                    lens_change[feature_lens_remainder != 1] += 1
-                elif feature_lens_remainder != 1:
-                    lens_change += 1
+        nemo_conv_settings = self.audio_config.get("nemo_conv_settings")
+        if nemo_conv_settings is None:
+            nemo_conv_settings = {"conv_channels": self.audio_config["nemo_conv_channels"]}
+        # Handle the special causal case
+        subsampling_causal_cond = nemo_conv_settings.get("subsampling", "dw_striding") in [
+            "dw_striding",
+            "striding",
+            "striding_conv1d",
+        ]
+        is_causal = nemo_conv_settings.get("is_causal", False)
+        if is_causal and subsampling_causal_cond:
+            lens_change = (
+                torch.ceil(feature_lens / self.time_reduction).long()
+                if isinstance(feature_lens, torch.Tensor)
+                else math.ceil(feature_lens / self.time_reduction)
+            )
+            feature_lens_remainder = feature_lens % self.time_reduction
+            if isinstance(feature_lens, torch.Tensor):
+                lens_change[feature_lens_remainder != 1] += 1
+            elif feature_lens_remainder != 1:
+                lens_change += 1
                 return lens_change
-            ceil_func = math.ceil if isinstance(feature_lens, int) else torch.ceil
-            return ceil_func(feature_lens / self.time_reduction)
+        ceil_func = math.ceil if isinstance(feature_lens, int) else torch.ceil
+        return ceil_func(feature_lens / self.time_reduction)
 
     def calculate_hs_mask(self, xs_pad, mask):
         max_audio_length = xs_pad.shape[1]
@@ -4132,23 +3983,21 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             & (input_ids <= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[1])
         ] = self._AUDIO_SPECIAL_TOKEN_ID
         input_ids = new_input_ids
-        image_position_mask = input_ids == self._IMAGE_SPECIAL_TOKEN_ID
-        non_image_position_mask = ~image_position_mask
-        image_hidden_states = self.image_embed(
+        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
+        hidden_states = self.image_embed(
             input_ids=input_ids,
-            input_embeds=input_image_embeds,
+            inputs_embeds=hidden_states,
+            image_pixel_values=input_image_embeds,
             image_sizes=image_sizes,
             image_attention_mask=image_attention_mask,
         )
-        audio_hidden_states = self.audio_embed(
+        hidden_states = self.audio_embed(
             input_ids=input_ids,
-            input_embeds=input_audio_embeds,
+            inputs_embeds=hidden_states,
+            audio_input_embeds=input_audio_embeds,
             audio_embed_sizes=audio_embed_sizes,
             audio_projection_mode=audio_projection_mode,
         )
-        hidden_states = image_hidden_states * image_position_mask.unsqueeze(
-            -1
-        ) + audio_hidden_states * non_image_position_mask.unsqueeze(-1)
 
         return hidden_states
 
@@ -4173,6 +4022,8 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             if isinstance(input_mode, torch.Tensor):
                 assert len(input_mode) == 1
                 input_mode = input_mode[0].item()
+            if input_mode is None:
+                input_mode = 1 if input_image_embeds is not None else 2
             input_mode = InputMode(input_mode)
 
             if input_mode in [InputMode.VISION_SPEECH, InputMode.VISION]:
@@ -4212,8 +4063,8 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         user_prompt = "<|user|>"
         assistant_prompt = "<|assistant|>"
         prompt_suffix = "<|end|>"
-        image_token = "<|image_1|>"
-        audio_token = "<|audio_1|>"
+        image_token = getattr(processor.tokenizer, "image_token", "<|image_1|>")
+        audio_token = getattr(processor.tokenizer, "audio_token", "<|audio_1|>")
         if audio is not None and audio_token not in text:
             text = audio_token + text
         if image is not None and image_token not in text:
@@ -4225,8 +4076,32 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             text = processor.tokenizer.apply_chat_template(
                 [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True
             )
-        inputs = processor(text=text, images=image, audios=audio, return_tensors="pt")
+        audio_input = {}
+        if "audio" in inspect.signature(processor.__call__).parameters:
+            sample_rate = None
+            if isinstance(audio, tuple):
+                audio, sample_rate = audio
+            if isinstance(audio, list) and len(audio) == 1 and isinstance(audio[0], tuple):
+                audio, sample_rate = audio[0]
+            audio_input["audio"] = audio
+            if sample_rate is not None:
+                audio_input["sampling_rate"] = sample_rate
+        else:
+            audio_input["audios"] = audio
+        inputs = processor(text=text, images=image, **audio_input, return_tensors="pt")
         return inputs
+
+    def get_img_features(self, pixel_values, image_attention_mask):
+        patch_position_ids = self.get_vision_position_ids(
+            pixel_values, image_attention_mask, self.patch_size, self.num_patches_per_side
+        )
+        return torch.from_numpy(
+            self.vision_embeddings(
+                pixel_values=pixel_values,
+                patch_attention_mask=image_attention_mask,
+                patch_position_ids=patch_position_ids,
+            )[0]
+        )
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
@@ -4245,4 +4120,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
     "phi4mm": _OVPhi4MMForCausalLM,
+    "phi4_multimodal": _OVPhi4MMForCausalLM,
 }

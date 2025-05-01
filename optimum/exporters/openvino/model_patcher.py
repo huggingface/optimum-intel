@@ -5612,6 +5612,8 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
         else:
             raise ValueError("Unknown ")
         self.orig_forward = self.patched_forward
+
+
 class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
@@ -5657,7 +5659,10 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         def forward(self, audio_input):
-            audio_input, masks = self._forward_embeddings_core(audio_input, None)
+            if hasattr(self, "_forward_embeddings_code"):
+                audio_input, masks = self._forward_embeddings_core(audio_input, None)
+            else:
+                audio_input, masks = self.embed(audio_input, None)
             return audio_input
 
         model.__orig_forward = model.forward
@@ -5677,21 +5682,27 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         def forward(self, audio_feature, audio_mask):
-            relative_attention_bias = self.init_relative_attention_bias(audio_feature)
+            if hasattr(self, "init_relative_attention_bias"):
+                relative_attention_bias = self.init_relative_attention_bias(audio_feature)
 
-            _simplified_path = self.extra_layer_output_idx == -1 and relative_attention_bias is None
+                _simplified_path = self.extra_layer_output_idx == -1 and relative_attention_bias is None
 
-            if _simplified_path:
-                audio_feature, *_ = self.encoders(audio_feature, None, None, audio_mask)
+                if _simplified_path:
+                    audio_feature, *_ = self.encoders(audio_feature, None, None, audio_mask)
+                else:
+                    for layer in self.encoders:
+                        audio_feature, _, _, _ = layer(
+                            audio_feature,
+                            None,
+                            None,
+                            audio_mask,
+                            relative_attention_bias=relative_attention_bias,
+                        )
             else:
+                relative_attention_bias = self.relative_attention_bias_layer(audio_feature)
+                attention_mask = audio_mask.unsqueeze(1) + relative_attention_bias
                 for layer in self.encoders:
-                    audio_feature, _, _, _ = layer(
-                        audio_feature,
-                        None,
-                        None,
-                        audio_mask,
-                        relative_attention_bias=relative_attention_bias,
-                    )
+                    audio_feature = layer(audio_feature, attention_mask)
             return audio_feature
 
         model.__orig_forward = model.forward
@@ -5710,7 +5721,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        def get_img_features(
+        def get_img_features_legacy(
             self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None
         ) -> torch.FloatTensor:
             LAYER_IDX = self.layer_idx
@@ -5785,8 +5796,37 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                     img_feature = torch.cat([cls_feature, patch_feature], dim=1)
                 return img_feature
 
+        def get_img_features(
+            self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None
+        ):
+            img_processor_output = self.img_processor(
+                pixel_values,
+                patch_attention_mask=patch_attention_mask,
+                output_hidden_states=True,
+                position_ids=patch_position_ids,
+            )
+            img_feature = img_processor_output.hidden_states[self.layer_idx]
+
+            patch_feature = img_feature
+            # reshape to 2D tensor
+            width = int(math.sqrt(patch_feature.size(1)))
+            patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+            # convert to NCHW
+            patch_feature = patch_feature.permute(0, 3, 1, 2)
+            if getattr(self, "img_processor_padding", None) is not None:
+                patch_feature = self.img_processor_padding(patch_feature)
+            patch_feature = self.image_token_compression(patch_feature)
+            # convert to NHWC
+            patch_feature = patch_feature.permute(0, 2, 3, 1)
+            patch_feature = patch_feature.view(
+                -1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1)
+            )
+            return patch_feature
+
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(get_img_features, model)
+        model.forward = types.MethodType(
+            get_img_features_legacy if hasattr(model, "type_feature") else get_img_features, model
+        )
         super().__init__(config, model, model_kwargs)
 
     def __enter__(self):
@@ -5951,9 +5991,13 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
             embeddings = embeddings + self.position_embedding(position_ids)
             return embeddings
 
-        for layer in self._model.img_processor.encoder.layers:
-            layer.self_attn._orig_forward = layer.self_attn.forward
-            layer.self_attn.forward = types.MethodType(attn_forward, layer.self_attn)
+        if (
+            getattr(self._model.img_processor.encoder.layers[0].self_attn.config, "_attn_implementation", "eager")
+            != "sdpa"
+        ):
+            for layer in self._model.img_processor.encoder.layers:
+                layer.self_attn._orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(attn_forward, layer.self_attn)
         self._model.img_processor._orig_forward = self._model.img_processor.forward
         self._model.img_processor.forward = types.MethodType(transformer_fwd, self._model.img_processor)
         self._model.img_processor.embeddings._orig_forward = self._model.img_processor.embeddings.forward
@@ -5965,6 +6009,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
         for layer in self._model.img_processor.encoder.layers:
-            layer.self_attn.forward = layer.self_attn._orig_forward
+            if hasattr(layer.self_attn, "_orig_frward"):
+                layer.self_attn.forward = layer.self_attn._orig_forward
         self._model.img_processor.forward = self._model.img_processor._orig_forward
         self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward

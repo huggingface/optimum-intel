@@ -233,6 +233,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "idefics3",
     "smolvlm",
     "phi4mm",
+    "phi4-multimodal",
 ]
 
 

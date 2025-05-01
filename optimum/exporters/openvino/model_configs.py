@@ -182,6 +182,14 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
@@ -2778,22 +2786,28 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         **kwargs,
     ):
         self.batch_size = batch_size
-        self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"]
-        self.image_dim_out = (
-            normalized_config.config.img_processor.get(
-                "image_dim_out", normalized_config.config.img_processor.get("hidden_size")
-            )
-            if normalized_config.config.img_processor is not None
-            else 1152
+        self._embed_layer_realization = (
+            normalized_config.config.embd_layer["embedding_cls"]
+            if hasattr(normalized_config.config, "embd_layer")
+            else "image_audio"
         )
+        if not hasattr(normalized_config.config, "vision_config"):
+            self.image_dim_out = (
+                normalized_config.config.img_processor.get(
+                    "image_dim_out", normalized_config.config.img_processor.get("hidden_size")
+                )
+                if normalized_config.config.img_processor is not None
+                else 1152
+            )
+            if "image_embd_layer" in normalized_config.config.embd_layer:
+                self.crop_size = normalized_config.config.embd_layer["image_embd_layer"].get("crop_size", crop_size)
+            else:
+                self.crop_size = normalized_config.config.embd_layer.get("crop_size", crop_size)
+        else:
+            self.image_dim_out = normalized_config.config.vision_config.hidden_size
+            self.crop_size = normalized_config.config.vision_config.crop_size
         self.height = height
         self.width = width
-        if "image_embd_layer" in normalized_config.config.embd_layer:
-            self.crop_size = normalized_config.config.embd_layer["image_embd_layer"].get(
-                "crop_size", crop_size
-            )
-        else:
-            self.crop_size = normalized_config.config.embd_layer.get("crop_size", crop_size)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         h = self.height // self.crop_size
@@ -2934,15 +2948,19 @@ class DummyAudioPhi4MMInputGenerator(DummyInputGenerator):
         normalized_config: NormalizedVisionConfig,
         batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
         signal_length=498,
-        audio_chunk_size=64,
         **kwargs,
     ):
         self.signal_length = signal_length
-        self.audio_chunk_size = (
-            signal_length // normalized_config.config.audio_processor["config"]["time_reduction"] + 1
-        )
-        self.input_size = normalized_config.config.audio_processor["config"]["input_size"]
-        self.attention_dim = normalized_config.config.audio_processor["config"]["attention_dim"]
+        if hasattr(normalized_config.config, "audio_processor"):
+            self.audio_chunk_size = (
+                signal_length // normalized_config.config.audio_processor["config"]["time_reduction"] + 1
+            )
+            self.input_size = normalized_config.config.audio_processor["config"]["input_size"]
+            self.attention_dim = normalized_config.config.audio_processor["config"]["attention_dim"]
+        else:
+            self.audio_chunk_size = signal_length // normalized_config.config.audio_config.time_reduction + 1
+            self.input_size = normalized_config.config.audio_config.input_size
+            self.attention_dim = normalized_config.config.audio_config.hidden_size
         self.batch_size = batch_size
         self.task = task
         self.normalized_config = normalized_config
@@ -3040,6 +3058,9 @@ class Phi4MMConfigBehavior(str, enum.Enum):
 @register_in_tasks_manager(
     "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
+@register_in_tasks_manager(
+    "phi4-multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+)
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3066,7 +3087,11 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
         self._orig_config = config
 
         if self._behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
-            self._config.image_size = self._config.embd_layer.get("image_embd_layer", {}).get("crop_size", 448)
+            if hasattr(self._config, "vision_config"):
+                self._config = self._config.vision_config
+                self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            else:
+                self._config.image_size = self._config.embd_layer.get("image_embd_layer", {}).get("crop_size", 448)
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsPhi4InputGenerator)
         if self._behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
@@ -3226,12 +3251,20 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
             vision_model = model.model.embed_tokens_extend.image_embed
-            projection = vision_model.img_projection
+            if hasattr(vision_model, "img_projection"):
+                projection = vision_model.img_projection
+            else:
+                import torch
+
+                projection = torch.nn.Sequential(
+                    *[vision_model.img_projection_up, torch.nn.GELU(), vision_model.img_projection_down]
+                )
             projection.config = vision_model.img_processor.config
             return projection
 
         if behavior == Phi4MMConfigBehavior.TEXT_EMBEDDINGS:
-            model.model.disable_input_require_grads()
+            if hasattr(model.model, "_require_grads_hook"):
+                model.model.disable_input_require_grads()
             text_embedding = model.model.embed_tokens
             text_embedding.config = model.config
             return text_embedding
@@ -3252,14 +3285,40 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             return audio_encoder
 
         if behavior == Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION:
-            audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["speech"]
-            audio_projection.config = model.config
-            return audio_projection
+            if hasattr(model.model.embed_tokens_extend.audio_embed, "audio_projection"):
+                audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["speech"]
+                audio_projection.config = model.config
+                return audio_projection
+            else:
+                import torch
+
+                audio_projection = torch.nn.Sequential(
+                    *[
+                        model.model.embed_tokens_extend.audio_embed.up_proj_for_speech,
+                        torch.nn.GELU(),
+                        model.model.embed_tokens_extend.audio_embed.down_proj_for_speech,
+                    ]
+                )
+                audio_projection.config = model.config
+                return audio_projection
 
         if behavior == Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION:
-            audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["vision"]
-            audio_projection.config = model.config
-            return audio_projection
+            if hasattr(model.model.embed_tokens_extend.audio_embed, "audio_projection"):
+                audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["vision"]
+                audio_projection.config = model.config
+                return audio_projection
+            else:
+                import torch
+
+                audio_projection = torch.nn.Sequential(
+                    *[
+                        model.model.embed_tokens_extend.audio_embed.up_proj_for_vision_speech,
+                        torch.nn.GELU(),
+                        model.model.embed_tokens_extend.audio_embed.down_proj_for_vision_speech,
+                    ]
+                )
+                audio_projection.config = model.config
+                return audio_projection
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -3276,7 +3335,7 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     def rename_ambiguous_inputs(self, inputs):
         if self._behavior == Phi4MMConfigBehavior.AUDIO_EMBEDDINGS:
             input_info = inputs.pop("audio_input")
-            inputs["input_"] = input_info
+            inputs["input_" if hasattr(self._normalized_config.config, "audio_processor") else "x"] = input_info
         if self._behavior in [
             Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
             Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
@@ -4137,4 +4196,3 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
             )
-
