@@ -5626,6 +5626,8 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
         if hasattr(model.config, "speech_lora") and model.config.speech_lora is not None:
             model.set_lora_adapter("speech")
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
+        # moved audio and vision features processing outside model
         def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
             from transformers.cache_utils import DynamicCache
 
@@ -5658,6 +5660,7 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1121
         def forward(self, audio_input):
             if hasattr(self, "_forward_embeddings_code"):
                 audio_input, masks = self._forward_embeddings_core(audio_input, None)
@@ -5681,6 +5684,7 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1201-L1212
         def forward(self, audio_feature, audio_mask):
             if hasattr(self, "init_relative_attention_bias"):
                 relative_attention_bias = self.init_relative_attention_bias(audio_feature)
@@ -5796,6 +5800,8 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                     img_feature = torch.cat([cls_feature, patch_feature], dim=1)
                 return img_feature
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L649
+        # added possibility to provide patch_position_ids
         def get_img_features(
             self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None
         ):
@@ -5832,6 +5838,8 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L563
+        # added possibility calculate position_ids outside
         def transformer_fwd(
             self,
             pixel_values,
@@ -5900,6 +5908,8 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
                 attentions=encoder_outputs.attentions,
             )
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L76
+        # used SDPA instead of eager attention
         def attn_forward(
             self,
             hidden_states: torch.Tensor,
@@ -5950,6 +5960,8 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
 
             return attn_output, None
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L488
+        # moved position_ids calculation outside of model
         def embd_forward(
             self,
             pixel_values: torch.FloatTensor,

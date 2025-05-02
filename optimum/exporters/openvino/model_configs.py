@@ -2999,23 +2999,32 @@ class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        if hasattr(normalized_config.config, "vision_conifg"):
+            self.patch_size = getattr(normalized_config.config.vision_config, "patch_size", 14)
+        else:
+            self.patch_size = 14
+        self.num_patches_per_side = self.height // self.patch_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "patch_position_ids":
             return self.get_vision_position_ids()
         if input_name == "patch_attention_mask":
             return self.random_int_tensor(
-                [self.batch_size, self.height // 14, self.width // 14], framework=framework, dtype="bool", max_value=2
+                [self.batch_size, self.height // self.patch_size, self.width // self.patch_size],
+                framework=framework,
+                dtype="bool",
+                max_value=2,
             )
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
-    def get_vision_position_ids(self, patch_size=14, num_patches_per_side=32):
+    def get_vision_position_ids(self):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L494-L512
         import torch
 
         batch_size = self.batch_size
         max_im_h, max_im_w = self.height, self.width
-        max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
-        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+        boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
         position_ids = torch.full(
             size=(
                 batch_size,
@@ -3024,7 +3033,7 @@ class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
             fill_value=0,
         )
         patch_attention_mask = torch.ones(
-            [self.batch_size, self.height // patch_size, self.width // patch_size], dtype=torch.int64
+            [self.batch_size, self.height // self.patch_size, self.width // self.patch_size], dtype=torch.int64
         )
         patch_attention_mask[0, self.height - 2 :] = 0
 
@@ -3038,7 +3047,7 @@ class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
             bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
 
-            pos_ids = (bucket_coords_h[:, None] * num_patches_per_side + bucket_coords_w).flatten()
+            pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
             position_ids[batch_idx][p_attn_mask.view(-1)] = pos_ids
         return position_ids
 

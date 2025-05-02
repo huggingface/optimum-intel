@@ -3576,6 +3576,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE = [float("-inf"), -10000]  # For backward compatibility
         self.image_dim_out = self.image_config.get("image_dim_out", self.image_config["hidden_size"])
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L669
     def image_embed(
         self,
         input_ids: torch.LongTensor,
@@ -3590,7 +3591,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         positions_tuple = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=True)
 
         if len(positions_tuple[-1]) == 0:
-            return inputs_embeds
+            return None
         batch_size = image_pixel_values.shape[0]
 
         img_features = self.get_img_features(
@@ -3653,6 +3654,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
 
         return image_embeds
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1241
     def audio_embed(
         self,
         input_ids: torch.LongTensor,
@@ -3668,7 +3670,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         positions_tuple = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=True)
 
         if len(positions_tuple[-1]) == 0:
-            return inputs_embeds
+            return None
 
         audio_embeds = self.get_audio_features(audio_input_embeds, audio_projection_mode)
 
@@ -3679,6 +3681,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
 
         return inputs_embeds
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1165
     def get_audio_features(
         self,
         input_embeds: torch.FloatTensor,
@@ -3751,6 +3754,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
 
         return chunk_size_train_eff, left_chunk_train_eff
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1121
     def forward_embeddings(self, xs_pad, masks=None, chunk_size_nc=None, left_chunk_nc=None):
         """Forwarding the inputs through the top embedding layers
 
@@ -3762,8 +3766,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             chunk_size_nc: (optional, default is None) chunk size for non-causal layers
             left_chunk_nc: (optional, default is None) # of left chunks for non-causal layers
         """
-        # pylint: disable=R0915
-        # get new lens.
         seq_len = int(self.compute_lens_change(xs_pad.shape[1]))
         if seq_len <= 0:
             raise ValueError(
@@ -3799,6 +3801,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             return input_tensor, None, None, hs_mask, None
         return input_tensor, None, None, hs_mask, None, hs_mask_nc
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1101
     def _streaming_mask(self, seq_len, batch_size, chunk_size, left_chunk):
         chunk_size_train_eff, left_chunk_train_eff = self._chunk_size_selection(chunk_size, left_chunk)
 
@@ -3848,6 +3851,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         ceil_func = math.ceil if isinstance(feature_lens, int) else torch.ceil
         return ceil_func(feature_lens / self.time_reduction)
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1146
     def calculate_hs_mask(self, xs_pad, mask):
         max_audio_length = xs_pad.shape[1]
         batch_size = xs_pad.shape[0]
@@ -3862,6 +3866,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         pad_mask = pad_mask & enc_streaming_mask
         return pad_mask
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1034
     @staticmethod
     def unfold_tensor(xs_pad, max_seq_len):
         """
@@ -3888,6 +3893,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         xs_pad = xs_pad.view(-1, max_seq_len, D)
         return xs_pad
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1053
     @staticmethod
     def adaptive_enc_mask(x_len, chunk_start_idx, left_window=0, right_window=0):
         """
@@ -3931,6 +3937,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         mask_right = seq_range_expand < boundary_right.unsqueeze(-1)
         return mask_left & mask_right
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L494-L512
     @staticmethod
     def get_vision_position_ids(pixel_values, patch_attention_mask, patch_size=14, num_patches_per_side=32):
         batch_size = pixel_values.shape[0]
@@ -3959,6 +3966,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             position_ids[batch_idx][p_attn_mask.view(-1)] = pos_ids
         return position_ids
 
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1561
     def embed_tokens_extend(
         self,
         input_ids: torch.LongTensor,
@@ -3983,21 +3991,29 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             & (input_ids <= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[1])
         ] = self._AUDIO_SPECIAL_TOKEN_ID
         input_ids = new_input_ids
+        image_position_mask = (input_ids == self._IMAGE_SPECIAL_TOKEN_ID).unsqueeze(-1)
+        non_image_position_mask = ~image_position_mask
         hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
-        hidden_states = self.image_embed(
+        vision_hidden_states = self.image_embed(
             input_ids=input_ids,
             inputs_embeds=hidden_states,
             image_pixel_values=input_image_embeds,
             image_sizes=image_sizes,
             image_attention_mask=image_attention_mask,
         )
-        hidden_states = self.audio_embed(
+        audio_hidden_states = self.audio_embed(
             input_ids=input_ids,
             inputs_embeds=hidden_states,
             audio_input_embeds=input_audio_embeds,
             audio_embed_sizes=audio_embed_sizes,
             audio_projection_mode=audio_projection_mode,
         )
+        if vision_hidden_states is not None and audio_hidden_states is not None:
+            hidden_states = vision_hidden_states * image_position_mask + audio_hidden_states * non_image_position_mask
+        elif vision_hidden_states is not None:
+            hidden_states = vision_hidden_states
+        elif audio_hidden_states is not None:
+            hidden_states = audio_hidden_states
 
         return hidden_states
 
