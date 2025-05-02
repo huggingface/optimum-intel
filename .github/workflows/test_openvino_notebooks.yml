@@ -30,7 +30,7 @@ jobs:
             "optimum_openvino_inference.ipynb",
             "question_answering_quantization.ipynb",
             "sentence_transformer_quantization.ipynb",
-            "stable_diffusion_hybrid_quantization.ipynb",
+            # "stable_diffusion_hybrid_quantization.ipynb", TODO: update and ran on a powerful cpu
           ]
 
     runs-on: ubuntu-22.04
