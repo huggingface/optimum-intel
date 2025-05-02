@@ -244,7 +244,7 @@ def get_num_quantized_nodes(model):
         "f8e4m3": "f8e4m3",
         "f8e5m2": "f8e5m2",
     }
-    num_weight_nodes = {n: 0 for n in types_map.values()}
+    num_weight_nodes = dict.fromkeys(types_map.values(), 0)
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
@@ -325,7 +325,7 @@ def check_compression_state_per_model(
     for i, (submodel, expected_num_weight_nodes) in enumerate(zip(models, expected_num_weight_nodes_per_model)):
         ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
-        expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+        expected_num_weight_nodes.update(dict.fromkeys(set(num_weight_nodes) - set(expected_num_weight_nodes), 0))
 
         actual_num_weights_per_model[i] = num_weight_nodes
         actual_num_fake_nodes_per_model[i] = num_fake_nodes
