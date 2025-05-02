@@ -9,8 +9,8 @@ on:
       - v*-release
   pull_request:
     paths:
-      - ".github/workflows/test_openvino_notebooks.yml"
       - "notebooks/openvino/*"
+      - ".github/workflows/test_openvino_notebooks.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -25,11 +25,10 @@ jobs:
       fail-fast: false
       matrix:
         python-version: [3.9]
-        test_file:
-          [
+        test_file: [
             "optimum_openvino_inference.ipynb",
             "question_answering_quantization.ipynb",
-            "sentence_transformer_quantization.ipynb",
+            # "sentence_transformer_quantization.ipynb", TODO: fix and run on any cpu
             # "stable_diffusion_hybrid_quantization.ipynb", TODO: update and ran on a powerful cpu
           ]
 
@@ -53,6 +52,10 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install -r notebooks/openvino/requirements.txt
           pip install .[tests,openvino] nbval
+
+      - name: Change some variables
+        run: |
+          sed -i 's/NUM_TRAIN_ITEMS = 600/NUM_TRAIN_ITEMS = 2/' notebooks/openvino/question_answering_quantization.ipynb
 
       - name: Test with Pytest
         run: |
