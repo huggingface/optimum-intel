@@ -65,6 +65,7 @@ from optimum.intel import (
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelForVisualCausalLM,
     OVSentenceTransformer,
+    OVModelForZeroShotImageClassification,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -374,6 +375,21 @@ class OVQuantizerTest(unittest.TestCase):
                 {"int8": 16},
             ],
         ),
+        (
+            OVModelForZeroShotImageClassification,
+            "clip",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="conceptual_captions",
+                num_samples=1,
+            ),
+            [
+                65,
+            ],
+            [
+                {"int8": 65},
+            ],
+        ),
     ]
 
     @staticmethod
@@ -552,6 +568,11 @@ class OVQuantizerTest(unittest.TestCase):
                 ov_model(prompt="A text-to-image prompt")
             elif model_cls == OVSentenceTransformer:
                 ov_model.encode(["This is a sample input"])
+            elif model_cls == OVModelForZeroShotImageClassification:
+                processor = AutoProcessor.from_pretrained(model_id)
+                image = np.random.rand(224, 224, 3).astype(np.uint8)
+                inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
+                ov_model(**inputs)
             else:
                 raise Exception("Unexpected model class.")
 

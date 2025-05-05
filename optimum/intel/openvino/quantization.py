@@ -18,6 +18,7 @@ import logging
 import os
 from collections import UserDict, deque
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -73,6 +74,7 @@ from .utils import (
     PREDEFINED_LANGUAGE_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
+    PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
 )
 
@@ -268,6 +270,7 @@ class OVCalibrationDatasetBuilder:
             OVModelForFeatureExtraction,
             OVModelForMaskedLM,
             OVModelForVisualCausalLM,
+            OVModelForZeroShotImageClassification,
             OVSentenceTransformer,
         )
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
@@ -280,7 +283,9 @@ class OVCalibrationDatasetBuilder:
 
         if isinstance(self.model, OVModelForCausalLM):
             return self._prepare_causal_lm_calibration_data(config)
-        elif isinstance(self.model, (OVModelForVisualCausalLM, _OVModelForWhisper)):
+        elif isinstance(
+            self.model, (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification)
+        ):
             if config.processor is None:
                 raise ValueError(
                     "`processor` must be specified in order to run data-aware quantization. Please provide it as a"
@@ -303,6 +308,16 @@ class OVCalibrationDatasetBuilder:
                     dataset_metadata["id"],
                     num_samples=config.num_samples,  # This is an upper bound on how many audios are needed
                     dataset_config_name=dataset_metadata["name"],
+                    dataset_split=dataset_metadata["split"],
+                    trust_remote_code=config.trust_remote_code,
+                    streaming=dataset_metadata["streaming"],
+                )
+            elif isinstance(self.model, OVModelForZeroShotImageClassification):
+                dataset_metadata = PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS[config.dataset]
+                return self.build_from_dataset_name(
+                    config,
+                    dataset_metadata["id"],
+                    num_samples=None,
                     dataset_split=dataset_metadata["split"],
                     trust_remote_code=config.trust_remote_code,
                     streaming=dataset_metadata["streaming"],
@@ -330,13 +345,14 @@ class OVCalibrationDatasetBuilder:
             return self.build_from_dataset(config, dataset)
         elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer, OVModelForMaskedLM)):
             if isinstance(config.dataset, str):
+                dataset_metadata = PREDEFINED_LANGUAGE_DATASETS[config.dataset]
                 dataset = self.load_dataset(
-                    PREDEFINED_LANGUAGE_DATASETS[config.dataset]["path"],
+                    dataset_metadata["id"],
                     num_samples=None,
-                    dataset_config_name=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["name"],
-                    dataset_split=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["split"],
+                    dataset_config_name=dataset_metadata["name"],
+                    dataset_split=dataset_metadata["split"],
                     trust_remote_code=config.trust_remote_code,
-                    streaming=PREDEFINED_LANGUAGE_DATASETS[config.dataset]["streaming"],
+                    streaming=dataset_metadata["streaming"],
                 )
             elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
                 dataset = datasets.Dataset.from_list([{"text": it} for it in config.dataset])
@@ -345,6 +361,8 @@ class OVCalibrationDatasetBuilder:
                     "Please provide dataset as one of the accepted dataset labels or as a list of strings."
                 )
             return self.build_from_dataset(config, dataset)
+        else:
+            raise RuntimeError("Unsupported model type for calibration dataset collection.")
 
     def build_from_dataset_name(
         self,
@@ -449,6 +467,7 @@ class OVCalibrationDatasetBuilder:
             OVModelForFeatureExtraction,
             OVModelForMaskedLM,
             OVModelForVisualCausalLM,
+            OVModelForZeroShotImageClassification,
             OVSentenceTransformer,
         )
         from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
@@ -470,6 +489,7 @@ class OVCalibrationDatasetBuilder:
                 _OVModelForWhisper,
                 OVModelForFeatureExtraction,
                 OVModelForMaskedLM,
+                OVModelForZeroShotImageClassification,
                 OVSentenceTransformer,
             ),
         ) or (is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)):
@@ -487,6 +507,8 @@ class OVCalibrationDatasetBuilder:
                 return self._prepare_diffusion_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer, OVModelForMaskedLM)):
                 return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, OVModelForZeroShotImageClassification):
+                return self._prepare_text_image_encoder_model_calibration_data(quantization_config, dataset)
             else:
                 raise RuntimeError("Unsupported model type for calibration dataset collection.")
         else:
@@ -871,6 +893,66 @@ class OVCalibrationDatasetBuilder:
                         inputs["input_ids"][0, random_positions[len(calibration_data)]] = tokenizer.mask_token_id
 
                 self.model(inputs) if isinstance(self.model, OVSentenceTransformer) else self.model(**inputs)
+
+                pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
+                if len(calibration_data) >= num_samples:
+                    break
+        finally:
+            self.model.request = self.model.request.request
+
+        return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
+
+    def _prepare_text_image_encoder_model_calibration_data(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        dataset: "Dataset",
+        seq_len: int = 128,
+    ) -> OVCalibrationDataset:
+        self.model.compile()
+
+        max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
+        if max_position_embeddings is not None and max_position_embeddings > 0:
+            seq_len = min(seq_len, max_position_embeddings)
+
+        num_samples = quantization_config.num_samples or 128
+        calibration_data = []
+        try:
+            inference_result_mock = {
+                "logits_per_image": np.empty((1,), np.float32),
+                "logits_per_text": np.empty((1,), np.float32),
+                "text_embeds": np.empty((1,), np.float32),
+                "image_embeds": np.empty((1,), np.float32),
+            }
+
+            self.model.request = InferRequestWrapper(
+                self.model.request,
+                calibration_data,
+                inference_result_mock=inference_result_mock,
+            )
+
+            processor = AutoProcessor.from_pretrained(
+                quantization_config.processor, trust_remote_code=quantization_config.trust_remote_code
+            )
+            dataset_metadata = PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS[quantization_config.dataset]
+
+            pbar = tqdm(total=num_samples, desc="Downloading calibration data")
+            for item in dataset:
+                try:
+                    response = requests.get(item[dataset_metadata["image_column_name"]], timeout=5)
+                    response.raise_for_status()
+                    image = Image.open(BytesIO(response.content))
+                except Exception:
+                    continue
+                inputs = processor(
+                    text=item[dataset_metadata["text_column_name"]],
+                    images=image.convert("RGB"),
+                    return_tensors="pt",
+                    padding=True,
+                )
+                if inputs["input_ids"].shape[1] > seq_len:
+                    inputs["input_ids"] = inputs["input_ids"][:, :seq_len]
+
+                self.model(**inputs)
 
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:

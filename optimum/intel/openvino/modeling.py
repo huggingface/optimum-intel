@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 from pathlib import Path
@@ -52,6 +52,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.models.clip.modeling_clip import CLIPOutput
 
+from .. import OVConfig
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
@@ -996,3 +997,23 @@ class OVModelForZeroShotImageClassification(OVModel):
             text_embeds=text_embeds,
             image_embeds=image_embeds,
         )
+
+    @classmethod
+    def from_pretrained(cls, model_id, *args, **kwargs):
+        load_in_8bit = kwargs.pop("load_in_8bit", False)
+        quantization_config = kwargs.pop("quantization_config", None)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
+
+        model = super().from_pretrained(
+            model_id, *args, quantization_config=None if is_data_aware_quantization else quantization_config, **kwargs
+        )
+
+        if is_data_aware_quantization:
+            from optimum.intel import OVQuantizer
+
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.processor = quantization_config.processor or model_id
+            ov_quantizer = OVQuantizer(model)
+            ov_quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        return model
