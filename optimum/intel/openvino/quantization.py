@@ -715,14 +715,14 @@ class OVCalibrationDatasetBuilder:
 
         models: Dict[str, Union[OVEncoder, OVDecoder]] = {}
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
+
         for submodel_name in self.model.ov_submodels:
-            ov_component_name = "_".join(submodel_name.split("_")[:-1])  # e.g. "encoder_model" -> "encoder"
-            ov_component: Union[OVEncoder, OVDecoder] = getattr(self.model, ov_component_name)
-            models[ov_component_name] = ov_component
-            collected_inputs[ov_component_name] = []
+            ov_component: Union[OVEncoder, OVDecoder] = getattr(self.model, submodel_name)
+            models[submodel_name] = ov_component
+            collected_inputs[submodel_name] = []
             ov_component._compile()
             ov_component.request = InferRequestWrapper(
-                ov_component.request, collected_inputs[ov_component_name], apply_caching=True
+                ov_component.request, collected_inputs[submodel_name], apply_caching=True
             )
 
         try:

@@ -350,11 +350,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             if decoder_with_past is not None:
                 decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
 
-        # TODO: remove all as can be extracted from self.encoder / self.decoder / self.decoder_with_past
-        self.encoder_model = encoder
-        self.decoder_model = decoder
-        self.decoder_with_past_model = decoder_with_past
-
         generation_config = kwargs.get("generation_config", None)
         self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
@@ -381,11 +376,11 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
-        self.encoder = OVEncoder(self.encoder_model, parent_model=self)
-        self.decoder = OVDecoder(self.decoder_model, parent_model=self)
+        self.encoder = OVEncoder(encoder, parent_model=self)
+        self.decoder = OVDecoder(decoder, parent_model=self)
 
-        if self.use_cache and not model_has_state(self.decoder_model):
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
+        if self.use_cache and not model_has_state(self.decoder.model):
+            self.decoder_with_past = OVDecoder(decoder_with_past, parent_model=self)
         if enable_compilation:
             self.compile()
 
@@ -403,7 +398,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     @property
     def _ov_submodel_names(self) -> List[str]:
         submodel_names = ["encoder", "decoder"]
-        if self.decoder_with_past_model is not None:
+        if self.decoder_with_past is not None:
             submodel_names.append("decoder_with_past")
         return submodel_names
 
@@ -412,15 +407,15 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
-        src_files = [self.encoder_model, self.decoder_model]
-        dst_file_names = [OV_ENCODER_NAME, OV_DECODER_NAME]
-        if self.decoder_with_past_model is not None:
-            src_files.append(self.decoder_with_past_model)
-            dst_file_names.append(OV_DECODER_WITH_PAST_NAME)
+        file_names = {
+            "encoder": OV_ENCODER_NAME,
+            "decoder": OV_DECODER_NAME,
+            "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
+        }
 
-        for src_file, dst_file_name in zip(src_files, dst_file_names):
-            dst_path = os.path.join(save_directory, dst_file_name)
-            openvino.save_model(src_file, dst_path, compress_to_fp16=False)
+        for name, model in self.ov_submodels():
+            dst_path = os.path.join(save_directory, file_names[name])
+            openvino.save_model(model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -707,6 +702,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         stateful = kwargs.get("stateful", True)
         variant = kwargs.pop("variant", None)
 
+        # now we use model_kwargs only for text-to-speech models to specify vocoder
+        model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
+        
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -721,6 +719,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             stateful=stateful,
             variant=variant,
+            model_kwargs=model_kwargs,
         )
 
         return cls._from_pretrained(
@@ -843,10 +842,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
-        self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
-        self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
-        if self.decoder_with_past_model is not None:
-            self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
+        self.encoder.model = self._reshape(self.encoder.model, batch_size, sequence_length, is_decoder=False)
+        self.decoder.model = self._reshape(self.decoder.model, batch_size, sequence_length)
+        if self.decoder_with_past is not None:
+            self.decoder_with_past.model = self._reshape(self.decoder_with_past.model, batch_size, sequence_length)
 
         self.clear_requests()
         return self
