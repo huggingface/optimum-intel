@@ -408,7 +408,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return submodel_names
 
     @property
-    def ov_submodels(self) -> Dict[str, ov.Model]:
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
