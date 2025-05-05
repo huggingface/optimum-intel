@@ -704,7 +704,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         # now we use model_kwargs only for text-to-speech models to specify vocoder
         model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
-        
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
