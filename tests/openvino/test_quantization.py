@@ -75,7 +75,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
+from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
@@ -503,8 +503,9 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
-            tokens = tokenizer("This is a sample input <mask>", return_tensors="pt")
-            model(tokens) if model_cls == OVSentenceTransformer else model(**tokens)
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = model(**tokens)
+            self.assertTrue("logits" in outputs)
 
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
