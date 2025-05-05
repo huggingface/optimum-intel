@@ -1859,7 +1859,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
-        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
         check_with_past_available(ov_model.decoder_with_past)
         self.assertIsInstance(ov_model.encoder, OVEncoder)
@@ -2658,7 +2658,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         # whisper cache class support implemented in 4.43
         expected_stateful = is_transformers_version(">", "4.43")
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
-        self.assertEqual(model_has_state(ov_model.decoder_model), expected_stateful)
+        self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
         check_with_past_available(ov_model.decoder_with_past)
 
@@ -3291,7 +3291,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
 
         self.assertIsInstance(ov_pipe.config, PretrainedConfig)
-        self.assertTrue(model_has_state(ov_pipe.decoder_model.model))
+        self.assertTrue(model_has_state(ov_pipe.decoder.model))
         self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
 
         del vocoder
