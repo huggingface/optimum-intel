@@ -86,7 +86,7 @@ else:
     from diffusers.models.vae import DiagonalGaussianDistribution
 
 # Required EncoderDecoderCache object from transformers
-if is_diffusers_version(">=", "0.28.2") and is_transformers_version(">=", "4.45"):
+if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45"):
     from diffusers import LTXPipeline
 else:
     LTXPipeline = object
@@ -1733,7 +1733,7 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
 
 OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
 
-if is_diffusers_version(">=", "0.28.2") and is_transformers_version(">=", "4.45.0"):
+if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45.0"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTXPipeline)
 
