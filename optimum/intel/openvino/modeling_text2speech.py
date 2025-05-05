@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 class OVTextToSpeechEncoder(OVModelPart):
-    _model_name = "encoder_model"
+    _model_name = "encoder"
 
     def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
@@ -66,7 +66,7 @@ class OVTextToSpeechEncoder(OVModelPart):
 
 
 class OVTextToSpeechDecoder(OVModelPart):
-    _model_name = "decoder_model"
+    _model_name = "decoder"
 
     def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
@@ -98,7 +98,7 @@ class OVTextToSpeechDecoder(OVModelPart):
 
 
 class OVTextToSpeechPostNet(OVModelPart):
-    _model_name = "postnet_model"
+    _model_name = "postnet"
 
     def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
@@ -122,7 +122,7 @@ class OVTextToSpeechPostNet(OVModelPart):
 
 
 class OVTextToSpeechVocoder(OVModelPart):
-    _model_name = "vocoder_model"
+    _model_name = "vocoder"
 
     def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
@@ -185,10 +185,10 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
     def __init__(
         self,
-        encoder_model: ov.Model,
-        decoder_model: ov.Model,
-        postnet_model: ov.Model,
-        vocoder_model: ov.Model,
+        encoder: ov.Model,
+        decoder: ov.Model,
+        postnet: ov.Model,
+        vocoder: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -215,10 +215,10 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
-        self.encoder_model = OVTextToSpeechEncoder(encoder_model, self)
-        self.decoder_model = OVTextToSpeechDecoder(decoder_model, self)
-        self.postnet_model = OVTextToSpeechPostNet(postnet_model, self)
-        self.vocoder_model = OVTextToSpeechVocoder(vocoder_model, self)
+        self.encoder = OVTextToSpeechEncoder(encoder, self)
+        self.decoder = OVTextToSpeechDecoder(decoder, self)
+        self.postnet = OVTextToSpeechPostNet(postnet, self)
+        self.vocoder = OVTextToSpeechVocoder(vocoder, self)
 
         if enable_compilation and not self._compile_only:
             self.compile()
@@ -248,7 +248,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
     @property
     def _ov_submodel_names(self):
-        component_names = ["encoder_model", "decoder_model", "postnet_model", "vocoder_model"]
+        component_names = ["encoder", "decoder", "postnet", "vocoder"]
         return component_names
 
     @property
@@ -383,10 +383,10 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             kwargs["compile"] = False
 
         model = _OVModelForSpeechT5ForTextToSpeech(
-            encoder_model=encoder_model,
-            decoder_model=decoder_model,
-            postnet_model=postnet_model,
-            vocoder_model=vocoder_model,
+            encoder=encoder_model,
+            decoder=decoder_model,
+            postnet=postnet_model,
+            vocoder=vocoder_model,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -434,7 +434,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
         bsz = input_values.size(0)
 
-        encoder_out = self.encoder_model(input_values)
+        encoder_out = self.encoder(input_values)
 
         encoder_last_hidden_state = encoder_out.last_hidden_state
         encoder_attention_mask = encoder_out.encoder_attention_mask
@@ -453,7 +453,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         while True:
             idx += 1
 
-            decoder_out = self.decoder_model(
+            decoder_out = self.decoder(
                 inputs_embeds=output_sequence,
                 speaker_embeddings=speaker_embeddings,
                 encoder_last_hidden_state=encoder_last_hidden_state,
@@ -479,7 +479,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 meet_indexes = [i for i in meet_indexes if i not in result_spectrogram]
                 if len(meet_indexes) > 0:
                     spectrograms = torch.stack(spectrogram)
-                    spectrograms = self.postnet_model(spectrograms)
+                    spectrograms = self.postnet(spectrograms)
                     spectrograms = spectrograms.postnet_spectrogram
 
                     for meet_index in meet_indexes:
@@ -493,8 +493,8 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 if bsz == 1
                 else torch.nn.utils.rnn.pad_sequence(spectrograms, batch_first=True)
             )
-            if self.vocoder_model is not None:
-                outputs = self.vocoder_model(spectrogram)
+            if self.vocoder is not None:
+                outputs = self.vocoder(spectrogram)
                 outputs = outputs.waveform
             else:
                 outputs = spectrogram
