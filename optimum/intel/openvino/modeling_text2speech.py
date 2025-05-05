@@ -33,14 +33,13 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings
 from transformers.utils import ModelOutput
 
+from ...exporters.openvino.stateful import model_has_state
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_seq2seq import (
     INPUTS_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
-from ...exporters.openvino.stateful import model_has_state
-
 from .utils import TemporaryDirectory
 
 
@@ -356,7 +355,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 model_save_dir,
             )
             decoder_model = OVBaseModel._compile_model(
-                file_names["decoder_model"],                    
+                file_names["decoder_model"],
                 device,
                 ov_config,
                 model_save_dir,
