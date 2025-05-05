@@ -75,7 +75,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization import InferRequestWrapper
+from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
