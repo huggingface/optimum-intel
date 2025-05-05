@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
-import openvino as ov
+import openvino
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 class OVTextToSpeechEncoder(OVModelPart):
     _model_name = "encoder"
 
-    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+    def __init__(self, model: openvino.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
@@ -69,7 +69,7 @@ class OVTextToSpeechEncoder(OVModelPart):
 class OVTextToSpeechDecoder(OVModelPart):
     _model_name = "decoder"
 
-    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+    def __init__(self, model: openvino.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
@@ -101,7 +101,7 @@ class OVTextToSpeechDecoder(OVModelPart):
 class OVTextToSpeechPostNet(OVModelPart):
     _model_name = "postnet"
 
-    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+    def __init__(self, model: openvino.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
@@ -125,7 +125,7 @@ class OVTextToSpeechPostNet(OVModelPart):
 class OVTextToSpeechVocoder(OVModelPart):
     _model_name = "vocoder"
 
-    def __init__(self, model: ov.Model, parent_model: OVBaseModel) -> None:
+    def __init__(self, model: openvino.Model, parent_model: OVBaseModel) -> None:
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
@@ -186,10 +186,10 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
     def __init__(
         self,
-        encoder: ov.Model,
-        decoder: ov.Model,
-        postnet: ov.Model,
-        vocoder: ov.Model,
+        encoder: openvino.Model,
+        decoder: openvino.Model,
+        postnet: openvino.Model,
+        vocoder: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -257,7 +257,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         return {component_name: getattr(self, component_name) for component_name in self._ov_submodel_names}
 
     @property
-    def ov_submodels(self) -> Dict[str, ov.Model]:
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -279,7 +279,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
         for src_model, dst_file_name in zip(src_models, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(src_model, dst_path, compress_to_fp16=False)
+            openvino.save_model(src_model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -308,7 +308,6 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         dynamic_shapes = kwargs.pop("dynamic_shapes", True)
         ov_config = kwargs.pop("ov_config", None)
         generation_config = kwargs.pop("generation_config", None)
-
         preprocessors = kwargs.pop("preprocessors", [])
         compile_only = kwargs.pop("compile_only", False)
         enable_compilation = kwargs.pop("compile", True)

@@ -562,26 +562,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        """
-        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
-
-        Arguments:
-            model_id (`str` or `Path`):
-                The directory from which to load the model.
-                Can be either:
-                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.
-            save_dir (`str` or `Path`):
-                The directory where the exported ONNX model should be saved, defaults to
-                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`):
-                Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id
-            kwargs (`Dict`, *optional*):
-                kwargs will be passed to the model during initialization
-        """
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
