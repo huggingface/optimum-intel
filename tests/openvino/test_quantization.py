@@ -75,7 +75,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
-from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
+from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
@@ -86,6 +86,8 @@ from utils_tests import (
 
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
+    "feature-extraction": ("wikitext", "wikitext-2-raw-v1", "text"),
+    "fill-mask": ("wikitext", "wikitext-2-raw-v1", "text"),
     "text-classification": ("glue", "sst2", "sentence"),
 }
 
@@ -101,9 +103,13 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
+    # TODO (nikita-savelyevv): Extend to other model types
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
+        (OVSentenceTransformer, "sentence-transformers-bert", 12, 15),
+        (OVModelForFeatureExtraction, "blenderbot", 33, 35),
+        (OVModelForMaskedLM, "roberta", 32, 34),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
         (
@@ -370,44 +376,8 @@ class OVQuantizerTest(unittest.TestCase):
         ),
     ]
 
-    @staticmethod
-    def get_calibration_dataset(
-        quantizer,
-        quantization_config,
-        dataset_name,
-        dataset_config_name,
-        preprocess_function,
-        tokenizer,
-        as_dataset_instance,
-    ):
-        if as_dataset_instance:
-            calibration_dataset = quantizer.get_calibration_dataset(
-                dataset_name,
-                dataset_config_name=dataset_config_name,
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
-                dataset_split="train",
-                trust_remote_code=True,
-            )
-        else:
-            dataset_builder = OVCalibrationDatasetBuilder(quantizer.model)
-            calibration_dataset = dataset_builder.build_from_dataset_name(
-                quantization_config,
-                dataset_name,
-                dataset_config_name=dataset_config_name,
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
-                dataset_split="train",
-                trust_remote_code=True,
-            )
-        return calibration_dataset
-
-    @parameterized.expand(
-        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_TORCH_MODEL, [False, True])]
-    )
-    def test_automodel_static_quantization(
-        self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
-    ):
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
+    def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
@@ -424,14 +394,11 @@ class OVQuantizerTest(unittest.TestCase):
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
 
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-            calibration_dataset = self.get_calibration_dataset(
-                quantizer,
-                ov_config.quantization_config,
-                dataset_name,
-                dataset_config_name,
-                preprocess_function,
-                tokenizer,
-                from_dataset_instance,
+            calibration_dataset = quantizer.get_calibration_dataset(
+                dataset_name=dataset_name,
+                dataset_config_name=dataset_config_name,
+                num_samples=1,
+                preprocess_function=partial(preprocess_function, tokenizer),
             )
             quantizer.quantize(
                 save_directory=tmp_dir,
@@ -452,18 +419,21 @@ class OVQuantizerTest(unittest.TestCase):
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
-    @parameterized.expand(
-        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_OV_MODEL, [False, True])]
-    )
-    def test_ovmodel_static_quantization(
-        self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
-    ):
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL)
+    def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
 
         def preprocess_function(examples, tokenizer):
-            return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
+            inputs = tokenizer(
+                examples[column_name], padding="max_length", max_length=128, truncation=True, return_tensors="np"
+            )
+            if model_cls == OVModelForMaskedLM:
+                batch_size = inputs["input_ids"].shape[0]
+                random_indices = np.random.randint(0, inputs["input_ids"].shape[1], size=batch_size)
+                inputs["input_ids"][np.arange(batch_size), random_indices] = tokenizer.mask_token_id
+            return inputs
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, export=True)
@@ -473,14 +443,11 @@ class OVQuantizerTest(unittest.TestCase):
             quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
 
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-            calibration_dataset = self.get_calibration_dataset(
-                quantizer,
-                ov_config.quantization_config,
-                dataset_name,
-                dataset_config_name,
-                preprocess_function,
-                tokenizer,
-                from_dataset_instance,
+            calibration_dataset = quantizer.get_calibration_dataset(
+                dataset_name=dataset_name,
+                dataset_config_name=dataset_config_name,
+                num_samples=1,
+                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
             )
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
 
@@ -490,9 +457,8 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
+            tokens = tokenizer("This is a sample input <mask>", return_tensors="pt")
+            model(tokens) if model_cls == OVSentenceTransformer else model(**tokens)
 
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)

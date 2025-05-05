@@ -833,13 +833,6 @@ class OVCalibrationDatasetBuilder:
                 inference_result_mock=inference_result_mock,
             )
 
-            if isinstance(self.model, OVSentenceTransformer):
-                tokenizer = self.model.tokenizer
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(
-                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
-                )
-
             max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
             if max_position_embeddings is not None and max_position_embeddings > 0:
                 seq_len = min(seq_len, max_position_embeddings)
@@ -849,15 +842,33 @@ class OVCalibrationDatasetBuilder:
                 with numpy_seed(self.seed):
                     random_positions = np.random.randint(0, seq_len, num_samples)
 
+            tokenizer = None
             pbar = tqdm(total=num_samples, desc="Collecting calibration data")
             for item in dataset:
-                inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="np")
-                if inputs["input_ids"].shape[1] < seq_len:
-                    continue
+                if "input_ids" in item:
+                    # Assuming that dataset contains already preprocessed text
+                    inputs = self._wrap_sample_as_array(item, add_batch_dim=True)
+                else:
+                    if tokenizer is None:
+                        if isinstance(self.model, OVSentenceTransformer):
+                            tokenizer = self.model.tokenizer
+                        else:
+                            if quantization_config.tokenizer is None:
+                                raise ValueError(
+                                    "Please provide tokenizer for calibration via quantization_config.tokenizer."
+                                )
+                            tokenizer = AutoTokenizer.from_pretrained(
+                                quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+                            )
 
-                if isinstance(self.model, OVModelForMaskedLM):
-                    # Replace a random token with a mask token
-                    inputs["input_ids"][0, random_positions[len(calibration_data)]] = tokenizer.mask_token_id
+                    inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="np")
+
+                    if inputs["input_ids"].shape[1] < seq_len:
+                        continue
+
+                    if isinstance(self.model, OVModelForMaskedLM):
+                        # Replace a random token with a mask token
+                        inputs["input_ids"][0, random_positions[len(calibration_data)]] = tokenizer.mask_token_id
 
                 self.model(inputs) if isinstance(self.model, OVSentenceTransformer) else self.model(**inputs)
 
@@ -868,6 +879,21 @@ class OVCalibrationDatasetBuilder:
             self.model.request = self.model.request.request
 
         return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
+
+    @staticmethod
+    def _wrap_sample_as_array(
+        sample: Dict[str, Any], add_batch_dim: bool = False
+    ) -> Dict[str, Union[np.ndarray, torch.Tensor]]:
+        """
+        Converts a sample to a dictionary of numpy arrays or torch tensors.
+        """
+        results = {}
+        for k, v in sample.items():
+            v_as_array = v if isinstance(v, (torch.Tensor, np.ndarray)) else np.array(v)
+            if add_batch_dim:
+                v_as_array = v_as_array[None]
+            results[k] = v_as_array
+        return results
 
 
 class OVQuantizer(OptimumQuantizer):
