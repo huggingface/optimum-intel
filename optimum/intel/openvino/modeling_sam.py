@@ -301,7 +301,7 @@ class OVSamModel(OVBaseModel):
         """
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         vision_encoder_shapes = {}
         for inputs in self.vision_encoder_model.inputs:

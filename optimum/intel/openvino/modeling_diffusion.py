@@ -306,7 +306,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         """
         if self._compile_only:
             raise ValueError(
-                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`save_pretrained()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         save_directory = Path(save_directory)
@@ -888,7 +888,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def reshape(self, batch_size: int, height: int, width: int, num_images_per_prompt: int = -1, num_frames: int = -1):
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
@@ -958,7 +958,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         """
         if self._compile_only:
             raise ValueError(
-                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for submodel in self.ov_submodels.values():
@@ -971,7 +971,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for component in [
@@ -1031,7 +1031,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         height, width = None, None
         height_idx, width_idx = None, None
-        shapes_overriden = False
+        shapes_overridden = False
         sig = inspect.signature(self.auto_model_class.__call__)
         sig_height_idx = list(sig.parameters).index("height") if "height" in sig.parameters else len(sig.parameters)
         sig_width_idx = list(sig.parameters).index("width") if "width" in sig.parameters else len(sig.parameters)
@@ -1059,7 +1059,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             else:
                 kwargs["height"] = height
 
-            shapes_overriden = True
+            shapes_overridden = True
 
         if self.width != -1:
             if width is not None and width != self.width:
@@ -1072,11 +1072,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 args[width_idx] = width
             else:
                 kwargs["width"] = width
-            shapes_overriden = True
+            shapes_overridden = True
 
         # Sana generates images in specific resolution grid size and then resize to requested size by default, it may contradict with pipeline height / width
         # Disable this behavior for static shape pipeline
-        if self.auto_model_class.__name__.startswith("Sana") and shapes_overriden:
+        if self.auto_model_class.__name__.startswith("Sana") and shapes_overridden:
             sig_resolution_bining_idx = (
                 list(sig.parameters).index("use_resolution_binning")
                 if "use_resolution_binning" in sig.parameters
