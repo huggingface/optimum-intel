@@ -39,6 +39,8 @@ from .modeling_seq2seq import (
     INPUTS_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
+from ...exporters.openvino.stateful import model_has_state
+
 from .utils import TemporaryDirectory
 
 
@@ -198,7 +200,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         **kwargs,
     ):
         self.config = config
-        self.use_cache = kwargs.get("use_cache", True)
+        self.use_cache = model_has_state(decoder)
         self._model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
@@ -294,7 +296,6 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         cls,
         model_id: Union[str, Path],
         config: "PretrainedConfig",
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -304,6 +305,15 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        device = kwargs.pop("device", "CPU")
+        dynamic_shapes = kwargs.pop("dynamic_shapes", True)
+        ov_config = kwargs.pop("ov_config", None)
+        generation_config = kwargs.pop("generation_config", None)
+
+        preprocessors = kwargs.pop("preprocessors", [])
+        compile_only = kwargs.pop("compile_only", False)
+        enable_compilation = kwargs.pop("compile", True)
+
         model_file_names = {
             "encoder_model": cls.OV_ENCODER_MODEL_NAME,
             "encoder_model_bin": cls.OV_ENCODER_MODEL_NAME.replace(".xml", ".bin"),
@@ -315,7 +325,6 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             "vocoder_model_bin": cls.OV_VOCODER_MODEL_NAME.replace(".xml", ".bin"),
         }
 
-        compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
             model_save_dir = Path(model_id)
@@ -342,45 +351,45 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         else:
             encoder_model = OVBaseModel._compile_model(
                 file_names["encoder_model"],
-                kwargs.get("device", "CPU"),
-                kwargs.get("ov_config"),
+                device,
+                ov_config,
                 model_save_dir,
             )
             decoder_model = OVBaseModel._compile_model(
-                file_names["decoder_model"],
-                kwargs.get("device", "CPU"),
-                kwargs.get("ov_config"),
+                file_names["decoder_model"],                    
+                device,
+                ov_config,
                 model_save_dir,
             )
             postnet_model = OVBaseModel._compile_model(
                 file_names["postnet_model"],
-                kwargs.get("device", "CPU"),
-                kwargs.get("ov_config"),
+                device,
+                ov_config,
                 model_save_dir,
             )
             vocoder_model = OVBaseModel._compile_model(
                 file_names["vocoder_model"],
-                kwargs.get("device", "CPU"),
-                kwargs.get("ov_config"),
+                device,
+                ov_config,
                 model_save_dir,
             )
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            except Exception:
+                pass
 
         quantization_config = OVBaseModel._prepare_quantization_config(quantization_config, load_in_8bit)
         to_quantize = not compile_only and quantization_config is not None
         if to_quantize:
-            kwargs["compile"] = False
+            enable_compilation = False
 
         model = _OVModelForSpeechT5ForTextToSpeech(
             encoder=encoder_model,
@@ -388,9 +397,15 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             postnet=postnet_model,
             vocoder=vocoder_model,
             config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            **kwargs,
+            preprocessors=preprocessors,
+            compile_only=compile_only,
+            compile=enable_compilation,
+            generation_config=generation_config,
         )
 
         if to_quantize:
