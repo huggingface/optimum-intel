@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import openvino
 import torch
-from huggingface_hub import hf_hub_download
+from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
@@ -38,6 +38,7 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
+from transformers.utils import http_user_agent
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
@@ -412,7 +413,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             "decoder": OV_DECODER_NAME,
             "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
         }
-        for name, model in self.ov_submodels().items():
+        for name, model in self.ov_submodels.items():
             dst_path = os.path.join(save_directory, file_names[name])
             openvino.save_model(model, dst_path, compress_to_fp16=False)
 
@@ -460,98 +461,56 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         device = kwargs.pop("device", "CPU")
         ov_config = kwargs.pop("ov_config", None)
 
-        # Load model from a local directory
-        if os.path.isdir(model_id):
-            model_save_dir = Path(model_id)
-
-            file_names = {
-                "encoder": os.path.join(model_id, encoder_file_name),
-                "decoder": os.path.join(model_id, decoder_file_name),
-                "decoder_with_past": os.path.join(model_id, decoder_with_past_file_name),
+        # Load model from hub
+        if not os.path.isdir(model_id):
+            allow_patterns = {
+                encoder_file_name,
+                decoder_file_name,
+                decoder_with_past_file_name,
+                encoder_file_name.replace(".xml", ".bin"),
+                decoder_file_name.replace(".xml", ".bin"),
+                decoder_with_past_file_name.replace(".xml", ".bin"),
+                cls.config_name,
             }
 
-            if not compile_only:
-                encoder = cls.load_model(file_names["encoder"], quantization_config)
-                decoder = cls.load_model(file_names["decoder"], quantization_config)
-                if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                    decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
-            else:
-                model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
-                encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
-                decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
-
-                if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                    decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
-
-        # Load model from hub
-        else:
-            model_file_names = {"encoder": encoder_file_name, "decoder": decoder_file_name}
-
-            # If not ONNX then OpenVINO IR : adds binary files
+            ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
             if not from_onnx:
-                for key in list(model_file_names.keys()):
-                    model_file_names[key + "_bin"] = model_file_names[key].replace(".xml", ".bin")
-            file_names = model_file_names.copy()
-            for name, file_name in model_file_names.items():
-                model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    token=token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                    subfolder=subfolder,
-                )
-                file_names[name] = model_cache_path
+                ignore_patterns.extend(["*.onnx", "*.onnx_data"])
 
-            model_save_dir = Path(model_cache_path).parent
-            if not compile_only:
-                encoder = cls.load_model(file_names["encoder"], quantization_config)
-                decoder = cls.load_model(file_names["decoder"], quantization_config)
-                if use_cache and not model_has_state(decoder):
-                    model_file_names["decoder_with_past"] = decoder_with_past_file_name
-                    with_past_files = ["decoder_with_past"]
-                    if not from_onnx:
-                        with_past_files.append("decoder_with_past_bin")
-                        model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
-                    for name in with_past_files:
-                        model_cache_path = hf_hub_download(
-                            repo_id=model_id,
-                            filename=model_file_names[name],
-                            token=token,
-                            revision=revision,
-                            cache_dir=cache_dir,
-                            force_download=force_download,
-                            local_files_only=local_files_only,
-                            subfolder=subfolder,
-                        )
-                        file_names[name] = model_cache_path
-                    decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
-            else:
-                model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
+            model_save_folder = snapshot_download(
+                model_id,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+                revision=revision,
+                token=token,
+                user_agent=http_user_agent,
+                allow_patterns=allow_patterns,
+                ignore_patterns=ignore_patterns,
+            )
 
-                encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
-                decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
-                if use_cache and not model_has_state(decoder):
-                    model_file_names["decoder_with_past"] = decoder_with_past_file_name
-                    with_past_files = ["decoder_with_past"]
-                    if not from_onnx:
-                        with_past_files.append("decoder_with_past_bin")
-                        model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
-                    for name in with_past_files:
-                        model_cache_path = hf_hub_download(
-                            repo_id=model_id,
-                            filename=model_file_names[name],
-                            token=token,
-                            revision=revision,
-                            cache_dir=cache_dir,
-                            force_download=force_download,
-                            local_files_only=local_files_only,
-                            subfolder=subfolder,
-                        )
-                        file_names[name] = model_cache_path
-                    decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
+            model_save_dir = Path(model_save_folder)
+
+        else:
+            model_save_dir = Path(model_id)
+
+        file_names = {
+            "encoder": model_save_dir / encoder_file_name,
+            "decoder": model_save_dir / decoder_file_name,
+            "decoder_with_past": model_save_dir / decoder_with_past_file_name,
+        }
+        if not compile_only:
+            encoder = cls.load_model(file_names["encoder"], quantization_config)
+            decoder = cls.load_model(file_names["decoder"], quantization_config)
+            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+        else:
+            model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
+            encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
+            decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
+
+            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
+                decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
 
         if generation_config is None:
             try:
