@@ -444,38 +444,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        """
-        Loads a model and its configuration file from a directory or the HF Hub.
-
-        Arguments:
-            model_id (`str` or `Path`):
-                The directory from which to load the model.
-                Can be either:
-                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id.
-            force_download (`bool`, *optional*, defaults to `False`):
-                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
-                cached versions if they exist.
-            cache_dir (`Union[str, Path]`, *optional*):
-                The path to a directory in which a downloaded pretrained model configuration should be cached if the
-                standard cache should not be used.
-            encoder_file_name(`str`, *optional*):
-                The encoder model file name. Overwrites the default file name openvino_encoder_model.xml and allows one to
-                load the encoder model with a different name.
-            decoder_file_name(`str`, *optional*):
-                The decoder model file name. Overwrites the default file name openvino_decoder_model.xml and allows one to
-                load the decoder model with a different name.
-            decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name
-                openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
-            local_files_only(`bool`, *optional*, defaults to `False`):
-                Whether or not to only look at local files (i.e., do not try to download the model).
-        """
         generation_config = kwargs.pop("generation_config", None)
         subfolder = kwargs.pop("subfolder", "")
 
@@ -488,47 +456,32 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         decoder_with_past = None
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-
-        compile_only = kwargs.get("compile_only", False)
+        compile_only = kwargs.pop("compile_only", False)
+        device = kwargs.pop("device", "CPU")
+        ov_config = kwargs.pop("ov_config", None)
 
         # Load model from a local directory
         if os.path.isdir(model_id):
             model_save_dir = Path(model_id)
+
+            file_names = {
+                "encoder": os.path.join(model_id, encoder_file_name),
+                "decoder": os.path.join(model_id, decoder_file_name),
+                "decoder_with_past": os.path.join(model_id, decoder_with_past_file_name),
+            }
+
             if not compile_only:
-                encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
-                decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
-                if (
-                    use_cache
-                    and not model_has_state(decoder)
-                    and os.path.exists(os.path.join(model_id, decoder_with_past_file_name))
-                ):
-                    decoder_with_past = cls.load_model(
-                        os.path.join(model_id, decoder_with_past_file_name), quantization_config
-                    )
+                encoder = cls.load_model(file_names["encoder"], quantization_config)
+                decoder = cls.load_model(file_names["decoder"], quantization_config)
+                if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
+                    decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
             else:
-                encoder = cls._compile_model(
-                    os.path.join(model_id, encoder_file_name),
-                    kwargs.get("device", "CPU"),
-                    kwargs.get("ov_config"),
-                    model_save_dir,
-                )
-                decoder = cls._compile_model(
-                    os.path.join(model_id, decoder_file_name),
-                    kwargs.get("device", "CPU"),
-                    kwargs.get("ov_config"),
-                    model_save_dir,
-                )
-                if (
-                    use_cache
-                    and not model_has_state(decoder)
-                    and os.path.exists(os.path.join(model_id, decoder_with_past_file_name))
-                ):
-                    decoder_with_past = cls._compile_model(
-                        os.path.join(model_id, decoder_with_past_file_name),
-                        kwargs.get("device", "CPU"),
-                        kwargs.get("ov_config"),
-                        model_save_dir,
-                    )
+                model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
+                encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
+                decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
+
+                if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
+                    decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
 
         # Load model from hub
         else:
@@ -576,12 +529,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                         file_names[name] = model_cache_path
                     decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
             else:
-                encoder = cls._compile_model(
-                    file_names["encoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
-                )
-                decoder = cls._compile_model(
-                    file_names["decoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
-                )
+                model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
+
+                encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
+                decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
                 if use_cache and not model_has_state(decoder):
                     model_file_names["decoder_with_past"] = decoder_with_past_file_name
                     with_past_files = ["decoder_with_past"]
@@ -600,12 +551,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                             subfolder=subfolder,
                         )
                         file_names[name] = model_cache_path
-                    decoder_with_past = cls._compile_model(
-                        file_names["decoder_with_past"],
-                        kwargs.get("device", "CPU"),
-                        kwargs.get("ov_config"),
-                        model_save_dir,
-                    )
+                    decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
 
         if generation_config is None:
             try:
@@ -633,6 +579,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
             generation_config=generation_config,
+            device=device,
+            ov_config=ov_config,
+            compile_only=compile_only,
             **kwargs,
         )
 
