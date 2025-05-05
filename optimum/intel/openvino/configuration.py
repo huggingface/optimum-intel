@@ -195,18 +195,8 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
-    "bigcode/starcoder2-3b": {
-        "bits": 4, 
-        "sym": False, 
-        "group_size": 128, 
-        "ratio": 0.9
-    },
-    "bigcode/starcoder2-15b": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 1.0,
-    },
+    "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "bigcode/starcoder2-15b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 1.0},
     "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {
         "bits": 4,
         "sym": False,
