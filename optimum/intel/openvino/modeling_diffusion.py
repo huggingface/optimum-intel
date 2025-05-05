@@ -977,8 +977,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             submodel.request = None
 
     def compile(self):
-        for submodel in self.ov_submodels.values():
-            submodel._compile()
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name)._compile()
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):

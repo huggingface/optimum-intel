@@ -349,6 +349,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             decoder = self._reshape(decoder, -1, -1)
             if decoder_with_past is not None:
                 decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
+
+        # TODO: remove all as can be extracted from self.encoder / self.decoder / self.decoder_with_past
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
@@ -400,10 +402,14 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
     @property
     def _ov_submodel_names(self) -> List[str]:
-        submodel_names = ["encoder_model", "decoder_model"]
+        submodel_names = ["encoder", "decoder"]
         if self.decoder_with_past_model is not None:
-            submodel_names.append("decoder_with_past_model")
+            submodel_names.append("decoder_with_past")
         return submodel_names
+
+    @property
+    def ov_submodels(self) -> Dict[str, ov.Model]:
+        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         src_files = [self.encoder_model, self.decoder_model]
@@ -866,12 +872,12 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
-        for submodel in self.ov_submodels.values():
-            submodel.request = None
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name).request = None
 
     def compile(self):
-        for submodel in self.ov_submodels.values():
-            submodel._compile()
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name)._compile()
 
 
 class OVEncoder:
