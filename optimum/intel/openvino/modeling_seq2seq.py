@@ -412,8 +412,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             "decoder": OV_DECODER_NAME,
             "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
         }
-
-        for name, model in self.ov_submodels():
+        for name, model in self.ov_submodels().items():
             dst_path = os.path.join(save_directory, file_names[name])
             openvino.save_model(model, dst_path, compress_to_fp16=False)
 
