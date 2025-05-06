@@ -910,6 +910,12 @@ class OVCalibrationDatasetBuilder:
     ) -> OVCalibrationDataset:
         self.model.compile()
 
+        def get_processor():
+            processor = AutoProcessor.from_pretrained(
+                quantization_config.processor, trust_remote_code=quantization_config.trust_remote_code
+            )
+            return processor
+
         max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
         if max_position_embeddings is not None and max_position_embeddings > 0:
             seq_len = min(seq_len, max_position_embeddings)
@@ -930,27 +936,29 @@ class OVCalibrationDatasetBuilder:
                 inference_result_mock=inference_result_mock,
             )
 
-            processor = AutoProcessor.from_pretrained(
-                quantization_config.processor, trust_remote_code=quantization_config.trust_remote_code
-            )
-            dataset_metadata = PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS[quantization_config.dataset]
-
-            pbar = tqdm(total=num_samples, desc="Downloading calibration data")
+            processor = None
+            pbar = tqdm(total=num_samples, desc="Collecting calibration data")
             for item in dataset:
-                try:
-                    response = requests.get(item[dataset_metadata["image_column_name"]], timeout=5)
-                    response.raise_for_status()
-                    image = Image.open(BytesIO(response.content))
-                except Exception:
-                    continue
-                inputs = processor(
-                    text=item[dataset_metadata["text_column_name"]],
-                    images=image.convert("RGB"),
-                    return_tensors="pt",
-                    padding=True,
-                )
-                if inputs["input_ids"].shape[1] > seq_len:
-                    inputs["input_ids"] = inputs["input_ids"][:, :seq_len]
+                if "input_ids" in item:
+                    # Assuming that dataset contains already preprocessed text
+                    inputs = self._wrap_sample_as_array(item, add_batch_dim=True)
+                else:
+                    dataset_metadata = PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS[quantization_config.dataset]
+                    try:
+                        response = requests.get(item[dataset_metadata["image_column_name"]], timeout=5)
+                        response.raise_for_status()
+                        image = Image.open(BytesIO(response.content))
+                    except Exception:
+                        continue
+                    processor = processor or get_processor()
+                    inputs = processor(
+                        text=item[dataset_metadata["text_column_name"]],
+                        images=image.convert("RGB"),
+                        return_tensors="pt",
+                        padding=True,
+                    )
+                    if inputs["input_ids"].shape[1] > seq_len:
+                        inputs["input_ids"] = inputs["input_ids"][:, :seq_len]
 
                 self.model(**inputs)
 
