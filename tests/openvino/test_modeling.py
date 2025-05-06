@@ -51,10 +51,10 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForSpeechSeq2Seq,
+    AutoModelForTextToSpectrogram,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
     AutoModelForZeroShotImageClassification,
-    AutoModelForTextToSpectrogram,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -556,10 +556,12 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
 
         processor = AutoProcessor.from_pretrained(self.OV_TEXTSPEECH_MODEL_I)
-        text_data =  "This text is converted to speech using OpenVINO backend"
+        text_data = "This text is converted to speech using OpenVINO backend"
         inputs = processor(text=text_data, return_tensors="pt")
         speaker_embeddings = np.random.randn(1, 512).astype(np.float32)
-        loaded_model_outputs = loaded_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+        loaded_model_outputs = loaded_model.generate(
+            input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings
+        )
 
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
@@ -585,7 +587,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         del loaded_model
         del model
         gc.collect()
-
 
     @pytest.mark.run_slow
     @slow
@@ -3282,14 +3283,12 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
     def _get_processor(self, model_id, model_arch):
         if model_arch == "speecht5":
-
             return AutoProcessor.from_pretrained(model_id)
         else:
             raise Exception("{} unknown processor for text-to-speech".format(model_arch))
 
     def _get_model(self, model_id, model_arch):
         if model_arch == "speecht5":
-
             return AutoModelForTextToSpectrogram.from_pretrained(model_id)
         else:
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
