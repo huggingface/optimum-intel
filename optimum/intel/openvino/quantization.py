@@ -809,6 +809,17 @@ class OVCalibrationDatasetBuilder:
         """
         from optimum.intel import OVModelForFeatureExtraction, OVModelForMaskedLM, OVSentenceTransformer
 
+        def get_tokenizer():
+            if isinstance(self.model, OVSentenceTransformer):
+                return self.model.tokenizer
+            else:
+                if quantization_config.tokenizer is None:
+                    raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
+                tokenizer = AutoTokenizer.from_pretrained(
+                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+                )
+            return tokenizer
+
         self.model.compile()
 
         num_samples = quantization_config.num_samples or 128
@@ -849,18 +860,7 @@ class OVCalibrationDatasetBuilder:
                     # Assuming that dataset contains already preprocessed text
                     inputs = self._wrap_sample_as_array(item, add_batch_dim=True)
                 else:
-                    if tokenizer is None:
-                        if isinstance(self.model, OVSentenceTransformer):
-                            tokenizer = self.model.tokenizer
-                        else:
-                            if quantization_config.tokenizer is None:
-                                raise ValueError(
-                                    "Please provide tokenizer for calibration via quantization_config.tokenizer."
-                                )
-                            tokenizer = AutoTokenizer.from_pretrained(
-                                quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
-                            )
-
+                    tokenizer = tokenizer or get_tokenizer()
                     inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="np")
 
                     if inputs["input_ids"].shape[1] < seq_len:
