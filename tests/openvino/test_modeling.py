@@ -54,6 +54,7 @@ from transformers import (
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
     AutoModelForZeroShotImageClassification,
+    AutoModelForTextToSpectrogram,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -166,6 +167,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
         self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
         self.OV_SAM_MODEL_ID = "katuni4ka/sam-vit-tiny-random-ov"
+        self.OV_TEXTSPEECH_MODEL_ID = "optimum-internal-testing/tiny-random-SpeechT5ForTextToSpeech-openvino"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -546,6 +548,44 @@ class OVModelIntegrationTest(unittest.TestCase):
         del loaded_model
         del model
         gc.collect()
+
+    def test_load_from_hub_and_save_text_speech_model(self):
+        loaded_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(self.OV_TEXTSPEECH_MODEL_ID)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+
+        processor = AutoProcessor.from_pretrained(self.OV_TEXTSPEECH_MODEL_I)
+        text_data =  "This text is converted to speech using OpenVINO backend"
+        inputs = processor(text=text_data, return_tensors="pt")
+        speaker_embeddings = np.random.randn(1, 512).astype(np.float32)
+        loaded_model_outputs = loaded_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+
+        with TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(loaded_model.OV_ENCODER_MODEL_NAME in folder_contents)
+            self.assertTrue(loaded_model.OV_DECODER_MODEL_NAME in folder_contents)
+            self.assertTrue(loaded_model.OV_POSTNET_MODEL_NAME in folder_contents)
+            self.assertTrue(loaded_model.OV_VOCODER_MODEL_NAME in folder_contents)
+            model = OVModelForTextToSpeechSeq2Seq.from_pretrained(tmpdirname, device="cpu")
+            # compile only
+            compile_only_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_model.encoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.postnet.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.vocoder.model, ov.CompiledModel)
+
+            outputs = compile_only_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+            self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+            del compile_only_model
+
+        outputs = model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+        self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+        del loaded_model
+        del model
+        gc.collect()
+
 
     @pytest.mark.run_slow
     @slow
@@ -3242,19 +3282,15 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
     def _get_processor(self, model_id, model_arch):
         if model_arch == "speecht5":
-            from transformers import SpeechT5Processor
 
-            processor = SpeechT5Processor.from_pretrained(model_id)
-            return processor
+            return AutoProcessor.from_pretrained(model_id)
         else:
             raise Exception("{} unknown processor for text-to-speech".format(model_arch))
 
     def _get_model(self, model_id, model_arch):
         if model_arch == "speecht5":
-            from transformers import SpeechT5ForTextToSpeech
 
-            model = SpeechT5ForTextToSpeech.from_pretrained(model_id)
-            return model
+            return AutoModelForTextToSpectrogram.from_pretrained(model_id)
         else:
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 

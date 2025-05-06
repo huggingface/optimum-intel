@@ -404,6 +404,27 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return submodel_names
 
     @property
+    def encoder_model(self) -> openvino.Model:
+        logger.warning(
+            "Access to the `encoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `encoder.model` instead"
+        )
+        return self.encoder.model
+
+    @property
+    def decoder_model(self) -> openvino.Model:
+        logger.warning(
+            "Access to the `decoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder.model` instead"
+        )
+        return self.decoder.model
+
+    @property
+    def decoder_with_past_model(self) -> openvino.Model:
+        logger.warning(
+            "Access to the `decoder_with_past_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder_with_past.model` instead"
+        )
+        return getattr(self.decoder_with_past, "model", None)
+
+    @property
     def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
