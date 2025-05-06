@@ -715,8 +715,7 @@ class OVCalibrationDatasetBuilder:
 
         models: Dict[str, Union[OVEncoder, OVDecoder]] = {}
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
-
-        for submodel_name in self.model.ov_submodels:
+        for submodel_name in self.model._ov_submodel_names:
             ov_component: Union[OVEncoder, OVDecoder] = getattr(self.model, submodel_name)
             models[submodel_name] = ov_component
             collected_inputs[submodel_name] = []
@@ -740,11 +739,10 @@ class OVCalibrationDatasetBuilder:
             for model in models.values():
                 model.request = model.request.request
 
-        calibration_data = {}
-        for model_name, model_data in collected_inputs.items():
-            calibration_data[model_name] = nncf.Dataset(model_data)
+        for model_name in collected_inputs:
+            collected_inputs[model_name] = nncf.Dataset(collected_inputs[model_name])
 
-        return OVCalibrationDataset(calibration_data)
+        return OVCalibrationDataset(collected_inputs)
 
     def _prepare_diffusion_calibration_data(
         self, config: OVQuantizationConfigBase, dataset: Union[List, "Dataset"]
