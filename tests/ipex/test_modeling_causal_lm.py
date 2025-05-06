@@ -30,7 +30,6 @@ from transformers.utils import is_auto_awq_available, is_bitsandbytes_available
 from utils_tests import MODEL_NAMES, IS_XPU_AVAILABLE, Timer
 
 from optimum.intel import IPEXModelForCausalLM
-from optimum.intel.utils.import_utils import is_torch_version
 from optimum.utils.testing_utils import grid_parameters
 
 
@@ -47,22 +46,42 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "blenderbot",
         "bloom",
         "codegen",
-        "falcon",
-        "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "mistral",
-        "llama2",
         "mpt",
         "opt",
         "phi",
-        "qwen2",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "falcon", "gpt2", "qwen2")
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = (
+        "llama2",
+        "falcon",
+        "gpt2",
+        "qwen2",
+        "mistral",
+    )
+    PATCHED_MODELS_GENERATION_RESULTS = {
+        "llama2": [
+            [[11095, 11095, 11095, 11095], [25853, 25125, 23858, 951]],
+            [[11095, 11095, 11095, 11095], [951, 951, 951, 951]],
+        ],
+        "gpt2": [[[14, 39907, 39907, 39907], [0, 33877, 27148, 16673]], [[14, 39907, 39907, 39907], [0, 0, 0, 0]]],
+        "falcon": [
+            [[1321, 18057, 38876, 38876], [6323, 6323, 6323, 6323]],
+            [[6310, 6310, 6310, 6310], [37802, 7699, 7699, 7699]],
+        ],
+        "qwen2": [
+            [[44995, 87732, 53511, 44995], [2926, 30587, 110888, 139440]],
+            [[44995, 87732, 53511, 44995], [30587, 46027, 139440, 46027]],
+        ],
+        "mistral": [
+            [[20336, 310, 27671, 17546], [26322, 3901, 469, 14865]],
+            [[20336, 310, 27671, 17546], [26322, 3901, 469, 14865]],
+        ],
+    }
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES + IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -146,14 +165,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
         )
-        # It will be removed when torch 2.6 released
-        if (
-            model_arch == "opt"
-            and not use_cache
-            and getattr(model.config, "compile", False)
-            and is_torch_version("<", "2.6.0")
-        ):
-            return
         if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             self.assertTrue(model.add_patch)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
@@ -162,22 +173,66 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
         # Test with batch_size is 1 and 2.
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
-        generation_configs = (
-            GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=False),
-            GenerationConfig(
-                max_new_tokens=4, do_sample=False, top_p=0.9, top_k=0, pad_token_id=tokenizer.eos_token_id
-            ),
+        generation_config = GenerationConfig(
+            max_new_tokens=4,
+            num_beams=4,
+            do_sample=False,
+            top_p=0.9,
+            top_k=0,
+            pad_token_id=tokenizer.eos_token_id,
         )
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
-            for generation_config in generation_configs:
-                outputs = model.generate(**tokens, generation_config=generation_config)
-                transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
-                self.assertIsInstance(outputs, torch.Tensor)
-                self.assertTrue(torch.equal(outputs, transformers_outputs))
+            outputs = model.generate(**tokens, generation_config=generation_config)
+            transformers_outputs = transformers_model.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
+            self.assertTrue(torch.equal(outputs, transformers_outputs))
+
+    @parameterized.expand(
+        grid_parameters(
+            {
+                "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
+                "use_cache": [True, False],
+                "batch_size": [1, 2],
+            }
+        )
+    )
+    def test_ipex_patched_beam_search(self, test_name, model_arch, use_cache, batch_size):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        model = IPEXModelForCausalLM.from_pretrained(
+            model_id, use_cache=use_cache, torch_dtype=dtype, device_map=DEVICE
+        )
+        if use_cache and model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
+            self.assertTrue(model.add_patch)
+        self.assertEqual(model.use_cache, use_cache)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        # Test with batch_size is 1 and 2.
+        if batch_size == 1:
+            text = "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."
+        elif batch_size == 2:
+            text = [
+                "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun.",
+                "It is done, and submitted. You can play 'Survival of the Tastiest' on Android,",
+            ]
+        generation_config = GenerationConfig(
+            max_new_tokens=4,
+            num_beams=4,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
+        outputs = model.generate(**tokens, generation_config=generation_config)
+        self.assertIsInstance(outputs, torch.Tensor)
+        results = self.PATCHED_MODELS_GENERATION_RESULTS[model_arch]
+        results = results[0] if use_cache else results[1]
+        for i in range(outputs.shape[0]):
+            self.assertEqual(outputs[..., -4:].tolist()[i], results[i])
 
     def test_compare_with_and_without_past_key_values(self):
-        model_id = "Intel/tiny_random_llama2_ipex_model"
+        model_id = "echarlaix/tiny-random-PhiForCausalLM"
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         model_with_pkv = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=True, torch_dtype=dtype, device_map=DEVICE
@@ -208,7 +263,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
         patched_model_id = MODEL_NAMES["patched_" + model_arch]
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=dtype, device_map=DEVICE)
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=DEVICE)
         exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id, torch_dtype=dtype, device_map=DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt").to(DEVICE)
