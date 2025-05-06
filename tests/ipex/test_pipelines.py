@@ -87,7 +87,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "vit",
     )
     TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
-    PATCHHED_MODELS_RESULTS = {
+    PATCHED_MODELS_GENERATION_RESULTS = {
         "llama2": [18926, 8157, 25457, 2572],
         "gpt2": [36418, 14352, 38921, 38921],
         "falcon": [8821, 31988, 31988, 31988],
@@ -178,7 +178,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
             inputs, do_sample=False, max_new_tokens=max_new_tokens, return_type=ReturnType.TENSORS
         )
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
-        self.assertEqual(ipex_output[0]["generated_token_ids"][-4:], self.PATCHHED_MODELS_RESULTS[model_arch])
+        self.assertEqual(ipex_output[0]["generated_token_ids"][-4:], self.PATCHED_MODELS_GENERATION_RESULTS[model_arch])
 
     @parameterized.expand(QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):

@@ -59,7 +59,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "qwen2",
         "mistral",
     )
-    PATCHHED_MODELS_RESULTS = {
+    PATCHED_MODELS_GENERATION_RESULTS = {
         "llama2": [
             [[11095, 11095, 11095, 11095], [25853, 25125, 23858, 951]],
             [[11095, 11095, 11095, 11095], [951, 951, 951, 951]],
@@ -222,7 +222,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         tokens = tokenizer(text, padding=True, return_tensors="pt").to(DEVICE)
         outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
-        results = self.PATCHHED_MODELS_RESULTS[model_arch]
+        results = self.PATCHED_MODELS_GENERATION_RESULTS[model_arch]
         results = results[0] if use_cache else results[1]
         for i in range(outputs.shape[0]):
             self.assertEqual(outputs[..., -4:].tolist()[i], results[i])
