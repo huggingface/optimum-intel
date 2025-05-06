@@ -134,6 +134,15 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
+    "Qwen/Qwen3-8B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
     "openlm-research/open_llama_3b_v2": {
         "bits": 4,
