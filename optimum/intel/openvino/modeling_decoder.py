@@ -249,7 +249,7 @@ class OVBaseDecoderModel(OVModel):
 
         if self._compile_only:
             raise ValueError(
-                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`save_pretrained()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         model_to_save = (
             self.model
@@ -368,7 +368,7 @@ class OVBaseDecoderModel(OVModel):
     ):
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         if height is not None:
@@ -895,7 +895,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             if compile_only:
                 raise ValueError(
-                    "quantization is not supported with `compile_only` mode, please intialize model without this option"
+                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
                 )
 
             from optimum.intel.openvino.quantization import OVQuantizer

@@ -65,4 +65,4 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/ipex/${{ matrix.test-file }}
+          pytest tests/ipex/${{ matrix.test-file }} -rsx -v

@@ -177,7 +177,7 @@ class OVBaseModel(OptimizedModel):
         """
         if self._compile_only and isinstance(device, str):
             raise ValueError(
-                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`to()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         if isinstance(device, str):
@@ -739,7 +739,7 @@ class OVBaseModel(OptimizedModel):
         """
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False

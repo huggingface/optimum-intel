@@ -745,7 +745,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         """
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
@@ -777,7 +777,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name).request = None
