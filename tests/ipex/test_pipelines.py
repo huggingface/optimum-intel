@@ -178,7 +178,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
             inputs, do_sample=False, max_new_tokens=max_new_tokens, return_type=ReturnType.TENSORS
         )
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
-        self.assertEqual(ipex_output[0]["generated_token_ids"][-4:], self.PATCHED_MODELS_GENERATION_RESULTS[model_arch])
+        self.assertEqual(
+            ipex_output[0]["generated_token_ids"][-4:], self.PATCHED_MODELS_GENERATION_RESULTS[model_arch]
+        )
 
     @parameterized.expand(QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):
