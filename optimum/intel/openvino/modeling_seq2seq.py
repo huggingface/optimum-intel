@@ -765,7 +765,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         if self._compile_only:
             raise ValueError(
-                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         for submodel in self.ov_submodels.values():
             apply_moc_transformations(submodel, cf=False)
