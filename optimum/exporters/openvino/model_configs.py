@@ -478,7 +478,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             decoder_sequence_name = "past_sequence_length"
             name = "past_key_values"
         else:
-            decoder_sequence_name = "past_sequence_length + present_lenght"
+            decoder_sequence_name = "past_sequence_length + present_length"
             name = "present"
 
         is_v4 = hasattr(self._normalized_config, "rope_ratio")
