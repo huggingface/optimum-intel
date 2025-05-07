@@ -107,6 +107,8 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    Llama4ImageEmbeddingsModelPatcher,
+    Llama4TextModelPatcher,
     LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
@@ -189,6 +191,10 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
     )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
@@ -1608,15 +1614,16 @@ def get_vlm_text_generation_config(
 
 
 class VLMConfigBehavior(str, enum.Enum):
-    LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
+    LANGUAGE = "language"
 
 
 class BaseVLMOpenVINOConfig(OnnxConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+    SUPPORTS_PAST = True
 
     def __init__(
         self,
@@ -4145,3 +4152,32 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             raise ValueError(
                 "self._behavior is neither encoder, decoder, postnet, or vocoder. This should not happen."
             )
+
+
+@register_in_tasks_manager(
+    "llama4-text", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        return Llama4TextModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager(
+    "llama4", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
