@@ -4119,6 +4119,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
             )[0]
         )
 
+
 class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
