@@ -555,7 +555,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
 
-        processor = AutoProcessor.from_pretrained(self.OV_TEXTSPEECH_MODEL_I)
+        processor = AutoProcessor.from_pretrained(self.OV_TEXTSPEECH_MODEL_ID)
         text_data = "This text is converted to speech using OpenVINO backend"
         inputs = processor(text=text_data, return_tensors="pt")
         speaker_embeddings = np.random.randn(1, 512).astype(np.float32)
