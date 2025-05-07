@@ -194,7 +194,7 @@ def init_model_configs():
     )
     TasksManager._CUSTOM_CLASSES[("pt", "llama4", "image-text-to-text")] = (
         "transformers",
-        "Llama4ForConditionalGeneration",
+        "AutoModelForImageTextToText",
     )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[

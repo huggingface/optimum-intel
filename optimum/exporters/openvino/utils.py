@@ -365,7 +365,13 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
     return ov_tokenizer_model
 
 
-SKIP_CHECK_TRACE_MODELS = ("deepseek", "deepseek-v2", "deepseek-v3", "levit", "llama4", )
+SKIP_CHECK_TRACE_MODELS = (
+    "deepseek",
+    "deepseek-v2",
+    "deepseek-v3",
+    "levit",
+    "llama4",
+)
 
 
 def allow_skip_tracing_check(library_name, model_type):

@@ -2353,7 +2353,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_AUDIO.append("phi4mm")
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
-    if is_transformers_version(">", "4.50"):
+    if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
