@@ -333,7 +333,6 @@ def main_export(
             if dtype in [torch.float16, torch.bfloat16]:
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
-        #           loading_kwargs["low_cpu_mem_usage"] = True
         # Patch the modules to export of GPTQ models w/o GPU
         if do_quant_patching:
             orig_cuda_check = torch.cuda.is_available
