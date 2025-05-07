@@ -33,7 +33,9 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _falcon_for_causal_lm_forward,
     _falcon_model_forward,
+    _gpt2_lm_head_model_forward,
     _gpt2_model_forward,
     _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
@@ -104,6 +106,7 @@ def _patch_falcon_model(model):
         model.config.num_kv_heads if (model.config.new_decoder_architecture or not model.config.multi_query) else 1
     )
     setattr(model.config, "num_key_value_heads", num_key_value_heads)
+    convert_func(model, "forward", _falcon_for_causal_lm_forward)
     convert_functions(model, FalconModel, "forward", _falcon_model_forward)
     replace_customized_linear_with_linear(model)
     convert_class(model, FalconDecoderLayer, _IPEXFalconDecoderLayer, model.device, model.config)
@@ -118,6 +121,7 @@ def _patch_gpt2_model(model):
     """
     num_key_value_heads = model.config.num_attention_heads
     setattr(model.config, "num_key_value_heads", num_key_value_heads)
+    convert_func(model, "forward", _gpt2_lm_head_model_forward)
     convert_functions(model, GPT2Model, "forward", _gpt2_model_forward)
     convert_class(model, GPT2Block, _IPEXGPT2Block, model.device, model.config)
     return model
@@ -129,6 +133,8 @@ def _patch_qwen2_model(model):
         1. Use IPEX rope and paged cache
         2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
+    # To avoid call _ignore_causal_mask_sdpa which will cause recompile
+    model.config._attn_implementation = "ipex_paged"
     convert_functions(model, Qwen2Model, "forward", _qwen2_model_forward)
     convert_functions(model, Qwen2RMSNorm, "forward", _ipex_rms_layer_norm_forward)
     convert_class(model, Qwen2DecoderLayer, _IPEXQwen2DecoderLayer, model.device, model.config)

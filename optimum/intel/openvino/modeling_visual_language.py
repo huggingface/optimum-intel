@@ -123,7 +123,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         self.request = None
         self.text_emb_request = None
@@ -409,7 +409,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for _, component in self.components.items():

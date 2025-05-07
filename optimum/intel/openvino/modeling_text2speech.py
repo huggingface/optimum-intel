@@ -235,7 +235,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for _, component in self.components.items():
@@ -258,7 +258,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         return {component_name: getattr(self, component_name) for component_name in self._ov_submodel_names}
 
     @property
-    def ov_submodels(self) -> Dict[str, ov.runtime.Model]:
+    def ov_submodels(self) -> Dict[str, ov.Model]:
         return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):

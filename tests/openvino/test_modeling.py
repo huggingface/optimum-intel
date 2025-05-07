@@ -198,8 +198,8 @@ class OVModelIntegrationTest(unittest.TestCase):
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
         self.assertGreaterEqual(current_num_blobs, num_blobs)
-        self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
-        self.assertIsInstance(compile_only_model.request, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.request, ov.CompiledModel)
         outputs = compile_only_model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
         del compile_only_model
@@ -242,8 +242,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertEqual(model.use_cache, use_cache)
 
             compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache)
-            self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
+            self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.request, ov.InferRequest)
             outputs = compile_only_model(**tokens)
             self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
             del compile_only_model
@@ -352,9 +352,9 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, compile_only=True)
-            self.assertIsInstance(compile_only_model.encoder.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.decoder.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.decoder_with_past.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.encoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder_with_past.model, ov.CompiledModel)
             outputs = compile_only_model.generate(**tokens)
             self.assertTrue(torch.equal(loaded_model_outputs, outputs))
             del compile_only_model
@@ -403,10 +403,10 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
 
             compile_only_pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
-            self.assertIsInstance(compile_only_pipeline.unet.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.unet.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.CompiledModel)
 
             np.random.seed(0)
             torch.manual_seed(0)
@@ -468,11 +468,11 @@ class OVModelIntegrationTest(unittest.TestCase):
 
             compile_only_pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
             self.assertIsInstance(compile_only_pipeline, OVFluxPipeline)
-            self.assertIsInstance(compile_only_pipeline.transformer.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.text_encoder_2.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.transformer.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder_2.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.CompiledModel)
 
             np.random.seed(0)
             torch.manual_seed(0)
@@ -523,10 +523,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
         self.assertGreaterEqual(current_num_blobs, num_blobs)
-        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.runtime.CompiledModel)
-        self.assertIsInstance(compile_only_model.vision_encoder.request, ov.runtime.CompiledModel)
-        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.runtime.CompiledModel)
-        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder.request, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
         self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
         self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
@@ -675,8 +675,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertEqual(model.use_cache, loaded_model.use_cache)
 
             compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True)
-            self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
-            self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
+            self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
+            self.assertIsInstance(compile_only_model.request, ov.InferRequest)
             outputs = compile_only_model(**tokens)
             self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
             del compile_only_model

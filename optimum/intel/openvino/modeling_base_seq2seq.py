@@ -475,7 +475,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
@@ -490,7 +490,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         if self._compile_only:
             raise ValueError(
-                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         for submodel in self.ov_submodels.values():
             apply_moc_transformations(submodel, cf=False)

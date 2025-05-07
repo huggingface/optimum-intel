@@ -62,6 +62,7 @@ MODEL_NAMES = {
     "patched_gpt2": "Intel/tiny-random-gpt2_ipex_model",
     "patched_llama2": "Intel/tiny-random-llama2_ipex_model",
     "patched_qwen2": "Jiqing/tiny-random-Qwen2_ipex_model",
+    "patched_mistral": "Intel/tiny-random-mistral_ipex_model",
 }
 
 

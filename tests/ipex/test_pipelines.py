@@ -20,6 +20,7 @@ import torch
 from parameterized import parameterized
 from transformers import AutoTokenizer, set_seed
 from transformers.pipelines import pipeline as transformers_pipeline
+from transformers.pipelines.text_generation import ReturnType
 from utils_tests import IS_XPU_AVAILABLE, MODEL_NAMES
 
 from optimum.intel.ipex.modeling_base import (
@@ -56,15 +57,18 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "blenderbot",
         "bloom",
         "codegen",
-        "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "llama2",
-        "mistral",
         "mpt",
         "opt",
         "phi",
+    )
+    IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "gpt2",
+        "llama2",
+        "falcon",
         "qwen2",
+        "mistral",
     )
     QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES = (
         "bert",
@@ -83,6 +87,13 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "vit",
     )
     TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
+    PATCHED_MODELS_GENERATION_RESULTS = {
+        "llama2": [18926, 8157, 25457, 2572],
+        "gpt2": [36418, 14352, 38921, 38921],
+        "falcon": [8821, 31988, 31988, 31988],
+        "qwen2": [87225, 130757, 124509, 113367],
+        "mistral": [26303, 4895, 22235, 20595],
+    }
 
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_token_classification_pipeline_inference(self, model_arch):
@@ -153,6 +164,23 @@ class PipelinesIntegrationTest(unittest.TestCase):
         ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
         self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
+
+    @parameterized.expand(IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_ipex_patched_text_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        ipex_generator = ipex_pipeline(
+            "text-generation", model_id, accelerator="ipex", torch_dtype=dtype, device_map=DEVICE
+        )
+        inputs = "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."
+        max_new_tokens = 4
+        ipex_output = ipex_generator(
+            inputs, do_sample=False, max_new_tokens=max_new_tokens, return_type=ReturnType.TENSORS
+        )
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
+        self.assertEqual(
+            ipex_output[0]["generated_token_ids"][-4:], self.PATCHED_MODELS_GENERATION_RESULTS[model_arch]
+        )
 
     @parameterized.expand(QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):
