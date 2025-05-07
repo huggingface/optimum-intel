@@ -3074,7 +3074,7 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = version.parse("4.48.0")
+    MIN_TRANSFORMERS_VERSION = version.parse("4.51.0")
 
     def __init__(
         self,
@@ -3176,74 +3176,14 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
                 "phi3", self._orig_config, self.int_dtype, self.float_dtype, model_patcher=Phi4MMLanguageModelPatcher
             )
 
-        if behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-        if behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-
-        if behavior == Phi4MMConfigBehavior.AUDIO_EMBEDDINGS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-
-        if behavior == Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-
-        if behavior == Phi4MMConfigBehavior.AUDIO_ENCODER:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-
-        if behavior == Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-
-        if behavior == Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
 
     @staticmethod
     def get_model_for_behavior(model, behavior: Union[str, Phi4MMConfigBehavior]):
