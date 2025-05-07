@@ -18,7 +18,7 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from transformers import PretrainedConfig
+from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
@@ -375,6 +375,7 @@ def allow_skip_tracing_check(library_name, model_type):
     return model_type in SKIP_CHECK_TRACE_MODELS
 
 
+# TO DO: load_preprocessors should be removed once this is included in https://github.com/huggingface/optimum/blob/fa87c66967595b8af4de529500868840a3443611/optimum/utils/save_utils.py#L27 (
 def load_preprocessors(
     src_name_or_path: Union[str, Path], subfolder: str = "", trust_remote_code: bool = False, model_type: str = None
 ):
@@ -384,8 +385,6 @@ def load_preprocessors(
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:
-            from transformers import AutoImageProcessor
-
             preprocessors.append(
                 AutoImageProcessor.from_pretrained(
                     src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code

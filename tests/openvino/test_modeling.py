@@ -259,71 +259,76 @@ class OVModelIntegrationTest(unittest.TestCase):
         "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
     )
     def test_load_from_hub_and_save_visual_language_model(self):
-        model_id = self.OV_VLM_MODEL_ID
-        processor = get_preprocessor(model_id)
-        prompt = "<image>\n What is shown in this image?"
-        image = Image.open(
-            requests.get(
-                TEST_IMAGE_URL,
-                stream=True,
-            ).raw
-        )
-        loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id)
-        self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
-        for component_name, component in loaded_model.components.items():
-            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        # Test that PERFORMANCE_HINT is set to LATENCY by default
-        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        model_ids = [self.OV_VLM_MODEL_ID]
+        if is_transformers_version(">=", "4.51"):
+            model_ids.append("katuni4ka/phi-4-multimodal-ov")
+        for model_id in model_ids:
+            processor = get_preprocessor(model_id)
+            prompt = "What is shown in this image?"
+            image = Image.open(
+                requests.get(
+                    TEST_IMAGE_URL,
+                    stream=True,
+                ).raw
+            )
+            loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id)
+            self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
+            for component_name, component in loaded_model.components.items():
+                self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
+            self.assertIsInstance(loaded_model.config, PretrainedConfig)
+            # Test that PERFORMANCE_HINT is set to LATENCY by default
+            self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
 
-        for component_name, component in loaded_model.components.items():
-            self.assertIsInstance(component.model, ov.Model)
-            if component_name == "language_model":
-                self.assertEqual(component.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
-                self.assertIsInstance(component.text_emb_model, ov.Model)
-                self.assertEqual(component.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
-            else:
-                self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
-
-        processor.patch_size = loaded_model.config.vision_config.patch_size
-        inputs = processor(images=image, text=prompt, return_tensors="pt")
-        set_seed(SEED)
-        loaded_model_outputs = loaded_model(**inputs)
-
-        with TemporaryDirectory() as tmpdirname:
-            loaded_model.save_pretrained(tmpdirname)
-            folder_contents = os.listdir(tmpdirname)
-            model_files = [
-                OV_LANGUAGE_MODEL_NAME,
-                OV_TEXT_EMBEDDINGS_MODEL_NAME,
-                OV_VISION_EMBEDDINGS_MODEL_NAME,
-            ]
-            model_files += ["openvino_{part}_model.xml" for part in loaded_model.additional_parts]
-            for xml_file_name in model_files:
-                self.assertTrue(xml_file_name in folder_contents)
-                self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
-            compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
-            for _, submodel in compile_only_model.ov_submodels.items():
-                self.assertIsInstance(submodel, ov.runtime.CompiledModel)
-            for component_name, component in compile_only_model.components.items():
-                self.assertIsInstance(component.model, ov.runtime.CompiledModel)
+            for component_name, component in loaded_model.components.items():
+                self.assertIsInstance(component.model, ov.Model)
                 if component_name == "language_model":
-                    self.assertIsInstance(component.request, ov.runtime.InferRequest)
-                    self.assertIsInstance(component.text_emb_model, ov.runtime.CompiledModel)
-                    self.assertIsInstance(component.text_emb_request, ov.runtime.CompiledModel)
+                    self.assertEqual(
+                        component.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY"
+                    )
+                    self.assertIsInstance(component.text_emb_model, ov.Model)
+                    self.assertEqual(component.text_emb_request.get_property("PERFORMANCE_HINT"), "LATENCY")
                 else:
-                    self.assertIsInstance(component.request, ov.runtime.CompiledModel)
+                    self.assertEqual(component.request.get_property("PERFORMANCE_HINT"), "LATENCY")
+            if "llava" in model_id:
+                processor.patch_size = loaded_model.config.vision_config.patch_size
+            inputs = loaded_model.preprocess_inputs(text=prompt, image=image, processor=processor)
+            set_seed(SEED)
+            loaded_model_outputs = loaded_model(**inputs)
 
-            outputs = compile_only_model(**inputs)
+            with TemporaryDirectory() as tmpdirname:
+                loaded_model.save_pretrained(tmpdirname)
+                folder_contents = os.listdir(tmpdirname)
+                model_files = [
+                    OV_LANGUAGE_MODEL_NAME,
+                    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+                    OV_VISION_EMBEDDINGS_MODEL_NAME,
+                ]
+                model_files += [f"openvino_{part}_model.xml" for part in loaded_model.additional_parts]
+                for xml_file_name in model_files:
+                    self.assertTrue(xml_file_name in folder_contents)
+                    self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
+                model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
+                compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
+                for _, submodel in compile_only_model.ov_submodels.items():
+                    self.assertIsInstance(submodel, ov.runtime.CompiledModel)
+                for component_name, component in compile_only_model.components.items():
+                    self.assertIsInstance(component.model, ov.runtime.CompiledModel)
+                    if component_name == "language_model":
+                        self.assertIsInstance(component.request, ov.runtime.InferRequest)
+                        self.assertIsInstance(component.text_emb_model, ov.runtime.CompiledModel)
+                        self.assertIsInstance(component.text_emb_request, ov.runtime.CompiledModel)
+                    else:
+                        self.assertIsInstance(component.request, ov.runtime.CompiledModel)
+
+                outputs = compile_only_model(**inputs)
+                self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+                del compile_only_model
+
+            outputs = model(**inputs)
             self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-            del compile_only_model
-
-        outputs = model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-        del loaded_model
-        del model
-        gc.collect()
+            del loaded_model
+            del model
+            gc.collect()
 
     def test_load_from_hub_and_save_seq2seq_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
@@ -2489,6 +2494,51 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             torch.equal(ov_outputs, transformers_outputs),
             f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
         )
+
+        # video loader helper only available for transformers >= 4.49
+        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+            from transformers.image_utils import load_video
+
+            video_path = hf_hub_download(
+                repo_id="raushan-testing-hf/videos-test",
+                filename="sample_demo_1.mp4",
+                repo_type="dataset",
+                user_agent=http_user_agent(),
+            )
+            input_video, _ = load_video(video_path, num_frames=2)
+            question = "Why is this video funny?"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+            transformers_inputs = copy.deepcopy(inputs)
+            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "internvl2"]:
+                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **transformers_inputs, generation_config=gen_config, **additional_inputs
+                )
+            self.assertTrue(
+                torch.equal(ov_outputs, transformers_outputs),
+                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+            )
+
+        if model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Translate this audio to French"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            transformers_inputs = copy.deepcopy(inputs)
+            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "internvl2"]:
+                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **transformers_inputs, generation_config=gen_config, **additional_inputs
+                )
+            self.assertTrue(
+                torch.equal(ov_outputs, transformers_outputs),
+                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+            )
         del transformers_model
         del ov_model
 
