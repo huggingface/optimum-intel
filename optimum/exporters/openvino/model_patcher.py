@@ -6075,6 +6075,30 @@ def llama4_rope_forward(self, x, position_ids):
     return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
+# use real cos / sin instead of complex
+# Modified from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/llama4/modeling_llama4.py#L247
+# Based on https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/deepseek_v3/modeling_deepseek_v3.py#L292
+# Native DeepSeek apply rotary emb works in the same way like llama4 apply rotary emb
+def llama4_apply_rotary_emb(
+    xq: torch.Tensor, xk: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    from transformers.models.llama.modeling_llama import rotate_half
+
+    xq_ = xq.float()
+    xk_ = xk.float()
+    cos = cos.unsqueeze(2)
+    sin = sin.unsqueeze(2)
+    b, h, s, d = xq_.shape
+    xq_ = xq_.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+
+    b, h, s, d = xk_.shape
+    xk_ = xk_.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+
+    q_embed = (xq_ * cos) + (rotate_half(xq_) * sin)
+    k_embed = (xk_ * cos) + (rotate_half(xk_) * sin)
+    return q_embed.type_as(xq), k_embed.type_as(xk)
+
+
 # https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L329
 # use real cos / sin instead of complex
 def llama4_attn_forward(
@@ -6086,7 +6110,6 @@ def llama4_attn_forward(
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
     from transformers.models.llama4.modeling_llama4 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
 
     input_shape = hidden_states.shape[:-1]
@@ -6098,8 +6121,8 @@ def llama4_attn_forward(
 
     if self.use_rope:  # the 16E model skips rope for long context on certain layers
         cos, sin = position_embeddings[0], position_embeddings[1]
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos.to(query_states.device), sin.to(query_states.device), unsqueeze_dim=2
+        query_states, key_states = llama4_apply_rotary_emb(
+            query_states, key_states, cos.to(query_states.device), sin.to(query_states.device)
         )
 
     if hasattr(self, "qk_norm"):  # the 128E model does not use qk_norm

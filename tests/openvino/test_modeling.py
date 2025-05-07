@@ -2412,8 +2412,12 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         prompt = "What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
+        loading_kwargs = {}
+
+        if "llama4" in model_arch:
+            loading_kwargs = {"_attn_implementation": "sdpa"}
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
-            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, **loading_kwargs
         )
         transformers_model.eval()
         if "internvl2" in model_arch:
@@ -2437,8 +2441,14 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
+        # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
         if model_arch == "llama4":
             transformers_inputs["pixel_values"] = transformers_inputs["pixel_values"].to(torch.float32)
+            transformers_model.generation_config.cache_implementation = None
+            from transformers.cache_utils import DynamicCache
+
+            transformers_inputs["past_key_values"] = DynamicCache()
+
         test_device = "AUTO"
         ov_model.to(test_device)
         self._check_device_and_request(ov_model, test_device, False)
@@ -2457,7 +2467,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**transformers_inputs)
             self.assertTrue(
-                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3, equal_nan=True),
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
                 f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
             )
 
@@ -2489,7 +2499,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             additional_inputs = {"past_key_values": DynamicCache()}
 
         if model_arch == "llama4":
-            transformers_model.config._attn_implementation = "sdpa"
+            transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(
