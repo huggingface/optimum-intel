@@ -28,7 +28,7 @@ jobs:
         test_file: [
             "optimum_openvino_inference.ipynb",
             "question_answering_quantization.ipynb",
-            # "sentence_transformer_quantization.ipynb", TODO: fix and run on any cpu
+            "sentence_transformer_quantization.ipynb",
             # "stable_diffusion_hybrid_quantization.ipynb", TODO: update and ran on a powerful cpu
           ]
 

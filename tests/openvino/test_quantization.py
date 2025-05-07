@@ -86,6 +86,8 @@ from utils_tests import (
 
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
+    "feature-extraction": ("wikitext", "wikitext-2-raw-v1", "text"),
+    "fill-mask": ("wikitext", "wikitext-2-raw-v1", "text"),
     "text-classification": ("glue", "sst2", "sentence"),
 }
 
@@ -101,9 +103,13 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
+    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq and OVStableDiffusionPipeline
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
+        (OVSentenceTransformer, "sentence-transformers-bert", 12, 15),
+        (OVModelForFeatureExtraction, "blenderbot", 33, 35),
+        (OVModelForMaskedLM, "roberta", 32, 34),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
         (
@@ -463,7 +469,14 @@ class OVQuantizerTest(unittest.TestCase):
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
 
         def preprocess_function(examples, tokenizer):
-            return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
+            inputs = tokenizer(
+                examples[column_name], padding="max_length", max_length=128, truncation=True, return_tensors="np"
+            )
+            if model_cls == OVModelForMaskedLM:
+                batch_size = inputs["input_ids"].shape[0]
+                random_indices = np.random.randint(0, inputs["input_ids"].shape[1], size=batch_size)
+                inputs["input_ids"][np.arange(batch_size), random_indices] = tokenizer.mask_token_id
+            return inputs
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, export=True)
@@ -490,9 +503,8 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
+            tokens = tokenizer("This is a sample input <mask>", return_tensors="pt")
+            model(tokens) if model_cls == OVSentenceTransformer else model(**tokens)
 
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
