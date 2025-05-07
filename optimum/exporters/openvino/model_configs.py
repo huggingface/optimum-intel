@@ -124,6 +124,10 @@ from .model_patcher import (
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
+    Phi4MMAudioEncoderPatcher,
+    Phi4MMAudioForwardEmbeddingsPatcher,
+    Phi4MMLanguageModelPatcher,
+    Phi4MMVisionEmbeddingsPatcher,
     PhiMoEModelPatcher,
     Qwen2_5_VLVisionEmbMergerPatcher,
     Qwen2VLLanguageModelPatcher,
@@ -172,6 +176,19 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "smolvlm", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForCausalLM",
     )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
@@ -2765,19 +2782,38 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = 336,
         height: int = 336,
+        crop_size=336,
         **kwargs,
     ):
         self.batch_size = batch_size
-        self._embed_layer_realization = normalized_config.config.embd_layer["embedding_cls"]
-        self.image_dim_out = normalized_config.config.img_processor["image_dim_out"]
+        self._embed_layer_realization = (
+            normalized_config.config.embd_layer["embedding_cls"]
+            if hasattr(normalized_config.config, "embd_layer")
+            else "image_audio"
+        )
+        if not hasattr(normalized_config.config, "vision_config"):
+            self.image_dim_out = (
+                normalized_config.config.img_processor.get(
+                    "image_dim_out", normalized_config.config.img_processor.get("hidden_size")
+                )
+                if normalized_config.config.img_processor is not None
+                else 1152
+            )
+            if "image_embd_layer" in normalized_config.config.embd_layer:
+                self.crop_size = normalized_config.config.embd_layer["image_embd_layer"].get("crop_size", crop_size)
+            else:
+                self.crop_size = normalized_config.config.embd_layer.get("crop_size", crop_size)
+        else:
+            self.image_dim_out = normalized_config.config.vision_config.hidden_size
+            self.crop_size = normalized_config.config.vision_config.crop_size
         self.height = height
         self.width = width
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        h = self.height // 336
-        w = self.width // 336
+        h = self.height // self.crop_size
+        w = self.width // self.crop_size
         feat_size = (h * w + 1) * 144 + 1 + (h + 1) * 12
-        if self._embed_layer_realization == "linear":
+        if self._embed_layer_realization in ["linear", "image_audio"]:
             shape = [self.batch_size, feat_size, self.image_dim_out]
         else:
             shape = [self.batch_size, feat_size, self.image_dim_out * 4]
@@ -2901,6 +2937,361 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
             return Phi3VisionImageEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+class DummyAudioPhi4MMInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("audio_input", "audio_feature", "audio_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        signal_length=498,
+        **kwargs,
+    ):
+        self.signal_length = signal_length
+        if hasattr(normalized_config.config, "audio_processor"):
+            self.audio_chunk_size = (
+                signal_length // normalized_config.config.audio_processor["config"]["time_reduction"] + 1
+            )
+            self.input_size = normalized_config.config.audio_processor["config"]["input_size"]
+            self.attention_dim = normalized_config.config.audio_processor["config"]["attention_dim"]
+        else:
+            self.audio_chunk_size = signal_length // normalized_config.config.audio_config.time_reduction + 1
+            self.input_size = normalized_config.config.audio_config.input_size
+            self.attention_dim = normalized_config.config.audio_config.hidden_size
+        self.batch_size = batch_size
+        self.task = task
+        self.normalized_config = normalized_config
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "audio_input":
+            return self.random_float_tensor(
+                [self.batch_size, self.signal_length, self.input_size], framework=framework, dtype=float_dtype
+            )
+
+        if input_name == "audio_feature":
+            return self.random_float_tensor(
+                [self.batch_size, self.audio_chunk_size, self.attention_dim], framework=framework, dtype=float_dtype
+            )
+
+        if input_name == "audio_mask":
+            return self.random_int_tensor(
+                [self.batch_size, self.audio_chunk_size, self.audio_chunk_size],
+                max_value=2,
+                framework=framework,
+                dtype="bool",
+            )
+
+
+class DummyVisionPositionIdsPhi4InputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("patch_position_ids", "patch_attention_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        if hasattr(normalized_config.config, "vision_conifg"):
+            self.patch_size = getattr(normalized_config.config.vision_config, "patch_size", 14)
+        else:
+            self.patch_size = 14
+        self.num_patches_per_side = self.height // self.patch_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "patch_position_ids":
+            return self.get_vision_position_ids()
+        if input_name == "patch_attention_mask":
+            return self.random_int_tensor(
+                [self.batch_size, self.height // self.patch_size, self.width // self.patch_size],
+                framework=framework,
+                dtype="bool",
+                max_value=2,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+    def get_vision_position_ids(self):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L494-L512
+        import torch
+
+        batch_size = self.batch_size
+        max_im_h, max_im_w = self.height, self.width
+        max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+        boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
+        position_ids = torch.full(
+            size=(
+                batch_size,
+                max_nb_patches_h * max_nb_patches_w,
+            ),
+            fill_value=0,
+        )
+        patch_attention_mask = torch.ones(
+            [self.batch_size, self.height // self.patch_size, self.width // self.patch_size], dtype=torch.int64
+        )
+        patch_attention_mask[0, self.height - 2 :] = 0
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            nb_patches_h = p_attn_mask[:, 0].sum()
+            nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1)] = pos_ids
+        return position_ids
+
+
+class Phi4MMConfigBehavior(str, enum.Enum):
+    AUDIO_EMBEDDINGS = "audio_embeddings"
+    AUDIO_ENCODER = "audio_encoder"
+    AUDIO_FORWARD_EMBEDDINGS = "audio_forward_embeddings"
+    AUDIO_VISION_PROJECTION = "audio_vision_projection"
+    AUDIO_SPEECH_PROJECTION = "audio_speech_projection"
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_PROJECTION = "vision_projection"
+    VISION_EMBEDDINGS = "vision_embeddings"
+
+
+@register_in_tasks_manager(
+    "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+)
+@register_in_tasks_manager(
+    "phi4-multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+)
+class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
+    MIN_TRANSFORMERS_VERSION = version.parse("4.51.0")
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Phi4MMConfigBehavior = Phi4MMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+
+        if self._behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
+            if hasattr(self._config, "vision_config"):
+                self._config = self._config.vision_config
+                self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            else:
+                self._config.image_size = self._config.embd_layer.get("image_embd_layer", {}).get("crop_size", 448)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsPhi4InputGenerator)
+        if self._behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyPhi3VisionProjectionInputGenerator,)
+        if self._behavior in (
+            Phi4MMConfigBehavior.AUDIO_EMBEDDINGS,
+            Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS,
+            Phi4MMConfigBehavior.AUDIO_ENCODER,
+            Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
+        ):
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyAudioPhi4MMInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 2: "height", 3: "width"},
+                "patch_attention_mask": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
+                "patch_position_ids": {0: "batch_size", 1: "patch_size"},
+            }
+        if self._behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
+            return {"input": {0: "batch_size", 1: "img_feat_size"}}
+
+        if self._behavior in [Phi4MMConfigBehavior.AUDIO_EMBEDDINGS, Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS]:
+            return {"audio_input": {0: "batch_size", 1: "audio_length"}}
+
+        if self._behavior == Phi4MMConfigBehavior.AUDIO_ENCODER:
+            return {
+                "audio_feature": {0: "batch_size", 1: "audio_length"},
+                "audio_mask": {0: "batch_size", 1: "audio_length", 2: "audio_length"},
+            }
+
+        if self._behavior in [
+            Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
+        ]:
+            return {"audio_feature": {0: "batch_size", 1: "audio_length"}}
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior in [
+            Phi4MMConfigBehavior.VISION_EMBEDDINGS,
+            Phi4MMConfigBehavior.VISION_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_EMBEDDINGS,
+            Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS,
+            Phi4MMConfigBehavior.AUDIO_ENCODER,
+            Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
+        ]:
+            return {"last_hidden_state": {0: "batch_size", 1: "projection_size"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, Phi4MMConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, Phi4MMConfigBehavior):
+            behavior = Phi4MMConfigBehavior(behavior)
+
+        if behavior == Phi4MMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("phi3", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Phi4MMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "phi3", self._orig_config, self.int_dtype, self.float_dtype, model_patcher=Phi4MMLanguageModelPatcher
+            )
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, Phi4MMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Phi4MMConfigBehavior):
+            behavior = Phi4MMConfigBehavior(behavior)
+
+        if behavior == Phi4MMConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
+            vision_embeddings = model.model.embed_tokens_extend.image_embed
+            vision_embeddings.config = model.model.embed_tokens_extend.image_embed.img_processor.config
+            return model.model.embed_tokens_extend.image_embed
+
+        if behavior == Phi4MMConfigBehavior.VISION_PROJECTION:
+            vision_model = model.model.embed_tokens_extend.image_embed
+            if hasattr(vision_model, "img_projection"):
+                projection = vision_model.img_projection
+            else:
+                import torch
+
+                projection = torch.nn.Sequential(
+                    *[vision_model.img_projection_up, torch.nn.GELU(), vision_model.img_projection_down]
+                )
+            projection.config = vision_model.img_processor.config
+            return projection
+
+        if behavior == Phi4MMConfigBehavior.TEXT_EMBEDDINGS:
+            if hasattr(model.model, "_require_grads_hook"):
+                model.model.disable_input_require_grads()
+            text_embedding = model.model.embed_tokens
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == Phi4MMConfigBehavior.AUDIO_EMBEDDINGS:
+            audio_embeddings = model.model.embed_tokens_extend.audio_embed.encoder.encoder_embedding
+            audio_embeddings.config = model.config
+            return audio_embeddings
+
+        if behavior == Phi4MMConfigBehavior.AUDIO_ENCODER:
+            audio_encoder = model.model.embed_tokens_extend.audio_embed.encoder
+            audio_encoder.config = model.config
+            return audio_encoder
+
+        if behavior == Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS:
+            audio_encoder = model.model.embed_tokens_extend.audio_embed.encoder
+            audio_encoder.config = model.config
+            return audio_encoder
+
+        if behavior == Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION:
+            if hasattr(model.model.embed_tokens_extend.audio_embed, "audio_projection"):
+                audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["speech"]
+                audio_projection.config = model.config
+                return audio_projection
+            else:
+                import torch
+
+                audio_projection = torch.nn.Sequential(
+                    *[
+                        model.model.embed_tokens_extend.audio_embed.up_proj_for_speech,
+                        torch.nn.GELU(),
+                        model.model.embed_tokens_extend.audio_embed.down_proj_for_speech,
+                    ]
+                )
+                audio_projection.config = model.config
+                return audio_projection
+
+        if behavior == Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION:
+            if hasattr(model.model.embed_tokens_extend.audio_embed, "audio_projection"):
+                audio_projection = model.model.embed_tokens_extend.audio_embed.audio_projection["vision"]
+                audio_projection.config = model.config
+                return audio_projection
+            else:
+                import torch
+
+                audio_projection = torch.nn.Sequential(
+                    *[
+                        model.model.embed_tokens_extend.audio_embed.up_proj_for_vision_speech,
+                        torch.nn.GELU(),
+                        model.model.embed_tokens_extend.audio_embed.down_proj_for_vision_speech,
+                    ]
+                )
+                audio_projection.config = model.config
+                return audio_projection
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
+            return Phi4MMVisionEmbeddingsPatcher(self, model, model_kwargs)
+        if self._behavior == Phi4MMConfigBehavior.AUDIO_FORWARD_EMBEDDINGS:
+            return Phi4MMAudioForwardEmbeddingsPatcher(self, model, model_kwargs)
+        if self._behavior == Phi4MMConfigBehavior.AUDIO_ENCODER:
+            return Phi4MMAudioEncoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    def rename_ambiguous_inputs(self, inputs):
+        if self._behavior == Phi4MMConfigBehavior.AUDIO_EMBEDDINGS:
+            input_info = inputs.pop("audio_input")
+            inputs["input_" if hasattr(self._normalized_config.config, "audio_processor") else "x"] = input_info
+        if self._behavior in [
+            Phi4MMConfigBehavior.AUDIO_SPEECH_PROJECTION,
+            Phi4MMConfigBehavior.AUDIO_VISION_PROJECTION,
+        ]:
+            input_info = inputs.pop("audio_feature")
+            inputs["input"] = input_info
+        return inputs
 
 
 class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):

@@ -18,7 +18,7 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from transformers import PretrainedConfig
+from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
@@ -28,7 +28,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available
-from optimum.utils.save_utils import maybe_save_preprocessors
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 
 logger = logging.getLogger(__name__)
@@ -232,6 +232,8 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "gemma3",
     "idefics3",
     "smolvlm",
+    "phi4mm",
+    "phi4-multimodal",
 ]
 
 
@@ -315,6 +317,9 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+        # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
+        if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
+            (Path(output) / "chat_template.json").unlink()
     else:
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
@@ -368,3 +373,23 @@ def allow_skip_tracing_check(library_name, model_type):
     if library_name == "diffusers":
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
+
+
+# TO DO: load_preprocessors should be removed once this is included in https://github.com/huggingface/optimum/blob/fa87c66967595b8af4de529500868840a3443611/optimum/utils/save_utils.py#L27 (
+def load_preprocessors(
+    src_name_or_path: Union[str, Path], subfolder: str = "", trust_remote_code: bool = False, model_type: str = None
+):
+    preprocessors = maybe_load_preprocessors(
+        src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+    )
+    if model_type == "phi4mm":
+        # audio feature extractor config overrides image processor config during saving, need to save it explicitly
+        try:
+            preprocessors.append(
+                AutoImageProcessor.from_pretrained(
+                    src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception:
+            pass
+    return preprocessors
