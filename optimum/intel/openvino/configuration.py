@@ -315,8 +315,10 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ignored_scope": {
             "patterns": [
-                "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul"
-            ]
+                "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul",
+                "__module\\.img_processor\\.encoder\\.layers\\.\\d+\\.mlp\\.fc2/ov_ext::linear/MatMul",
+            ],
+            "validate": False,
         },
     },
 }
