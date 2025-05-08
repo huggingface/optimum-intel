@@ -309,6 +309,16 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
+    "microsoft/Phi-4-multimodal-instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ignored_scope": {
+            "patterns": [
+                "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul"
+            ]
+        },
+    },
 }
 
 # Add configs for model id aliases
