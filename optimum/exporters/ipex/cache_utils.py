@@ -127,7 +127,7 @@ class IPEXPagedCache(Cache):
         num_blocks = (input_lens + self.block_size - 1) // self.block_size
         for i in range(batch_size):
             nb = num_blocks[i]
-            scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1)
+            scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1, device=self.device)
             block_table = torch.topk(scores, nb).indices
             self.block_tables[i][0:nb] = block_table
             self.free_blocks[block_table] = 0
@@ -154,7 +154,7 @@ class IPEXPagedCache(Cache):
                 b_idx = start_block_idx[i]
                 if self.block_tables[i][b_idx] == -1:
                     # Need a free block. Get indices of free blocks, select the first free block
-                    scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1)
+                    scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1, device=self.device)
                     self.block_tables[i][b_idx] = scores.argmax()
                     self.free_blocks[self.block_tables[i][b_idx]] = 0
             self.slots[i] = self.block_tables[i][start_block_idx[i]] * self.block_size + slot_offset_in_block[i]
