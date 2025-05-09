@@ -383,6 +383,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                 {"int8": 16},
             ],
         ),
+        (
+            "zero-shot-image-classification",
+            "clip",
+            "int8",
+            "--dataset conceptual_captions --num-samples 1",
+            [
+                65,
+            ],
+            [
+                {"int8": 65},
+            ],
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [

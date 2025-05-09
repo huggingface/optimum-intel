@@ -152,8 +152,8 @@ _HEAD_TO_AUTOMODELS = {
 PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}
 
 PREDEFINED_LANGUAGE_DATASETS = {
-    "wikitext2": {"path": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
-    "c4": {"path": "allenai/c4", "name": "en", "split": "train", "streaming": True},
+    "wikitext2": {"id": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
+    "c4": {"id": "allenai/c4", "name": "en", "split": "train", "streaming": True},
 }
 
 PREDEFINED_SD_DATASETS = {
@@ -164,6 +164,16 @@ PREDEFINED_SD_DATASETS = {
         "streaming": True,
     },
     "laion/filtered-wit": {"split": "train", "prompt_column_name": "caption", "streaming": True},
+}
+
+PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {
+    "conceptual_captions": {
+        "id": "conceptual_captions",
+        "split": "train",
+        "text_column_name": "caption",
+        "image_column_name": "image_url",
+        "streaming": True,
+    },
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
