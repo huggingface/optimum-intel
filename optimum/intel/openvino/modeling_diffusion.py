@@ -976,7 +976,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name).request = None
 
-
     def compile(self):
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name)._compile()
