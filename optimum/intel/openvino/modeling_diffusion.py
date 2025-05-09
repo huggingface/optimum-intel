@@ -973,8 +973,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        for submodel in self.ov_submodels.values():
-            submodel.request = None
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name).request = None
+
 
     def compile(self):
         for submodel_name in self._ov_submodel_names:
