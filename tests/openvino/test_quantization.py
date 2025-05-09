@@ -860,6 +860,37 @@ class OVWeightCompressionTest(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.49.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "phi4mm",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=8,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        trust_remote_code=True,
+                    ),
+                    [
+                        {"int8": 8, "int4": 42},
+                        {"int8": 1},
+                        {"int8": 8},
+                        {"int8": 2},
+                        {},
+                        {"int8": 6},
+                        {"int8": 25},
+                        {"int8": 2},
+                        {"int8": 2},
+                    ],
+                ),
+            ]
+        )
+
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         (OVModelForCausalLM, "gpt2", False),
         (OVModelForMaskedLM, "bert", False),
