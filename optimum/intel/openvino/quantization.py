@@ -715,16 +715,14 @@ class OVCalibrationDatasetBuilder:
 
         models: Dict[str, Union[OVEncoder, OVDecoder]] = {}
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
-        for submodel_name in self.model.ov_submodels:
-            ov_component_name = "_".join(submodel_name.split("_")[:-1])  # e.g. "encoder_model" -> "encoder"
-            ov_component: Union[OVEncoder, OVDecoder] = getattr(self.model, ov_component_name)
-            models[ov_component_name] = ov_component
-            collected_inputs[ov_component_name] = []
+        for submodel_name in self.model._ov_submodel_names:
+            ov_component: Union[OVEncoder, OVDecoder] = getattr(self.model, submodel_name)
+            models[submodel_name] = ov_component
+            collected_inputs[submodel_name] = []
             ov_component._compile()
             ov_component.request = InferRequestWrapper(
-                ov_component.request, collected_inputs[ov_component_name], apply_caching=True
+                ov_component.request, collected_inputs[submodel_name], apply_caching=True
             )
-
         try:
             processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
 
@@ -741,10 +739,10 @@ class OVCalibrationDatasetBuilder:
             for model in models.values():
                 model.request = model.request.request
 
-        calibration_data = {}
-        for model_name, model_data in collected_inputs.items():
-            calibration_data[f"{model_name}_model"] = nncf.Dataset(model_data)
-        return OVCalibrationDataset(calibration_data)
+        for model_name in collected_inputs:
+            collected_inputs[model_name] = nncf.Dataset(collected_inputs[model_name])
+
+        return OVCalibrationDataset(collected_inputs)
 
     def _prepare_diffusion_calibration_data(
         self, config: OVQuantizationConfigBase, dataset: Union[List, "Dataset"]
@@ -1411,8 +1409,7 @@ def _quantize_whisper_model(
         # quantization_config.num_samples of audio samples result in more actual model inputs
         config.num_samples = calibration_dataset[submodel_name].get_length()
         quantized_model = _full_quantization(submodel, config, calibration_dataset[submodel_name], **kwargs)
-        setattr(model, submodel_name, quantized_model)
-        getattr(model, "_".join(submodel_name.split("_")[:-1])).model = quantized_model
+        getattr(model, submodel_name).model = quantized_model
 
 
 def _weight_only_quantization(
