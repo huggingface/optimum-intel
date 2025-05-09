@@ -1364,6 +1364,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
 
+        additional_args = {}
+        if is_transformers_version(">=", "4.51"):
+            additional_args["use_model_defaults"] = False
+
         model = OVModelForCausalLM.from_pretrained(model_id, use_cache=False, compile=False, **model_kwargs)
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
@@ -1373,7 +1377,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         inputs = "My name is Arthur and I live in"
         set_seed(SEED)
-        outputs = pipe(inputs, max_new_tokens=5)
+        outputs = pipe(inputs, max_new_tokens=5, **additional_args)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
         ov_pipe = optimum_pipeline(
@@ -1384,7 +1388,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer=tokenizer if model_arch == "qwen" else None,
         )
         set_seed(SEED)
-        ov_outputs = ov_pipe(inputs, max_new_tokens=5)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=5, **additional_args)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -1619,7 +1623,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if (
                 gen_config.num_beams > 1
                 and is_transformers_version(">=", "4.51.0")
-                and model_arch in ["bart", "pegasus", "marian"]
+                and model_arch in ["bart", "pegasus", "marian", "blenderbot", "blenderbot-small", "mixtral_awq"]
             ):
                 continue
             set_seed(SEED)
