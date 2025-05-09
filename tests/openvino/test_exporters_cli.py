@@ -526,6 +526,29 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.49.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "phi4mm",
+                    'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    [
+                        {"int8": 8, "int4": 42},
+                        {"int8": 1},
+                        {"int8": 8},
+                        {"int8": 2},
+                        {},
+                        {"int8": 6},
+                        {"int8": 25},
+                        {"int8": 2},
+                        {"int8": 2},
+                    ],
+                ),
+            ]
+        )
+
     def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
             main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
