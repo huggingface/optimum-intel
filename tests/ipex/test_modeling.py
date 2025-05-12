@@ -469,4 +469,4 @@ class IPEXLangchainTest(unittest.TestCase):
             self.assertIsInstance(chunk, str)
             stream_results_string = chunk
 
-        self.assertTrue(len(stream_results_string.strip()) > 0)
+        self.assertTrue(len(stream_results_string.strip()) > 1)
