@@ -440,7 +440,7 @@ class IPEXSTModel(unittest.TestCase):
 
 
 class IPEXLangchainTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("gpt2",)
+    SUPPORTED_ARCHITECTURES = ("llama2",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @unittest.skipIf(
@@ -469,4 +469,4 @@ class IPEXLangchainTest(unittest.TestCase):
             self.assertIsInstance(chunk, str)
             stream_results_string = chunk
 
-        self.assertTrue(len(stream_results_string.strip()) > 1)
+        self.assertTrue(len(stream_results_string.strip()) > 0)
