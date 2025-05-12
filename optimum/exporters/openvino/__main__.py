@@ -88,6 +88,18 @@ def infer_task(
                     token=token,
                     library_name=library_name,
                 )
+                # phi-4-multimodal has more common with multimodal, however pipeline_tag defined as automatic-speech-recognition on hub
+                if "automatic-speech-recognition" in task and library_name == "transformers":
+                    config = AutoConfig.from_pretrained(
+                        model_name_or_path,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        trust_remote_code=True,
+                    )
+                    if getattr(config, "model_type", "").replace("_", "-") in ["phi4mm", "phi4-multimodal"]:
+                        task = "image-text-to-text"
             except KeyError as e:
                 raise KeyError(
                     f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
