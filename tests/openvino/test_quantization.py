@@ -145,11 +145,13 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
                 smooth_quant_alpha=0.95,
             ),
-            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
+            {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
             (
-                [{"int8": 8}, {"int8": 11}, {"int8": 9}]
+                {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
                 if is_transformers_version("<=", "4.36.0")
-                else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
+                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -161,12 +163,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dtype="f8e4m3",
                 weight_only=False,
             ),
-            [
-                13,
-            ],
-            [
-                {"f8e4m3": 16},
-            ],
+            {
+                "model": 13,
+            },
+            {
+                "model": {"f8e4m3": 16},
+            },
         ),
         (
             OVModelForCausalLM,
@@ -177,12 +179,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                14,
-            ],
-            [
-                {"f8e4m3": 11, "nf4": 5},
-            ],
+            {
+                "model": 14,
+            },
+            {
+                "model": {"f8e4m3": 11, "nf4": 5},
+            },
         ),
         (
             OVModelForCausalLM,
@@ -202,12 +204,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                7,
-            ],
-            [
-                {"f8e4m3": 8, "nf4": 2},
-            ],
+            {
+                "model": 7,
+            },
+            {
+                "model": {"f8e5m2": 8, "nf4": 2},
+            },
         ),
         (
             OVModelForCausalLM,
@@ -227,12 +229,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                7,
-            ],
-            [
-                {"f8e5m2": 8, "nf4": 2},
-            ],
+            {
+                "model": 7,
+            },
+            {
+                "model": {"f8e5m2": 8, "nf4": 2},
+            },
         ),
         (
             OVModelForCausalLM,
@@ -243,12 +245,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                14,
-            ],
-            [
-                {"f8e4m3": 11, "int4": 10},
-            ],
+            {
+                "model": 14,
+            },
+            {
+                "model": {"f8e4m3": 11, "int4": 10},
+            },
         ),
         (
             OVModelForCausalLM,
@@ -259,12 +261,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                13,
-            ],
-            [
-                {"f8e5m2": 2, "int4": 28},
-            ],
+            {
+                "model": 13,
+            },
+            {
+                "model": {"f8e5m2": 2, "int4": 28},
+            },
         ),
         (
             OVStableDiffusionPipeline,
@@ -276,18 +278,18 @@ class OVQuantizerTest(unittest.TestCase):
                 processor=MODEL_NAMES["stable-diffusion"],
                 trust_remote_code=True,
             ),
-            [
-                112,
-                0,
-                0,
-                0,
-            ],
-            [
-                {"int8": 121},
-                {"int8": 42},
-                {"int8": 34},
-                {"int8": 64},
-            ],
+            {
+                "unet": 112,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+            },
+            {
+                "unet": {"int8": 121},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 64},
+            },
         ),
         (
             OVStableDiffusionXLPipeline,
@@ -300,20 +302,20 @@ class OVQuantizerTest(unittest.TestCase):
                 processor=MODEL_NAMES["stable-diffusion-xl"],
                 trust_remote_code=True,
             ),
-            [
-                174,
-                0,
-                0,
-                0,
-                0,
-            ],
-            [
-                {"f8e5m2": 183},
-                {"int8": 42},
-                {"int8": 34},
-                {"int8": 64},
-                {"int8": 66},
-            ],
+            {
+                "unet": 174,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+                "text_encoder_2": 0,
+            },
+            {
+                "unet": {"f8e5m2": 183},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 64},
+                "text_encoder_2": {"int8": 66},
+            },
         ),
         (
             OVLatentConsistencyModelPipeline,
@@ -324,18 +326,18 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
                 trust_remote_code=True,
             ),
-            [
-                79,
-                0,
-                0,
-                0,
-            ],
-            [
-                {"f8e4m3": 84},
-                {"int8": 42},
-                {"int8": 34},
-                {"int8": 40},
-            ],
+            {
+                "unet": 79,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+            },
+            {
+                "unet": {"f8e4m3": 84},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 40},
+            },
         ),
         (
             OVModelForFeatureExtraction,
@@ -345,12 +347,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                33,
-            ],
-            [
-                {"int8": 35},
-            ],
+            {
+                "model": 33,
+            },
+            {
+                "model": {"int8": 35},
+            },
         ),
         (
             OVSentenceTransformer,
@@ -360,12 +362,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="c4",
                 num_samples=1,
             ),
-            [
-                12,
-            ],
-            [
-                {"int8": 15},
-            ],
+            {
+                "model": 12,
+            },
+            {
+                "model": {"int8": 15},
+            },
         ),
         (
             OVModelForMaskedLM,
@@ -375,12 +377,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="wikitext2",
                 num_samples=1,
             ),
-            [
-                32,
-            ],
-            [
-                {"int8": 34},
-            ],
+            {
+                "model": 32,
+            },
+            {
+                "model": {"int8": 34},
+            },
         ),
         (
             OVModelForMaskedLM,
@@ -390,12 +392,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="c4",
                 num_samples=1,
             ),
-            [
-                14,
-            ],
-            [
-                {"int8": 16},
-            ],
+            {
+                "model": 14,
+            },
+            {
+                "model": {"int8": 16},
+            },
         ),
         (
             OVModelForZeroShotImageClassification,
@@ -405,12 +407,12 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="conceptual_captions",
                 num_samples=1,
             ),
-            [
-                65,
-            ],
-            [
-                {"int8": 65},
-            ],
+            {
+                "model": 65,
+            },
+            {
+                "model": {"int8": 65},
+            },
         ),
     ]
 
@@ -601,12 +603,10 @@ class OVQuantizerTest(unittest.TestCase):
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            submodels = ov_model.ov_submodels.values()
-
             if model_cls == OVModelForSpeechSeq2Seq:
                 if ov_model.decoder_with_past is None:
-                    expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
-                    expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
+                    del expected_fake_nodes_per_model["decoder_with_past"]
+                    del expected_num_weight_nodes_per_model["decoder_with_past"]
 
                 input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
                 ov_model.generate(input_features)
@@ -634,7 +634,7 @@ class OVQuantizerTest(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                submodels,
+                ov_model.ov_submodels,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
@@ -656,26 +656,21 @@ class OVWeightCompressionTest(unittest.TestCase):
             "gpt2",  # model name
             False,  # trust remote code
             dict(bits=4, sym=False, group_size=-1, ratio=0.8),  # quantization config
-            [{"int8": 14, "int4": 30}],  # reference number of low-precision nodes
+            {"model": {"int8": 14, "int4": 30}},  # reference number of low-precision nodes
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
             dict(bits=4, dtype="mxfp4", group_size=32),
-            [{"int8": 4, "f4e2m1": 20, "f8e8m0": 20}],
+            {"model": {"int8": 4, "f4e2m1": 20, "f8e8m0": 20}},
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
             dict(bits=4, dtype="nf4", group_size=32),
-            [
-                {
-                    "int8": 4,
-                    "nf4": 20,
-                }
-            ],
+            {"model": {"int8": 4, "nf4": 20}},
         ),
         (
             OVModelForCausalLM,
@@ -687,14 +682,14 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
-            [{"int8": 4, "int4": 38}],
+            {"model": {"int8": 4, "int4": 38}},
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             False,
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            [{"int8": 18, "int4": 26}],
+            {"model": {"int8": 4, "int4": 26}},
         ),
         (
             OVModelForCausalLM,
@@ -708,7 +703,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            [{"int8": 18, "int4": 23}] if is_transformers_version(">=", "4.49") else [{"int8": 14, "int4": 25}],
+            {"model": {"int8": 18, "int4": 23}}
+            if is_transformers_version(">=", "4.49")
+            else {"model": {"int8": 14, "int4": 25}},
         ),
         (
             OVModelForCausalLM,
@@ -722,7 +719,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            [{"int8": 18, "int4": 23}] if is_transformers_version(">=", "4.49") else [{"int8": 16, "int4": 24}],
+            {"model": {"int8": 18, "int4": 23}}
+            if is_transformers_version(">=", "4.49")
+            else {"model": {"int8": 16, "int4": 24}},
         ),
         (
             OVModelForCausalLM,
@@ -738,7 +737,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            [{"int8": 8, "int4": 12}],
+            {"model": {"int8": 8, "int4": 12}},
         ),
         (
             OVModelForCausalLM,
@@ -753,7 +752,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            [{"int8": 8, "int4": 12}],
+            {"model": {"int8": 8, "int4": 12}},
         ),
         (
             OVModelForCausalLM,
@@ -768,7 +767,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 gptq=True,
             ),
-            [{"int8": 8, "int4": 12}],
+            {"model": {"int8": 8, "int4": 12}},
         ),
         (
             OVModelForCausalLM,
@@ -781,35 +780,35 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="auto",
                 lora_correction=True,
             ),
-            [{"int8": 60, "int4": 28}],
+            {"model": {"int8": 60, "int4": 28}},
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="none", group_size=16),
-            [{"int4": 28}],
+            {"model": {"int4": 28}},
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="none", group_size=16, ratio=0.5),
-            [{"int4": 6}],
+            {"model": {"int4": 6}},
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="int8_sym", group_size=16, ratio=0.5),
-            [{"int4": 6, "int8": 13}],
+            {"model": {"int8": 13, "int4": 6}},
         ),
         (
             OVModelForCausalLM,
             "llama_awq",
             False,
             dict(bits=4, backup_precision="int8_asym", group_size=16, ratio=0.5),
-            [{"int4": 6, "int8": 26}],
+            {"model": {"int8": 26, "int4": 6}},
         ),
     ]
 
@@ -829,7 +828,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         processor=MODEL_NAMES["llava_next"],
                     ),
-                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 9}],
+                    {
+                        "lm_model": {"int8": 6, "int4": 24},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 9},
+                    },
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -846,7 +849,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                         tokenizer=MODEL_NAMES["nanollava"],
                         trust_remote_code=True,
                     ),
-                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
+                    {
+                        "lm_model": {"int8": 16, "int4": 14},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 15},
+                    },
                 ),
             ]
         )
@@ -867,7 +874,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         processor=MODEL_NAMES["llava_next_video"],
                     ),
-                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 7}, {}, {"int8": 2}],
+                    {
+                        "lm_model": {"int8": 6, "int4": 24},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 7},
+                        "vision_resampler_model": {},
+                        "multi_modal_projector_model": {"int8": 2},
+                    },
                 ),
             ]
         )
@@ -889,7 +902,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                         processor=MODEL_NAMES["minicpmv"],
                         trust_remote_code=True,
                     ),
-                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
+                    {
+                        "lm_model": {"int8": 8, "int4": 22},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 26},
+                        "resampler_model": {"int8": 6},
+                    },
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -904,7 +922,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
+                    {
+                        "lm_model": {"int8": 8, "int4": 22},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 11},
+                    },
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -919,7 +941,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
+                    {
+                        "lm_model": {"int8": 4, "int4": 14},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 7},
+                        "vision_projection_model": {"int8": 2},
+                    },
                 ),
                 (
                     OVModelForVisualCausalLM,
@@ -933,7 +960,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                         sensitivity_metric="mean_activation_magnitude",
                         num_samples=1,
                     ),
-                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 1}, {"int8": 10}],
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
                 ),
             ]
         )
@@ -954,17 +986,17 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                         trust_remote_code=True,
                     ),
-                    [
-                        {"int8": 8, "int4": 42},
-                        {"int8": 1},
-                        {"int8": 8},
-                        {"int8": 2},
-                        {},
-                        {"int8": 6},
-                        {"int8": 25},
-                        {"int8": 2},
-                        {"int8": 2},
-                    ],
+                    {
+                        "lm_model": {"int8": 8, "int4": 42},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 8},
+                        "vision_projection_model": {"int8": 2},
+                        "audio_embeddings_model": {},
+                        "audio_forward_embeddings_model": {"int8": 6},
+                        "audio_encoder_model": {"int8": 25},
+                        "audio_vision_projection_model": {"int8": 2},
+                        "audio_speech_projection_model": {"int8": 2},
+                    },
                 ),
             ]
         )
@@ -1154,10 +1186,12 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
         submodels = (
-            [model.text_model, model.visual_model] if model_type == "open-clip" else model.ov_submodels.values()
+            {"text_model": model.text_model, "visual_model": model.visual_model}
+            if model_type == "open-clip"
+            else model.ov_submodels
         )
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-        expected_ov_int8 = [{"int8": it} for it in expected_ov_int8]
+        expected_ov_int8 = {k: {"int8": v} for k, v in expected_ov_int8.items()}
         check_compression_state_per_model(self, submodels, expected_ov_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
@@ -1268,12 +1302,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            submodels = list(model.ov_submodels.values())
+            submodels = model.ov_submodels
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             # At the moment the first model in the list is the only one we apply data-aware compression to
-            wc_rt_info = submodels[0].get_rt_info()["nncf"]["weight_compression"]
+            wc_rt_info = next(iter(submodels.values())).get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
             self.assertEqual(
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
@@ -1293,9 +1327,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertTrue(model.stateful)
         self.assertTrue(model.use_cache)
 
-        expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type][0]
         _, num_weight_nodes = get_num_quantized_nodes(model)
-        check_compression_state_per_model(self, [model.model], [{"int8": expected_ov_int8}])
+        check_compression_state_per_model(self, model.ov_submodels, _ARCHITECTURES_TO_EXPECTED_INT8[model_type])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
@@ -1422,7 +1455,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
-            check_compression_state_per_model(self, model.ov_submodels.values(), expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir)
