@@ -1377,7 +1377,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         inputs = "My name is Arthur and I live in"
         set_seed(SEED)
-        outputs = pipe(inputs, max_new_tokens=5, **additional_args)
+        outputs = pipe(inputs, max_new_tokens=5, **additional_args, do_sample=False)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
         ov_pipe = optimum_pipeline(
@@ -1388,7 +1388,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer=tokenizer if model_arch == "qwen" else None,
         )
         set_seed(SEED)
-        ov_outputs = ov_pipe(inputs, max_new_tokens=5, **additional_args)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=5, **additional_args, do_sample=False)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -1588,7 +1588,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
         additional_inputs = {}
@@ -1608,8 +1607,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             **tokenization_args,
         )
         ov_model_stateful.generation_config.eos_token_id = None
+        ov_model_stateful.generation_config.forced_eos_token_id = None
+        ov_model_stateful.generation_config.encoder_no_repeat_ngram_size = None
+        ov_model_stateful.generation_config.do_sample = False
         ov_model_stateless.generation_config.eos_token_id = None
+        ov_model_stateless.generation_config.forced_eos_token_id = None
+        ov_model_stateless.generation_config.encoder_no_repeat_ngram_size = None
+        ov_model_stateless.generation_config.do_sample = False
         transformers_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.forced_eos_token_id = None
+        transformers_model.generation_config.encoder_no_repeat_ngram_size = None
+        transformers_model.generation_config.do_sample = False
         ov_model_stateful.config.eos_token_id = None
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
@@ -1620,18 +1628,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
-            if (
-                gen_config.num_beams > 1
-                and is_transformers_version(">=", "4.51.0")
-                and model_arch in ["bart", "pegasus", "marian", "blenderbot", "blenderbot-small", "mixtral_awq"]
-            ):
+            if gen_config.num_beams > 1 and is_transformers_version(">=", "4.51.0") and model_arch in ["mixtral_awq"]:
                 continue
             set_seed(SEED)
 
             if model_arch in ["gemma2", "gemma3-text"]:
                 from transformers.cache_utils import DynamicCache
 
-                additional_inputs = {"past_key_values": DynamicCache()}
+                additional_inputs["past_key_values"] = DynamicCache()
             with patch_awq_for_inference("awq" in model_arch):
                 transformers_outputs = transformers_model.generate(
                     **tokens, generation_config=gen_config, **additional_inputs
