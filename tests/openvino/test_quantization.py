@@ -65,6 +65,7 @@ from optimum.intel import (
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelForVisualCausalLM,
     OVSentenceTransformer,
+    OVModelForZeroShotImageClassification,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -85,10 +86,31 @@ from utils_tests import (
 )
 
 _TASK_TO_DATASET = {
-    "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
-    "feature-extraction": ("wikitext", "wikitext-2-raw-v1", "text"),
-    "fill-mask": ("wikitext", "wikitext-2-raw-v1", "text"),
-    "text-classification": ("glue", "sst2", "sentence"),
+    "text-generation": {
+        "dataset_name": "wikitext",
+        "dataset_config_name": "wikitext-2-raw-v1",
+        "column_name": "text",
+    },
+    "feature-extraction": {
+        "dataset_name": "wikitext",
+        "dataset_config_name": "wikitext-2-raw-v1",
+        "column_name": "text",
+    },
+    "fill-mask": {
+        "dataset_name": "wikitext",
+        "dataset_config_name": "wikitext-2-raw-v1",
+        "column_name": "text",
+    },
+    "text-classification": {
+        "dataset_name": "glue",
+        "dataset_config_name": "sst2",
+        "column_name": "sentence",
+    },
+    "zero-shot-image-classification": {
+        "dataset_name": "conceptual_captions",
+        "column_name": "caption",
+        "streaming": True,
+    },
 }
 
 pattern_prefix = (
@@ -110,6 +132,7 @@ class OVQuantizerTest(unittest.TestCase):
         (OVSentenceTransformer, "sentence-transformers-bert", 12, 15),
         (OVModelForFeatureExtraction, "blenderbot", 33, 35),
         (OVModelForMaskedLM, "roberta", 32, 34),
+        (OVModelForZeroShotImageClassification, "clip", 65, 65),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
         (
@@ -374,26 +397,42 @@ class OVQuantizerTest(unittest.TestCase):
                 {"int8": 16},
             ],
         ),
+        (
+            OVModelForZeroShotImageClassification,
+            "clip",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="conceptual_captions",
+                num_samples=1,
+            ),
+            [
+                65,
+            ],
+            [
+                {"int8": 65},
+            ],
+        ),
     ]
 
     @staticmethod
     def get_calibration_dataset(
         quantizer,
         quantization_config,
-        dataset_name,
-        dataset_config_name,
         preprocess_function,
-        tokenizer,
         as_dataset_instance,
+        dataset_name,
+        dataset_config_name=None,
+        streaming=False,
     ):
         if as_dataset_instance:
             calibration_dataset = quantizer.get_calibration_dataset(
                 dataset_name,
                 dataset_config_name=dataset_config_name,
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
+                preprocess_function=preprocess_function,
+                num_samples=2,
                 dataset_split="train",
                 trust_remote_code=True,
+                streaming=streaming,
             )
         else:
             dataset_builder = OVCalibrationDatasetBuilder(quantizer.model)
@@ -401,10 +440,11 @@ class OVQuantizerTest(unittest.TestCase):
                 quantization_config,
                 dataset_name,
                 dataset_config_name=dataset_config_name,
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
+                preprocess_function=preprocess_function,
+                num_samples=2,
                 dataset_split="train",
                 trust_remote_code=True,
+                streaming=streaming,
             )
         return calibration_dataset
 
@@ -416,7 +456,8 @@ class OVQuantizerTest(unittest.TestCase):
     ):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
-        dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
+        dataset_kwargs = {**_TASK_TO_DATASET[task]}
+        column_name = dataset_kwargs.pop("column_name")
         file_name = "openvino_quantized_model.xml"
 
         def preprocess_function(examples, tokenizer):
@@ -433,11 +474,9 @@ class OVQuantizerTest(unittest.TestCase):
             calibration_dataset = self.get_calibration_dataset(
                 quantizer,
                 ov_config.quantization_config,
-                dataset_name,
-                dataset_config_name,
-                preprocess_function,
-                tokenizer,
+                partial(preprocess_function, tokenizer=tokenizer),
                 from_dataset_instance,
+                **dataset_kwargs,
             )
             quantizer.quantize(
                 save_directory=tmp_dir,
@@ -466,34 +505,62 @@ class OVQuantizerTest(unittest.TestCase):
     ):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
-        dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
-
-        def preprocess_function(examples, tokenizer):
-            inputs = tokenizer(
-                examples[column_name], padding="max_length", max_length=128, truncation=True, return_tensors="np"
-            )
-            if model_cls == OVModelForMaskedLM:
-                batch_size = inputs["input_ids"].shape[0]
-                random_indices = np.random.randint(0, inputs["input_ids"].shape[1], size=batch_size)
-                inputs["input_ids"][np.arange(batch_size), random_indices] = tokenizer.mask_token_id
-            return inputs
+        dataset_kwargs = {**_TASK_TO_DATASET[task]}
+        column_name = dataset_kwargs.pop("column_name")
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, export=True)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+
+            is_text_related_task = model_cls in (
+                OVModelForSequenceClassification,
+                OVModelForCausalLM,
+                OVModelForFeatureExtraction,
+                OVSentenceTransformer,
+                OVModelForMaskedLM,
+            )
+            if is_text_related_task:
+                tokenizer = AutoTokenizer.from_pretrained(model_id)
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+
+                def preprocess_function(examples):
+                    inputs = tokenizer(
+                        examples[column_name],
+                        padding="max_length",
+                        max_length=128,
+                        truncation=True,
+                        return_tensors="np",
+                    )
+                    if model_cls == OVModelForMaskedLM:
+                        batch_size = inputs["input_ids"].shape[0]
+                        random_indices = np.random.randint(0, inputs["input_ids"].shape[1], size=batch_size)
+                        inputs["input_ids"][np.arange(batch_size), random_indices] = tokenizer.mask_token_id
+                    return inputs
+
+            elif model_cls == OVModelForZeroShotImageClassification:
+                processor = AutoProcessor.from_pretrained(model_id)
+
+                def preprocess_function(examples):
+                    # Mock dataset data
+                    n_examples = len(examples[column_name])
+                    text = ["This is a sample text"] * n_examples
+                    image = (np.random.rand(n_examples, 224, 224, 3) * 255).astype(np.uint8)
+                    inputs = processor(
+                        text=text,
+                        images=image,
+                        return_tensors="pt",
+                        padding=True,
+                    )
+                    return inputs
+
+            else:
+                raise ValueError("Unsupported model class.")
+
             quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
 
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             calibration_dataset = self.get_calibration_dataset(
-                quantizer,
-                ov_config.quantization_config,
-                dataset_name,
-                dataset_config_name,
-                preprocess_function,
-                tokenizer,
-                from_dataset_instance,
+                quantizer, ov_config.quantization_config, preprocess_function, from_dataset_instance, **dataset_kwargs
             )
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
 
@@ -503,8 +570,14 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
 
-            tokens = tokenizer("This is a sample input <mask>", return_tensors="pt")
-            model(tokens) if model_cls == OVSentenceTransformer else model(**tokens)
+            if is_text_related_task:
+                tokens = tokenizer("This is a sample input <mask>", return_tensors="pt")
+                model(tokens) if model_cls == OVSentenceTransformer else model(**tokens)
+            elif model_cls == OVModelForZeroShotImageClassification:
+                inputs = preprocess_function({column_name: ["sample text"]})
+                model(**inputs)
+            else:
+                raise ValueError("Unsupported model class.")
 
             # Verify that the configuration is correctly saved and loaded
             loaded_config = OVConfig.from_pretrained(tmp_dir)
@@ -551,6 +624,11 @@ class OVQuantizerTest(unittest.TestCase):
                 ov_model(prompt="A text-to-image prompt")
             elif model_cls == OVSentenceTransformer:
                 ov_model.encode(["This is a sample input"])
+            elif model_cls == OVModelForZeroShotImageClassification:
+                processor = AutoProcessor.from_pretrained(model_id)
+                image = np.random.rand(224, 224, 3).astype(np.uint8)
+                inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
+                ov_model(**inputs)
             else:
                 raise Exception("Unexpected model class.")
 
