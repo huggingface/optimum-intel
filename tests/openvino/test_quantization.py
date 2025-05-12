@@ -208,7 +208,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 7,
             },
             {
-                "model": {"f8e5m2": 8, "nf4": 2},
+                "model": {"f8e4m3": 8, "nf4": 2},
             },
         ),
         (
@@ -689,7 +689,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             "gpt2",
             False,
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            {"model": {"int8": 4, "int4": 26}},
+            {"model": {"int8": 18, "int4": 26}},
         ),
         (
             OVModelForCausalLM,
@@ -1328,7 +1328,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertTrue(model.use_cache)
 
         _, num_weight_nodes = get_num_quantized_nodes(model)
-        check_compression_state_per_model(self, model.ov_submodels, _ARCHITECTURES_TO_EXPECTED_INT8[model_type])
+        expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
+        expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
+        check_compression_state_per_model(self, model.ov_submodels, expected_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
