@@ -1608,25 +1608,28 @@ def _phi3_self_attn_sdpa_forward(
     return attn_output, None, past_key_value
 
 
-@torch.jit.script
-def select_ext_factor(seq_len: torch.Tensor, max_pos_embeddings: torch.Tensor, short_factor: torch.Tensor, long_factor: torch.Tensor):
-    if seq_len > max_pos_embeddings:
-        return long_factor
-    return short_factor
+# @torch.jit.script
+def select_ext_factor(
+    seq_len: torch.Tensor, max_pos_embeddings: torch.Tensor, short_factor: torch.Tensor, long_factor: torch.Tensor
+):
+    return torch.where(
+        seq_len < max_pos_embeddings, short_factor, long_factor
+    )  # short_factor * (seq_len <= max_pos_embeddings) + long_factor * (seq_len > max_pos_embeddings)
+
 
 def long_rope(self, x, position_ids, seq_len=None):
     seq_len = torch.max(position_ids) + 1
     original_max_position_embeddings = (
         self.original_max_position_embeddings
-        if hasattr(self, "original_max_positional_embeddings") else self.config.original_max_position_embeddings
+        if hasattr(self, "original_max_positional_embeddings")
+        else self.config.original_max_position_embeddings
     )
-    max_position_embeddings = self.max_position_embeddings if hasattr(self, "max_position_embeddings") else self.config.max_position_embeddings
-    inv_freq = select_ext_factor(
-        seq_len,
-        torch.tensor(original_max_position_embeddings),
-        self.inv_freq,
-        self.long_inv_freq
+    max_position_embeddings = (
+        self.max_position_embeddings
+        if hasattr(self, "max_position_embeddings")
+        else self.config.max_position_embeddings
     )
+    inv_freq = select_ext_factor(seq_len, original_max_position_embeddings, self.inv_freq, self.long_inv_freq)
 
     inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
     position_ids_expanded = position_ids[:, None, :].float()
@@ -1679,9 +1682,16 @@ class Phi3ModelPatcher(DecoderModelPatcher):
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
-        
-        if hasattr(self._model.model, "rotary_emb") and getattr(self._model.model.rotary_emb, "rope_type", "default") == "longrope":
-            long_inv_freq, _ = self._model.model.rotary_emb.rope_init_fn(self._model.config, torch.device("cpu"), seq_len=self._model.config.original_max_position_embeddings + 1)
+
+        if (
+            hasattr(self._model.model, "rotary_emb")
+            and getattr(self._model.model.rotary_emb, "rope_type", "default") == "longrope"
+        ):
+            long_inv_freq, _ = self._model.model.rotary_emb.rope_init_fn(
+                self._model.config,
+                torch.device("cpu"),
+                seq_len=self._model.config.original_max_position_embeddings + 1,
+            )
             self._model.model.rotary_emb.long_inv_freq = long_inv_freq
             self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
             self._model.model.rotary_emb.forward = types.MethodType(long_rope, self._model.model.rotary_emb)
@@ -1689,7 +1699,6 @@ class Phi3ModelPatcher(DecoderModelPatcher):
             self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
         ):
             self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
-
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)

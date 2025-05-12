@@ -846,6 +846,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
+        elif model_type == "phi3":
+            init_cls = OVPhi3ForCausalLM
         else:
             init_cls = cls
 
@@ -913,6 +915,47 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return causal_model
+
+
+class OVPhi3ForCausalLM(OVModelForCausalLM):
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        logits_to_keep=None,
+        **kwargs,
+    ):
+        # Overwritten -- this model may need to switch between short and long rope, invalidating the cache in the
+        # process
+
+        # When the first time input length reached long and short factor switching point, enforce re-compute cache
+        # It will cause downside of slower at this single token position, however, better than current failure.
+        if (
+            past_key_values
+            and self.config.rope_scaling
+            and input_ids.shape[1] >= self.config.original_max_position_embeddings + 1
+        ):
+            past_length = cache_position[0]
+            if past_length <= self.config.original_max_position_embeddings:
+                past_key_values = None
+
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+            logits_to_keep=logits_to_keep,
+            **kwargs,
+        )
+        return model_inputs
 
 
 class OVBloomForCausalLM(OVModelForCausalLM):
