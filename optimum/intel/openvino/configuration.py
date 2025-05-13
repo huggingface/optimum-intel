@@ -347,19 +347,19 @@ _DEFAULT_INT8_FQ_CONFIGS = {
     "openai/clip-vit-base-patch16": {
         "dytpe": "int8",
         "dataset": "conceptual_captions",
-        "num_samples": 128,
+        "num_samples": 300,
         "smooth_quant_alpha": 0.6,
     },
     "openai/clip-vit-base-patch32": {
         "dytpe": "int8",
         "dataset": "conceptual_captions",
-        "num_samples": 128,
+        "num_samples": 300,
         "smooth_quant_alpha": 0.6,
     },
     "openai/clip-vit-large-patch14": {
         "dytpe": "int8",
         "dataset": "conceptual_captions",
-        "num_samples": 128,
+        "num_samples": 300,
         "smooth_quant_alpha": 0.6,
     },
 }
