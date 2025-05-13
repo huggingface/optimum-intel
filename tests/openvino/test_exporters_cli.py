@@ -16,9 +16,10 @@ import subprocess
 import unittest
 from pathlib import Path
 from typing import Dict, List
+from unittest.mock import Mock
 
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -55,7 +56,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFAULT_INT8_FQ_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
@@ -883,49 +884,93 @@ class OVCLIExportTestCase(unittest.TestCase):
                 expected_fake_nodes_per_model,
             )
 
-    def test_exporters_cli_int4_with_local_model_and_default_config(self):
+    @parameterized.expand(
+        [
+            (
+                "falcon-40b",
+                "tiiuae/falcon-7b-instruct",
+                AutoModelForCausalLM,
+                OVModelForCausalLM,
+                "--task text-generation-with-past --weight-format int4",
+                _DEFAULT_4BIT_WQ_CONFIGS,
+            ),
+            (
+                "clip",
+                "hf-tiny-model-private/tiny-random-CLIPModel",
+                AutoModelForZeroShotImageClassification,
+                OVModelForZeroShotImageClassification,
+                "--task zero-shot-image-classification --quant-mode int8",
+                _DEFAULT_INT8_FQ_CONFIGS,
+            ),
+        ]
+    )
+    def test_exporters_cli_with_default_config(
+        self,
+        model_name,
+        model_id,
+        auto_model_cls,
+        ov_model_cls,
+        options,
+        default_configs_collection,
+    ):
         with TemporaryDirectory() as tmpdir:
-            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
+            pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
             pt_model.save_pretrained(tmpdir)
+            try:
+                AutoTokenizer.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
+            except Exception:
+                pass
+            try:
+                AutoProcessor.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
+            except Exception:
+                pass
             with open(Path(tmpdir) / "config.json", "r") as f:
                 config = json.load(f)
-                config["_name_or_path"] = "tiiuae/falcon-7b-instruct"
-
+                config["_name_or_path"] = model_id
             with open(Path(tmpdir) / "config.json", "w") as wf:
                 json.dump(config, wf)
 
             subprocess.run(
-                f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
+                f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}",
                 shell=True,
                 check=True,
             )
 
-            model = OVModelForCausalLM.from_pretrained(tmpdir)
+            model = ov_model_cls.from_pretrained(tmpdir)
             rt_info = model.model.get_rt_info()
-            self.assertTrue("nncf" in rt_info)
-            self.assertTrue("weight_compression" in rt_info["nncf"])
-            model_weight_compression_config = rt_info["nncf"]["weight_compression"]
+            nncf_info = rt_info["nncf"]
+            is_weight_compression = "weight_compression" in nncf_info
+            model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
-            default_config = _DEFAULT_4BIT_WQ_CONFIGS["tiiuae/falcon-7b-instruct"]
-            bits = default_config.pop("bits", None)
-            self.assertEqual(bits, 4)
-
-            sym = default_config.pop("sym", False)
-            default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
-
-            quant_method = default_config.pop("quant_method", None)
-            default_config["awq"] = quant_method == "awq"
-            default_config["gptq"] = quant_method == "gptq"
-
+            default_config = {**default_configs_collection[model_id]}
             default_config.pop("dataset", None)
+            if is_weight_compression:
+                bits = default_config.pop("bits", None)
+                self.assertEqual(bits, 4)
+                sym = default_config.pop("sym", False)
+                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+                quant_method = default_config.pop("quant_method", None)
+                default_config["awq"] = quant_method == "awq"
+                default_config["gptq"] = quant_method == "gptq"
+            else:
+                dtype = default_config.pop("dtype", None)
+                self.assertEqual(dtype, "int8")
+                num_samples = default_config.pop("num_samples", None)
+                if num_samples is not None:
+                    default_config["subset_size"] = num_samples
+                advanced_parameters = eval(model_quantization_config["advanced_parameters"].value)
+                model_quantization_config["smooth_quant_alpha"] = Mock()
+                model_quantization_config["smooth_quant_alpha"].value = str(
+                    advanced_parameters["smooth_quant_alphas"]["matmul"]
+                )
 
             for key, value in default_config.items():
-                self.assertIn(key, model_weight_compression_config)
+                self.assertIn(key, model_quantization_config)
                 self.assertEqual(
-                    model_weight_compression_config[key].value,
+                    model_quantization_config[key].value,
                     str(value),
-                    f"Parameter {key} not matched with expected, {model_weight_compression_config[key].value} != {value}",
+                    f"Parameter {key} not matched with expected, {model_quantization_config[key].value} != {value}",
                 )
 
     def test_exporters_cli_help(self):
