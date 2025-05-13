@@ -389,9 +389,9 @@ def get_default_quantization_config(
         model_id_or_path (`str`):
             id of the model or path to it.
         weight_format (`str`, *optional*):
-            The format of the weights. Currently on "int4" value is supported.
+            The format of the weights. Currently only "int4" value is supported.
         quant_mode (`str`, *optional*):
-            The quantization mode. Currently on "int8" value is supported.
+            The quantization mode. Currently only "int8" value is supported.
     Returns:
         Default quantization config for the given model if found and `None` otherwise.
     """
