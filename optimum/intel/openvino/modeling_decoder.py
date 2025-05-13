@@ -39,10 +39,10 @@ from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
+    _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVWeightQuantizationConfig,
-    _check_default_4bit_configs,
-    get_default_int4_config,
+    get_default_quantization_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
@@ -850,11 +850,20 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            quantization_config = get_default_int4_config(config.name_or_path)
-            if quantization_config.get("dataset", None) is not None:
-                quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
-
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+            default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
+            quantization_config = cls._prepare_quantization_config(
+                default_config or _DEFAULT_4BIT_WQ_CONFIG, load_in_8bit
+            )
+            if quantization_config.dataset is not None:
+                quantization_config.trust_remote_code = kwargs.get("trust_remote_code", False)
+        else:
+            quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.bits == 4:
+                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
+                if default_config:
+                    logger.info(
+                        f"For the given model, we recommend the following `quantization_config` : {default_config}"
+                    )
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
 
@@ -899,13 +908,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
 
             from optimum.intel.openvino.quantization import OVQuantizer
-
-            default_config = _check_default_4bit_configs(config.name_or_path)
-
-            if default_config:
-                logger.info(
-                    f"For the given model, we recommend the following `quantization_config` : {default_config}"
-                )
 
             quantizer = OVQuantizer(causal_model)
             quantization_config_copy = copy.deepcopy(quantization_config)

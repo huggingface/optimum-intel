@@ -55,7 +55,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
@@ -907,7 +907,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("weight_compression" in rt_info["nncf"])
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
 
-            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
+            default_config = _DEFAULT_4BIT_WQ_CONFIGS["tiiuae/falcon-7b-instruct"]
             bits = default_config.pop("bits", None)
             self.assertEqual(bits, 4)
 
