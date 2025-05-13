@@ -259,7 +259,18 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return BaichuanModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-classification",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
 class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 

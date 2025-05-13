@@ -406,6 +406,19 @@ class OVExportCommand(BaseOptimumCLICommand):
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
         task = infer_task(self.args.task, self.args.model, library_name=library_name)
+        # in some cases automatic task detection for multimodal models gives incorrect results
+        if self.args.task == "auto" and library_name == "transformers":
+            from transformers import AutoConfig
+
+            from ...exporters.openvino.utils import MULTI_MODAL_TEXT_GENERATION_MODELS
+
+            config = AutoConfig.from_pretrained(
+                self.args.model,
+                cache_dir=self.args.cache_dir,
+                trust_remote_code=self.args.trust_remote_code,
+            )
+            if getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS:
+                task = "image-text-to-text"
 
         if library_name == "diffusers" and quantize_with_dataset:
             if not is_diffusers_available():

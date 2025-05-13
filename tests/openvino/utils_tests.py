@@ -13,7 +13,7 @@
 #  limitations under the License.
 import unittest
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 import openvino as ov
@@ -109,7 +109,7 @@ MODEL_NAMES = {
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
-    "mixtral_awq": "TitanML/tiny-mixtral-AWQ-4bit",
+    "mixtral_awq": "katuni4ka/tiny-mixtral-AWQ-4bit",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
@@ -138,8 +138,8 @@ MODEL_NAMES = {
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "qwen2_5_vl": "katuni4ka/tiny-random-qwen2.5-vl",
-    "qwen3": "snake7gun/tiny-random-qwen3",
-    "qwen3-moe": "snake7gun/tiny-random-qwen3moe",
+    "qwen3": "katuni4ka/tiny-random-qwen3",
+    "qwen3-moe": "katuni4ka/tiny-random-qwen3moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -201,33 +201,121 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (68,),
-    "roberta": (68,),
-    "albert": (84,),
-    "vit": (64,),
-    "blenderbot": (70,),
-    "gpt2": (44,),
-    "wav2vec2": (34,),
-    "distilbert": (66,),
-    "t5": (64, 104, 84),
-    "stable-diffusion": (242, 42, 34, 64),
-    "stable-diffusion-xl": (366, 42, 34, 64, 66),
-    "stable-diffusion-xl-refiner": (366, 42, 34, 66),
-    "open-clip": (20, 28),
-    "stable-diffusion-3": (66, 58, 42, 30, 30, 32),
-    "flux": (56, 28, 24, 64, 64),
-    "flux-fill": (56, 28, 24, 64, 64),
-    "llava": (30, 1, 9),
-    "llava_next": (30, 1, 9),
-    "minicpmv": (30, 1, 26, 6),
-    "llava_next_video": (30, 1, 7, 0, 2),
-    "nanollava": (30, 1, 15),
-    "qwen2_vl": (30, 1, 1, 10),
-    "sana": (58, 28, 28, 18),
-    "ltx-video": (34, 28, 28, 64),
-    "sam": (102, 100),
-    "speecht5": (28, 52, 10, 80),
-    "clip": (130,),
+    "bert": {"model": 68},
+    "roberta": {"model": 68},
+    "albert": {"model": 84},
+    "vit": {"model": 64},
+    "blenderbot": {"model": 70},
+    "gpt2": {"model": 44},
+    "wav2vec2": {"model": 34},
+    "distilbert": {"model": 66},
+    "t5": {
+        "encoder": 64,
+        "decoder": 104,
+        "decoder_with_past": 84,
+    },
+    "stable-diffusion": {
+        "unet": 242,
+        "vae_decoder": 42,
+        "vae_encoder": 34,
+        "text_encoder": 64,
+    },
+    "stable-diffusion-xl": {
+        "unet": 366,
+        "vae_decoder": 42,
+        "vae_encoder": 34,
+        "text_encoder": 64,
+        "text_encoder_2": 66,
+    },
+    "stable-diffusion-xl-refiner": {
+        "unet": 366,
+        "vae_decoder": 42,
+        "vae_encoder": 34,
+        "text_encoder_2": 66,
+    },
+    "open-clip": {
+        "text_model": 20,
+        "visual_model": 28,
+    },
+    "stable-diffusion-3": {
+        "transformer": 66,
+        "vae_decoder": 58,
+        "vae_encoder": 42,
+        "text_encoder": 30,
+        "text_encoder_2": 30,
+        "text_encoder_3": 32,
+    },
+    "flux": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
+    "flux-fill": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
+    "llava": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 9,
+    },
+    "llava_next": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 9,
+    },
+    "minicpmv": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 26,
+        "resampler_model": 6,
+    },
+    "llava_next_video": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 7,
+        "vision_resampler_model": 0,
+        "multi_modal_projector_model": 2,
+    },
+    "nanollava": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 15,
+    },
+    "qwen2_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+    },
+    "sana": {
+        "transformer": 58,
+        "vae_decoder": 28,
+        "vae_encoder": 28,
+        "text_encoder": 18,
+    },
+    "ltx-video": {
+        "transformer": 34,
+        "vae_decoder": 28,
+        "vae_encoder": 28,
+        "text_encoder": 64,
+    },
+    "sam": {
+        "vision_encoder_model": 102,
+        "prompt_encoder_mask_decoder_model": 100,
+    },
+    "speecht5": {
+        "encoder": 28,
+        "decoder": 52,
+        "postnet": 10,
+        "vocoder": 80,
+    },
+    "clip": {"model": 130},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -317,20 +405,21 @@ def patch_awq_for_inference(to_patch):
 
 def check_compression_state_per_model(
     test_case: unittest.TestCase,
-    models: List[Union[ov.Model, OVBaseModel]],
-    expected_num_weight_nodes_per_model: List[Dict[str, int]],
-    expected_num_fake_nodes_per_model: Optional[List[int]] = None,
+    models: Dict[str, Union[ov.Model, OVBaseModel]],
+    expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
+    expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
-    actual_num_weights_per_model = [{}] * len(models)
-    actual_num_fake_nodes_per_model = [0] * len(models)
-    for i, (submodel, expected_num_weight_nodes) in enumerate(zip(models, expected_num_weight_nodes_per_model)):
+    actual_num_weights_per_model = {}
+    actual_num_fake_nodes_per_model = {}
+    for submodel_name, submodel in models.items():
+        expected_num_weight_nodes = expected_num_weight_nodes_per_model[submodel_name]
         ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
         expected_num_weight_nodes.update(dict.fromkeys(set(num_weight_nodes) - set(expected_num_weight_nodes), 0))
 
-        actual_num_weights_per_model[i] = num_weight_nodes
-        actual_num_fake_nodes_per_model[i] = num_fake_nodes
+        actual_num_weights_per_model[submodel_name] = num_weight_nodes
+        actual_num_fake_nodes_per_model[submodel_name] = num_fake_nodes
 
         test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
