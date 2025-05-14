@@ -350,7 +350,7 @@ def main_export(
                     elif is_auto_gptq_available():
                         from auto_gptq import exllama_set_max_input_length
                     else:
-                        raise ValueError("neither auto_gptq nor gptqmodel is available")
+                        raise ValueError("Neither ``auto_gptq nor `gptqmodel` is available, please install one of them.")
 
                     class StoreAttr(object):
                         pass
