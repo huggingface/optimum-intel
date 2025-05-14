@@ -985,7 +985,7 @@ class OVDecoder:
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         self._past_length += input_ids.shape[1]
 
         out_past_key_values = ((),)
@@ -993,7 +993,9 @@ class OVDecoder:
         if not self.stateful:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
             # self-attention layer and 2 to the cross-attention layer)
-            out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+            out_past_key_values = tuple(
+                np.copy(self.request.get_tensor(key).data) for key in self.key_value_output_names
+            )
 
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
             # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)

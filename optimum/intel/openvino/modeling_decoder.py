@@ -553,10 +553,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if self._first_iter_beam_search:
             inputs, duplication_indices = self._deduplicate_inputs(inputs)
+
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         if self.stateful:
             # Need a marker to differentiate the first generate iteration from the others in
             # the first condition at the function beginning above.
@@ -567,7 +568,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not self.stateful:
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-                past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+                past_key_values = tuple(
+                    np.copy(self.request.get_tensor(key).data) for key in self.key_value_output_names
+                )
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
                     self.config.model_type == "falcon" and self.config.new_decoder_architecture
                 ):
