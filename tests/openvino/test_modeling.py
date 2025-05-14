@@ -1450,25 +1450,35 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+
         model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
+        del model_with_pkv
+
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
         outputs_model_without_pkv = model_without_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
+        del model_without_pkv
+
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+
         model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
         outputs_model_stateful = model_stateful.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
         self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
-        del model_with_pkv
-        del model_without_pkv
+        logits = model_stateful(**tokens).logits
+        copy_logits = copy.deepcopy(logits)
+        tokens = tokenizer("Input sample", return_tensors="pt")
+        model_stateful(**tokens).logits
+        self.assertTrue(torch.equal(copy_logits, logits))
+        del model_stateful
         gc.collect()
 
     def test_print_model_properties(self):
