@@ -373,6 +373,9 @@ SKIP_CHECK_TRACE_MODELS = (
     "llama4",
 )
 
+if is_transformers_version("<", "4.41"):
+    SKIP_CHECK_TRACE_MODELS += ("gemma",)
+
 
 def allow_skip_tracing_check(library_name, model_type):
     if is_openvino_version("<", "2025.0.0"):
