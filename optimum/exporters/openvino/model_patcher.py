@@ -1613,7 +1613,7 @@ def select_ext_factor(
     seq_len: torch.Tensor, max_pos_embeddings: torch.Tensor, short_factor: torch.Tensor, long_factor: torch.Tensor
 ):
     return torch.where(
-        seq_len < max_pos_embeddings, short_factor, long_factor
+        seq_len <= max_pos_embeddings, short_factor, long_factor
     )  # short_factor * (seq_len <= max_pos_embeddings) + long_factor * (seq_len > max_pos_embeddings)
 
 
