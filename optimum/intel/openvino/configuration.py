@@ -344,12 +344,6 @@ _DEFAULT_4BIT_WQ_CONFIG = {
 
 # Default configs for int8 full quantization
 _DEFAULT_INT8_FQ_CONFIGS = {
-    "hf-tiny-model-private/tiny-random-CLIPModel": {  # For test purposes
-        "dtype": "int8",
-        "dataset": "conceptual_captions",
-        "num_samples": 1,
-        "smooth_quant_alpha": 0.9,
-    },
     "openai/clip-vit-base-patch16": {
         "dtype": "int8",
         "dataset": "conceptual_captions",
@@ -367,6 +361,12 @@ _DEFAULT_INT8_FQ_CONFIGS = {
         "dataset": "conceptual_captions",
         "num_samples": 300,
         "smooth_quant_alpha": 0.6,
+    },
+    "hf-tiny-model-private/tiny-random-CLIPModel": {  # For test purposes
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 1,
+        "smooth_quant_alpha": 0.9,
     },
 }
 
