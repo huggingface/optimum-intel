@@ -185,7 +185,7 @@ optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 -
 
 #### Default quantization configs
 
-For some models we maintain a set of default quantization configs. To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`. For example:
+For some models we maintain a set of default quantization configs ([link](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py)). To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`. For example:
 
 ```bash
 optimum-cli export openvino -m microsoft/Phi-4-mini-instruct --weight-format int4 ./Phi-4-mini-instruct
