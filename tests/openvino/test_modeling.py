@@ -1506,7 +1506,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask(self):
         model_id = MODEL_NAMES["gpt2"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, stateful=False, use_cache=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -1529,7 +1529,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, stateful=False, use_cache=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
