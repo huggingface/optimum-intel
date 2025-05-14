@@ -104,12 +104,15 @@ class IPEXPagedCache(Cache):
     ):
         # TODO: unify API definition between CPU and XPU in IPEX version > 2.6
         if self.device.type == "xpu" and self._supports_flash_decoding:
+            # make a WA here as slots here is padded but XPU does not support slots with length not equal to key length, will fix it in IPEX 2.8
+            valid_len = key.shape[0]
+            truncated_slots = slots[:valid_len]
             PagedAttention.reshape_and_cache_flash(
                 key,
                 value,
                 key_cache,
                 value_cache,
-                slots,
+                truncated_slots,
             )
         else:
             PagedAttention.reshape_and_cache(
