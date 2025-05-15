@@ -44,7 +44,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig, OVQuantizer
 from ..utils import is_transformers_version
-from .configuration import OVQuantizationConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
+from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -1350,7 +1350,8 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         compile_only = kwargs.get("compile_only", False)
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        if not compile_only and isinstance(quantization_config, OVQuantizationConfig):
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
+        if not compile_only and is_data_aware_quantization:
             model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
                 model_id, config, load_in_8bit=False, **kwargs
             )

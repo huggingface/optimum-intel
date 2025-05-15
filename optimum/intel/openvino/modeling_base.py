@@ -36,7 +36,12 @@ from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedMode
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
+from .configuration import (
+    OVConfig,
+    OVDynamicQuantizationConfig,
+    OVWeightQuantizationConfig,
+    _quantization_config_from_dict,
+)
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -518,7 +523,7 @@ class OVBaseModel(OptimizedModel):
         if not quantization_config and load_in_8bit:
             quantization_config = OVWeightQuantizationConfig(bits=8)
         elif isinstance(quantization_config, dict):
-            quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
+            quantization_config = _quantization_config_from_dict(quantization_config)
 
         return quantization_config
 

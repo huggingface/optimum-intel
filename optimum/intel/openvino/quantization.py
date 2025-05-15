@@ -61,6 +61,7 @@ from ..utils.modeling_utils import get_model_device
 from .configuration import (
     OVConfig,
     OVMixedQuantizationConfig,
+    OVPipelineQuantizationConfig,
     OVQuantizationConfig,
     OVQuantizationConfigBase,
     OVQuantizationMethod,
@@ -1188,7 +1189,10 @@ class OVQuantizer(OptimumQuantizer):
         if calibration_dataset is None and quantization_config.dataset is not None:
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
-        if (
+        pipeline_quantization_configs = {}
+        if isinstance(quantization_config, OVPipelineQuantizationConfig):
+            pipeline_quantization_configs = quantization_config.pipeline_quantization_configs
+        elif (
             isinstance(quantization_config, OVWeightQuantizationConfig)
             and quantization_config.quant_method != OVQuantizationMethod.HYBRID
         ):
@@ -1196,18 +1200,17 @@ class OVQuantizer(OptimumQuantizer):
             # Regular (non-hybrid) weight-only quantization
             #
             if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                for submodel in self.model.ov_submodels.values():
-                    _weight_only_quantization(submodel, quantization_config, **kwargs)
+                for submodel_name in self.model.ov_submodels:
+                    pipeline_quantization_configs[submodel_name] = quantization_config
             elif isinstance(self.model, OVModelForVisualCausalLM):
-                for submodel_name, submodel in self.model.ov_submodels.items():
-                    if submodel_name == "lm_model":
-                        nncf_dataset = calibration_dataset.get("lm_model") if calibration_dataset else None
-                        _weight_only_quantization(submodel, quantization_config, nncf_dataset, **kwargs)
-                    else:
-                        _weight_only_quantization(submodel, OVWeightQuantizationConfig(bits=8, sym=True), **kwargs)
+                for submodel_name in self.model.ov_submodels:
+                    pipeline_quantization_configs[submodel_name] = (
+                        quantization_config
+                        if submodel_name == "lm_model"
+                        else OVWeightQuantizationConfig(bits=8, sym=True)
+                    )
             else:
-                nncf_dataset = calibration_dataset.get("model") if calibration_dataset else None
-                _weight_only_quantization(self.model.model, quantization_config, nncf_dataset, **kwargs)
+                pipeline_quantization_configs["model"] = quantization_config
         else:
             #
             # Hybrid/Full/Mixed quantization
@@ -1226,45 +1229,47 @@ class OVQuantizer(OptimumQuantizer):
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     if len(calibration_dataset) > 1:
                         raise ValueError("Calibration datasets for Diffusion models should contain only one value.")
-                    # Apply hybrid quantization to diffusion model
-                    diffusion_model_name, nncf_dataset = next(iter(calibration_dataset.items()))
+
+                    # Hybrid quantization means that we quantize
+                    #  (1) weights of MatMul and Embedding layers
+                    #  (2) activations of other layers.
+
+                    diffusion_model_name = next(iter(calibration_dataset))
                     diffusion_model = getattr(self.model, diffusion_model_name).model
-                    getattr(self.model, diffusion_model_name).model = _hybrid_quantization(
-                        diffusion_model, quantization_config, nncf_dataset, **kwargs
+
+                    # Apply hybrid quantization to diffusion model
+                    pipeline_quantization_configs[diffusion_model_name] = _get_hybrid_mixed_quantization_config(
+                        diffusion_model, quantization_config, **kwargs
                     )
 
                     # Apply weight-only quantization to all SD submodels except UNet/Transformer
                     quantization_config_copy = quantization_config.clone()
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    sub_models = [v for (k, v) in self.model.ov_submodels.items() if k != diffusion_model_name]
-                    for sub_model in sub_models:
-                        _weight_only_quantization(sub_model, quantization_config_copy, **kwargs)
+                    for submodel_name in self.model.ov_submodels:
+                        if submodel_name != diffusion_model_name:
+                            pipeline_quantization_configs[submodel_name] = quantization_config_copy
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
-                    self.model.model = _hybrid_quantization(
-                        self.model.model, quantization_config, calibration_dataset["model"], **kwargs
-                    )
+                    pipeline_quantization_configs["model"] = quantization_config
             elif isinstance(quantization_config, OVQuantizationConfig):
                 #
                 # Full quantization
                 #
                 if isinstance(self.model, _OVModelForWhisper):
-                    _quantize_whisper_model(self.model, quantization_config, calibration_dataset, **kwargs)
+                    for submodel_name in self.model.ov_submodels:
+                        # quantization_config.num_samples of audio samples result in more actual model inputs
+                        config = quantization_config.clone()
+                        config.num_samples = calibration_dataset[submodel_name].get_length()
+                        pipeline_quantization_configs[submodel_name] = config
                 elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    diffusion_model_name, nncf_dataset = next(iter(calibration_dataset.items()))
-                    diffusion_model = getattr(self.model, diffusion_model_name).model
-                    getattr(self.model, diffusion_model_name).model = _full_quantization(
-                        diffusion_model, quantization_config, nncf_dataset, **kwargs
-                    )
-                    sub_models = [v for (k, v) in self.model.ov_submodels.items() if k != diffusion_model_name]
-                    for sub_model in sub_models:
-                        _weight_only_quantization(sub_model, OVWeightQuantizationConfig(bits=8), **kwargs)
-                    self.model.clear_requests()
+                    diffusion_model_name = next(iter(calibration_dataset))
+                    pipeline_quantization_configs[diffusion_model_name] = quantization_config
+                    for submodel_name in self.model.ov_submodels:
+                        if submodel_name != diffusion_model_name:
+                            pipeline_quantization_configs[submodel_name] = OVWeightQuantizationConfig(bits=8)
                 else:
-                    self.model.model = _full_quantization(
-                        self.model.model, quantization_config, calibration_dataset["model"], **kwargs
-                    )
+                    pipeline_quantization_configs["model"] = quantization_config
             elif isinstance(quantization_config, OVMixedQuantizationConfig):
                 #
                 # Mixed quantization
@@ -1272,11 +1277,44 @@ class OVQuantizer(OptimumQuantizer):
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
-                self.model.model = _mixed_quantization(
-                    self.model.model, quantization_config, calibration_dataset["model"], **kwargs
-                )
+                pipeline_quantization_configs["model"] = quantization_config
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
+
+        for submodel_name, config in pipeline_quantization_configs.items():
+            if submodel_name not in self.model.ov_submodels:
+                raise RuntimeError(
+                    f"Unexpected submodel name encountered during applying quantization: {submodel_name}. "
+                    f"Available submodels: {list(self.model.ov_submodels.keys())}."
+                )
+            submodel = self.model.ov_submodels[submodel_name]
+            nncf_dataset = calibration_dataset.get(submodel_name, None) if calibration_dataset else None
+
+            if isinstance(config, OVWeightQuantizationConfig) and config.quant_method == OVQuantizationMethod.HYBRID:
+                config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
+
+            if isinstance(config, OVWeightQuantizationConfig):
+                # Weight only quantization is performed in-place
+                _weight_only_quantization(submodel, config, nncf_dataset, **kwargs)
+            elif isinstance(config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
+                if nncf_dataset is None:
+                    raise ValueError(
+                        f"Calibration dataset for submodel {submodel_name} is required to run quantization."
+                    )
+                if isinstance(config, OVQuantizationConfig):
+                    quantized_model = _full_quantization(submodel, config, nncf_dataset, **kwargs)
+                else:
+                    quantized_model = _mixed_quantization(submodel, config, nncf_dataset, **kwargs)
+
+                # Replace the original model with the quantized model
+                if isinstance(getattr(self.model, submodel_name), openvino.Model):
+                    setattr(self.model, submodel_name, quantized_model)
+                elif isinstance(getattr(getattr(self.model, submodel_name), "model"), openvino.Model):
+                    setattr(getattr(self.model, submodel_name), "model", quantized_model)
+                else:
+                    raise RuntimeError("Can't locate OpenVINO model to replace it with the quantized one.")
+            else:
+                raise ValueError(f"Unsupported type of quantization config: {type(config)}.")
 
         self.model.clear_requests()
 
@@ -1491,17 +1529,6 @@ class OVQuantizer(OptimumQuantizer):
         )
 
 
-def _quantize_whisper_model(
-    model, quantization_config: OVQuantizationConfig, calibration_dataset: OVCalibrationDataset, **kwargs
-):
-    for submodel_name, submodel in model.ov_submodels.items():
-        config = quantization_config.clone()
-        # quantization_config.num_samples of audio samples result in more actual model inputs
-        config.num_samples = calibration_dataset[submodel_name].get_length()
-        quantized_model = _full_quantization(submodel, config, calibration_dataset[submodel_name], **kwargs)
-        getattr(model, submodel_name).model = quantized_model
-
-
 def _weight_only_quantization(
     model: openvino.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
@@ -1637,23 +1664,21 @@ def _collect_ops_with_weights(model):
     return ops_with_weights
 
 
-def _hybrid_quantization(
-    model: openvino.Model, quantization_config: OVWeightQuantizationConfig, dataset: nncf.Dataset, **kwargs
-) -> openvino.Model:
+def _get_hybrid_mixed_quantization_config(
+    model: openvino.Model,
+    quantization_config: OVWeightQuantizationConfig,
+    **kwargs,
+) -> OVMixedQuantizationConfig:
     """
-    Quantize a model in hybrid mode with NNCF which means that we quantize:
-    weights of MatMul and Embedding layers and activations of other layers.
-    The optimization specifications defined in `quantization_config`.
+    Returns mixed quantization config representing hybrid quantization
 
     Args:
         model (`openvino.Model`):
-            The OpenVINO Runtime model for applying hybrid quantization.
+            The OpenVINO model for applying quantization.
         quantization_config (`OVWeightQuantizationConfig`):
             The configuration containing the parameters related to quantization.
-        dataset (`nncf.Dataset`):
-            The dataset used for hybrid quantization.
     Returns:
-        The OpenVINO Runtime model with applied hybrid quantization.
+        The mixed quantization config representing hybrid quantization.
     """
 
     wc_config = quantization_config.clone()
@@ -1676,7 +1701,7 @@ def _hybrid_quantization(
         **kwargs,
     )
 
-    return _mixed_quantization(model, mixed_quantization_config, dataset, **kwargs)
+    return mixed_quantization_config
 
 
 def _mixed_quantization(

@@ -17,6 +17,7 @@ import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from functools import reduce
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
 
@@ -310,15 +311,23 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ignored_scope": {
-            "patterns": [
-                "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul",
-                "__module\\.img_processor\\.encoder\\.layers\\.\\d+\\.mlp\\.fc2/ov_ext::linear/MatMul",
-            ],
-            "validate": False,
+        "pipeline_quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+                "dataset": "wikitext2",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+                "ignored_scope": {
+                    "patterns": [
+                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul",
+                    ]
+                },
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "audio_encoder_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
 }
@@ -769,7 +778,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         bits: int = 8,
         sym: bool = False,
         ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None,
-        num_samples: Optional[int] = 128,
+        num_samples: Optional[int] = None,
         model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
@@ -939,17 +948,10 @@ class OVConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
         self.optimum_version = kwargs.pop("optimum_version", None)
         if isinstance(quantization_config, dict):
-            quantization_config = self.quantization_config_from_dict(quantization_config)
+            quantization_config = _quantization_config_from_dict(quantization_config)
         self.quantization_config = quantization_config
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, (OVWeightQuantizationConfig, OVQuantizationConfig)):
-                self.dtype = self.quantization_config.dtype
-            elif isinstance(self.quantization_config, OVMixedQuantizationConfig):
-                wc_dtype = self.quantization_config.weight_quantization_config.dtype
-                q_dtype = self.quantization_config.full_quantization_config.dtype
-                self.dtype = f"{wc_dtype}_{q_dtype}"
-            else:
-                raise ValueError(f"Unsupported type of quantization config: {type(self.quantization_config)}")
+            self.dtype = self._get_dtype(self.quantization_config)
         else:
             self.dtype = dtype
 
@@ -962,29 +964,6 @@ class OVConfig(BaseConfig):
             }
             for name, value in model_inputs.items()
         ]
-
-    @staticmethod
-    def quantization_config_from_dict(quantization_config: dict) -> OVQuantizationConfigBase:
-        if "weight_quantization_config" in quantization_config and "full_quantization_config" in quantization_config:
-            return OVMixedQuantizationConfig.from_dict(quantization_config)
-        wq_args = inspect.getfullargspec(OVWeightQuantizationConfig.__init__).args
-        q_args = inspect.getfullargspec(OVQuantizationConfig.__init__).args
-        weight_only = quantization_config.pop("weight_only", None)
-        config_keys = quantization_config.keys()
-        matches_wq_config_signature = all(arg_name in wq_args for arg_name in config_keys)
-        matches_q_config_signature = all(arg_name in q_args for arg_name in config_keys)
-        if matches_wq_config_signature == matches_q_config_signature:
-            if weight_only is None:
-                logger.warning(
-                    "Can't determine type of OV quantization config. Please specify explicitly whether you intend to "
-                    "run weight-only quantization or not with `weight_only` parameter. Creating an instance of "
-                    "OVWeightQuantizationConfig."
-                )
-                return OVWeightQuantizationConfig.from_dict(quantization_config)
-            matches_wq_config_signature = weight_only
-
-        config_type = OVWeightQuantizationConfig if matches_wq_config_signature else OVQuantizationConfig
-        return config_type.from_dict(quantization_config)
 
     def _to_dict_safe(self, to_diff_dict: bool = False) -> Dict[str, Any]:
         class ConfigStub:
@@ -1002,6 +981,23 @@ class OVConfig(BaseConfig):
         else:
             result = super().to_diff_dict() if to_diff_dict else super().to_dict()
         return result
+
+    @staticmethod
+    def _get_dtype(quantization_config):
+        if isinstance(quantization_config, (OVWeightQuantizationConfig, OVQuantizationConfig)):
+            dtype = quantization_config.dtype
+        elif isinstance(quantization_config, OVMixedQuantizationConfig):
+            wc_dtype = quantization_config.weight_quantization_config.dtype
+            q_dtype = quantization_config.full_quantization_config.dtype
+            dtype = f"{wc_dtype}_{q_dtype}"
+        elif isinstance(quantization_config, OVPipelineQuantizationConfig):
+            dtypes = [
+                OVConfig._get_dtype(config) for config in quantization_config.pipeline_quantization_configs.values()
+            ]
+            dtype = "_".join(dtypes)
+        else:
+            raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
+        return dtype
 
     def to_dict(self) -> Dict[str, Any]:
         return self._to_dict_safe(to_diff_dict=False)
@@ -1075,8 +1071,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             # TODO: remove once there is support for FP8 weight compression in NNCF
             wqc.backup_precision = "none"
 
-        # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
-        # in case user sets those parameters inside child configs only.
+        # Pull dataset-related parameters from child configs
         num_samples = max((num_samples or 0, wqc.num_samples or 0, fqc.num_samples or 0)) or None
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
@@ -1114,3 +1109,146 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         result["weight_quantization_config"] = self.weight_quantization_config.to_dict()
         result["full_quantization_config"] = self.full_quantization_config.to_dict()
         return result
+
+
+class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
+    def __init__(
+        self,
+        pipeline_quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
+        num_samples: Optional[int] = None,
+        dataset: Optional[Union[str, List[str]]] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: Optional[bool] = False,
+        **kwargs,
+    ):
+        """
+        Configuration class for quantization of multimodel pipelines.
+        For each submodel in the pipeline, a separate quantization config can be provided. If the config is not provided for a
+        submodel, it won't be quantized.
+
+        Args:
+            pipeline_quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
+                A dictionary where keys are submodel names and values are either dictionaries or instances of
+                `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+            num_samples (Optional[int]):
+                The maximum number of samples composing the calibration dataset. Defaults to None.
+            dataset (Optional[Union[str, List[str]]]):
+                The dataset used for data-aware optimization with NNCF. Can be a string or a list of strings. Defaults to None.
+            tokenizer (Optional[str]):
+                The tokenizer used to process the dataset. Can be a model ID or a path to a directory containing
+                tokenizer files. Defaults to None.
+            processor (Optional[str]):
+                A transformers processor used to process the dataset inputs. Can be a model ID or a path to a
+                directory containing processor files. Defaults to None.
+            trust_remote_code (Optional[bool]):
+                If True, allows the use of custom code hosted in the model repository. This should only be set for repositories
+                you trust, as it will execute arbitrary code on your local machine. Defaults to False.
+            **kwargs:
+                Additional parameters for the configuration.
+        """
+
+        def or_op(a, b):
+            return a or b
+
+        if kwargs.pop("ignored_scope", None) is not None:
+            logger.warning(
+                "`ignored_scope` parameter is not supported for pipeline quantization. It will be ignored. "
+                "Please use `ignored_scope` parameter in the submodel configs instead."
+            )
+
+        pipeline_quantization_configs = copy.deepcopy(pipeline_quantization_configs)
+        for submodel_name, submodel_config in pipeline_quantization_configs.items():
+            if isinstance(submodel_config, dict):
+                pipeline_quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
+
+        # Pull dataset-related parameters from child configs
+        configs = pipeline_quantization_configs.values()
+        num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
+        dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
+        tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
+        processor = reduce(or_op, (processor, *(config.processor for config in configs)))
+        trust_remote_code = reduce(or_op, (trust_remote_code, *(config.trust_remote_code for config in configs)))
+
+        super().__init__(
+            ignored_scope=None,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
+        self.pipeline_quantization_configs = pipeline_quantization_configs
+        self.post_init()
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["pipeline_quantization_configs"] = {
+            name: config.to_dict() for name, config in self.pipeline_quantization_configs.items()
+        }
+        return result
+
+    def post_init(self):
+        super().post_init()
+        for submodel_config in self.pipeline_quantization_configs.values():
+            submodel_config.post_init()
+
+
+def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
+    """
+    Helper function to create a quantization config from a dictionary.
+    """
+
+    # Check for OVMixedQuantizationConfig
+    if "weight_quantization_config" in config_dict and "full_quantization_config" in config_dict:
+        return OVMixedQuantizationConfig.from_dict(config_dict)
+
+    # Check for OVPipelineQuantizationConfig
+    if "pipeline_quantization_configs" in config_dict:
+        return OVPipelineQuantizationConfig.from_dict(config_dict)
+
+    # Either OVWeightQuantizationConfig or OVQuantizationConfig
+    # Try to detect the type of config based on the keys present in the dictionary
+    wq_args = set(inspect.getfullargspec(OVWeightQuantizationConfig.__init__).args)
+    fq_args = set(inspect.getfullargspec(OVQuantizationConfig.__init__).args)
+    common_args = wq_args & fq_args
+    wq_only_args = wq_args - common_args
+    fq_only_args = fq_args - common_args
+    if any(arg in wq_only_args for arg in config_dict):
+        return OVWeightQuantizationConfig.from_dict(config_dict)
+    if any(arg in fq_only_args for arg in config_dict):
+        return OVQuantizationConfig.from_dict(config_dict)
+
+    # Try to create instances of both configs and check which one is valid
+    try:
+        wq_config = OVWeightQuantizationConfig.from_dict(config_dict)
+    except ValueError as wc_exception:  # noqa: F841
+        wq_config = None
+    try:
+        fq_config = OVQuantizationConfig.from_dict(config_dict)
+    except ValueError as fq_exception:  # noqa: F841
+        fq_config = None
+    if (wq_config is None) != (fq_config is None):
+        return wq_config or fq_config
+    if wq_config is None and fq_config is None:
+        raise ValueError(
+            "The provided configuration dictionary does not match the expected structure for either "
+            "OVWeightQuantizationConfig or OVQuantizationConfig. "
+            f"Exceptions encountered: {wc_exception} \n {fq_exception}"  # noqa: F821
+        )
+
+    # Try to determine the type of config based on the `weight_only` parameter
+    weight_only = config_dict.get("weight_only", None)
+    if weight_only:
+        return wq_config
+    if weight_only is False:
+        return fq_config
+    logger.warning(
+        "Can't determine type of OV quantization config. Please specify explicitly whether you intend to "
+        "run weight-only quantization or not with `weight_only` parameter. Creating an instance of "
+        "OVWeightQuantizationConfig."
+    )
+
+    # If everything else fails, default to OVWeightQuantizationConfig
+    return wq_config
