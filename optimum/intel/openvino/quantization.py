@@ -1398,7 +1398,7 @@ class OVQuantizer(OptimumQuantizer):
             model = nncf.quantize(
                 model,
                 calibration_datasets["model"],
-                subset_size=quantization_config.num_samples,
+                subset_size=quantization_config.num_samples or 128,
                 ignored_scope=quantization_config.get_ignored_scope_instance(),
                 model_type=nncf.ModelType(quantization_config.model_type),
                 preset=(
