@@ -20,6 +20,7 @@ import openvino as ov
 import torch
 
 from optimum.intel.openvino.modeling_base import OVBaseModel
+from optimum.intel.utils.import_utils import is_openvino_version
 
 
 MODEL_NAMES = {
@@ -306,7 +307,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder_model": 102,
+        "vision_encoder_model": 102 if is_openvino_version("<=", "2025.1.0") else 150,
         "prompt_encoder_mask_decoder_model": 100,
     },
     "speecht5": {
