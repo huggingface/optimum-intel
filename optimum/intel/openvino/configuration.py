@@ -1244,11 +1244,11 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
         return wq_config
     if weight_only is False:
         return fq_config
+
+    # If everything else fails, default to OVWeightQuantizationConfig
     logger.warning(
         "Can't determine type of OV quantization config. Please specify explicitly whether you intend to "
         "run weight-only quantization or not with `weight_only` parameter. Creating an instance of "
         "OVWeightQuantizationConfig."
     )
-
-    # If everything else fails, default to OVWeightQuantizationConfig
     return wq_config

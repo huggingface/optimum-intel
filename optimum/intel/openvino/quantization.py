@@ -1230,14 +1230,9 @@ class OVQuantizer(OptimumQuantizer):
                     if len(calibration_dataset) > 1:
                         raise ValueError("Calibration datasets for Diffusion models should contain only one value.")
 
-                    # Hybrid quantization means that we quantize
-                    #  (1) weights of MatMul and Embedding layers
-                    #  (2) activations of other layers.
-
+                    # Apply hybrid quantization to diffusion model
                     diffusion_model_name = next(iter(calibration_dataset))
                     diffusion_model = getattr(self.model, diffusion_model_name).model
-
-                    # Apply hybrid quantization to diffusion model
                     pipeline_quantization_configs[diffusion_model_name] = _get_hybrid_mixed_quantization_config(
                         diffusion_model, quantization_config, **kwargs
                     )
@@ -1680,6 +1675,10 @@ def _get_hybrid_mixed_quantization_config(
     Returns:
         The mixed quantization config representing hybrid quantization.
     """
+
+    # Hybrid quantization means that we quantize
+    #  (1) weights of MatMul and Embedding layers
+    #  (2) activations of other layers.
 
     wc_config = quantization_config.clone()
     wc_config.ignored_scope = {}
