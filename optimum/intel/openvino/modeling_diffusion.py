@@ -605,12 +605,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set
-        # to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="auto")
+        ov_config = kwargs.get("ov_config")
+
+        if ov_config is None:
+            # If load_in_8bit and quantization_config not specified then ov_config is set
+            # to None and will be set by default in convert depending on the model size
+            if load_in_8bit is None and not quantization_config:
+                ov_config = None
+            else:
+                ov_config = OVConfig(dtype="auto")
 
         torch_dtype = kwargs.pop("torch_dtype", None)
 
