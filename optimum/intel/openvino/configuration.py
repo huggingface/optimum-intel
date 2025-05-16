@@ -316,7 +316,7 @@ _DEFAULT_4BIT_CONFIGS = {
                 "bits": 4,
                 "sym": False,
                 "group_size": 128,
-                "dataset": "wikitext2",
+                "dataset": "contextual",
                 "quant_method": OVQuantizationMethod.AWQ,
                 "scale_estimation": True,
                 "ignored_scope": {
