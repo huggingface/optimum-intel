@@ -306,13 +306,9 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
-        ov_export_config = kwargs.get("ov_config")
-        if ov_export_config is None:
-            # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-            if load_in_8bit is None and not quantization_config:
-                ov_export_config = None
-            else:
-                ov_export_config = OVConfig(dtype="auto")
+        ov_export_config = kwargs.get("ov_export_config")
+        if ov_export_config is None and load_in_8bit is not None or quantization_config is not None:
+            ov_export_config = OVConfig(dtype="auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
