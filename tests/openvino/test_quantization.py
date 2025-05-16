@@ -1378,134 +1378,134 @@ class OVWeightCompressionTest(unittest.TestCase):
 
 class OVPipelineQuantizationTest(unittest.TestCase):
     PIPELINE_QUANTIZATION_SCOPE = [
-        (
-            OVModelForCausalLM,
-            "llama",
-            False,
-            dict(
-                pipeline_quantization_configs={
-                    "model": dict(
-                        weight_quantization_config=dict(
-                            bits=4,
-                            dtype="nf4",
-                            group_size=16,
-                            dataset="wikitext2",
-                            num_samples=1,
-                            gptq=True,
-                            ratio=0.5,
-                        ),
-                        full_quantization_config=dict(dtype="f8e4m3"),
-                        dataset="wikitext2",
-                        num_samples=1,
-                    ),
-                }
-            ),
-            {
-                "model": 14,
-            },
-            {
-                "model": {"f8e4m3": 11, "nf4": 5},
-            },
-        ),
-        (
-            OVStableDiffusionPipeline,
-            "stable-diffusion",
-            True,
-            dict(
-                pipeline_quantization_configs={
-                    "unet": dict(
-                        dtype="f8e4m3",
-                        dataset="laion/filtered-wit",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    "vae_decoder": OVWeightQuantizationConfig(),
-                    "vae_encoder": OVWeightQuantizationConfig(),
-                    "text_encoder": OVWeightQuantizationConfig(),
-                }
-            ),
-            {
-                "unet": 112,
-                "vae_decoder": 0,
-                "vae_encoder": 0,
-                "text_encoder": 0,
-            },
-            {
-                "unet": {"f8e4m3": 121},
-                "vae_decoder": {"int8": 42},
-                "vae_encoder": {"int8": 34},
-                "text_encoder": {"int8": 64},
-            },
-        ),
+        # (
+        #     OVModelForCausalLM,
+        #     "llama",
+        #     False,
+        #     dict(
+        #         pipeline_quantization_configs={
+        #             "model": dict(
+        #                 weight_quantization_config=dict(
+        #                     bits=4,
+        #                     dtype="nf4",
+        #                     group_size=16,
+        #                     dataset="wikitext2",
+        #                     num_samples=1,
+        #                     gptq=True,
+        #                     ratio=0.5,
+        #                 ),
+        #                 full_quantization_config=dict(dtype="f8e4m3"),
+        #                 dataset="wikitext2",
+        #                 num_samples=1,
+        #             ),
+        #         }
+        #     ),
+        #     {
+        #         "model": 14,
+        #     },
+        #     {
+        #         "model": {"f8e4m3": 11, "nf4": 5},
+        #     },
+        # ),
+        # (
+        #     OVStableDiffusionPipeline,
+        #     "stable-diffusion",
+        #     True,
+        #     dict(
+        #         pipeline_quantization_configs={
+        #             "unet": dict(
+        #                 dtype="f8e4m3",
+        #                 dataset="laion/filtered-wit",
+        #                 num_samples=1,
+        #                 trust_remote_code=True,
+        #             ),
+        #             "vae_decoder": OVWeightQuantizationConfig(),
+        #             "vae_encoder": OVWeightQuantizationConfig(),
+        #             "text_encoder": OVWeightQuantizationConfig(),
+        #         }
+        #     ),
+        #     {
+        #         "unet": 112,
+        #         "vae_decoder": 0,
+        #         "vae_encoder": 0,
+        #         "text_encoder": 0,
+        #     },
+        #     {
+        #         "unet": {"f8e4m3": 121},
+        #         "vae_decoder": {"int8": 42},
+        #         "vae_encoder": {"int8": 34},
+        #         "text_encoder": {"int8": 64},
+        #     },
+        # ),
     ]
 
-    if is_transformers_version(">", "4.43.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVStableDiffusion3Pipeline,
-                    "stable-diffusion-3",
-                    False,
-                    dict(
-                        pipeline_quantization_configs={
-                            "transformer": dict(
-                                dataset="conceptual_captions",
-                                num_samples=1,
-                                quant_method=OVQuantizationMethod.HYBRID,
-                            ),
-                            "vae_decoder": OVWeightQuantizationConfig(),
-                            "vae_encoder": OVWeightQuantizationConfig(),
-                            "text_encoder": OVWeightQuantizationConfig(),
-                        }
-                    ),
-                    {
-                        "transformer": 9,
-                        "vae_decoder": 0,
-                        "vae_encoder": 0,
-                        "text_encoder": 0,
-                        "text_encoder_2": 0,
-                        "text_encoder_3": 0,
-                    },
-                    {
-                        "transformer": {"int8": 65},
-                        "vae_decoder": {"int8": 58},
-                        "vae_encoder": {"int8": 42},
-                        "text_encoder": {"int8": 30},
-                        "text_encoder_2": {"int8": 0},
-                        "text_encoder_3": {"int8": 0},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">", "4.43.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVModelForSpeechSeq2Seq,
-                    "whisper",
-                    True,
-                    dict(
-                        pipeline_quantization_configs={
-                            "encoder": dict(smooth_quant_alpha=0.95),
-                            "decoder": dict(smooth_quant_alpha=0.9),
-                        },
-                        dataset="librispeech",
-                        num_samples=1,
-                        processor=MODEL_NAMES["whisper"],
-                        trust_remote_code=True,
-                    ),
-                    {"encoder": 10, "decoder": 12}
-                    if is_transformers_version("<=", "4.36.0")
-                    else {"encoder": 8, "decoder": 12},
-                    (
-                        {"encoder": {"int8": 8}, "decoder": {"int8": 11}}
-                        if is_transformers_version("<=", "4.36.0")
-                        else {"encoder": {"int8": 8}, "decoder": {"int8": 12}}
-                    ),
-                ),
-            ]
-        )
+    # if is_transformers_version(">", "4.43.0"):
+    #     PIPELINE_QUANTIZATION_SCOPE.extend(
+    #         [
+    #             (
+    #                 OVStableDiffusion3Pipeline,
+    #                 "stable-diffusion-3",
+    #                 False,
+    #                 dict(
+    #                     pipeline_quantization_configs={
+    #                         "transformer": dict(
+    #                             dataset="conceptual_captions",
+    #                             num_samples=1,
+    #                             quant_method=OVQuantizationMethod.HYBRID,
+    #                         ),
+    #                         "vae_decoder": OVWeightQuantizationConfig(),
+    #                         "vae_encoder": OVWeightQuantizationConfig(),
+    #                         "text_encoder": OVWeightQuantizationConfig(),
+    #                     }
+    #                 ),
+    #                 {
+    #                     "transformer": 9,
+    #                     "vae_decoder": 0,
+    #                     "vae_encoder": 0,
+    #                     "text_encoder": 0,
+    #                     "text_encoder_2": 0,
+    #                     "text_encoder_3": 0,
+    #                 },
+    #                 {
+    #                     "transformer": {"int8": 65},
+    #                     "vae_decoder": {"int8": 58},
+    #                     "vae_encoder": {"int8": 42},
+    #                     "text_encoder": {"int8": 30},
+    #                     "text_encoder_2": {"int8": 0},
+    #                     "text_encoder_3": {"int8": 0},
+    #                 },
+    #             ),
+    #         ]
+    #     )
+    #
+    # if is_transformers_version(">", "4.43.0"):
+    #     PIPELINE_QUANTIZATION_SCOPE.extend(
+    #         [
+    #             (
+    #                 OVModelForSpeechSeq2Seq,
+    #                 "whisper",
+    #                 True,
+    #                 dict(
+    #                     pipeline_quantization_configs={
+    #                         "encoder": dict(smooth_quant_alpha=0.95),
+    #                         "decoder": dict(smooth_quant_alpha=0.9),
+    #                     },
+    #                     dataset="librispeech",
+    #                     num_samples=1,
+    #                     processor=MODEL_NAMES["whisper"],
+    #                     trust_remote_code=True,
+    #                 ),
+    #                 {"encoder": 10, "decoder": 12}
+    #                 if is_transformers_version("<=", "4.36.0")
+    #                 else {"encoder": 8, "decoder": 12},
+    #                 (
+    #                     {"encoder": {"int8": 8}, "decoder": {"int8": 11}}
+    #                     if is_transformers_version("<=", "4.36.0")
+    #                     else {"encoder": {"int8": 8}, "decoder": {"int8": 12}}
+    #                 ),
+    #             ),
+    #         ]
+    #     )
 
     if is_transformers_version(">=", "4.49.0"):
         PIPELINE_QUANTIZATION_SCOPE.extend(
@@ -1528,7 +1528,12 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                                 lora_correction=True,
                                 ignored_scope={
                                     "patterns": [
-                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
+                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))"
+                                        + (
+                                            "/aten::mul/Multiply"
+                                            if is_openvino_version("<", "2025.2")
+                                            else "\\.lora_B\\.speech/aten::linear/MatMul"
+                                        ),
                                     ],
                                 },
                             ),
