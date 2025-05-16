@@ -369,10 +369,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                     quantization_config = get_default_int4_config(self.args.model)
                 else:
                     quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-
-                if quantization_config.get("dataset", None) is not None:
-                    quantization_config["trust_remote_code"] = self.args.trust_remote_code
-                ov_config = OVConfig(quantization_config=quantization_config)
             else:
                 if self.args.dataset is None:
                     raise ValueError(
@@ -395,11 +391,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                         "full_quantization_config": q_config,
                         "num_samples": self.args.num_samples,
                         "dataset": self.args.dataset,
-                        "trust_remote_code": self.args.trust_remote_code,
                     }
                 else:
                     quantization_config = prepare_q_config(self.args)
-                ov_config = OVConfig(quantization_config=quantization_config)
+            quantization_config["trust_remote_code"] = self.args.trust_remote_code
+            ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None

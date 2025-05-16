@@ -81,6 +81,7 @@ except OptionalDependencyNotAvailable:
         [
             "OVQuantizer",
             "OVCalibrationDataset",
+            "OVPipelineQuantizationConfig",
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
@@ -92,6 +93,7 @@ else:
         [
             "OVQuantizer",
             "OVCalibrationDataset",
+            "OVPipelineQuantizationConfig",
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
@@ -275,6 +277,7 @@ if TYPE_CHECKING:
             OVCalibrationDataset,
             OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
+            OVPipelineQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVWeightQuantizationConfig,
@@ -284,6 +287,7 @@ if TYPE_CHECKING:
             OVCalibrationDataset,
             OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
+            OVPipelineQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVWeightQuantizationConfig,
