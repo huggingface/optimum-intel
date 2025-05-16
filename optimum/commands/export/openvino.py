@@ -329,7 +329,7 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
@@ -363,43 +363,56 @@ class OVExportCommand(BaseOptimumCLICommand):
             if not is_nncf_available():
                 raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
 
+            default_quantization_config = get_default_quantization_config(
+                self.args.model, self.args.weight_format, self.args.quant_mode
+            )
             if self.args.weight_format is not None:
                 # For int4 quantization if no parameter is provided, then use the default config if exists
                 if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
-                    quantization_config = get_default_int4_config(self.args.model)
+                    if default_quantization_config is not None:
+                        quantization_config = default_quantization_config
+                        log_message = (
+                            f"Applying the default quantization config for {self.args.model}: {quantization_config}."
+                        )
+                    else:
+                        quantization_config = _DEFAULT_4BIT_WQ_CONFIG
+                        log_message = f"Applying a default quantization config: {quantization_config}."
+                    logger.info(log_message)
                 else:
-                    quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-
-                if quantization_config.get("dataset", None) is not None:
-                    quantization_config["trust_remote_code"] = self.args.trust_remote_code
-                ov_config = OVConfig(quantization_config=quantization_config)
+                    quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
             else:
-                if self.args.dataset is None:
-                    raise ValueError(
-                        "Dataset is required for full quantization. Please provide it with --dataset argument."
+                if no_quantization_parameter_provided(self.args) and default_quantization_config is not None:
+                    quantization_config = default_quantization_config
+                    logger.info(
+                        f"Applying the default quantization config for {self.args.model}: {quantization_config}."
                     )
-
-                if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
-                    if library_name == "diffusers":
-                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                    wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-                    wc_dtype, q_dtype = self.args.quant_mode.split("_")
-                    wc_config["dtype"] = wc_dtype
-
-                    q_config = prepare_q_config(self.args)
-                    q_config["dtype"] = q_dtype
-
-                    quantization_config = {
-                        "weight_quantization_config": wc_config,
-                        "full_quantization_config": q_config,
-                        "num_samples": self.args.num_samples,
-                        "dataset": self.args.dataset,
-                        "trust_remote_code": self.args.trust_remote_code,
-                    }
                 else:
-                    quantization_config = prepare_q_config(self.args)
-                ov_config = OVConfig(quantization_config=quantization_config)
+                    if self.args.dataset is None:
+                        raise ValueError(
+                            "Dataset is required for full quantization. Please provide it with --dataset argument."
+                        )
+                    if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
+                        if library_name == "diffusers":
+                            raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
+
+                        wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
+                        wc_dtype, q_dtype = self.args.quant_mode.split("_")
+                        wc_config["dtype"] = wc_dtype
+
+                        q_config = prepare_q_config(self.args)
+                        q_config["dtype"] = q_dtype
+
+                        quantization_config = {
+                            "weight_quantization_config": wc_config,
+                            "full_quantization_config": q_config,
+                            "num_samples": self.args.num_samples,
+                            "dataset": self.args.dataset,
+                        }
+                    else:
+                        quantization_config = prepare_q_config(self.args)
+            if quantization_config.get("dataset", None):
+                quantization_config["trust_remote_code"] = self.args.trust_remote_code
+            ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
