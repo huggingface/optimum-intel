@@ -70,8 +70,8 @@ from optimum.intel import (
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
     OVQuantizationConfigBase,
-    _DEFAULT_4BIT_CONFIGS,
-    _DEFAULT_4BIT_CONFIG,
+    _DEFAULT_4BIT_WQ_CONFIGS,
+    _DEFAULT_4BIT_WQ_CONFIG,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
@@ -1265,7 +1265,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
     @unittest.mock.patch.dict(
-        "optimum.intel.openvino.configuration._DEFAULT_4BIT_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
+        "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
     )
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with TemporaryDirectory() as tmp_dir:
@@ -1702,8 +1702,8 @@ class OVQuantizationConfigTest(unittest.TestCase):
     )
 
     def get_default_configurations() -> dict:
-        default_configurations = deepcopy(_DEFAULT_4BIT_CONFIGS)
-        default_configurations.update({"default": _DEFAULT_4BIT_CONFIG})
+        default_configurations = deepcopy(_DEFAULT_4BIT_WQ_CONFIGS)
+        default_configurations.update({"default": _DEFAULT_4BIT_WQ_CONFIG})
         return default_configurations
 
     DEFAULT_CONFIGURATIONS = get_default_configurations()
@@ -1747,7 +1747,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
     def test_for_no_short_id_duplicates(self):
         short_ids = set()
-        for model_id in _DEFAULT_4BIT_CONFIGS.keys():
+        for model_id in _DEFAULT_4BIT_WQ_CONFIGS.keys():
             short_id = model_id.split("/")[1]
             assert short_id not in short_ids
             short_ids.add(short_id)
