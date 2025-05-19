@@ -1340,6 +1340,13 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
     generate = WhisperForConditionalGeneration.generate
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Restore multilingual model transcribe task by default after model export
+        if is_transformers_version(">=", "4.50"):
+            if self.generation_config.is_multilingual and self.generation_config.forced_decoder_ids is None:
+                self.config.forced_decoder_ids = [[1, None], [2, self.generation_config.task_to_id["transcribe"]]]
+
     @classmethod
     def _from_pretrained(
         cls,
