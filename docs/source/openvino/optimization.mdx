@@ -662,3 +662,27 @@ optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode n
 ```
 
 Don't forget to provide a dataset since it is required for the calibration procedure during full quantization.
+
+
+## Pipeline Quantization
+
+There are multimodal pipelines that consist of multiple components, such as Stable Diffusion or Visual Causal Language models. In these cases, there may be a need to apply different quantization methods to different components of the pipeline. For example, you may want to apply int4 data-aware weight-only quantization to a language model in visual-language pipeline, while applying int8 weight-only quantization to other components. In this case you can use the `OVPipelineQuantizationConfig` class to specify the quantization configuration for each component of the pipeline.
+
+For example, the code below compresses weights a language model inside InternVL2-1B to int4, weights of a text embedding model to int8 and skips any quantization for vision embedding model.
+
+```python
+from optimum.intel import OVModelForVisualCausalLM, OVPipelineQuantizationConfig, OVWeightQuantizationConfig
+
+
+model_id = "OpenGVLab/InternVL2-8B"
+model = OVModelForVisualCausalLM.from_pretrained(
+    model_id,
+    export=True,
+    quantization_config=OVPipelineQuantizationConfig(
+        pipeline_quantization_configs={
+            "lm_model": OVWeightQuantizationConfig(bits=4, group_size=128, dataset="contextual", quant_method="awq"),
+            "text_embeddings_model": OVWeightQuantizationConfig(bits=8),
+        },
+    )
+)
+```
