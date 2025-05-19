@@ -728,7 +728,6 @@ def export_from_model(
             if hasattr(model.config, "forced_decoder_ids"):
                 model.config.forced_decoder_ids = None
             if hasattr(model, "generation_config") and hasattr(model.generation_config, "forced_decoder_ids"):
-                model.generation_config.input_ids = model.generation_config.forced_decoder_ids
                 model.generation_config.forced_decoder_ids = None
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)

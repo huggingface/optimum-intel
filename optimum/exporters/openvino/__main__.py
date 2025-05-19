@@ -475,6 +475,12 @@ def main_export(
 
         for submodel_path in submodel_paths:
             submodel_path = Path(output) / submodel_path
+
+            if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
+                raise RuntimeError(
+                    f"An issue happenned during export : {submodel_path.name} was not converted and saved as expected."
+                )
+
             submodel = core.read_model(submodel_path)
 
             quantization_config = None

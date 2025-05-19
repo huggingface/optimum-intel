@@ -79,12 +79,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
                     onclick="navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode int8 --dataset wikitext2 ./save_dir')">
@@ -236,12 +231,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')">
-                    ✅
-                </button>
-            </td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
                     onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode int8 --dataset wikitext2 ./save_dir')">
@@ -294,12 +284,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
                     onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode int8 --dataset wikitext2 ./save_dir')">
@@ -352,12 +337,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
                     onclick="navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode int8 --dataset wikitext2 ./save_dir')">
@@ -410,12 +390,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=4, quant_method=\'hybrid\', dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
                     onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 --dataset conceptual_captions ./save_dir')">

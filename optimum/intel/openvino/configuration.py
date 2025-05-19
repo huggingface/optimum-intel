@@ -48,7 +48,8 @@ class OVQuantizationMethod(str, Enum):
     AWQ = "awq"
 
 
-_DEFAULT_4BIT_CONFIGS = {
+# Default configs for 4-bit weight quantization
+_DEFAULT_4BIT_WQ_CONFIGS = {
     "databricks/dolly-v2-3b": {
         "bits": 4,
         "sym": False,
@@ -339,9 +340,9 @@ model_id_aliases = [
     ("meta-llama/Meta-Llama-3.1-8B", "meta-llama/Llama-3.1-8B"),
 ]
 for m_id_1, m_id_2 in model_id_aliases:
-    _DEFAULT_4BIT_CONFIGS[m_id_2] = _DEFAULT_4BIT_CONFIGS[m_id_1]
+    _DEFAULT_4BIT_WQ_CONFIGS[m_id_2] = _DEFAULT_4BIT_WQ_CONFIGS[m_id_1]
 
-_DEFAULT_4BIT_CONFIG = {
+_DEFAULT_4BIT_WQ_CONFIG = {
     "bits": 4,
     "ratio": 1.0,
     "sym": False,
@@ -350,25 +351,33 @@ _DEFAULT_4BIT_CONFIG = {
 }
 
 
-def _check_default_4bit_configs(model_id_or_path: str):
-    if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
-        return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
-
-    model_path = Path(model_id_or_path)
-    config_path = model_path / "config.json"
-    if config_path.exists():
-        with config_path.open("r") as config_f:
-            config = json.load(config_f)
-            original_model_name = config.get("_name_or_path", "")
-        if original_model_name in _DEFAULT_4BIT_CONFIGS:
-            return _DEFAULT_4BIT_CONFIGS[original_model_name]
-
-    for model_id, config in _DEFAULT_4BIT_CONFIGS.items():
-        short_id = model_id.split("/")[-1]
-        if model_path.name == short_id:
-            return config
-
-    return None
+# Default configs for int8 full quantization
+_DEFAULT_INT8_FQ_CONFIGS = {
+    "openai/clip-vit-base-patch16": {
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.6,
+    },
+    "openai/clip-vit-base-patch32": {
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.6,
+    },
+    "openai/clip-vit-large-patch14": {
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.6,
+    },
+    "hf-tiny-model-private/tiny-random-CLIPModel": {  # For test purposes
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 1,
+        "smooth_quant_alpha": 0.9,
+    },
+}
 
 
 def get_default_int4_config(model_id_or_path: str):
@@ -379,7 +388,60 @@ def get_default_int4_config(model_id_or_path: str):
     Returns:
         Default int4 config for the given model or generic default int4 config.
     """
-    return _check_default_4bit_configs(model_id_or_path) or _DEFAULT_4BIT_CONFIG
+    logger.warning(
+        "The `get_default_int4_config` function is deprecated and will be removed in optimum-intel v1.25.0. "
+        "Please use `get_default_quantization_config` instead."
+    )
+
+    return get_default_quantization_config(model_id_or_path, "int4") or _DEFAULT_4BIT_WQ_CONFIG
+
+
+def get_default_quantization_config(
+    model_id_or_path: str, weight_format: Optional[str] = None, quant_mode: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+        weight_format (`str`, *optional*):
+            The format of the weights. Currently only "int4" value is supported.
+        quant_mode (`str`, *optional*):
+            The quantization mode. Currently only "int8" value is supported.
+    Returns:
+        Default quantization config for the given model if found and `None` otherwise.
+    """
+
+    if weight_format is None and quant_mode is None:
+        raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
+
+    if weight_format == "int4":
+        default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
+    elif quant_mode == "int8":
+        default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
+    else:
+        return None
+
+    # Check if the model_id_or_path is in the default configs
+    if model_id_or_path in default_configs_dict:
+        return default_configs_dict[model_id_or_path]
+
+    # Try to match by config.json
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
+    if config_path.exists():
+        with config_path.open("r") as config_f:
+            config = json.load(config_f)
+            original_model_name = config.get("_name_or_path", "")
+        if original_model_name in default_configs_dict:
+            return default_configs_dict[original_model_name]
+
+    # Try to match by folder name
+    for model_id, config in default_configs_dict.items():
+        short_id = model_id.split("/")[-1]
+        if model_path.name == short_id:
+            return config
+
+    return None
 
 
 @dataclass

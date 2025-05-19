@@ -223,7 +223,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = self.request.get_tensor("logits").data
-        logits = torch.from_numpy(logits).to(self.device)
+        logits = torch.from_numpy(logits).clone().to(self.device)
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
 
