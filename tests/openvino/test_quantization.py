@@ -1437,6 +1437,29 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "text_encoder": {"int8": 64},
             },
         ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            True,
+            dict(
+                pipeline_quantization_configs={
+                    "encoder": dict(smooth_quant_alpha=0.95),
+                    "decoder": dict(smooth_quant_alpha=0.9),
+                },
+                dataset="librispeech",
+                num_samples=1,
+                processor=MODEL_NAMES["whisper"],
+                trust_remote_code=True,
+            ),
+            {"encoder": 10, "decoder": 12}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 8, "decoder": 12},
+            (
+                {"encoder": {"int8": 8}, "decoder": {"int8": 11}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}}
+            ),
+        ),
     ]
 
     if is_transformers_version(">", "4.43.0"):
@@ -1474,35 +1497,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         "text_encoder_2": {"int8": 0},
                         "text_encoder_3": {"int8": 0},
                     },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">", "4.43.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVModelForSpeechSeq2Seq,
-                    "whisper",
-                    True,
-                    dict(
-                        pipeline_quantization_configs={
-                            "encoder": dict(smooth_quant_alpha=0.95),
-                            "decoder": dict(smooth_quant_alpha=0.9),
-                        },
-                        dataset="librispeech",
-                        num_samples=1,
-                        processor=MODEL_NAMES["whisper"],
-                        trust_remote_code=True,
-                    ),
-                    {"encoder": 10, "decoder": 12}
-                    if is_transformers_version("<=", "4.36.0")
-                    else {"encoder": 8, "decoder": 12},
-                    (
-                        {"encoder": {"int8": 8}, "decoder": {"int8": 11}}
-                        if is_transformers_version("<=", "4.36.0")
-                        else {"encoder": {"int8": 8}, "decoder": {"int8": 12}}
-                    ),
                 ),
             ]
         )
