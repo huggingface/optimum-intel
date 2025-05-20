@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -36,7 +36,7 @@ from transformers import (
     WhisperForConditionalGeneration,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
-from transformers.generation import GenerationMixin
+from transformers.generation import GenerationMixin, LogitsProcessorList
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.utils import http_user_agent
 
@@ -1340,13 +1340,6 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
     generate = WhisperForConditionalGeneration.generate
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Restore multilingual model transcribe task by default after model export
-        if is_transformers_version(">=", "4.50"):
-            if self.generation_config.is_multilingual and self.generation_config.forced_decoder_ids is None:
-                self.config.forced_decoder_ids = [[1, None], [2, self.generation_config.task_to_id["transcribe"]]]
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -1448,3 +1441,34 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             "decoder_position_ids": decoder_position_ids,
             "cache_position": cache_position,
         }
+
+    def _get_logits_processor(
+        self,
+        generation_config: GenerationConfig,
+        input_ids_seq_length: int,
+        encoder_input_ids: torch.LongTensor,
+        prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], List[int]],
+        logits_processor: Optional[LogitsProcessorList],
+        device: Optional[str] = None,
+        model_kwargs: Optional[Dict[str, Any]] = None,
+        negative_prompt_ids: Optional[torch.Tensor] = None,
+        negative_prompt_attention_mask: Optional[torch.Tensor] = None,
+    ) -> LogitsProcessorList:
+        forced_decoder_ids = generation_config.forced_decoder_ids
+        # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
+        # see for details https://github.com/huggingface/transformers/issues/37172
+        if is_transformers_version(">=", "4.50.0"):
+            generation_config.forced_decoder_ids = None
+        logits_processor = super()._get_logits_processor(
+            generation_config,
+            input_ids_seq_length,
+            encoder_input_ids,
+            prefix_allowed_tokens_fn,
+            logits_processor,
+            device,
+            model_kwargs,
+            negative_prompt_ids,
+            negative_prompt_attention_mask,
+        )
+        generation_config.forced_decoder_ids = forced_decoder_ids
+        return logits_processor

@@ -724,10 +724,10 @@ def export_from_model(
                     setattr(model.config, param_name, None)
 
         # workaround for https://github.com/huggingface/transformers/issues/37172
-        if is_transformers_version(">=", "4.50.0") and model_type == "whisper":
-            if hasattr(model, "generation_config") and hasattr(model.generation_config, "forced_decoder_ids"):
-                model.config.forced_decoder_ids = model.generation_config.forced_decoder_ids
-                model.generation_config.forced_decoder_ids = None
+        # if is_transformers_version(">=", "4.50.0") and model_type == "whisper":
+        #     if hasattr(model, "generation_config") and hasattr(model.generation_config, "forced_decoder_ids"):
+        #         model.config.forced_decoder_ids = model.generation_config.forced_decoder_ids
+        #         model.generation_config.forced_decoder_ids = None
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
