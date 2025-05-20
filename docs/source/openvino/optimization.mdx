@@ -133,8 +133,18 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --quant-mode int8 --dataset contextual ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
         </tr>

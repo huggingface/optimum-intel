@@ -1263,6 +1263,13 @@ class OVQuantizer(OptimumQuantizer):
                     for submodel_name in self.model.ov_submodels:
                         if submodel_name != diffusion_model_name:
                             pipeline_quantization_configs[submodel_name] = OVWeightQuantizationConfig(bits=8)
+                elif isinstance(self.model, OVModelForVisualCausalLM):
+                    for submodel_name in self.model.ov_submodels:
+                        pipeline_quantization_configs[submodel_name] = (
+                            quantization_config
+                            if submodel_name == "lm_model"
+                            else OVWeightQuantizationConfig(bits=8, sym=True)
+                        )
                 else:
                     pipeline_quantization_configs["model"] = quantization_config
             elif isinstance(quantization_config, OVMixedQuantizationConfig):

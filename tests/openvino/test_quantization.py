@@ -358,6 +358,33 @@ class OVQuantizerTest(unittest.TestCase):
         ),
     ]
 
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen2_vl",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 13,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 0,
+                        "vision_embeddings_merger_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
+                ),
+            ]
+        )
+
     @staticmethod
     def get_calibration_dataset(
         quantizer,
@@ -570,6 +597,11 @@ class OVQuantizerTest(unittest.TestCase):
                 processor = AutoProcessor.from_pretrained(model_id)
                 image = np.random.rand(224, 224, 3).astype(np.uint8)
                 inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
+                ov_model(**inputs)
+            elif model_cls == OVModelForVisualCausalLM:
+                processor = AutoProcessor.from_pretrained(model_id)
+                image = np.random.rand(224, 224, 3).astype(np.uint8)
+                inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
                 ov_model(**inputs)
             else:
                 raise Exception("Unexpected model class.")

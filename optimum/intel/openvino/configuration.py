@@ -933,8 +933,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         """
         super().post_init()
 
-        if self.dataset is not None:
+        if self.dataset is not None and isinstance(self.dataset, str):
             speech_to_text_datasets = set(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
             if (
@@ -943,12 +944,14 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 | language_datasets
                 | speech_to_text_datasets
                 | stable_diffusion_datasets
+                | visual_lm_datasets
             ):
                 raise ValueError(
                     "You can only choose between the following datasets:"
                     f"{language_datasets} for text feature extraction models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, "
-                    f"{speech_to_text_datasets} for speech-to-text models or "
+                    f"{speech_to_text_datasets} for speech-to-text models, "
+                    f"{visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
 
