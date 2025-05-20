@@ -2837,6 +2837,10 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
 
+        generate_kwrgs = {}
+        if is_transformers_version(">=", "4.50"):
+            generate_kwrgs = {"use_model_defaults": False}
+
         gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -2846,9 +2850,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         )
 
         set_seed(SEED)
-        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config)
+        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
         set_seed(SEED)
-        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config)
+        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
 
         self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
 
