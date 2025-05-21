@@ -651,7 +651,7 @@ Don't forget to provide a dataset since it is required for the calibration proce
 
 ## Pipeline Quantization
 
-There are multimodal pipelines that consist of multiple components, such as Stable Diffusion or Visual Causal Language models. In these cases, there may be a need to apply different quantization methods to different components of the pipeline. For example, you may want to apply int4 data-aware weight-only quantization to a language model in visual-language pipeline, while applying int8 weight-only quantization to other components. In this case you can use the `OVPipelineQuantizationConfig` class to specify the quantization configuration for each component of the pipeline.
+There are multimodal pipelines that consist of multiple components, such as Stable Diffusion or Visual Language models. In these cases, there may be a need to apply different quantization methods to different components of the pipeline. For example, you may want to apply int4 data-aware weight-only quantization to a language model in visual-language pipeline, while applying int8 weight-only quantization to other components. In this case you can use the `OVPipelineQuantizationConfig` class to specify the quantization configuration for each component of the pipeline.
 
 For example, the code below quantizes weights and activations of a language model inside InternVL2-1B, compresses weights of a text embedding model and skips any quantization for vision embedding model.
 
@@ -663,11 +663,14 @@ model_id = "OpenGVLab/InternVL2-1B"
 model = OVModelForVisualCausalLM.from_pretrained(
     model_id,
     export=True,
+    trust_remote_code=True,
     quantization_config=OVPipelineQuantizationConfig(
         pipeline_quantization_configs={
-            "lm_model": OVQuantizationConfig(bits=8, dataset="contextual"),
+            "lm_model": OVQuantizationConfig(bits=8),
             "text_embeddings_model": OVWeightQuantizationConfig(bits=8),
         },
+        dataset="contextual",
+        trust_remote_code=True,
     )
 )
 ```
