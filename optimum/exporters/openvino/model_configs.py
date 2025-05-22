@@ -3548,6 +3548,17 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
+    @property
+    def runtime_options(self):
+        rt_options = getattr(self, "_rt_options", {})
+        if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            rt_options.update({"ACTIVATIONS_SCALE_FACTOR": "8.0"})
+        return rt_options
+
+    @runtime_options.setter
+    def _set_runtime_options(self, options):
+        self._rt_options = options
+
 
 @register_in_tasks_manager(
     "glm",
