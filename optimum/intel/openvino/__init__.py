@@ -54,6 +54,7 @@ from .configuration import (
     OVConfig,
     OVDynamicQuantizationConfig,
     OVMixedQuantizationConfig,
+    OVPipelineQuantizationConfig,
     OVQuantizationConfig,
     OVWeightQuantizationConfig,
 )
