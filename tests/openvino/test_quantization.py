@@ -1415,7 +1415,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             "llama",
             False,
             dict(
-                pipeline_quantization_configs={
+                quantization_configs={
                     "model": dict(
                         weight_quantization_config=dict(
                             bits=4,
@@ -1444,7 +1444,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             "stable-diffusion",
             True,
             dict(
-                pipeline_quantization_configs={
+                quantization_configs={
                     "unet": dict(
                         dtype="f8e4m3",
                         dataset="laion/filtered-wit",
@@ -1479,7 +1479,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                     "stable-diffusion-3",
                     False,
                     dict(
-                        pipeline_quantization_configs={
+                        quantization_configs={
                             "transformer": dict(
                                 dataset="conceptual_captions",
                                 num_samples=1,
@@ -1512,7 +1512,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                     "whisper",
                     True,
                     dict(
-                        pipeline_quantization_configs={
+                        quantization_configs={
                             "encoder": dict(smooth_quant_alpha=0.95),
                             "decoder": dict(smooth_quant_alpha=0.9),
                         },
@@ -1535,7 +1535,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                     "phi4mm",
                     True,
                     dict(
-                        pipeline_quantization_configs={
+                        quantization_configs={
                             "lm_model": dict(
                                 bits=4,
                                 group_size=16,
@@ -1620,7 +1620,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             # Compare the quantization config with the model runtime info
             for submodel_name, submodel in model.ov_submodels.items():
                 rt_info = submodel.get_rt_info()
-                config = quantization_config.pipeline_quantization_configs.get(submodel_name)
+                config = quantization_config.quantization_configs.get(submodel_name)
                 if config is None:
                     self.assertTrue("nncf" not in rt_info)
                     continue
@@ -1816,7 +1816,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (
             OVPipelineQuantizationConfig(
-                pipeline_quantization_configs={
+                quantization_configs={
                     "model1": OVQuantizationConfig(bits=8, dataset="wikitext2"),
                     "model2": OVWeightQuantizationConfig(bits=4, group_size=16),
                     "model3": OVMixedQuantizationConfig(
@@ -1903,7 +1903,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (
             dict(
-                pipeline_quantization_configs=dict(
+                quantization_configs=dict(
                     model1=dict(bits=8, dataset="wikitext2", weight_only=False),
                     model2=dict(bits=4, group_size=16),
                     model3=dict(
@@ -2054,9 +2054,9 @@ class OVQuantizationConfigTest(unittest.TestCase):
             mock_method.assert_called_once_with(mock_model, **expected_kwargs)
 
     def compare_config_dict_to_config_object(self, config_dict: dict, config_obj: OVQuantizationConfigBase):
-        if "pipeline_quantization_configs" in config_dict:
-            for k, v in config_dict["pipeline_quantization_configs"].items():
-                self.compare_config_dict_to_config_object(v, getattr(config_obj, "pipeline_quantization_configs")[k])
+        if "quantization_configs" in config_dict:
+            for k, v in config_dict["quantization_configs"].items():
+                self.compare_config_dict_to_config_object(v, getattr(config_obj, "quantization_configs")[k])
             return
         for k, v in config_dict.items():
             if hasattr(config_obj, k):

@@ -312,7 +312,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
-        "pipeline_quantization_configs": {
+        "quantization_configs": {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
@@ -1056,9 +1056,7 @@ class OVConfig(BaseConfig):
             q_dtype = quantization_config.full_quantization_config.dtype
             dtype = f"{wc_dtype}_{q_dtype}"
         elif isinstance(quantization_config, OVPipelineQuantizationConfig):
-            dtypes = [
-                OVConfig._get_dtype(config) for config in quantization_config.pipeline_quantization_configs.values()
-            ]
+            dtypes = [OVConfig._get_dtype(config) for config in quantization_config.quantization_configs.values()]
             dtype = "_".join(dtypes)
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
@@ -1179,7 +1177,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
 class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
-        pipeline_quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
+        quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
         num_samples: Optional[int] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
@@ -1193,7 +1191,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         submodel, it won't be quantized.
 
         Args:
-            pipeline_quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
+            quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
                 A dictionary where keys are submodel names and values are either dictionaries or instances of
                 `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
             num_samples (Optional[int]):
@@ -1222,13 +1220,13 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
                 "Please use `ignored_scope` parameter in the submodel configs instead."
             )
 
-        pipeline_quantization_configs = copy.deepcopy(pipeline_quantization_configs)
-        for submodel_name, submodel_config in pipeline_quantization_configs.items():
+        quantization_configs = copy.deepcopy(quantization_configs)
+        for submodel_name, submodel_config in quantization_configs.items():
             if isinstance(submodel_config, dict):
-                pipeline_quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
+                quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
 
         # Pull dataset-related parameters from child configs
-        configs = pipeline_quantization_configs.values()
+        configs = quantization_configs.values()
         num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
@@ -1244,19 +1242,17 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             trust_remote_code=trust_remote_code,
             **kwargs,
         )
-        self.pipeline_quantization_configs = pipeline_quantization_configs
+        self.quantization_configs = quantization_configs
         self.post_init()
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
-        result["pipeline_quantization_configs"] = {
-            name: config.to_dict() for name, config in self.pipeline_quantization_configs.items()
-        }
+        result["quantization_configs"] = {name: config.to_dict() for name, config in self.quantization_configs.items()}
         return result
 
     def post_init(self):
         super().post_init()
-        for submodel_config in self.pipeline_quantization_configs.values():
+        for submodel_config in self.quantization_configs.values():
             submodel_config.post_init()
 
 
@@ -1270,7 +1266,7 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
         return OVMixedQuantizationConfig.from_dict(config_dict)
 
     # Check for OVPipelineQuantizationConfig
-    if "pipeline_quantization_configs" in config_dict:
+    if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
 
     # Either OVWeightQuantizationConfig or OVQuantizationConfig

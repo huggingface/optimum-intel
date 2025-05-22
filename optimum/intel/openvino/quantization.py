@@ -1189,9 +1189,9 @@ class OVQuantizer(OptimumQuantizer):
         if calibration_dataset is None and quantization_config.dataset is not None:
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
-        pipeline_quantization_configs = {}
+        quantization_configs = {}
         if isinstance(quantization_config, OVPipelineQuantizationConfig):
-            pipeline_quantization_configs = quantization_config.pipeline_quantization_configs
+            quantization_configs = quantization_config.quantization_configs
         elif (
             isinstance(quantization_config, OVWeightQuantizationConfig)
             and quantization_config.quant_method != OVQuantizationMethod.HYBRID
@@ -1201,16 +1201,16 @@ class OVQuantizer(OptimumQuantizer):
             #
             if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 for submodel_name in self.model.ov_submodels:
-                    pipeline_quantization_configs[submodel_name] = quantization_config
+                    quantization_configs[submodel_name] = quantization_config
             elif isinstance(self.model, OVModelForVisualCausalLM):
                 for submodel_name in self.model.ov_submodels:
-                    pipeline_quantization_configs[submodel_name] = (
+                    quantization_configs[submodel_name] = (
                         quantization_config
                         if submodel_name == "lm_model"
                         else OVWeightQuantizationConfig(bits=8, sym=True)
                     )
             else:
-                pipeline_quantization_configs["model"] = quantization_config
+                quantization_configs["model"] = quantization_config
         else:
             #
             # Hybrid/Full/Mixed quantization
@@ -1233,7 +1233,7 @@ class OVQuantizer(OptimumQuantizer):
                     # Apply hybrid quantization to diffusion model
                     diffusion_model_name = next(iter(calibration_dataset))
                     diffusion_model = getattr(self.model, diffusion_model_name).model
-                    pipeline_quantization_configs[diffusion_model_name] = _get_hybrid_mixed_quantization_config(
+                    quantization_configs[diffusion_model_name] = _get_hybrid_mixed_quantization_config(
                         diffusion_model, quantization_config, **kwargs
                     )
 
@@ -1243,10 +1243,10 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
                     for submodel_name in self.model.ov_submodels:
                         if submodel_name != diffusion_model_name:
-                            pipeline_quantization_configs[submodel_name] = quantization_config_copy
+                            quantization_configs[submodel_name] = quantization_config_copy
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
-                    pipeline_quantization_configs["model"] = quantization_config
+                    quantization_configs["model"] = quantization_config
             elif isinstance(quantization_config, OVQuantizationConfig):
                 #
                 # Full quantization
@@ -1256,22 +1256,22 @@ class OVQuantizer(OptimumQuantizer):
                         # quantization_config.num_samples of audio samples result in more actual model inputs
                         config = quantization_config.clone()
                         config.num_samples = calibration_dataset[submodel_name].get_length()
-                        pipeline_quantization_configs[submodel_name] = config
+                        quantization_configs[submodel_name] = config
                 elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     diffusion_model_name = next(iter(calibration_dataset))
-                    pipeline_quantization_configs[diffusion_model_name] = quantization_config
+                    quantization_configs[diffusion_model_name] = quantization_config
                     for submodel_name in self.model.ov_submodels:
                         if submodel_name != diffusion_model_name:
-                            pipeline_quantization_configs[submodel_name] = OVWeightQuantizationConfig(bits=8)
+                            quantization_configs[submodel_name] = OVWeightQuantizationConfig(bits=8)
                 elif isinstance(self.model, OVModelForVisualCausalLM):
                     for submodel_name in self.model.ov_submodels:
-                        pipeline_quantization_configs[submodel_name] = (
+                        quantization_configs[submodel_name] = (
                             quantization_config
                             if submodel_name == "lm_model"
                             else OVWeightQuantizationConfig(bits=8, sym=True)
                         )
                 else:
-                    pipeline_quantization_configs["model"] = quantization_config
+                    quantization_configs["model"] = quantization_config
             elif isinstance(quantization_config, OVMixedQuantizationConfig):
                 #
                 # Mixed quantization
@@ -1279,11 +1279,11 @@ class OVQuantizer(OptimumQuantizer):
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
-                pipeline_quantization_configs["model"] = quantization_config
+                quantization_configs["model"] = quantization_config
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
-        for submodel_name, config in pipeline_quantization_configs.items():
+        for submodel_name, config in quantization_configs.items():
             if submodel_name not in self.model.ov_submodels:
                 raise RuntimeError(
                     f"Unexpected submodel name encountered during applying quantization: {submodel_name}. "
