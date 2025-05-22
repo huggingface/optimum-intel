@@ -1923,7 +1923,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
-    SUPPORT_STATEFUL = ("t5", "mt5")
+    SUPPORT_STATEFUL = SUPPORTED_ARCHITECTURES if is_transformers_version(">=", "4.52") else ("t5", "mt5")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

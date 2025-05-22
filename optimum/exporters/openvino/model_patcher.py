@@ -5094,7 +5094,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
 
 
 # Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/decoder_models.py#L367
-def _blenderbot_attn_forward(
+def _blenderbot_attn_forward_legacy(
     self,
     hidden_states: torch.Tensor,
     key_value_states: Optional[torch.Tensor] = None,
@@ -5180,6 +5180,108 @@ def _blenderbot_attn_forward(
     return attn_output, None, past_key_value
 
 
+def _blenderbot_attn_forward_new(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states=None,
+    past_key_value=None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+    cache_position: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    from transformers.cache_utils import EncoderDecoderCache
+
+    """Input shape: Batch x Time x Channel"""
+
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    if output_attentions or layer_head_mask is not None:
+        return self._orig_forward(
+            hidden_states,
+            key_value_states,
+            past_key_value,
+            attention_mask,
+            layer_head_mask,
+            output_attentions,
+            cache_position,
+        )
+    is_cross_attention = key_value_states is not None
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states).view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+    query_states = query_states
+
+    if past_key_value is not None:
+        if isinstance(past_key_value, EncoderDecoderCache):
+            is_updated = past_key_value.is_updated.get(self.layer_idx)
+            if is_cross_attention:
+                # after the first generated id, we can subsequently re-use all key/value_states from cache
+                curr_past_key_value = past_key_value.cross_attention_cache
+            else:
+                curr_past_key_value = past_key_value.self_attention_cache
+        else:
+            curr_past_key_value = past_key_value
+
+    current_states = key_value_states if is_cross_attention else hidden_states
+    if is_cross_attention and past_key_value is not None and is_updated:
+        # reuse k,v, cross_attentions
+        key_states = curr_past_key_value.key_cache[self.layer_idx]
+        value_states = curr_past_key_value.value_cache[self.layer_idx]
+    else:
+        key_states = self.k_proj(current_states)
+        value_states = self.v_proj(current_states)
+        key_states = key_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+        if past_key_value is not None:
+            # save all key/value_states to cache to be re-used for fast auto-regressive generation
+            cache_position = cache_position if not is_cross_attention else None
+            key_states, value_states = curr_past_key_value.update(
+                key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+            )
+            # set flag that curr layer for cross-attn is already updated so we can re-use in subsequent calls
+            if is_cross_attention:
+                past_key_value.is_updated[self.layer_idx] = True
+
+    proj_shape = (bsz, self.num_heads, -1, self.head_dim)
+    query_states = query_states.reshape(*proj_shape)
+    key_states = key_states.reshape(*proj_shape)
+    value_states = value_states.reshape(*proj_shape)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        dropout_p=self.dropout if self.training else 0.0,
+        is_causal=False,
+    )
+
+    if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned aross GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+if is_transformers_version(">=", "4.52"):
+    _blenderbot_attn_forward = _blenderbot_attn_forward_new
+else:
+    _blenderbot_attn_forward = _blenderbot_attn_forward_legacy
+
+
 def modulewise_patch(model, module_cls, patch_forward):
     for _, module in model.named_children():
         if isinstance(module, module_cls):
@@ -5233,6 +5335,14 @@ class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, BlenderbotSmallAttention)
 
 
+class BlenderbotStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotModelPatcher):
+    pass
+
+
+class BlenderbotSmallStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotSmallModelPatcher):
+    pass
+
+
 class PegasusModelPatcher(Seq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -5249,6 +5359,10 @@ class PegasusModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, PegasusAttention)
 
 
+class PegasusStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, PegasusModelPatcher):
+    pass
+
+
 class MarianModelPatcher(Seq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -5263,6 +5377,10 @@ class MarianModelPatcher(Seq2SeqModelPatcher):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_unpatch(self._model, MarianAttention)
+
+
+class MarianStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, MarianModelPatcher):
+    pass
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
