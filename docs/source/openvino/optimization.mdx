@@ -665,7 +665,7 @@ model = OVModelForVisualCausalLM.from_pretrained(
     export=True,
     trust_remote_code=True,
     quantization_config=OVPipelineQuantizationConfig(
-        pipeline_quantization_configs={
+        quantization_configs={
             "lm_model": OVQuantizationConfig(bits=8),
             "text_embeddings_model": OVWeightQuantizationConfig(bits=8),
         },
