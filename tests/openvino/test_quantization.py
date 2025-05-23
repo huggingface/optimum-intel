@@ -998,6 +998,25 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "audio_speech_projection_model": {"int8": 2},
                     },
                 ),
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen2_5_vl",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 14, "int4": 16},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
             ]
         )
 
