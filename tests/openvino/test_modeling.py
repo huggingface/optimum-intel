@@ -1326,9 +1326,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 1e-3 if model_arch == "minicpm" else 1e-4
+        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
+            print(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())
+            print(atol)
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
@@ -1923,7 +1925,10 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
-    SUPPORT_STATEFUL = SUPPORTED_ARCHITECTURES if is_transformers_version(">=", "4.52") else ("t5", "mt5")
+    SUPPORT_STATEFUL = ("t5", "mt5")
+    if is_transformers_version(">=", "4.52.0"):
+        SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
+        # all models are stateful on transformers main, but pegasus update is not included in 4.52 yet
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

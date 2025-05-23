@@ -924,7 +924,9 @@ class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class BioGPTOpenVINOConfig(TextDecoderOnnxConfig):
+class BioGPTOpenVINOConfig(
+    TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOnnxConfig
+):
     # BioGPT does not require position_ids input.
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
