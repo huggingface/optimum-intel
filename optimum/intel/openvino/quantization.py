@@ -695,6 +695,11 @@ class OVCalibrationDatasetBuilder:
             instruction = item[dataset_metadata["inputs"]["instruction"]]
             image_url = item[dataset_metadata["inputs"]["image_url"]]
             image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+            # To avoid large images, resize them keeping the aspect ratio
+            scale_factor = max(image.size[0] / 600, image.size[1] / 600)
+            if scale_factor > 1:
+                new_size = (int(image.size[0] / scale_factor), int(image.size[1] / scale_factor))
+                image = image.resize(new_size)
 
             try:
                 inputs = self.model.preprocess_inputs(
