@@ -640,9 +640,9 @@ class OVCalibrationDatasetBuilder:
         self.model.request = InferRequestWrapper(self.model.request, collected_inputs)
         try:
             for data in tqdm(dataloader, desc="Collecting calibration data", total=num_samples):
-                self.model.generate(**data, max_new_tokens=1)
-                if len(collected_inputs) >= num_samples:
+                if len(collected_inputs) > num_samples:
                     break
+                self.model.generate(**data, max_new_tokens=1)
         finally:
             self.model.request = self.model.request.request
 
@@ -692,6 +692,9 @@ class OVCalibrationDatasetBuilder:
         calibration_data = []
         num_samples = config.num_samples or 32
         for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
+            if len(calibration_data) > num_samples:
+                break
+
             instruction = item[dataset_metadata["inputs"]["instruction"]]
             image_url = item[dataset_metadata["inputs"]["image_url"]]
             image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
@@ -721,9 +724,6 @@ class OVCalibrationDatasetBuilder:
             )
 
             calibration_data.append(language_model_inputs)
-
-            if len(calibration_data) >= num_samples:
-                break
 
         return OVCalibrationDataset({"lm_model": nncf.Dataset(calibration_data)})
 
