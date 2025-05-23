@@ -5202,6 +5202,7 @@ def _blenderbot_attn_forward_legacy(
     return attn_output, None, past_key_value
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v4.52.3/src/transformers/models/blenderbot/modeling_blenderbot.py#L156
 def _blenderbot_attn_forward_new(
     self,
     hidden_states: torch.Tensor,
@@ -5268,9 +5269,12 @@ def _blenderbot_attn_forward_new(
                 past_key_value.is_updated[self.layer_idx] = True
 
     proj_shape = (bsz, self.num_heads, -1, self.head_dim)
+    # difference with original, removed query_states = query_states.reshape(*proj_shape) * self.scale as scale is part of SDPA
     query_states = query_states.reshape(*proj_shape)
     key_states = key_states.reshape(*proj_shape)
     value_states = value_states.reshape(*proj_shape)
+
+    # Difference with original, use SDPA instead of eager attention
 
     attn_output = torch.nn.functional.scaled_dot_product_attention(
         query_states,
