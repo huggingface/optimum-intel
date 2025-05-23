@@ -704,7 +704,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
             ),
             {"model": {"int8": 18, "int4": 23}}
-            if is_transformers_version(">=", "4.49")
+            if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.52")
             else {"model": {"int8": 14, "int4": 25}},
         ),
         (
@@ -720,7 +720,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset=["one two, " * i for i in range(10)],
             ),
             {"model": {"int8": 18, "int4": 23}}
-            if is_transformers_version(">=", "4.49")
+            if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.52")
             else {"model": {"int8": 16, "int4": 24}},
         ),
         (
@@ -996,6 +996,25 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "audio_encoder_model": {"int8": 25},
                         "audio_vision_projection_model": {"int8": 2},
                         "audio_speech_projection_model": {"int8": 2},
+                    },
+                ),
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen2_5_vl",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 14, "int4": 16},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 12},
                     },
                 ),
             ]

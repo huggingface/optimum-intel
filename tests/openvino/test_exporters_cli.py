@@ -638,6 +638,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                         "audio_speech_projection_model": {"int8": 2},
                     },
                 ),
+                (
+                    "image-text-to-text",
+                    "qwen2_5_vl",
+                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {
+                        "lm_model": {"int8": 14, "int4": 16},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
             ]
         )
 
