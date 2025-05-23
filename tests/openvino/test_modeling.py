@@ -2558,7 +2558,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
         if model_arch == "gemma3":
-            patch_update_causal_mask(transformers_model, "4.43.0")
+            patch_update_causal_mask(
+                transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
+                "4.43.0",
+            )
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
@@ -2583,7 +2586,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         # video loader helper only available for transformers >= 4.49
         if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            from transformers.image_utils import load_video
+            if is_transformers_version("<=", "4.52"):
+                from transformers.image_utils import load_video
+            else:
+                from transformers.video_utils import load_video
 
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
@@ -2591,7 +2597,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2)
+            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             transformers_inputs = copy.deepcopy(inputs)
@@ -2715,9 +2721,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
 
-        # video loader helper only available for transformers >= 4.49
-        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            from transformers.image_utils import load_video
+            # video loader helper only available for transformers >= 4.49
+            if is_transformers_version("<=", "4.52"):
+                from transformers.image_utils import load_video
+            else:
+                from transformers.video_utils import load_video
 
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
@@ -2725,7 +2733,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2)
+            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             outputs = model.generate(**inputs, max_new_tokens=10)

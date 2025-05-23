@@ -1518,6 +1518,8 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        model_kwargs = model_kwargs or {}
+        model_kwargs["use_cache"] = True
         if self.patcher_cls is not None:
             return self.patcher_cls(self, model, model_kwargs=model_kwargs)
         # Refer to DecoderModelPatcher.
@@ -1713,7 +1715,7 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return model.language_model
+            return model.language_model if not hasattr(model, "lm_head") else model
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
@@ -1895,6 +1897,17 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
 class MairaOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.46.0")
     SUPPORTS_PAST = True
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.language_model.get_input_embeddings()
+            text_embedding.config = model.language_model.config
+            return text_embedding
+
+        return super().get_model_for_behavior(model, behavior)
 
 
 @register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
@@ -3451,7 +3464,9 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.model.embed_tokens
+            text_embedding = (
+                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
+            )
             text_embedding.config = model.config
             return text_embedding
 
