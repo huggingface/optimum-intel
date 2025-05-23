@@ -2656,8 +2656,11 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.42.0")
-        if hasattr(self._model.model.layers[0].self_attn, "rotary_emb") and hasattr(
-            self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"
+        if (
+            hasattr(self._model, "model")
+            and hasattr(self._model.model, "layers")
+            and hasattr(self._model.model.layers[0].self_attn, "rotary_emb")
+            and hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache")
         ):
             for layer in self._model.model.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
@@ -4296,6 +4299,7 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
             past_key_values=None,
             inputs_embeds=None,
             input_ids=None,
+            use_cache=True,
         ):
             from transformers.cache_utils import DynamicCache
 
@@ -4306,6 +4310,7 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
                 position_ids=position_ids,
                 past_key_values=new_past_key_values,
                 inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
             )
             if past_key_values is not None:
                 result["past_key_values"] = result["past_key_values"].to_legacy_cache()
@@ -4791,7 +4796,10 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         model.__orig_forward = model.forward
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
-        model.forward = model.get_image_features
+        if hasattr(model, "model") and hasattr(model.model, "get_image_features"):
+            model.forward = model.model.get_image_features
+        else:
+            model.forward = model.get_image_features
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4857,12 +4865,18 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         model.__orig_forward = model.forward
-        model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+        if is_transformers_version("<", "4.52"):
+            model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+        else:
+            model.model._orig_update_causual_mask = model.model._update_causal_mask
+            model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, model.model)
 
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
-        def forward(self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds):
+        def forward(
+            self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
+        ):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
@@ -4871,18 +4885,24 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
+            forward_kwargs = {}
 
-            causal_mask = self._update_causal_mask_mm(
-                attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
-            )
+            if is_transformers_version("<", "4.52"):
+                attention_mask = self._update_causal_mask_mm(
+                    attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
+                )
+            else:
+                forward_kwargs["token_type_ids"] = token_type_ids
 
             result = self.__orig_forward(
                 input_ids=None,
-                attention_mask=causal_mask,
+                attention_mask=attention_mask,
                 position_ids=position_ids,
                 cache_position=cache_position,
                 past_key_values=pkv,
                 inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                **forward_kwargs,
             )
             upd_pkv = result["past_key_values"]
             result["past_key_values"] = upd_pkv.to_legacy_cache()
@@ -4894,6 +4914,8 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        if hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
