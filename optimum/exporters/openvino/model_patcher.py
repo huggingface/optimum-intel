@@ -5792,7 +5792,7 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
-        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
+        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
@@ -5800,7 +5800,7 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
-                use_cache=True,
+                use_cache=use_cache,
                 past_key_values=pkv,
             )
             hidden_states = outputs[0]

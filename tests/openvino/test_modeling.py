@@ -2722,26 +2722,27 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
 
-            # video loader helper only available for transformers >= 4.49
-            if is_transformers_version("<=", "4.52"):
-                from transformers.image_utils import load_video
-            else:
-                from transformers.video_utils import load_video
+            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+                # video loader helper only available for transformers >= 4.49
+                if is_transformers_version("<=", "4.52"):
+                    from transformers.image_utils import load_video
+                else:
+                    from transformers.video_utils import load_video
 
-            video_path = hf_hub_download(
-                repo_id="raushan-testing-hf/videos-test",
-                filename="sample_demo_1.mp4",
-                repo_type="dataset",
-                user_agent=http_user_agent(),
-            )
-            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
-            question = "Why is this video funny?"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
-            outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-            outputs = outputs[:, inputs["input_ids"].shape[1] :]
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            self.assertIsInstance(outputs[0], str)
+                video_path = hf_hub_download(
+                    repo_id="raushan-testing-hf/videos-test",
+                    filename="sample_demo_1.mp4",
+                    repo_type="dataset",
+                    user_agent=http_user_agent(),
+                )
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                question = "Why is this video funny?"
+                inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+                outputs = model.generate(**inputs, max_new_tokens=10)
+                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                outputs = outputs[:, inputs["input_ids"].shape[1] :]
+                outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                self.assertIsInstance(outputs[0], str)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
