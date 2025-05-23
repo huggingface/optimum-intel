@@ -5333,18 +5333,12 @@ class BlenderbotModelPatcher(Seq2SeqModelPatcher):
 
             modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
 
-        if is_transformers_version(">=", "4.52.0") and self.real_config.task == "feature_extraction":
-            patch_update_causal_mask(self._model, "4.52.0", inner_model_name="decoder")
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         if is_transformers_version(">=", "4.49.0"):
             from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
             modulewise_unpatch(self._model, BlenderbotAttention)
-
-        if is_transformers_version(">=", "4.52.0") and self.real_config.task == "feature_extraction":
-            unpatch_update_causal_mask(self._model, inner_model_name="decoder")
 
 
 class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
