@@ -3480,6 +3480,13 @@ def llava_next_video_vision_embed_forward(self, pixel_values):
     return selected_image_feature
 
 
+# Modified from https://huggingface.co/microsoft/maira-2/blob/main/modeling_maira2.py#L68
+def maira_vision_embed_forward(self, pixel_values):
+    vision_feature_select_strategy = self.config.vision_feature_select_strategy
+    vision_feature_layer = self.config.vision_feature_layer
+    return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
+
+
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -3489,6 +3496,23 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class MairaImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(maira_vision_embed_forward, model)
 
         super().__init__(config, model, model_kwargs)
 
