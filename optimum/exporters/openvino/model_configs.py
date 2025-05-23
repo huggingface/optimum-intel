@@ -116,6 +116,7 @@ from .model_patcher import (
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
+    MairaImageEmbeddingModelPatcher,
     MarianModelPatcher,
     MarianStatefulSeq2SeqDecoderPatcher,
     MiniCPM3Patcher,
@@ -1914,6 +1915,14 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
             return text_embedding
 
         return super().get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return MairaImageEmbeddingModelPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
