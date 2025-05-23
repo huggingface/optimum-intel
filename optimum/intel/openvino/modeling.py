@@ -50,6 +50,7 @@ from transformers.modeling_outputs import (
     XVectorOutput,
 )
 from transformers.models.clip.modeling_clip import CLIPOutput
+from transformers.utils.hub import PushToHubMixin
 
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
@@ -116,7 +117,7 @@ AUDIO_INPUTS_DOCSTRING = r"""
 """
 
 
-class OVModel(OVBaseModel):
+class OVModel(OVBaseModel, PushToHubMixin):
     base_model_prefix = "openvino_model"
     auto_model_class = AutoModel
 
