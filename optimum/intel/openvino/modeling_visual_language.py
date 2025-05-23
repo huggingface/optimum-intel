@@ -8,7 +8,6 @@ import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from types import MethodType
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -2518,7 +2517,6 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
         if is_transformers_version(">=", "4.45.0"):
             from transformers.models.qwen2_vl.modeling_qwen2_vl import (
-                Qwen2VLForConditionalGeneration,
                 VisionRotaryEmbedding,
             )
 

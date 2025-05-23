@@ -1876,10 +1876,14 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
             behavior = LlavaNextVideoConfigBehavior(behavior)
 
         if behavior == LlavaNextVideoConfigBehavior.MULTI_MODAL_PROJECTOR:
-            return model.multi_modal_projector
+            return (
+                model.multi_modal_projector
+                if hasattr(model, "multi_model_projector")
+                else model.model.multi_modal_projector
+            )
 
         if behavior == LlavaNextVideoConfigBehavior.VISION_RESAMPLER:
-            return model.vision_resampler
+            return model.vision_resampler if hasattr(model, "vision_resampler") else model.model.vision_resampler
 
         return super().get_model_for_behavior(model, behavior)
 

@@ -942,6 +942,9 @@ def _get_multi_modal_submodels_and_export_configs(
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
+    if hasattr(model, "model") and hasattr(model.model, "image_newline"):
+        model.config.image_newline = model.model.image_newline.tolist()
+
     main_config_cls = TasksManager.get_exporter_config_constructor(
         model=model, task=task, exporter="openvino", library_name=library_name
     )
