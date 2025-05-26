@@ -1355,7 +1355,7 @@ class OVQuantizer(OptimumQuantizer):
             if not isinstance(quantization_config, OVQuantizationConfig):
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
             if stateful:
-                logger.warn(
+                logger.warning(
                     "Quantization algorithm does not support optimized stateful models. "
                     "The original model without optimization will be quantized and exported."
                 )

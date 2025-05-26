@@ -158,7 +158,7 @@ class OVBaseDecoderModel(OVModel):
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
         if self.use_cache and not self.stateful:
-            logger.warn(
+            logger.warning(
                 "Provided model does not contain state. It may lead to sub-optimal performance."
                 "Please reexport model with updated OpenVINO version >= 2023.3.0 calling the `from_pretrained` method with original model "
                 "and `export=True` parameter"
