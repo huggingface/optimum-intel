@@ -60,6 +60,7 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
+    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -932,7 +933,9 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
 
-            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
+            # Starting from NNCF 2.17 there is a support for data-free AWQ
+            awq_str = b"Applying data-aware AWQ" if is_nncf_version(">", "2.16") else b"Applying AWQ"
+            self.assertTrue("--awq" not in option or awq_str in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
             self.assertTrue(
