@@ -264,6 +264,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--revision",
+        type=str,
+        help=("Revision of the model to load."),
+    )
+    optional_group.add_argument(
         "--model-kwargs",
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
@@ -332,7 +337,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
 
         if self.args.library is None:
-            # TODO: add revision, subfolder and token to args
+            # TODO: add subfolder and token to args
             library_name = _infer_library_from_model_name_or_path(
                 model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
             )
@@ -427,6 +432,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 self.args.model,
                 cache_dir=self.args.cache_dir,
                 trust_remote_code=self.args.trust_remote_code,
+                revision=self.args.revision,
             )
             if getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS:
                 task = "image-text-to-text"
@@ -473,7 +479,9 @@ class OVExportCommand(BaseOptimumCLICommand):
             else:
                 raise NotImplementedError(f"Quantization isn't supported for class {class_name}.")
 
-            model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
+            model = model_cls.from_pretrained(
+                self.args.model, export=True, quantization_config=quantization_config, revision=self.args.revision
+            )
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
@@ -529,6 +537,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 trust_remote_code=self.args.trust_remote_code,
                 variant=self.args.variant,
                 cache_dir=self.args.cache_dir,
+                revision=self.args.revision,
             )
             model.save_pretrained(self.args.output)
 
@@ -551,6 +560,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 convert_tokenizer=not self.args.disable_convert_tokenizer,
                 library_name=library_name,
                 variant=self.args.variant,
+                revision=self.args.revision,
                 model_kwargs=self.args.model_kwargs,
                 # **input_shapes,
             )
