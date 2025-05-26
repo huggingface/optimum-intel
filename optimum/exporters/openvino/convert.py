@@ -723,7 +723,6 @@ def export_from_model(
                     setattr(model.generation_config, param_name, param_value)
                     setattr(model.config, param_name, None)
 
-        # workaround for https://github.com/huggingface/transformers/issues/37172
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
