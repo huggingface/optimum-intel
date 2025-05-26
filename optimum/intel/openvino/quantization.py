@@ -706,13 +706,7 @@ class OVCalibrationDatasetBuilder:
                     raise tokenizer_error
                 raise value_error
 
-            input_ids = inputs.get("input_ids")
-            position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
-
-            inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
-                **inputs,
-                position_ids=position_ids,
-            )
+            inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(**inputs)
 
             language_model_inputs = self.model.language_model.prepare_inputs(
                 input_ids=None,
