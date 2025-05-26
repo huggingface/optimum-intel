@@ -369,6 +369,7 @@ SKIP_CHECK_TRACE_MODELS = (
     "deepseek",
     "deepseek-v2",
     "deepseek-v3",
+    "esm",
     "levit",
     "llama4",
 )
