@@ -390,6 +390,15 @@ def is_openvino_version(operation: str, version: str):
     return compare_versions(parse(_openvino_version), operation, version)
 
 
+def is_nncf_version(operation: str, version: str):
+    """
+    Compare the current NNCF version to a given reference with an operation.
+    """
+    if not _nncf_available:
+        return False
+    return compare_versions(parse(_nncf_version), operation, version)
+
+
 def is_openvino_tokenizers_version(operation: str, version: str):
     if not is_openvino_available():
         return False
