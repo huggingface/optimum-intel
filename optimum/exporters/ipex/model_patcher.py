@@ -51,7 +51,7 @@ from .modeling_utils import (
 
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
-_TRANSFORMERS_MIN_VERSION = "4.50.0"
+_TRANSFORMERS_MIN_VERSION = "4.51.0"
 _TRANSFORMERS_MAX_VERSION = "4.52.2"
 
 _IPEX_EXPORTED_GENERATION_TASKS = ("text-generation",)
