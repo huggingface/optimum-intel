@@ -566,7 +566,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         )
 
     @classmethod
-    def _from_export(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
