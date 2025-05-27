@@ -1740,6 +1740,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "deberta_v2",
         "distilbert",
         "electra",
+        "esm",
         "flaubert",
         "ibert",
         "mobilebert",

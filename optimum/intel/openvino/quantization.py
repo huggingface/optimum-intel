@@ -640,9 +640,9 @@ class OVCalibrationDatasetBuilder:
         self.model.request = InferRequestWrapper(self.model.request, collected_inputs)
         try:
             for data in tqdm(dataloader, desc="Collecting calibration data", total=num_samples):
-                self.model.generate(**data, max_new_tokens=1)
-                if len(collected_inputs) >= num_samples:
+                if len(collected_inputs) > num_samples:
                     break
+                self.model.generate(**data, max_new_tokens=1)
         finally:
             self.model.request = self.model.request.request
 
@@ -674,7 +674,10 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset(calibration_dataset)
 
     def _prepare_visual_causal_lm_calibration_data(
-        self, config: OVQuantizationConfigBase, dataset: "Dataset"
+        self,
+        config: OVQuantizationConfigBase,
+        dataset: "Dataset",
+        max_image_size: Optional[int] = 600,
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for VLM pipelines.
@@ -692,9 +695,18 @@ class OVCalibrationDatasetBuilder:
         calibration_data = []
         num_samples = config.num_samples or 32
         for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
+            if len(calibration_data) > num_samples:
+                break
+
             instruction = item[dataset_metadata["inputs"]["instruction"]]
             image_url = item[dataset_metadata["inputs"]["image_url"]]
             image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+            if max_image_size is not None:
+                # To avoid large images, resize them keeping the aspect ratio
+                scale_factor = max(image.size[0] / max_image_size, image.size[1] / max_image_size)
+                if scale_factor > 1:
+                    new_size = (int(image.size[0] / scale_factor), int(image.size[1] / scale_factor))
+                    image = image.resize(new_size)
 
             try:
                 inputs = self.model.preprocess_inputs(
@@ -705,13 +717,7 @@ class OVCalibrationDatasetBuilder:
                     raise tokenizer_error
                 raise value_error
 
-            input_ids = inputs.get("input_ids")
-            position_ids = torch.arange(input_ids.size(1)).unsqueeze(0).to(input_ids.device)
-
-            inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(
-                **inputs,
-                position_ids=position_ids,
-            )
+            inputs_embeds, attention_mask, position_ids = self.model.get_multimodal_embeddings(**inputs)
 
             language_model_inputs = self.model.language_model.prepare_inputs(
                 input_ids=None,
@@ -721,9 +727,6 @@ class OVCalibrationDatasetBuilder:
             )
 
             calibration_data.append(language_model_inputs)
-
-            if len(calibration_data) >= num_samples:
-                break
 
         return OVCalibrationDataset({"lm_model": nncf.Dataset(calibration_data)})
 
@@ -1352,7 +1355,7 @@ class OVQuantizer(OptimumQuantizer):
             if not isinstance(quantization_config, OVQuantizationConfig):
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
             if stateful:
-                logger.warn(
+                logger.warning(
                     "Quantization algorithm does not support optimized stateful models. "
                     "The original model without optimization will be quantized and exported."
                 )
