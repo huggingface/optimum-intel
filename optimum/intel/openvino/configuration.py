@@ -316,7 +316,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "lm_model": {
                 "bits": 4,
                 "sym": False,
-                "group_size": 128,
+                "group_size": 64,
                 "dataset": "contextual",
                 "quant_method": OVQuantizationMethod.AWQ,
                 "scale_estimation": True,
