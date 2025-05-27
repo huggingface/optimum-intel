@@ -600,7 +600,7 @@ def export_from_model(
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
         model_type = model.config.export_model_type
     else:
-        model_type = (getattr(model.config, "model_type", None) or "")
+        model_type = getattr(model.config, "model_type", None) or ""
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
