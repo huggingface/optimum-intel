@@ -935,7 +935,7 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.hd_transform_order = model.model.embed_tokens_extend.image_embed.hd_transform_order
         if model.config.img_processor is None:
             model.config.img_processor = model.model.embed_tokens_extend.image_embed.img_processor.config.to_dict()
-    if model_type == "phi4-multimodal":
+    if model_type == "phi4_multimodal":
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
@@ -1295,7 +1295,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="clip-text-model",
+            model_type="clip_text_model",
         )
         text_encoder_export_config = text_encoder_config_constructor(
             pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype

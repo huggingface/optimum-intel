@@ -386,7 +386,7 @@ class OVQuantizerTest(unittest.TestCase):
         ),
         (
             OVModelForMaskedLM,
-            "xlm_roberta",
+            "xlm-roberta",
             OVQuantizationConfig(
                 dtype="int8",
                 dataset="c4",

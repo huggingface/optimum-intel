@@ -847,7 +847,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         export_transformers_version = get_export_transformers_version(model, config)
         if model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"):
             init_cls = OVBloomForCausalLM
-        elif model_type == "gpt-bigcode":
+        elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         else:
             init_cls = cls

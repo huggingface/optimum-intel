@@ -151,20 +151,20 @@ def init_model_configs():
         "transformers",
         "LlavaForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "llava-next", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
         "transformers",
         "LlavaNextForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-vl", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_5_vl", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
     )
 
-    TasksManager._CUSTOM_CLASSES[("pt", "llava-next-video", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
     )
@@ -185,11 +185,11 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "image-text-to-text")] = (
         "transformers",
         "AutoModelForCausalLM",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "automatic-speech-recognition")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForCausalLM",
     )
@@ -285,7 +285,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen2-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -300,7 +300,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
-@register_in_tasks_manager("qwen3-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -926,7 +926,7 @@ class BioGPTOpenVINOConfig(TextDecoderOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-neox-japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "gpt_neox_japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     # GPTNeoxJapanese does not require position_ids input.
@@ -940,7 +940,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-neo",
+    "gpt_neo",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -1227,7 +1227,7 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-neox",
+    "gpt_neox",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -1265,7 +1265,7 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gemma3-text",
+    "gemma3_text",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -1380,7 +1380,7 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="open_clip")
+@register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1415,7 +1415,7 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="open_clip")
+@register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1449,8 +1449,8 @@ class CLIPOpenVINOConfig(CLIPOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="transformers")
-@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="diffusers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     def patch_model_for_export(
@@ -1468,7 +1468,7 @@ class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="transformers")
 class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -1768,7 +1768,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
         return super().generate_dummy_inputs(framework, **kwargs)
 
 
-@register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
 
@@ -1824,7 +1824,7 @@ class LlavaNextVideoConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager(
-    "llava-next-video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
+    "llava_next_video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
 )
 class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.42.0")
@@ -3095,7 +3095,7 @@ class Phi4MMConfigBehavior(str, enum.Enum):
     "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 @register_in_tasks_manager(
-    "phi4-multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
@@ -3402,7 +3402,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3533,7 +3533,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2-5-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
@@ -3616,7 +3616,7 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-bigcode",
+    "gpt_bigcode",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -3705,7 +3705,7 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "deepseek-v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager(
     "deepseek-v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
@@ -3718,7 +3718,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
         return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("got-ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
@@ -4175,7 +4175,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
 
 
 @register_in_tasks_manager(
-    "llama4-text", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "llama4_text", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
