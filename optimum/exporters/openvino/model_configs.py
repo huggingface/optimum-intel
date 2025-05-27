@@ -2322,9 +2322,30 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
 @register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class DcaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+    @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "latent": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("dcae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class DcaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
         }
 
 
