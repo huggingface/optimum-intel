@@ -447,7 +447,7 @@ def export_pytorch(
 
         ts_decoder_kwargs = {}
         model_config = getattr(model, "config", {})
-        model_type = getattr(model_config, "model_type", "").replace("_", "-")
+        model_type = getattr(model_config, "model_type", "")
         if allow_skip_tracing_check(library_name, model_type):
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
@@ -598,9 +598,9 @@ def export_from_model(
         TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
-        model_type = model.config.export_model_type.replace("_", "-")
+        model_type = model.config.export_model_type
     else:
-        model_type = (getattr(model.config, "model_type", None) or "").replace("_", "-")
+        model_type = (getattr(model.config, "model_type", None) or "")
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
@@ -919,7 +919,7 @@ def _get_multi_modal_submodels_and_export_configs(
     models_for_export = {}
     stateful_parts = []
 
-    model_type = model.config.model_type.replace("_", "-")
+    model_type = model.config.model_type
 
     if model_type == "internvl-chat" and preprocessors is not None:
         model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
@@ -977,7 +977,7 @@ def _get_submodels_and_export_configs(
     if (
         not custom_architecture
         and library_name == "transformers"
-        and model.config.model_type.replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+        and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
     ):
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful

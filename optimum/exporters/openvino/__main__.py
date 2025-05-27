@@ -260,7 +260,7 @@ def main_export(
             supported_quant_methods.append("awq")
         do_quant_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
         do_gptq_patching = do_quant_patching and quantization_config["quant_method"] == "gptq"
-        model_type = config.model_type.replace("_", "-")
+        model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
             if custom_export_configs is None:
@@ -318,7 +318,7 @@ def main_export(
             and framework == "pt"
             and (
                 task.startswith("text-generation")
-                or getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+                or getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS
             )
             and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
         ):
@@ -416,9 +416,9 @@ def main_export(
                 model.config.pad_token_id = pad_token_id
 
         if hasattr(model.config, "export_model_type"):
-            model_type = model.config.export_model_type.replace("_", "-")
+            model_type = model.config.export_model_type
         else:
-            model_type = model.config.model_type.replace("_", "-")
+            model_type = model.config.model_type
 
         if (
             not custom_architecture

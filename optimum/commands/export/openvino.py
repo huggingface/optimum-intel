@@ -428,7 +428,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 cache_dir=self.args.cache_dir,
                 trust_remote_code=self.args.trust_remote_code,
             )
-            if getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS:
+            if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
                 task = "image-text-to-text"
 
         if library_name == "diffusers" and quantize_with_dataset:

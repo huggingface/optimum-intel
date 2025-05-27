@@ -1571,7 +1571,7 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
 
 
 def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype):
-    model_type = model_type.replace("_", "-")
+    model_type = model_type
 
     if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
         raise ValueError(

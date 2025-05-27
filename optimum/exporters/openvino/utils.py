@@ -297,9 +297,9 @@ def save_preprocessors(
 ):
     model_name_or_path = config._name_or_path
     if hasattr(config, "export_model_type"):
-        model_type = config.export_model_type.replace("_", "-")
+        model_type = config.export_model_type
     else:
-        model_type = config.model_type.replace("_", "-")
+        model_type = config.model_type
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
         if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:

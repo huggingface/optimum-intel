@@ -843,7 +843,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 model_cache_path, kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_cache_path.parent
             )
 
-        model_type = config.model_type.replace("_", "-")
+        model_type = config.model_type
         export_transformers_version = get_export_transformers_version(model, config)
         if model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"):
             init_cls = OVBloomForCausalLM
