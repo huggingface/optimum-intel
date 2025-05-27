@@ -921,10 +921,10 @@ def _get_multi_modal_submodels_and_export_configs(
 
     model_type = model.config.model_type
 
-    if model_type == "internvl-chat" and preprocessors is not None:
+    if model_type == "internvl_chat" and preprocessors is not None:
         model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
 
-    if model_type == "phi3-v":
+    if model_type == "phi3_v":
         model.config.glb_GN = model.model.vision_embed_tokens.glb_GN.tolist()
         model.config.sub_GN = model.model.vision_embed_tokens.sub_GN.tolist()
 

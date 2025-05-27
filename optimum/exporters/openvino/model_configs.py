@@ -1899,7 +1899,7 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
         return MairaImageEmbeddingModelPatcher(self, model, model_kwargs)
 
 
-@register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
     def __init__(
         self,
@@ -2845,7 +2845,7 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
-@register_in_tasks_manager("phi3-v", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("phi3_v", *["image-text-to-text"], library_name="transformers")
 class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi3VisionConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig

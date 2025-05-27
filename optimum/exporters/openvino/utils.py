@@ -222,10 +222,10 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava_next",
     "llava_next_video",
     "llava-qwen2",
-    "internvl-chat",
+    "internvl_chat",
     "maira2",
     "minicpmv",
-    "phi3-v",
+    "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
     "got_ocr2",
@@ -302,7 +302,7 @@ def save_preprocessors(
         model_type = config.model_type
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
-        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
+        if is_transformers_version(">=", "4.45") and model_type == "phi3_v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
         if (
