@@ -1295,7 +1295,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="clip_text_model",
+            model_type="clip-text",
         )
         text_encoder_export_config = text_encoder_config_constructor(
             pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype

@@ -270,7 +270,7 @@ class OVBaseDecoderModel(OVModel):
         self._save_openvino_config(save_directory)
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,

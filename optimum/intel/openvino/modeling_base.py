@@ -570,7 +570,7 @@ class OVBaseModel(OptimizedModel):
         return model_cache_path
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,

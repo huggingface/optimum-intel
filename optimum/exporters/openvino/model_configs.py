@@ -198,9 +198,9 @@ def init_model_configs():
         "AutoModelForImageTextToText",
     )
 
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
-        "image-text-to-text"
-    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = (
+        TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
+    )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["video-text-to-text"] = "AutoModelForVision2Seq"
 
@@ -1450,7 +1450,6 @@ class CLIPOpenVINOConfig(CLIPOnnxConfig):
 
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
-@register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="diffusers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     def patch_model_for_export(
@@ -1459,7 +1458,6 @@ class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
 class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
     def patch_model_for_export(
