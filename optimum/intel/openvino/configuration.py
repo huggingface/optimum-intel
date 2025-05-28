@@ -353,6 +353,17 @@ _DEFAULT_4BIT_WQ_CONFIG = {
 
 # Default configs for int8 full quantization
 _DEFAULT_INT8_FQ_CONFIGS = {
+    "FacebookAI/roberta-large": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.5,
+    },
+    "google-bert/bert-base-multilingual-uncased": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+    },
     "openai/clip-vit-base-patch16": {
         "dtype": "int8",
         "dataset": "conceptual_captions",
