@@ -58,6 +58,7 @@ from optimum.intel import (
     OVStableDiffusion3Pipeline,
     OVQuantizer,
     OVSanaPipeline,
+    OVPipelineQuantizationConfig,
     OVQuantizationConfig,
     OVMixedQuantizationConfig,
     OVWeightQuantizationConfig,
@@ -72,6 +73,7 @@ from optimum.intel.openvino.configuration import (
     OVQuantizationConfigBase,
     _DEFAULT_4BIT_WQ_CONFIGS,
     _DEFAULT_4BIT_WQ_CONFIG,
+    _quantization_config_from_dict,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
@@ -136,54 +138,18 @@ class OVQuantizerTest(unittest.TestCase):
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET = [
         (
-            OVModelForSpeechSeq2Seq,
-            "whisper",
-            dict(
-                dataset="librispeech",
-                num_samples=1,
-                processor=MODEL_NAMES["whisper"],
-                trust_remote_code=True,
-                smooth_quant_alpha=0.95,
-            ),
-            {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
-            if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
-            (
-                {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
-                if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}, "decoder_with_past": {"int8": 18}}
-            ),
-        ),
-        (
             OVModelForCausalLM,
             "llama",
             dict(
                 dataset="wikitext2",
                 num_samples=1,
                 dtype="f8e4m3",
-                weight_only=False,
             ),
             {
                 "model": 13,
             },
             {
                 "model": {"f8e4m3": 16},
-            },
-        ),
-        (
-            OVModelForCausalLM,
-            "llama",
-            dict(
-                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, weight_only=True, ratio=0.5),
-                full_quantization_config=dict(dtype="f8e4m3", weight_only=False),
-                dataset="wikitext2",
-                num_samples=1,
-            ),
-            {
-                "model": 14,
-            },
-            {
-                "model": {"f8e4m3": 11, "nf4": 5},
             },
         ),
         (
@@ -269,33 +235,9 @@ class OVQuantizerTest(unittest.TestCase):
             },
         ),
         (
-            OVStableDiffusionPipeline,
-            "stable-diffusion",
-            dict(
-                weight_only=False,
-                dataset="conceptual_captions",
-                num_samples=1,
-                processor=MODEL_NAMES["stable-diffusion"],
-                trust_remote_code=True,
-            ),
-            {
-                "unet": 112,
-                "vae_decoder": 0,
-                "vae_encoder": 0,
-                "text_encoder": 0,
-            },
-            {
-                "unet": {"int8": 121},
-                "vae_decoder": {"int8": 42},
-                "vae_encoder": {"int8": 34},
-                "text_encoder": {"int8": 64},
-            },
-        ),
-        (
             OVStableDiffusionXLPipeline,
             "stable-diffusion-xl",
             dict(
-                weight_only=False,
                 dtype="f8e5m2",
                 dataset="laion/220k-GPT4Vision-captions-from-LIVIS",
                 num_samples=1,
@@ -415,6 +357,33 @@ class OVQuantizerTest(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "qwen2_vl",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 13,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 0,
+                        "vision_embeddings_merger_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
+                ),
+            ]
+        )
 
     @staticmethod
     def get_calibration_dataset(
@@ -628,6 +597,11 @@ class OVQuantizerTest(unittest.TestCase):
                 processor = AutoProcessor.from_pretrained(model_id)
                 image = np.random.rand(224, 224, 3).astype(np.uint8)
                 inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
+                ov_model(**inputs)
+            elif model_cls == OVModelForVisualCausalLM:
+                processor = AutoProcessor.from_pretrained(model_id)
+                image = np.random.rand(224, 224, 3).astype(np.uint8)
+                inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
                 ov_model(**inputs)
             else:
                 raise Exception("Unexpected model class.")
@@ -973,31 +947,6 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49.0"):
         LOAD_IN_4_BITS_SCOPE.extend(
             [
-                (
-                    OVModelForVisualCausalLM,
-                    "phi4mm",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=8,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 8, "int4": 42},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 8},
-                        "vision_projection_model": {"int8": 2},
-                        "audio_embeddings_model": {},
-                        "audio_forward_embeddings_model": {"int8": 6},
-                        "audio_encoder_model": {"int8": 25},
-                        "audio_vision_projection_model": {"int8": 2},
-                        "audio_speech_projection_model": {"int8": 2},
-                    },
-                ),
                 (
                     OVModelForVisualCausalLM,
                     "qwen2_5_vl",
@@ -1484,6 +1433,277 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
 
+class OVPipelineQuantizationTest(unittest.TestCase):
+    PIPELINE_QUANTIZATION_SCOPE = [
+        (
+            OVModelForCausalLM,
+            "llama",
+            False,
+            dict(
+                quantization_configs={
+                    "model": dict(
+                        weight_quantization_config=dict(
+                            bits=4,
+                            dtype="nf4",
+                            group_size=16,
+                            dataset="wikitext2",
+                            num_samples=1,
+                            gptq=True,
+                            ratio=0.5,
+                        ),
+                        full_quantization_config=dict(dtype="f8e4m3"),
+                        dataset="wikitext2",
+                        num_samples=1,
+                    ),
+                }
+            ),
+            {
+                "model": 14,
+            },
+            {
+                "model": {"f8e4m3": 11, "nf4": 5},
+            },
+        ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            True,
+            dict(
+                quantization_configs={
+                    "unet": dict(
+                        dtype="f8e4m3",
+                        dataset="laion/filtered-wit",
+                        num_samples=1,
+                        trust_remote_code=True,
+                    ),
+                    "vae_decoder": OVWeightQuantizationConfig(),
+                    "vae_encoder": OVWeightQuantizationConfig(),
+                    "text_encoder": OVWeightQuantizationConfig(),
+                }
+            ),
+            {
+                "unet": 112,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+            },
+            {
+                "unet": {"f8e4m3": 121},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 64},
+            },
+        ),
+    ]
+
+    if is_transformers_version(">", "4.43.0"):
+        PIPELINE_QUANTIZATION_SCOPE.extend(
+            [
+                (
+                    OVStableDiffusion3Pipeline,
+                    "stable-diffusion-3",
+                    False,
+                    dict(
+                        quantization_configs={
+                            "transformer": dict(
+                                dataset="conceptual_captions",
+                                num_samples=1,
+                                quant_method=OVQuantizationMethod.HYBRID,
+                            ),
+                            "vae_decoder": OVWeightQuantizationConfig(),
+                            "vae_encoder": OVWeightQuantizationConfig(),
+                            "text_encoder": OVWeightQuantizationConfig(),
+                        }
+                    ),
+                    {
+                        "transformer": 9,
+                        "vae_decoder": 0,
+                        "vae_encoder": 0,
+                        "text_encoder": 0,
+                        "text_encoder_2": 0,
+                        "text_encoder_3": 0,
+                    },
+                    {
+                        "transformer": {"int8": 65},
+                        "vae_decoder": {"int8": 58},
+                        "vae_encoder": {"int8": 42},
+                        "text_encoder": {"int8": 30},
+                        "text_encoder_2": {"int8": 0},
+                        "text_encoder_3": {"int8": 0},
+                    },
+                ),
+                (
+                    OVModelForSpeechSeq2Seq,
+                    "whisper",
+                    True,
+                    dict(
+                        quantization_configs={
+                            "encoder": dict(smooth_quant_alpha=0.95),
+                            "decoder": dict(smooth_quant_alpha=0.9),
+                        },
+                        dataset="librispeech",
+                        num_samples=1,
+                        processor=MODEL_NAMES["whisper"],
+                        trust_remote_code=True,
+                    ),
+                    {"encoder": 8, "decoder": 12},
+                    {"encoder": {"int8": 8}, "decoder": {"int8": 12}},
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.49.0"):
+        PIPELINE_QUANTIZATION_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "phi4mm",
+                    True,
+                    dict(
+                        quantization_configs={
+                            "lm_model": dict(
+                                bits=4,
+                                group_size=16,
+                                dataset="contextual",
+                                num_samples=1,
+                                ratio=0.8,
+                                sensitivity_metric="mean_activation_magnitude",
+                                quant_method=OVQuantizationMethod.AWQ,
+                                scale_estimation=True,
+                                lora_correction=True,
+                                ignored_scope={
+                                    "patterns": [
+                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))"
+                                        + (
+                                            "/aten::mul/Multiply"
+                                            if is_openvino_version("<", "2025.2")
+                                            else "\\.lora_B\\.speech/aten::linear/MatMul"
+                                        ),
+                                    ],
+                                },
+                            ),
+                            "text_embeddings_model": dict(bits=8, sym=True, weight_only=True),
+                            "audio_encoder_model": dict(bits=8, sym=True, weight_only=True),
+                            "vision_embeddings_model": dict(bits=8, sym=True, weight_only=True),
+                        },
+                        trust_remote_code=True,
+                    ),
+                    {
+                        "lm_model": 0,
+                        "text_embeddings_model": 0,
+                        "audio_encoder_model": 0,
+                        "vision_embeddings_model": 0,
+                        "vision_projection_model": 0,
+                        "audio_embeddings_model": 0,
+                        "audio_forward_embeddings_model": 0,
+                        "audio_vision_projection_model": 0,
+                        "audio_speech_projection_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 60, "int4": 26},
+                        "text_embeddings_model": {"int8": 1},
+                        "audio_encoder_model": {"int8": 25},
+                        "vision_embeddings_model": {"int8": 8},
+                        "vision_projection_model": {},
+                        "audio_embeddings_model": {},
+                        "audio_forward_embeddings_model": {},
+                        "audio_vision_projection_model": {},
+                        "audio_speech_projection_model": {},
+                    },
+                ),
+            ]
+        )
+
+    @parameterized.expand(PIPELINE_QUANTIZATION_SCOPE)
+    def test_ovmodel_pipeline_quantization(
+        self,
+        model_cls,
+        model_name,
+        trust_remote_code,
+        quantization_config,
+        expected_fake_nodes_per_model,
+        expected_num_weight_nodes_per_model,
+    ):
+        def eval_expression_if_possible(expression):
+            try:
+                return eval(expression)
+            except NameError:
+                return expression
+
+        model_id = MODEL_NAMES[model_name]
+        with TemporaryDirectory() as tmp_dir:
+            quantization_config = OVPipelineQuantizationConfig.from_dict(quantization_config)
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+            )
+            model.save_pretrained(tmp_dir)
+
+            model = model_cls.from_pretrained(tmp_dir)
+            check_compression_state_per_model(
+                self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
+            )
+            # Compare the quantization config with the model runtime info
+            for submodel_name, submodel in model.ov_submodels.items():
+                rt_info = submodel.get_rt_info()
+                config = quantization_config.quantization_configs.get(submodel_name)
+                if config is None:
+                    self.assertTrue("nncf" not in rt_info)
+                    continue
+
+                if isinstance(config, OVWeightQuantizationConfig):
+                    sub_configs = [config]
+                    rt_info_keys = ["weight_compression"]
+                elif isinstance(config, OVQuantizationConfig):
+                    sub_configs = [config]
+                    rt_info_keys = ["quantization"]
+                elif isinstance(config, OVMixedQuantizationConfig):
+                    sub_configs = [config.weight_quantization_config, config.full_quantization_config]
+                    rt_info_keys = ["weight_compression", "quantization"]
+                else:
+                    raise ValueError(f"Unsupported config type: {type(config)}")
+
+                for sub_config, rt_info_key in zip(sub_configs, rt_info_keys):
+                    q_rt_info = rt_info["nncf"][rt_info_key]
+                    config_dict = sub_config.to_nncf_dict()
+                    for param_name in q_rt_info:
+                        rt_info_value = q_rt_info[param_name]
+                        if isinstance(rt_info_value, dict):
+                            # For example, ignored scope case
+                            rt_info_value_ = {}
+                            for k, v in rt_info_value.items():
+                                rt_info_value_[k] = eval_expression_if_possible(v.value)
+                            rt_info_value = rt_info_value_
+                        else:
+                            rt_info_value = eval_expression_if_possible(rt_info_value.value)
+
+                        if param_name not in config_dict:
+                            continue
+                        config_value = config_dict[param_name]
+                        if param_name == "advanced_parameters":
+                            from nncf.quantization.advanced_parameters import convert_to_dict_recursively
+
+                            config_value = convert_to_dict_recursively(config_value)
+                        if param_name == "ignored_scope":
+                            if sub_config.quant_method == OVQuantizationMethod.HYBRID:
+                                # For hybrid quantization ignored scope is set dynamically
+                                config_value = {"types": ["Convolution"]}
+                            else:
+                                from nncf.openvino.rt_info import exclude_empty_fields
+
+                                config_value = exclude_empty_fields(dataclasses.asdict(config_value))
+                                config_value = [] if config_value == {} else config_value
+                        if param_name == "backup_mode" and config_value is None:
+                            config_value = "int8_asym"
+                        if param_name == "sensitivity_metric" and config_value is None:
+                            config_value = (
+                                "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
+                            )
+
+                        if config_value is None and rt_info_value is False:
+                            continue
+                        self.assertEqual(config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}")
+
+
 class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("hf-internal-testing/tiny-random-BertForQuestionAnswering",)
 
@@ -1602,6 +1822,35 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ),
         ),
         (OVQuantizationConfig(ignored_scope=nncf.IgnoredScope(names=["op_name"])),),
+        (
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    bits=4,
+                    dtype="nf4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+        ),
+        (
+            OVPipelineQuantizationConfig(
+                quantization_configs={
+                    "model1": OVQuantizationConfig(bits=8, dataset="wikitext2"),
+                    "model2": OVWeightQuantizationConfig(bits=4, group_size=16),
+                    "model3": OVMixedQuantizationConfig(
+                        weight_quantization_config=OVWeightQuantizationConfig(bits=4, dtype="nf4"),
+                        full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", dataset="wikitext2"),
+                    ),
+                }
+            ),
+        ),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
@@ -1631,6 +1880,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
+        (dict(bits=8), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
             dict(bits=8, fast_bias_correction=True, dataset="librispeech"),
             OVQuantizationConfig,
@@ -1653,17 +1903,43 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
+        (dict(bits=8, weight_only=False), OVQuantizationConfig, None),
+        (dict(bits=8, weight_only=True), OVWeightQuantizationConfig, None),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="librispeech", weight_only=True),
+            dict(bits=8, fast_bias_correction=True, dataset="librispeech"),
             OVQuantizationConfig,
             None,
         ),
         (
-            dict(bits=4, dataset="wikitext2", weight_only=True),
+            dict(bits=4, dataset="wikitext2"),
             OVWeightQuantizationConfig,
             None,
         ),
-        (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
+        (dict(bits=8, fast_bias_correction=True), OVQuantizationConfig, None),
+        (
+            dict(
+                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, ratio=0.5),
+                full_quantization_config=dict(dtype="f8e4m3"),
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            OVMixedQuantizationConfig,
+            None,
+        ),
+        (
+            dict(
+                quantization_configs=dict(
+                    model1=dict(bits=8, dataset="wikitext2", weight_only=False),
+                    model2=dict(bits=4, group_size=16),
+                    model3=dict(
+                        weight_quantization_config=dict(bits=4, dtype="nf4"),
+                        full_quantization_config=dict(dtype="f8e4m3", dataset="wikitext2"),
+                    ),
+                )
+            ),
+            OVPipelineQuantizationConfig,
+            None,
+        ),
     )
 
     QUANTIZATION_CONFIGS_WITH_KWARGS = (
@@ -1733,13 +2009,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             ov_config.save_pretrained(tmp_dir)
             loaded_ov_config = OVConfig.from_pretrained(tmp_dir)
-
-            if quantization_config is None:
-                self.assertEqual(loaded_ov_config.quantization_config, None)
-                return
-            for key, value in loaded_ov_config.quantization_config.to_dict().items():
-                initial_value = getattr(ov_config.quantization_config, key)
-                self.assertEqual(value, initial_value)
+            self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
 
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)
     def test_config_from_dict(self, quantization_config: dict, config_type: type, warning_log: Union[str, None]):
@@ -1752,17 +2022,14 @@ class OVQuantizationConfigTest(unittest.TestCase):
         else:
             ov_config = OVConfig(quantization_config=quantization_config)
         self.assertIsInstance(ov_config.quantization_config, config_type)
-        for k, v in quantization_config.items():
-            if hasattr(ov_config.quantization_config, k):
-                self.assertEqual(getattr(ov_config.quantization_config, k), v)
+
+        self.compare_config_dict_to_config_object(quantization_config, ov_config.quantization_config)
 
     @parameterized.expand(DEFAULT_CONFIGURATIONS)
     def test_named_default_configurations(self, config_id: str):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
-        prepared_config = OVModelForCausalLM._prepare_quantization_config(custom_configuration)
-        for field_name, reference_value in custom_configuration.items():
-            value = prepared_config.__getattribute__(field_name)
-            self.assertEqual(value, reference_value)
+        prepared_config = _quantization_config_from_dict(custom_configuration)
+        self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
 
     def test_for_no_short_id_duplicates(self):
         short_ids = set()
@@ -1810,6 +2077,19 @@ class OVQuantizationConfigTest(unittest.TestCase):
             expected_kwargs = {"param1": "value1", "param2": "new_value2", "param3": "value3", dataset_key: None}
 
             mock_method.assert_called_once_with(mock_model, **expected_kwargs)
+
+    def compare_config_dict_to_config_object(self, config_dict: dict, config_obj: OVQuantizationConfigBase):
+        if "quantization_configs" in config_dict:
+            for k, v in config_dict["quantization_configs"].items():
+                self.compare_config_dict_to_config_object(v, getattr(config_obj, "quantization_configs")[k])
+            return
+        for k, v in config_dict.items():
+            if hasattr(config_obj, k):
+                config_v = getattr(config_obj, k)
+                if isinstance(config_v, OVQuantizationConfigBase):
+                    self.compare_config_dict_to_config_object(v, config_v)
+                else:
+                    self.assertEqual(v, config_v)
 
     @staticmethod
     def compare_objects(o1, o2) -> bool:

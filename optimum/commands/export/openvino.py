@@ -410,8 +410,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                         }
                     else:
                         quantization_config = prepare_q_config(self.args)
-            if quantization_config.get("dataset", None):
-                quantization_config["trust_remote_code"] = self.args.trust_remote_code
+            quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
