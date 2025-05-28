@@ -356,7 +356,7 @@ _DEFAULT_INT8_FQ_CONFIGS = {
     "FacebookAI/roberta-large": {
         "dtype": "int8",
         "dataset": "wikitext2",
-        "num_samples": 300,
+        "num_samples": 128,
         "smooth_quant_alpha": 0.5,
     },
     "google-bert/bert-base-multilingual-uncased": {
