@@ -125,6 +125,7 @@ class OVBaseDecoderModel(OVModel):
                 "`compile_only` mode does not support disabling compilation."
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
+
         config.is_encoder_decoder = False
         super().__init__(
             model,
@@ -153,8 +154,6 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
-        if self.is_dynamic and not self._compile_only:
-            self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
         if self.use_cache and not self.stateful:
@@ -210,7 +209,6 @@ class OVBaseDecoderModel(OVModel):
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful or self._compile_only:
             return
-
         pkv_precision = Type.f32
         if not force_fp32:
             device = self._device.upper()
@@ -233,8 +231,6 @@ class OVBaseDecoderModel(OVModel):
             if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
                 self.model = self._get_model_with_updated_pkv_precision(self.model, Type.f32)
                 self._pkv_precision = Type.f32
-                if self.is_dynamic:
-                    self.model = self._reshape(self.model, -1, -1)
                 self.request = None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):

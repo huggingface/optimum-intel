@@ -748,7 +748,7 @@ class OVBaseModel(OptimizedModel):
                 "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.is_dynamic = batch_size == -1 and sequence_length == -1
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
         return self
