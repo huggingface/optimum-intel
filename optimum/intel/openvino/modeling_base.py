@@ -102,7 +102,7 @@ class OVBaseModel(OptimizedModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
             model_dynamic_shapes = model_has_dynamic_inputs(model)
-            if dynamic_shapes ^ model_dynamic_shapes:
+            if dynamic_shapes is not None and dynamic_shapes ^ model_dynamic_shapes:
                 raise ValueError(
                     f"Provided compiled model with {'dynamic' if model_dynamic_shapes else 'static'} shapes but requested to use {'dynamic' if dynamic_shapes else 'static'}. Please set `compile_only=False` or `dynamic_shapes`={model_dynamic_shapes}"
                 )
