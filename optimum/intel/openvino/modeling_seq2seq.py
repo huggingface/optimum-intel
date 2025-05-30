@@ -44,7 +44,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig, OVQuantizer
 from ..utils import is_transformers_version
-from .configuration import OVQuantizationConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
+from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -1352,7 +1352,8 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         compile_only = kwargs.get("compile_only", False)
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        if not compile_only and isinstance(quantization_config, OVQuantizationConfig):
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
+        if not compile_only and is_data_aware_quantization:
             model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
                 model_id, config, load_in_8bit=False, **kwargs
             )
@@ -1441,3 +1442,13 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             "decoder_position_ids": decoder_position_ids,
             "cache_position": cache_position,
         }
+
+    def _get_logits_processor(self, generation_config: GenerationConfig, *args, **kwargs):
+        forced_decoder_ids = generation_config.forced_decoder_ids
+        # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
+        # see for details https://github.com/huggingface/transformers/issues/37172
+        if is_transformers_version(">=", "4.50.0"):
+            generation_config.forced_decoder_ids = None
+        logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
+        generation_config.forced_decoder_ids = forced_decoder_ids
+        return logits_processor
