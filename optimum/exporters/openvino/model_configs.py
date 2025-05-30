@@ -138,6 +138,7 @@ from .model_patcher import (
     Phi4MMVisionEmbeddingsPatcher,
     PhiMoEModelPatcher,
     Qwen2_5_VLVisionEmbMergerPatcher,
+    Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
@@ -301,7 +302,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")

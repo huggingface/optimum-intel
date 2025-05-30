@@ -1981,8 +1981,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
+    # @pytest.mark.run_slow
+    # @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -2008,12 +2008,12 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe(inputs)
+        outputs = pipe(inputs, max_new_tokens=20)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
         ov_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(inputs)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=20)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
