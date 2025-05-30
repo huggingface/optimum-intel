@@ -106,14 +106,16 @@ class OVBaseDecoderModel(OVModel):
         model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        dynamic_shapes = kwargs.pop("dynamic_shapes", None)
         if dynamic_shapes is not None:
-            logger.warning(f"`dynamic_shapes` was set to {dynamic_shapes}, but this value will be ignored as only dynamic shapes are supported.")
+            logger.warning(
+                f"`dynamic_shapes` was set to {dynamic_shapes}, but this value will be ignored as only dynamic shapes are supported."
+            )
 
         compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
@@ -353,7 +355,7 @@ class OVBaseDecoderModel(OVModel):
             **kwargs,
         )
 
-    def reshape(self, batch_size: int, sequence_length: int):
+    def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
 
