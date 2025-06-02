@@ -127,6 +127,7 @@ class OVBaseDecoderModel(OVModel):
             )
 
         config.is_encoder_decoder = False
+
         super().__init__(
             model,
             config,
@@ -155,6 +156,11 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
+
+        # reshape with dynamic shapes is needed for decoder_with_past model to be compatible with inference
+        if not self.stateful and not self._compile_only:
+            self.model = self._reshape(self.model, -1, -1)
+
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
         if self.use_cache and not self.stateful:
@@ -232,6 +238,8 @@ class OVBaseDecoderModel(OVModel):
             if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
                 self.model = self._get_model_with_updated_pkv_precision(self.model, Type.f32)
                 self._pkv_precision = Type.f32
+                if self.is_dynamic and not self._compile_only:
+                    self.model = self._reshape(self.model, -1, -1)
                 self.request = None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -355,7 +363,47 @@ class OVBaseDecoderModel(OVModel):
             **kwargs,
         )
 
-    def reshape(self, *args, **kwargs):
+
+    def _reshape(
+        self,
+        model: openvino.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+
+        if height is not None:
+            logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
+
+        if width is not None:
+            logger.warning(f"`width` set to `{width}` will be ignored during reshaping operation.")
+
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = -1
+            input_name = inputs.get_any_name()
+            if input_name.startswith("past_key_values"):
+                if (len(inputs.partial_shape) == 3 and input_name.endswith("value")) or (
+                    self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio")
+                ):
+                    shapes[inputs][1] = -1
+                else:
+                    shapes[inputs][2] = -1
+            elif input_name.startswith("beam_idx"):
+                shapes[inputs][0] = -1
+            else:
+                shapes[inputs][1] = -1
+        model.reshape(shapes)
+        return model
+    
+
+    def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
 
