@@ -363,7 +363,6 @@ class OVBaseDecoderModel(OVModel):
             **kwargs,
         )
 
-
     def _reshape(
         self,
         model: openvino.Model,
@@ -401,7 +400,6 @@ class OVBaseDecoderModel(OVModel):
                 shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
-    
 
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
