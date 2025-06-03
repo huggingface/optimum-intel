@@ -67,7 +67,7 @@ class IPEXPagedCache(Cache):
         self.max_cache_len = max_cache_len
         self.num_kv_heads = config.num_key_value_heads
         self.num_hidden_layers = config.num_hidden_layers
-        if hasattr(config, "head_dim"):
+        if getattr(config, "head_dim", None) is not None:
             head_size = config.head_dim
         else:
             head_size = config.hidden_size // config.num_attention_heads
