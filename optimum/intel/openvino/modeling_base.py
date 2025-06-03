@@ -75,7 +75,7 @@ class OVBaseModel(OptimizedModel):
         model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = None,
+        dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
