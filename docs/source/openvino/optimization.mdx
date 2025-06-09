@@ -133,8 +133,18 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --quant-mode int8 --dataset contextual ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
         </tr>
@@ -637,3 +647,30 @@ optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode n
 ```
 
 Don't forget to provide a dataset since it is required for the calibration procedure during full quantization.
+
+
+## Pipeline Quantization
+
+There are multimodal pipelines that consist of multiple components, such as Stable Diffusion or Visual Language models. In these cases, there may be a need to apply different quantization methods to different components of the pipeline. For example, you may want to apply int4 data-aware weight-only quantization to a language model in visual-language pipeline, while applying int8 weight-only quantization to other components. In this case you can use the `OVPipelineQuantizationConfig` class to specify the quantization configuration for each component of the pipeline.
+
+For example, the code below quantizes weights and activations of a language model inside InternVL2-1B, compresses weights of a text embedding model and skips any quantization for vision embedding model.
+
+```python
+from optimum.intel import OVModelForVisualCausalLM
+from optimum.intel import OVPipelineQuantizationConfig, OVQuantizationConfig, OVWeightQuantizationConfig
+
+model_id = "OpenGVLab/InternVL2-1B"
+model = OVModelForVisualCausalLM.from_pretrained(
+    model_id,
+    export=True,
+    trust_remote_code=True,
+    quantization_config=OVPipelineQuantizationConfig(
+        quantization_configs={
+            "lm_model": OVQuantizationConfig(bits=8),
+            "text_embeddings_model": OVWeightQuantizationConfig(bits=8),
+        },
+        dataset="contextual",
+        trust_remote_code=True,
+    )
+)
+```
