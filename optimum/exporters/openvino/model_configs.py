@@ -599,6 +599,24 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
 
 
 @register_in_tasks_manager(
+    "bitnet",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class BitnetOpenVINOConfig(LlamaOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
     "exaone",
     *[
         "feature-extraction",

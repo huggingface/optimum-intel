@@ -258,8 +258,11 @@ def main_export(
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
+        if is_openvino_version(">=", "2025.3.0"):
+            supported_quant_methods.append("bitnet")
         do_quant_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
         do_gptq_patching = do_quant_patching and quantization_config["quant_method"] == "gptq"
+        do_bitnet_patching = do_quant_patching and quantization_config["quant_method"] == "bitnet"
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
@@ -356,6 +359,21 @@ def main_export(
                     return model
 
                 GPTQQuantizer.post_init_model = post_init_model
+            if do_bitnet_patching:
+                from transformers.integrations.bitnet import AutoBitLinear, unpack_weights
+                import functools
+
+                orig_load_hook = AutoBitLinear.load_hook
+
+                # rewrite load hook to save original weight
+                @functools.wraps(orig_load_hook)
+                def bitnet_load_hook(self, state_dict, prefix, *args, **kwargs):
+                    if (prefix + "weight") in state_dict and state_dict[prefix + "weight"].dtype != self.weight.dtype:
+                        self.original_weight = state_dict[prefix + "weight"]
+                        state_dict[prefix + "weight"] = unpack_weights(state_dict[prefix + "weight"], dtype=self.weight.dtype).to(torch.device("meta"))
+                    return state_dict
+
+                AutoBitLinear.load_hook = bitnet_load_hook
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
@@ -531,6 +549,8 @@ def main_export(
             torch.cuda.is_available = orig_cuda_check
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
+            if do_bitnet_patching:
+                AutoBitLinear.load_hook = orig_load_hook
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
