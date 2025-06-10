@@ -1,11 +1,12 @@
 name: Build documentation
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
+      - doc-builder*
       - v*-release
-  workflow_dispatch:
 
 jobs:
   build_documentation:
@@ -45,7 +46,6 @@ jobs:
       - name: Setup environment
         run: |
           python -m pip install --upgrade pip
-          python -m ensurepip --upgrade
           python -m pip install --upgrade setuptools
           python -m pip install git+https://github.com/huggingface/doc-builder
           python -m pip install .[quality]
