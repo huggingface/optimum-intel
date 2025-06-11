@@ -383,7 +383,9 @@ def main_export(
 
     try:
         if library_name == "open_clip":
-            model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+            model = _OpenClipForZeroShotImageClassification.from_pretrained(
+                model_name_or_path, cache_dir=cache_dir, revision=revision
+            )
         else:
             model = TasksManager.get_model_from_task(
                 task,
@@ -407,7 +409,7 @@ def main_export(
             if pad_token_id is not None:
                 model.config.pad_token_id = pad_token_id
             else:
-                tok = AutoTokenizer.from_pretrained(model_name_or_path)
+                tok = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
                 pad_token_id = getattr(tok, "pad_token_id", None)
                 if pad_token_id is None:
                     raise ValueError(

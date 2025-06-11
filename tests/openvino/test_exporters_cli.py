@@ -202,9 +202,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
-            if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
+            (
+                {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": 8, "decoder": 12, "decoder_with_past": 25}
+            ),
             (
                 {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
                 if is_transformers_version("<=", "4.36.0")
@@ -216,9 +218,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
-            if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
+            (
+                {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": 8, "decoder": 12, "decoder_with_past": 25}
+            ),
             (
                 {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 11}, "decoder_with_past": {"f8e4m3": 9}}
                 if is_transformers_version("<=", "4.36.0")
@@ -1145,3 +1149,24 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    def test_export_openvino_with_revision(self):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model hf-internal-testing/tiny-random-MistralForCausalLM --revision 7158fab {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            eval(_HEAD_TO_AUTOMODELS["text-generation"]).from_pretrained(tmpdir, compile=False)
+
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                f"optimum-cli export openvino --model hf-internal-testing/tiny-random-MistralForCausalLM --revision 7158fac {tmpdir}",
+                shell=True,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not a valid git identifier", result.stderr)
