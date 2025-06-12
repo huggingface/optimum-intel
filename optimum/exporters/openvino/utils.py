@@ -381,7 +381,7 @@ if is_transformers_version("<", "4.41"):
 def allow_skip_tracing_check(library_name, model_type):
     if is_openvino_version("<", "2025.0.0"):
         return False
-    if library_name == "diffusers":
+    if library_name in ["diffusers", "sentence_transformers"]:
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
 
