@@ -394,6 +394,9 @@ class OVModelForFeatureExtraction(OVModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
+        if "decoder_input_ids" in self.input_names:
+            inputs["decoder_input_ids"] = input_ids
+
         outputs = self._inference(inputs)
         last_hidden_state = (
             torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
