@@ -3769,7 +3769,7 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         seq_len = int(self.compute_lens_change(xs_pad.shape[1]))
         if seq_len <= 0:
             raise ValueError(
-                f"""The squence length after time reduction is invalid: {seq_len}.
+                f"""The sequence length after time reduction is invalid: {seq_len}.
                 Your input feature is too short. Consider filtering out the very
                 short sentence from data loader""",
             )
