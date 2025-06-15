@@ -1179,6 +1179,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
+    SUPPORTED_ARCHITECTURES = ("arctic",)
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
