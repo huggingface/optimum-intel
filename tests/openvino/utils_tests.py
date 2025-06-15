@@ -28,7 +28,7 @@ MODEL_NAMES = {
     "aquila": "katuni4ka/tiny-random-aquilachat",
     "aquila2": "katuni4ka/tiny-random-aquila2",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
-    "arctic": "optimum-internal-testing/tiny-random-snowflake",
+    "arctic": "katuni4ka/tiny-random-snowflake",
     "bge": "BAAI/bge-small-en-v1.5",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
