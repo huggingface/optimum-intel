@@ -77,7 +77,7 @@ MODEL_START_DOCSTRING = r"""
         dynamic_shapes (`bool`, defaults to `True`):
             All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
         ov_config (`Optional[Dict]`, defaults to `None`):
-            The dictionary containing the informations related to the model compilation.
+            The dictionary containing the information related to the model compilation.
         compile (`bool`, defaults to `True`):
             Disable the model compilation during the loading step when set to `False`.
             Can be useful to avoid unnecessary compilation, in the case where the model needs to be statically reshaped, the device modified or if FP16 conversion is enabled.
