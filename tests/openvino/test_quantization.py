@@ -146,7 +146,7 @@ class OVQuantizerTest(unittest.TestCase):
                 dtype="f8e4m3",
             ),
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e4m3": 16},
@@ -171,7 +171,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 7,
+                "model": 8,
             },
             {
                 "model": {"f8e4m3": 8, "nf4": 2},
@@ -196,7 +196,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 7,
+                "model": 8,
             },
             {
                 "model": {"f8e5m2": 8, "nf4": 2},
@@ -212,7 +212,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "int4": 10},
@@ -228,7 +228,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e5m2": 2, "int4": 28},
@@ -245,7 +245,7 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "unet": 174,
+                "unet": 198,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -269,7 +269,7 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "unet": 79,
+                "unet": 87,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -1458,7 +1458,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "nf4": 5},
@@ -1482,7 +1482,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {
-                "unet": 112,
+                "unet": 124,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
