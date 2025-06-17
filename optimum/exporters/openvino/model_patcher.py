@@ -5442,6 +5442,7 @@ class Qwen2MoEPatcher(UpdateCausalMaskModelPatcher):
             modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
         if is_transformers_version(">=", "4.52.0"):
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
 
