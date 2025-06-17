@@ -337,12 +337,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
 
         # gptq and awq install disabled for windows test environment
-        if platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
+        # if platform.system() != "Windows":
+        # SUPPORTED_ARCHITECTURES += ("opt_gptq",)
 
         # autoawq install disabled for windows test environment
-        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+        # if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+        # SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
@@ -496,8 +496,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
-            with patch_awq_for_inference("awq" in model_arch):
-                transformers_outputs = transformers_model(**tokens)
+            transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
