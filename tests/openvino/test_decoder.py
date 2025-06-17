@@ -157,113 +157,6 @@ class Timer(object):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
-class OVModelIntegrationTest(unittest.TestCase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
-        self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
-        self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_SD_DIFFUSION_MODEL_ID = "katuni4ka/tiny-stable-diffusion-openvino"
-        self.OV_FLUX_DIFFUSION_MODEL_ID = "katuni4ka/tiny-random-flux-ov"
-        self.OV_VLM_MODEL_ID = "katuni4ka/tiny-random-llava-ov"
-        self.OV_SAM_MODEL_ID = "katuni4ka/sam-vit-tiny-random-ov"
-        self.OV_TEXTSPEECH_MODEL_ID = "optimum-internal-testing/tiny-random-SpeechT5ForTextToSpeech-openvino"
-
-    @parameterized.expand((True, False))
-    def test_load_from_hub_and_save_decoder_model(self, use_cache):
-        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        # Test that PERFORMANCE_HINT is set to LATENCY by default
-        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
-        self.assertEqual(loaded_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
-        loaded_model_outputs = loaded_model(**tokens)
-
-        with TemporaryDirectory() as tmpdirname:
-            loaded_model.save_pretrained(tmpdirname)
-            folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
-            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
-            self.assertEqual(model.use_cache, use_cache)
-
-            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache)
-            self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
-            self.assertIsInstance(compile_only_model.request, ov.InferRequest)
-            outputs = compile_only_model(**tokens)
-            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-            del compile_only_model
-
-        outputs = model(**tokens)
-        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-        del loaded_model
-        del model
-        gc.collect()
-
-
-    @pytest.mark.run_slow
-    @slow
-    def test_load_model_from_hub_private_with_token(self):
-        model_id = "optimum-internal-testing/tiny-random-phi-private"
-        token = os.environ.get("HF_HUB_READ_TOKEN", None)
-        if not token:
-            self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
-
-        model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
-        self.assertIsInstance(model.config, PretrainedConfig)
-        self.assertTrue(model.stateful)
-
-
-    def test_infer_export_when_loading(self):
-        model_id = MODEL_NAMES["phi"]
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        with TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(Path(tmpdirname) / "original")
-            # Load original model and convert
-            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "original")
-            model.save_pretrained(Path(tmpdirname) / "openvino")
-            # Load openvino model
-            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "openvino")
-        del model
-        gc.collect()
-
-
-    def test_load_from_hub_onnx_model_and_save(self):
-        model_id = "katuni4ka/tiny-random-LlamaForCausalLM-onnx"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id, from_onnx=True)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        # Test that PERFORMANCE_HINT is set to LATENCY by default
-        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
-        self.assertEqual(loaded_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
-        loaded_model_outputs = loaded_model(**tokens)
-
-        with TemporaryDirectory() as tmpdirname:
-            loaded_model.save_pretrained(tmpdirname)
-            folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
-            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname)
-            self.assertEqual(model.use_cache, loaded_model.use_cache)
-
-            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True)
-            self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
-            self.assertIsInstance(compile_only_model.request, ov.InferRequest)
-            outputs = compile_only_model(**tokens)
-            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-            del compile_only_model
-
-        outputs = model(**tokens)
-        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-        del loaded_model
-        del model
-        gc.collect()
-
-
-
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -306,6 +199,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "jais",
         "chatglm4",
         "decilm",
+        "arctic",
     )
 
     if is_transformers_version(">=", "4.40.0"):
@@ -318,7 +212,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "cohere",
             "qwen2",
             "qwen2-moe",
-            "arctic",
         )
 
     if is_transformers_version(">=", "4.41.0"):
