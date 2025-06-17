@@ -137,6 +137,7 @@ from optimum.utils import (
 )
 from optimum.utils.testing_utils import require_diffusers
 
+from transformers.cache_utils import DynamicCache
 
 TENSOR_ALIAS_TO_TYPE = {
     "pt": torch.Tensor,
@@ -1179,7 +1180,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
-    SUPPORTED_ARCHITECTURES = ("arctic",)
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1373,9 +1373,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
-            from transformers.cache_utils import DynamicCache
-
             additional_inputs = {"past_key_values": DynamicCache()}
+
+        if model_arch == "arctic":
+            additional_inputs = {"past_key_values": DynamicCache()}
+
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
