@@ -137,7 +137,6 @@ from optimum.utils import (
 )
 from optimum.utils.testing_utils import require_diffusers
 
-from transformers.cache_utils import DynamicCache
 
 TENSOR_ALIAS_TO_TYPE = {
     "pt": torch.Tensor,
