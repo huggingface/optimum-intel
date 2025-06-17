@@ -1373,9 +1373,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
-            additional_inputs = {"past_key_values": DynamicCache()}
 
-        if model_arch == "arctic":
+            from transformers.cache_utils import DynamicCache
             additional_inputs = {"past_key_values": DynamicCache()}
 
         with patch_awq_for_inference("awq" in model_arch):
