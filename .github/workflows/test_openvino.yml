@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         test-pattern:
-          ["*modeling*", "*diffusion*", "*quantization*", "*export*"]
+          ["*modeling*", "*diffusion*", "*quantization*", "*export*", "*decoder*"]
         transformers-version: ["4.36.0", "latest"]
 
     runs-on: ubuntu-22.04
