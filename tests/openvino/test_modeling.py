@@ -1329,8 +1329,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
-            print(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())
-            print(atol)
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
