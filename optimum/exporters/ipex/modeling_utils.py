@@ -1056,15 +1056,17 @@ class _IPEXLlamaAttention(_IPEXAttention):
                 self.mha_linear_add = LinearAdd(module.o_proj)
 
     def qkv_gemm(self, hidden_states):
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
         if hasattr(self, "concat_qkv"):
             qkv_out = self.concat_qkv(hidden_states)
-            query = qkv_out[:, : self.q_slice].view(-1, self.num_attention_heads, self.head_dim)
-            key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
-            value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
+            query = qkv_out[:, : self.q_slice].view(hidden_shape)
+            key = qkv_out[:, self.q_slice : self.k_slice].view(hidden_shape)
+            value = qkv_out[:, self.k_slice :].view(hidden_shape)
         else:
-            query = self.q_proj(hidden_states).view(-1, self.num_attention_heads, self.head_dim)
-            key = self.k_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
-            value = self.v_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
+            query = self.q_proj(hidden_states).view(hidden_shape)
+            key = self.k_proj(hidden_states).view(hidden_shape)
+            value = self.v_proj(hidden_states).view(hidden_shape)
 
         return query, key, value
 
