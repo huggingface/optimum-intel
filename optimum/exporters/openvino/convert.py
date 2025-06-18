@@ -1173,7 +1173,7 @@ def get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         exporter=exporter,
         library_name="diffusers",
         task="semantic-segmentation",
-        model_type="vae-decoder",
+        model_type="dcae-decoder",
     )
     vae_decoder_export_config = vae_config_constructor(
         vae_decoder.config, int_dtype=int_dtype, float_dtype=float_dtype
