@@ -31,6 +31,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
@@ -95,12 +96,16 @@ TEXT_GENERATION_EXAMPLE = r"""
 """
 
 
+# inheritage from PushToHubMixin added as workaround for transformers>=4.52.0 and nncf<=2.16.0 compatibility
+# during dataset preparatioon nncf checks isinstance(model, PreTrainedModel.__bases__)
+# in transformers 4.52.0 PreTrainedModel does not include GenerationMixin and this check failed for OVModelForCausalLM
+# TO DO: remove it after migration on new nncf
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
     """,
 )
-class OVBaseDecoderModel(OVModel):
+class OVBaseDecoderModel(OVModel, PushToHubMixin):
     def __init__(
         self,
         model: openvino.Model,
@@ -270,7 +275,7 @@ class OVBaseDecoderModel(OVModel):
         self._save_openvino_config(save_directory)
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,

@@ -125,7 +125,7 @@ pattern_prefix = (
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
+        (OVModelForCausalLM, "gpt2", 31, 22),
     )
     # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq and OVStableDiffusionPipeline
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
@@ -146,7 +146,7 @@ class OVQuantizerTest(unittest.TestCase):
                 dtype="f8e4m3",
             ),
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e4m3": 16},
@@ -171,7 +171,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 7,
+                "model": 8,
             },
             {
                 "model": {"f8e4m3": 8, "nf4": 2},
@@ -196,7 +196,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 7,
+                "model": 8,
             },
             {
                 "model": {"f8e5m2": 8, "nf4": 2},
@@ -212,7 +212,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "int4": 10},
@@ -228,7 +228,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e5m2": 2, "int4": 28},
@@ -245,7 +245,7 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "unet": 174,
+                "unet": 198,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -269,7 +269,7 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "unet": 79,
+                "unet": 87,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -677,9 +677,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            {"model": {"int8": 18, "int4": 23}}
-            if is_transformers_version(">=", "4.49")
-            else {"model": {"int8": 14, "int4": 25}},
+            {"model": {"int8": 18, "int4": 23}},
         ),
         (
             OVModelForCausalLM,
@@ -693,9 +691,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            {"model": {"int8": 18, "int4": 23}}
-            if is_transformers_version(">=", "4.49")
-            else {"model": {"int8": 16, "int4": 24}},
+            {"model": {"int8": 18, "int4": 23}},
         ),
         (
             OVModelForCausalLM,
@@ -1470,7 +1466,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "nf4": 5},
@@ -1494,7 +1490,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {
-                "unet": 112,
+                "unet": 124,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,

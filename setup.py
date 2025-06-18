@@ -28,8 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum==1.25.*",
-    "transformers>=4.36,<4.52",
+    "optimum==1.26.*",
+    "transformers>=4.36,<4.53",
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
@@ -68,7 +68,7 @@ EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.16.0"],
     "openvino": ["nncf>=2.16.0", "openvino>=2025.1.0", "openvino-tokenizers>=2025.1.0"],
     "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46"],
-    "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.49,<4.52", "accelerate"],
+    "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.50,<4.53", "accelerate"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
