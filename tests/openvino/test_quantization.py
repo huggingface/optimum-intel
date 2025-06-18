@@ -677,7 +677,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            {"model": {"int8": 18, "int4": 23}},
+            {"model": {"int8": 18, "int4": 23}}
+            if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.52")
+            else {"model": {"int8": 14, "int4": 25}},
         ),
         (
             OVModelForCausalLM,
@@ -691,7 +693,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            {"model": {"int8": 18, "int4": 23}},
+            {"model": {"int8": 18, "int4": 23}}
+            if is_transformers_version(">=", "4.49") and is_transformers_version("<", "4.52")
+            else {"model": {"int8": 16, "int4": 24}},
         ),
         (
             OVModelForCausalLM,
