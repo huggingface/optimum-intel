@@ -584,7 +584,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         return ov_pipeline
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: Dict[str, Any],
