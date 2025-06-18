@@ -92,6 +92,7 @@ from .model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
+    ErnieModelPatcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
@@ -4321,3 +4322,123 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+class ErnieDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.head_dim = getattr(
+            normalized_config, "head_dim", self.hidden_size // self.num_attention_heads
+        )
+        self.num_key_value_heads = getattr(
+            normalized_config, "num_key_value_heads", normalized_config.num_attention_heads
+        )
+        
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_shape = (self.batch_size, self.sequence_length, self.num_key_value_heads, self.head_dim)
+        past_value_shape = (self.batch_size, self.sequence_length, self.num_key_value_heads, self.head_dim)
+        return [
+            (
+                self.random_float_tensor(past_key_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(past_value_shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
+
+@register_in_tasks_manager("ernie", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ErnieDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = ErnieDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("past_key_values")]
+        if self.use_past_in_inputs and self.use_cache_branch is not False:
+            input_names.append("past_key_values")
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                        dummy_input_gen,
+                        input_name,
+                        framework,
+                        input_shapes=kwargs,
+                    )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                )
+
+        # refer to https://github.com/huggingface/optimum/pull/764
+        if (
+            self.use_past_in_inputs
+            and self.PAD_ATTENTION_MASK_TO_PAST
+            and self.use_cache_branch is not False
+            and "attention_mask" in dummy_inputs
+        ):
+            # Obtain the past sequence length from the value instead of the key (Bloom). ChatGLM has seq_len in 0 dim instead of -2
+            seq_len_dim = 1
+            past_present_length = (
+                dummy_inputs["input_ids"].shape[1] + dummy_inputs["past_key_values"][0][1].shape[1]
+            )
+
+            dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
+                dummy_inputs["attention_mask"],
+                desired_length=past_present_length,
+                dim=1,
+                dtype=dummy_inputs["attention_mask"].dtype,
+            )
+
+        return dummy_inputs
+    
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """
+        Fills `input_or_outputs` mapping with past_key_values dynamic axes considering the direction.
+
+        Args:
+            inputs_or_outputs (`Dict[str, Dict[int, str]]`): The mapping to fill.
+            direction (`str`):
+                either "inputs" or "outputs", it specifies whether `input_or_outputs` is the input mapping or the
+                output mapping, this is important for axes naming.
+        """
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + 1"
+            name = "present"
+
+        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 1: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 1: decoder_sequence_name}
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return ErnieModelPatcher(self, model, model_kwargs=model_kwargs)

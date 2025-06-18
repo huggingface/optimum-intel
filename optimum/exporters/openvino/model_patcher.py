@@ -6456,3 +6456,107 @@ class Llama4TextModelPatcher(ModelPatcher):
             if layer.is_moe_layer:
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+def _ernie_core_attn(
+    self,
+    q,
+    k,
+    v,
+    attention_mask=None,
+    attn_mask_start_row_indices=None,
+    seq_length=None,
+):
+    """SDPA attention implementation.
+
+    Args:
+        q (torch.Tensor): Query tensor
+        k (torch.Tensor): Key tensor
+        v (torch.Tensor): Value tensor
+        attention_mask (Optional[torch.Tensor]): Attention mask
+        attn_mask_start_row_indices (Optional[torch.Tensor]): Variable length indices
+        seq_length (Optional[int]): Sequence length
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Attention output and weights
+    """
+    origin_dtype = q.dtype
+
+    q = q.permute(0, 2, 1, 3)
+    k = k.permute(0, 2, 1, 3)
+    v = v.permute(0, 2, 1, 3)
+
+    # Handle GQA case - repeat k and v heads to match q heads
+    if self.is_gqa:
+        # [batch, num_key_value_heads, seq_len, head_dim] -> [batch, num_heads, seq_len, head_dim]
+        repeat_factor = self.num_heads // self.num_key_value_heads
+        k = self.repeat_kv(k, repeat_factor)
+        v = self.repeat_kv(v, repeat_factor)
+
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(torch.float32)
+        attention_mask = attention_mask[:, None, None, :]
+    
+    out = F.scaled_dot_product_attention(
+        q, k, v, attn_mask=attention_mask, dropout_p=self.config.attention_probs_dropout_prob, is_causal=False
+    )
+
+    # combine heads
+    out = out.permute(0, 2, 1, 3)
+    out = out.contiguous().view(out.size(0), out.size(1), -1)
+
+    return out, None
+        
+class ErnieModelPatcher(DecoderModelPatcher):
+    
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        
+        def forward(
+            self,
+            input_ids,
+            position_ids=None,
+            attention_mask=None,
+            attn_mask_start_row_indices=None,
+            token_type_ids=None,
+            inputs_embeds=None,
+            labels=None,
+            use_cache=True,
+            past_key_values=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            **kwargs,
+        ):
+            return self.__orig_forward(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                attn_mask_start_row_indices=attn_mask_start_row_indices,
+                token_type_ids=token_type_ids,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                use_cache=use_cache,
+                past_key_values=past_key_values,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                **kwargs,)
+
+        model.forward = types.MethodType(forward, model)
+
+        super().__init__(config, model, model_kwargs)
+    
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.ernie.layers:
+            layer.self_attn._orig_core_attn = layer.self_attn.core_attn
+            layer.self_attn.core_attn = types.MethodType(_ernie_core_attn, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.ernie.layers:
+            layer.self_attn.core_attn = layer.self_attn._orig_core_attn
