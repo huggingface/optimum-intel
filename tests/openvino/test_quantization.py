@@ -717,6 +717,18 @@ class OVWeightCompressionTest(unittest.TestCase):
                 bits=4,
                 sym=True,
                 group_size=16,
+                quant_method=QuantizationMethod.AWQ,
+            ),
+            {"model": {"int8": 4, "int4": 14}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
