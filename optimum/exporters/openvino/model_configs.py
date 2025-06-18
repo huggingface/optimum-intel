@@ -993,6 +993,30 @@ class BloomOpenVINOConfig(BloomOnnxConfig):
     ) -> "ModelPatcher":
         return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
 
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if is_transformers_version(">=", "4.44"):
+            super().add_past_key_values(inputs_or_outputs, direction)
+        else:
+            if direction not in ["inputs", "outputs"]:
+                raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+            if direction == "inputs":
+                decoder_sequence_name = "past_sequence_length"
+                name = "past_key_values"
+            else:
+                decoder_sequence_name = "past_sequence_length + 1"
+                name = "present"
+
+            for i in range(self._normalized_config.num_layers):
+                inputs_or_outputs[f"{name}.{i}.key"] = {
+                    0: "batch_size x num_heads",
+                    2: decoder_sequence_name,
+                }
+                inputs_or_outputs[f"{name}.{i}.value"] = {
+                    0: "batch_size x num_heads",
+                    1: decoder_sequence_name,
+                }
+
 
 @register_in_tasks_manager(
     "cohere",
@@ -2324,9 +2348,30 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
 @register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class DcaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+    @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "latent": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("dcae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class DcaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
         }
 
 
