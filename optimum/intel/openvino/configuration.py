@@ -118,6 +118,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
+    "Qwen/Qwen2.5-Coder-3B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "Qwen/Qwen3-1.7B": {
         "bits": 4,
         "sym": True,
