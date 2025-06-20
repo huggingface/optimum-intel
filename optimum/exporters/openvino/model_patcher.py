@@ -6456,3 +6456,83 @@ class Llama4TextModelPatcher(ModelPatcher):
             if layer.is_moe_layer:
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class Zamba2ModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        self._model._orig_forward = self._model.forward
+
+        # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
+        def zamba2_forward(self, input_ids, attention_mask, position_ids, past_key_values):
+            from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridDynamicCache
+
+            class CustomZamba2HybridDynamicCache(Zamba2HybridDynamicCache):
+                def __init__(self, config, batch_size: int, conv_states, ssm_states, key_cache, value_cache):
+                    """
+                    Custom Zamba2 cache object that holds conv, SSM, and KV states.
+
+                    Args:
+                        conv_states (torch.Tensor): Cached convolution states.
+                        ssm_states (torch.Tensor): Cached state-space model states.
+                        key_cache (torch.Tensor): Cached keys for attention.
+                        value_cache (torch.Tensor): Cached values for attention.
+                        config (PretrainedConfig): Model configuration object.
+                    """
+                    # Call parent constructor with all required arguments
+                    super().__init__(config=config, batch_size=batch_size)
+                    self.conv_states = conv_states
+                    self.ssm_states = ssm_states
+                    self.key_cache = key_cache
+                    self.value_cache = value_cache
+
+            batch_size = 2
+
+            num_hidden_layers = self.config.num_hidden_layers
+            conv_states = []
+            ssm_states = []
+            key_cache = []
+            value_cache = []
+            # inputs passed in an order of (key, value, conv_state, ssm_state)
+            for idx in range(num_hidden_layers):
+                batch_size = past_key_values[4 * idx].size(0)
+
+                key_cache.append(past_key_values[4 * idx])
+                value_cache.append(past_key_values[4 * idx + 1])
+                conv_states.append(past_key_values[4 * idx + 2])
+                ssm_states.append(past_key_values[4 * idx + 3])
+
+            past_key_values = CustomZamba2HybridDynamicCache(
+                self.config, batch_size, conv_states, ssm_states, key_cache, value_cache
+            )
+
+            causal_lm_output = self._orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+            )
+            outputs = {"logits": causal_lm_output.logits}
+
+            # outputs in an order of (key, value, conv_state, ssm_state)
+            num_states = len(past_key_values.conv_states)
+            for idx in range(num_states):
+                outputs["key_cache.present.{}".format(idx)] = past_key_values.key_cache[idx]
+                outputs["value_cache.present.{}".format(idx)] = past_key_values.value_cache[idx]
+                outputs["conv_states.present.{}".format(idx)] = past_key_values.conv_states[idx]
+                outputs["ssm_states.present.{}".format(idx)] = past_key_values.ssm_states[idx]
+
+            return outputs
+
+        self._model.forward = types.MethodType(zamba2_forward, self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model._orig_forward
