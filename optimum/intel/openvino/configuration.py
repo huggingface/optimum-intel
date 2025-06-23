@@ -578,9 +578,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - "default": default weight quantization will be applied.
                 - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
                   method. AWQ improves generation quality of INT4-compressed LLMs. If dataset is provided, a data-aware
-                  mode of the algorithm will be executed, which requires additional time; otherwise, data-free AWQ will
-                  be applied. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
-                  such case it will be skipped.
+                  activation-based version of the algorithm will be executed, which requires additional time. Otherwise,
+                  data-free AWQ will be applied which relies on per-column magnitudes of weights instead of activations.
+                  Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it
+                  will be skipped.
                 - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
                   activations of other layers, facilitating accuracy preservation post-optimization while reducing
                   the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
