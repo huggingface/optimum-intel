@@ -26,7 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_nncf_version
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
@@ -708,6 +708,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
+
+        if self.dataset is None and self.quant_method == OVQuantizationMethod.AWQ and is_nncf_version("<", "2.17.0"):
+            raise ValueError("Data-free AWQ is available starting form NNCF 2.17. Please update nncf package.")
 
         if self.dtype in ["int4", "int8"]:
             bits = 4 if self.dtype == "int4" else 8
