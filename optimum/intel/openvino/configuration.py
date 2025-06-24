@@ -26,7 +26,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_nncf_version
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
@@ -585,10 +585,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Weight compression method to apply. Possible options:
                 - "default": default weight quantization will be applied.
                 - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
-                  method. AWQ improves generation quality of INT4-compressed LLMs, but requires
-                  additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
-                  required. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
-                  such case it will be skipped.
+                  method. AWQ improves generation quality of INT4-compressed LLMs. If dataset is provided, a data-aware
+                  activation-based version of the algorithm will be executed, which requires additional time. Otherwise,
+                  data-free AWQ will be applied which relies on per-column magnitudes of weights instead of activations.
+                  Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it
+                  will be skipped.
                 - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
                   activations of other layers, facilitating accuracy preservation post-optimization while reducing
                   the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
@@ -715,6 +716,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
+
+        if self.dataset is None and self.quant_method == OVQuantizationMethod.AWQ and is_nncf_version("<", "2.17.0"):
+            raise ValueError("Data-free AWQ is available starting form NNCF 2.17. Please update nncf package.")
 
         if self.dtype in ["int4", "int8"]:
             bits = 4 if self.dtype == "int4" else 8

@@ -186,10 +186,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         default=None,
         help=(
-            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
-            "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
-            "argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such "
-            "case it will be skipped."
+            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs. If dataset is "
+            "provided, a data-aware activation-based version of the algorithm will be executed, which requires "
+            "additional time. Otherwise, data-free AWQ will be applied which relies on per-column magnitudes of "
+            "weights instead of activations. Note: it is possible that there will be no matching patterns in the model "
+            "to apply AWQ, in such case it will be skipped."
         ),
     )
     optional_group.add_argument(
