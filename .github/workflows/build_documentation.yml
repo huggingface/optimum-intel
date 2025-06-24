@@ -14,7 +14,8 @@ jobs:
     with:
       commit_sha: ${{ github.sha }}
       package: optimum-intel
-      version_tag_suffix: main
+      version_tag_suffix: ""
+      additional_args: --version main
     secrets:
       token: ${{ secrets.HUGGINGFACE_PUSH }}
       hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
