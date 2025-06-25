@@ -53,7 +53,7 @@ jobs:
           doc-builder build optimum.intel docs/source/ \
             --repo_name optimum-intel \
             --build_dir intel-doc-build/ \
-            --version ${{ env.VERSION }} \
+            --version main \
             --version_tag_suffix "" \
             --html \
             --clean \
