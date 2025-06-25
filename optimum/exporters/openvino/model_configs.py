@@ -4370,8 +4370,6 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
-
-
 class MambaCacheDummyInputGenerator(DummyInputGenerator):
     """
     Generates dummy past_key_values inputs for seq2seq architectures.
@@ -4508,4 +4506,3 @@ class FalconMambaOpenVINOConfig(MambaOpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
-
