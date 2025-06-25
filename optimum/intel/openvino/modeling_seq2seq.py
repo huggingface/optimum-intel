@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import copy
 import logging
 import os
 from pathlib import Path
@@ -42,9 +41,9 @@ from transformers.utils import http_user_agent
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
-from .. import OVConfig, OVQuantizer
+from .. import OVConfig
 from ..utils import is_transformers_version
-from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
+from .configuration import OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -550,6 +549,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         model = cls(
             encoder=encoder,
             decoder=decoder,
@@ -557,19 +557,20 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            generation_config=generation_config,
             device=device,
             ov_config=ov_config,
             compile_only=compile_only,
             **kwargs,
         )
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         if quantization_config is not None:
             from optimum.intel import OVQuantizer
 
             quantizer = OVQuantizer(model)
             quantization_config_copy = quantization_config.clone()
             quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.processor = quantization_config.processor or model_id
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -1354,27 +1355,9 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         cls,
         model_id: Union[str, Path],
         config: "PretrainedConfig",
-        load_in_8bit: bool = False,
-        quantization_config: Union[dict, OVQuantizationConfigBase] = None,
         **kwargs,
     ):
-        compile_only = kwargs.get("compile_only", False)
-
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
-        if not compile_only and is_data_aware_quantization:
-            model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
-                model_id, config, load_in_8bit=False, **kwargs
-            )
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.processor = quantization_config.processor or model_id
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
-        else:
-            model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
-                model_id, config, load_in_8bit=load_in_8bit, quantization_config=quantization_config, **kwargs
-            )
-
-        return model
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
     class DummyWhisperModel:
         def __init__(self):
