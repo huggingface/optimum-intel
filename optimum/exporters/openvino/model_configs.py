@@ -4506,3 +4506,4 @@ class FalconMambaOpenVINOConfig(MambaOpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
+        return FalconMambaPatcher(self, model, model_kwargs)
