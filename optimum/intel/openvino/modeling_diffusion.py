@@ -22,7 +22,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -49,10 +49,11 @@ from diffusers.utils.constants import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
+from openvino import Core
 from openvino._offline_transformations import compress_model_transformation
-from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 from transformers.modeling_outputs import ModelOutput
+from transformers.utils import http_user_agent
 
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -63,7 +64,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version, is_openvino_version
+from ..utils.import_utils import is_diffusers_version, is_openvino_version, is_transformers_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
@@ -83,6 +84,13 @@ if is_diffusers_version(">=", "0.25.0"):
     from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 else:
     from diffusers.models.vae import DiagonalGaussianDistribution
+
+# Required EncoderDecoderCache object from transformers
+if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45"):
+    from diffusers import LTXPipeline
+else:
+    LTXPipeline = object
+
 
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
@@ -108,6 +116,11 @@ else:
     FluxFillPipeline = object
     SanaPipeline = object
 
+if is_diffusers_version(">=", "0.33.0"):
+    from diffusers import SanaSprintPipeline
+else:
+    SanaSprintPipeline = object
+
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -128,14 +141,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def __init__(
         self,
         scheduler: SchedulerMixin,
-        unet: Optional[openvino.runtime.Model] = None,
-        vae_decoder: Optional[openvino.runtime.Model] = None,
+        unet: Optional[openvino.Model] = None,
+        vae_decoder: Optional[openvino.Model] = None,
         # optional pipeline models
-        vae_encoder: Optional[openvino.runtime.Model] = None,
-        text_encoder: Optional[openvino.runtime.Model] = None,
-        text_encoder_2: Optional[openvino.runtime.Model] = None,
-        text_encoder_3: Optional[openvino.runtime.Model] = None,
-        transformer: Optional[openvino.runtime.Model] = None,
+        vae_encoder: Optional[openvino.Model] = None,
+        text_encoder: Optional[openvino.Model] = None,
+        text_encoder_2: Optional[openvino.Model] = None,
+        text_encoder_3: Optional[openvino.Model] = None,
+        transformer: Optional[openvino.Model] = None,
         # optional pipeline submodels
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
@@ -170,7 +183,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 )
 
             main_model = unet if unet is not None else transformer
-            if not isinstance(main_model, openvino.runtime.CompiledModel):
+            if not isinstance(main_model, openvino.CompiledModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
             model_is_dynamic = model_has_dynamic_inputs(main_model)
@@ -265,7 +278,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.compile()
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.runtime.Model]:
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {name: getattr(getattr(self, name), "model") for name in self._ov_submodel_names}
 
     @property
@@ -293,7 +306,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         """
         if self._compile_only:
             raise ValueError(
-                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`save_pretrained()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         save_directory = Path(save_directory)
@@ -437,6 +450,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 local_files_only=local_files_only,
                 revision=revision,
                 token=token,
+                user_agent=http_user_agent,
                 allow_patterns=allow_patterns,
                 ignore_patterns=ignore_patterns,
             )
@@ -534,7 +548,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         else:
             # why is this quantization not performed in __init__?
             if ov_pipeline_class.export_feature != "text-to-image":
-                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
+                raise NotImplementedError(f"Quantization is not supported for {cls.__name__}")
 
             from optimum.intel import OVQuantizer
 
@@ -548,10 +562,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             # same as in DiffusionPipeline.from_pretrained, we save where the model was instantiated from
             ov_pipeline.register_to_config(_name_or_path=config.get("_name_or_path", str(model_id)))
 
-            hybrid_quantization_config = deepcopy(quantization_config)
-            hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
             quantizer = OVQuantizer(ov_pipeline)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
+            if isinstance(quantization_config, OVWeightQuantizationConfig):
+                hybrid_quantization_config = deepcopy(quantization_config)
+                hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
+                quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
+            else:
+                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
             return ov_pipeline
         ov_pipeline = ov_pipeline_class(
@@ -567,7 +584,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         return ov_pipeline
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: Dict[str, Any],
@@ -665,18 +682,22 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     @property
     def height(self) -> int:
         model = self.vae.decoder.model
-        height = model.inputs[0].get_partial_shape()[2]
+        height = model.inputs[0].get_partial_shape()[-2]
         if height.is_dynamic:
             return -1
-        return height.get_length() * self.vae_scale_factor
+        return height.get_length() * (
+            self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio
+        )
 
     @property
     def width(self) -> int:
         model = self.vae.decoder.model
-        width = model.inputs[0].get_partial_shape()[3]
+        width = model.inputs[0].get_partial_shape()[-1]
         if width.is_dynamic:
             return -1
-        return width.get_length() * self.vae_scale_factor
+        return width.get_length() * (
+            self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio
+        )
 
     @property
     def batch_size(self) -> int:
@@ -688,7 +709,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def _reshape_unet(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int = -1,
         height: int = -1,
         width: int = -1,
@@ -736,12 +757,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def _reshape_transformer(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int = -1,
         height: int = -1,
         width: int = -1,
         num_images_per_prompt: int = -1,
         tokenizer_max_length: int = -1,
+        num_frames: int = -1,
     ):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
@@ -751,11 +773,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if "img_ids" not in {inputs.get_any_name() for inputs in model.inputs}:
                 batch_size *= 2
 
-        height = height // self.vae_scale_factor if height > 0 else height
-        width = width // self.vae_scale_factor if width > 0 else width
-        packed_height = height // 2 if height > 0 else height
-        packed_width = width // 2 if width > 0 else width
-        packed_height_width = packed_width * packed_height if height > 0 and width > 0 else -1
+        is_ltx = self.__class__.__name__.startswith("OVLTX")
+        if is_ltx:
+            height = height // self.vae_spatial_compression_ratio if height > 0 else -1
+            width = width // self.vae_spatial_compression_ratio if width > 0 else -1
+            packed_height_width = width * height * num_frames if height > 0 and width > 0 and num_frames > 0 else -1
+        else:
+            height = height // self.vae_scale_factor if height > 0 else height
+            width = width // self.vae_scale_factor if width > 0 else width
+            packed_height = height // 2 if height > 0 else height
+            packed_width = width // 2 if width > 0 else width
+            packed_height_width = packed_width * packed_height if height > 0 and width > 0 else -1
+
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
@@ -787,22 +816,27 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 )
             elif inputs.get_any_name() == "txt_ids":
                 shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
+            elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
+                shapes[inputs] = inputs.get_partial_shape()
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = -1  # text_encoder_3 may have vary input length
         model.reshape(shapes)
         return model
 
-    def _reshape_text_encoder(
-        self, model: openvino.runtime.Model, batch_size: int = -1, tokenizer_max_length: int = -1
-    ):
+    def _reshape_text_encoder(self, model: openvino.Model, batch_size: int = -1, tokenizer_max_length: int = -1):
         if batch_size != -1:
             shapes = {input_tensor: [batch_size, tokenizer_max_length] for input_tensor in model.inputs}
             model.reshape(shapes)
         return model
 
     def _reshape_vae_encoder(
-        self, model: openvino.runtime.Model, batch_size: int = -1, height: int = -1, width: int = -1
+        self,
+        model: openvino.Model,
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_frames: int = -1,
     ):
         in_channels = self.vae_encoder.config.get("in_channels", None)
         if in_channels is None:
@@ -812,15 +846,29 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Could not identify `in_channels` from the VAE encoder configuration, to statically reshape the VAE encoder please provide a configuration."
                 )
                 self.is_dynamic = True
-        shapes = {model.inputs[0]: [batch_size, in_channels, height, width]}
+        shapes = {
+            model.inputs[0]: [batch_size, in_channels, height, width]
+            if model.inputs[0].get_partial_shape().rank.get_length() == 4
+            else [batch_size, in_channels, num_frames, height, width]
+        }
         model.reshape(shapes)
         return model
 
     def _reshape_vae_decoder(
-        self, model: openvino.runtime.Model, height: int = -1, width: int = -1, num_images_per_prompt: int = -1
+        self,
+        model: openvino.Model,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+        num_frames: int = -1,
     ):
-        height = height // self.vae_scale_factor if height > -1 else height
-        width = width // self.vae_scale_factor if width > -1 else width
+        is_ltx = self.__class__.__name__.startswith("OVLTX")
+        if is_ltx:
+            height = height // self.vae_spatial_compression_ratio if height > 0 else -1
+            width = width // self.vae_spatial_compression_ratio if width > 0 else -1
+        else:
+            height = height // self.vae_scale_factor if height > -1 else height
+            width = width // self.vae_scale_factor if width > -1 else width
         latent_channels = self.vae_decoder.config.get("latent_channels", None)
         if latent_channels is None:
             latent_channels = model.inputs[0].get_partial_shape()[1]
@@ -829,20 +877,18 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     "Could not identify `latent_channels` from the VAE decoder configuration, to statically reshape the VAE decoder please provide a configuration."
                 )
                 self.is_dynamic = True
-        shapes = {model.inputs[0]: [num_images_per_prompt, latent_channels, height, width]}
+        shapes = {
+            model.inputs[0]: [num_images_per_prompt, latent_channels, height, width]
+            if not is_ltx
+            else [num_images_per_prompt, latent_channels, num_frames, height, width]
+        }
         model.reshape(shapes)
         return model
 
-    def reshape(
-        self,
-        batch_size: int,
-        height: int,
-        width: int,
-        num_images_per_prompt: int = -1,
-    ):
+    def reshape(self, batch_size: int, height: int, width: int, num_images_per_prompt: int = -1, num_frames: int = -1):
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
@@ -865,22 +911,34 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
         if self.transformer is not None:
             self.transformer.model = self._reshape_transformer(
-                self.transformer.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+                self.transformer.model,
+                batch_size,
+                height,
+                width,
+                num_images_per_prompt,
+                tokenizer_max_len,
+                num_frames=num_frames,
             )
         self.vae_decoder.model = self._reshape_vae_decoder(
-            self.vae_decoder.model, height, width, num_images_per_prompt
+            self.vae_decoder.model, height, width, num_images_per_prompt, num_frames=num_frames
         )
 
         if self.vae_encoder is not None:
-            self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
+            self.vae_encoder.model = self._reshape_vae_encoder(
+                self.vae_encoder.model, batch_size, height, width, num_frames=num_frames
+            )
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
+                # GemmaTokenizer uses inf as model_max_length, Text Encoder in LTX do not pad input to model_max_length
                 self.text_encoder.model,
                 batch_size,
-                getattr(self.tokenizer, "model_max_length", -1)
-                if "Gemma" not in self.tokenizer.__class__.__name__
-                else -1,
+                (
+                    getattr(self.tokenizer, "model_max_length", -1)
+                    if "Gemma" not in self.tokenizer.__class__.__name__
+                    and not self.__class__.__name__.startswith("OVLTX")
+                    else -1
+                ),
             )
 
         if self.text_encoder_2 is not None:
@@ -889,9 +947,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             )
 
         if self.text_encoder_3 is not None:
-            self.text_encoder_3.model = self._reshape_text_encoder(
-                self.text_encoder_3.model, batch_size, getattr(self.tokenizer_3, "model_max_length", -1)
-            )
+            self.text_encoder_3.model = self._reshape_text_encoder(self.text_encoder_3.model, batch_size, -1)
 
         self.clear_requests()
         return self
@@ -902,7 +958,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         """
         if self._compile_only:
             raise ValueError(
-                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for submodel in self.ov_submodels.values():
@@ -915,33 +971,14 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-
-        for component in [
-            self.unet,
-            self.transformer,
-            self.vae_encoder,
-            self.vae_decoder,
-            self.text_encoder,
-            self.text_encoder_2,
-            self.text_encoder_3,
-        ]:
-            if component is not None:
-                component.request = None
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name).request = None
 
     def compile(self):
-        for component in [
-            self.unet,
-            self.transformer,
-            self.vae_encoder,
-            self.vae_decoder,
-            self.text_encoder,
-            self.text_encoder_2,
-            self.text_encoder_3,
-        ]:
-            if component is not None:
-                component._compile()
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name)._compile()
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
@@ -973,6 +1010,63 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         for k, v in kwargs.items():
             kwargs[k] = np_to_pt_generators(v, self.device)
 
+        height, width = None, None
+        height_idx, width_idx = None, None
+        shapes_overridden = False
+        sig = inspect.signature(self.auto_model_class.__call__)
+        sig_height_idx = list(sig.parameters).index("height") if "height" in sig.parameters else len(sig.parameters)
+        sig_width_idx = list(sig.parameters).index("width") if "width" in sig.parameters else len(sig.parameters)
+        if "height" in kwargs:
+            height = kwargs["height"]
+        elif len(args) > sig_height_idx:
+            height = args[sig_height_idx]
+            height_idx = sig_height_idx
+
+        if "width" in kwargs:
+            width = kwargs["width"]
+        elif len(args) > sig_width_idx:
+            width = args[sig_width_idx]
+            width_idx = sig_width_idx
+
+        if self.height != -1:
+            if height is not None and height != self.height:
+                logger.warning(f"Incompatible height argument provided {height}. Pipeline only support {self.height}.")
+                height = self.height
+            else:
+                height = self.height
+
+            if height_idx is not None:
+                args[height_idx] = height
+            else:
+                kwargs["height"] = height
+
+            shapes_overridden = True
+
+        if self.width != -1:
+            if width is not None and width != self.width:
+                logger.warning(f"Incompatible widtth argument provided {width}. Pipeline only support {self.width}.")
+                width = self.width
+            else:
+                width = self.width
+
+            if width_idx is not None:
+                args[width_idx] = width
+            else:
+                kwargs["width"] = width
+            shapes_overridden = True
+
+        # Sana generates images in specific resolution grid size and then resize to requested size by default, it may contradict with pipeline height / width
+        # Disable this behavior for static shape pipeline
+        if self.auto_model_class.__name__.startswith("Sana") and shapes_overridden:
+            sig_resolution_bining_idx = (
+                list(sig.parameters).index("use_resolution_binning")
+                if "use_resolution_binning" in sig.parameters
+                else len(sig.parameters)
+            )
+            if len(args) > sig_resolution_bining_idx:
+                args[sig_resolution_bining_idx] = False
+            else:
+                kwargs["use_resolution_binning"] = False
         # we use auto_model_class.__call__ here because we can't call super().__call__
         # as OptimizedModel already defines a __call__ which is the first in the MRO
         return self.auto_model_class.__call__(self, *args, **kwargs)
@@ -983,7 +1077,7 @@ class OVPipelinePart(ConfigMixin):
 
     def __init__(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         parent_pipeline: OVDiffusionPipeline,
         model_name: str = "",
     ):
@@ -1069,7 +1163,7 @@ class OVPipelinePart(ConfigMixin):
 
 
 class OVModelTextEncoder(OVPipelinePart):
-    def __init__(self, model: openvino.runtime.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
+    def __init__(self, model: openvino.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
         super().__init__(model, parent_pipeline, model_name)
         self.hidden_states_output_names = [
             name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")
@@ -1177,6 +1271,11 @@ class OVModelTransformer(OVPipelinePart):
         block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: torch.LongTensor = None,
+        num_frames: Optional[int] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        rope_interpolation_scale: Optional[Union[Tuple[float, float, float], torch.Tensor]] = None,
+        video_coords: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ):
@@ -1199,6 +1298,16 @@ class OVModelTransformer(OVPipelinePart):
 
         if encoder_attention_mask is not None:
             model_inputs["encoder_attention_mask"] = encoder_attention_mask
+        if num_frames is not None:
+            model_inputs["num_frames"] = num_frames
+        if height is not None:
+            model_inputs["height"] = height
+        if width is not None:
+            model_inputs["width"] = width
+        if rope_interpolation_scale is not None:
+            if not isinstance(rope_interpolation_scale, torch.Tensor):
+                rope_interpolation_scale = torch.tensor(rope_interpolation_scale)
+            model_inputs["rope_interpolation_scale"] = rope_interpolation_scale
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -1278,12 +1387,16 @@ class OVModelVaeDecoder(OVPipelinePart):
     def forward(
         self,
         latent_sample: Union[np.ndarray, torch.Tensor],
+        timestep: Optional[Union[np.ndarray, torch.Tensor]] = None,
         generator: Optional[torch.Generator] = None,
         return_dict: bool = False,
     ):
         self._compile()
 
         model_inputs = {"latent_sample": latent_sample}
+
+        if timestep is not None:
+            model_inputs["timestep"] = timestep
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -1311,6 +1424,18 @@ class OVModelVae:
     def __init__(self, decoder: OVModelVaeDecoder, encoder: OVModelVaeEncoder):
         self.decoder = decoder
         self.encoder = encoder
+        self.spatial_compression_ratio, self.temporal_compression_ratio = None, None
+        if hasattr(self.decoder.config, "spatio_temporal_scaling"):
+            patch_size = self.decoder.config.patch_size
+            patch_size_t = self.decoder.config.patch_size_t
+            spatio_temporal_scaling = self.decoder.config.spatio_temporal_scaling
+            self.spatial_compression_ratio = patch_size * 2 ** sum(spatio_temporal_scaling)
+            self.temporal_compression_ratio = patch_size_t * 2 ** sum(spatio_temporal_scaling)
+        self.latents_mean, self.latents_std = None, None
+        if hasattr(self.decoder.config, "latents_mean_data"):
+            self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
+        if hasattr(self.decoder.config, "latents_std_data"):
+            self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
 
     @property
     def config(self):
@@ -1547,6 +1672,18 @@ class OVSanaPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaPip
     auto_model_class = SanaPipeline
 
 
+class OVSanaSprintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaSprintPipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = SanaSprintPipeline
+
+
+class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-video"
+    auto_model_class = LTXPipeline
+
+
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
@@ -1594,6 +1731,12 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
     ]
 )
 
+OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
+
+if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45.0"):
+    OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
+    SUPPORTED_OV_PIPELINES.append(OVLTXPipeline)
+
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(
         [
@@ -1621,10 +1764,16 @@ if is_diffusers_version(">=", "0.32.0"):
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana"] = OVSanaPipeline
     SUPPORTED_OV_PIPELINES.append(OVSanaPipeline)
 
+
+if is_diffusers_version(">=", "0.33.0"):
+    SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
     OV_IMAGE2IMAGE_PIPELINES_MAPPING,
     OV_INPAINT_PIPELINES_MAPPING,
+    OV_TEXT2VIDEO_PIPELINES_MAPPING,
 ]
 
 
@@ -1689,3 +1838,9 @@ class OVPipelineForInpainting(OVPipelineForTask):
     auto_model_class = AutoPipelineForInpainting
     ov_pipelines_mapping = OV_INPAINT_PIPELINES_MAPPING
     export_feature = "inpainting"
+
+
+class OVPipelineForText2Video(OVPipelineForTask):
+    auto_model_class = DiffusionPipeline
+    ov_pipelines_mapping = OV_TEXT2VIDEO_PIPELINES_MAPPING
+    export_feature = "text-to-video"

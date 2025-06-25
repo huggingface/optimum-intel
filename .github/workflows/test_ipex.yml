@@ -13,13 +13,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  TRANSFORMERS_IS_CI: true
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        transformers-version: ["4.47.*"]
-        torch-version: ["2.6.0"]
+        transformers-version: ["4.51.0", "4.52.*"]
+        torch-version: ["2.7.0"]
+        test-file: [test_modeling.py, test_pipelines.py, test_modeling_causal_lm.py]
 
     runs-on: ubuntu-22.04
 
@@ -39,10 +43,19 @@ jobs:
           pip install .[ipex,tests] transformers[testing]==${{ matrix.transformers-version }} intel_extension_for_pytorch==${{ matrix.torch-version }}
 
       - name: Install bitsandbytes
+        if: matrix.test-file == 'test_modeling_causal_lm.py'
         run: |
           git clone --branch multi-backend-refactor https://github.com/bitsandbytes-foundation/bitsandbytes.git
           cd bitsandbytes
           pip install .
+
+      - name: Install autoawq
+        if: matrix.test-file == 'test_modeling_causal_lm.py'
+        run: |
+          git clone https://github.com/casper-hansen/AutoAWQ.git
+          cd AutoAWQ
+          pip install .
+          pip uninstall triton -y
 
       - name: Assert versions
         run: |
@@ -52,4 +65,4 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/ipex
+          pytest tests/ipex/${{ matrix.test-file }} -rsx -v

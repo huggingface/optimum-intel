@@ -14,6 +14,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  TRANSFORMERS_IS_CI: true
+
 jobs:
   build:
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
@@ -56,7 +59,7 @@ jobs:
           python -m pip install --upgrade pip
           # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[tests]
+          pip install .[tests,diffusers]
 
       - name: Install openvino-nightly
         if: ${{ matrix.openvino == 'ov-nightly' }}
@@ -78,7 +81,7 @@ jobs:
         if: ${{ matrix.transformers-version != 'latest' }}
         run: pip install transformers==${{ matrix.transformers-version }}
 
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2019' }}
+      - if: ${{ matrix.transformers-version == 'latest' }}
         name: Install auto-gptq, autoawq
         run: |
           pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu

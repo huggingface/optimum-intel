@@ -14,18 +14,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  TRANSFORMERS_IS_CI: true
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         test-pattern:
-          [
-            "*modeling*",
-            "*diffusion*",
-            "*quantization*",
-            "*export*",
-          ]
+          ["*modeling*", "*diffusion*", "*quantization*", "*export*"]
         transformers-version: ["4.36.0", "latest"]
 
     runs-on: ubuntu-22.04
@@ -43,13 +41,13 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,openvino-tokenizers,diffusers,tests] transformers[testing]
+          pip install .[openvino,openvino-tokenizers,diffusers,tests]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
           pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
-      
+
       - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*modeling*'}}
         name: Install auto-gptq, autoawq
         run: |
@@ -75,3 +73,5 @@ jobs:
         name: Test with Pytest (nightly)
         run: |
           pytest tests/openvino/test_modeling_basic.py --durations=0
+        env:
+          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}

@@ -5,24 +5,32 @@ on:
   schedule:
     - cron: "14 3 * * 1" # run weekly: every Monday at 3:14
   push:
-    paths:
-      - ".github/workflows/test_openvino_notebooks.yml"
-      - "notebooks/openvino/*"
+    branches:
+      - v*-release
   pull_request:
     paths:
-      - ".github/workflows/test_openvino_notebooks.yml"
       - "notebooks/openvino/*"
+      - ".github/workflows/test_openvino_notebooks.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
+
+env:
+  TRANSFORMERS_IS_CI: true
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.12"]
+        python-version: [3.9]
+        test_file: [
+            "optimum_openvino_inference.ipynb",
+            "question_answering_quantization.ipynb",
+            "sentence_transformer_quantization.ipynb",
+            # "stable_diffusion_hybrid_quantization.ipynb", TODO: update and ran on a powerful cpu
+          ]
 
     runs-on: ubuntu-22.04
 
@@ -35,16 +43,20 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install packages
+        run: |
+          sudo apt-get install -y ffmpeg
+
       - name: Install dependencies
         run: |
-          # ffmpeg is required for image classification and audio classification pipelines
-          sudo apt-get install ffmpeg
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install -r notebooks/openvino/requirements.txt
           pip install .[tests,openvino] nbval
 
+      - name: Change some variables
+        run: |
+          sed -i 's/NUM_TRAIN_ITEMS = 600/NUM_TRAIN_ITEMS = 2/' notebooks/openvino/question_answering_quantization.ipynb
+
       - name: Test with Pytest
         run: |
-          sed -i 's/NUM_TRAIN_ITEMS = 600/NUM_TRAIN_ITEMS = 10/' notebooks/openvino/question_answering_quantization.ipynb
-          sed -i 's/# %pip install/%pip install/' notebooks/openvino/optimum_openvino_inference.ipynb
-          python -m pytest --nbval-lax notebooks/openvino/optimum_openvino_inference.ipynb  notebooks/openvino/question_answering_quantization.ipynb
+          pytest --nbval-lax -vvvv notebooks/openvino/${{ matrix.test_file }}

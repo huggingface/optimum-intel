@@ -18,17 +18,17 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from transformers import PretrainedConfig
+from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
-from openvino.runtime import Dimension, PartialShape, Symbol
-from openvino.runtime.utils.types import get_element_type
+from openvino import Dimension, PartialShape, Symbol
+from openvino.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.intel.utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available
-from optimum.utils.save_utils import maybe_save_preprocessors
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 
 logger = logging.getLogger(__name__)
@@ -220,6 +220,7 @@ def _get_open_clip_submodels_fn_and_export_configs(
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava-next",
+    "llava-next-video",
     "llava-qwen2",
     "internvl-chat",
     "maira2",
@@ -227,6 +228,13 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi3-v",
     "qwen2-vl",
     "qwen2-5-vl",
+    "got-ocr2",
+    "gemma3",
+    "idefics3",
+    "smolvlm",
+    "phi4mm",
+    "phi4-multimodal",
+    "llama4",
 ]
 
 SSM_MODELS = ["mamba", "falcon-mamba"]
@@ -301,10 +309,10 @@ def save_preprocessors(
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
         if (
             is_transformers_version(">=", "4.45")
-            and model_type in ["llava", "llava-next"]
+            and model_type in ["llava", "llava-next", "llava-next-video"]
             and preprocessors is not None
         ):
-            if getattr(preprocessors[1], "patch_size", None) is None:
+            if len(preprocessors) > 1 and getattr(preprocessors[1], "patch_size", None) is None:
                 preprocessors[1].patch_size = config.vision_config.patch_size
                 preprocessors[1].vision_feature_select_strategy = config.vision_feature_select_strategy
         for processor in preprocessors:
@@ -312,6 +320,9 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+        # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
+        if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
+            (Path(output) / "chat_template.json").unlink()
     else:
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
@@ -335,6 +346,12 @@ COMPLEX_CHAT_TEMPLATES = {
     "{% set image_count = namespace(value=0) %}{% set video_count = namespace(value=0) %}{% for message in messages %}{% if loop.first and message['role'] != 'system' %}<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n{% endif %}<|im_start|>{{ message['role'] }}\n{% if message['content'] is string %}{{ message['content'] }}<|im_end|>\n{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' or 'image' in content or 'image_url' in content %}{% set image_count.value = image_count.value + 1 %}{% if add_vision_id %}Picture {{ image_count.value }}: {% endif %}<|vision_start|><|image_pad|><|vision_end|>{% elif content['type'] == 'video' or 'video' in content %}{% set video_count.value = video_count.value + 1 %}{% if add_vision_id %}Video {{ video_count.value }}: {% endif %}<|vision_start|><|video_pad|><|vision_end|>{% elif 'text' in content %}{{ content['text'] }}{% endif %}{% endfor %}<|im_end|>\n{% endif %}{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n' }}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}",
     # qwen2-vl
     "{% if messages is string %}{{ messages }}{% else %}{% for content in messages %}{% if content['type'] == 'image' or 'image' in content or 'image_url' in content %}<|vision_start|><|image_pad|><|vision_end|>{% elif content['type'] == 'video' or 'video' in content %}<|vision_start|><|video_pad|><|vision_end|>{% elif 'text' in content %}{{ content['text'] }}{% endif %}{% endfor %}{% endif %}": "{% for message in messages %}{{ message['content'] }}{% endfor %}",
+    # falcon3-7b-instruct
+    "{%- if tools %}\n{{- '<|system|>\\n' }}\n{%- if messages[0]['role'] == 'system' %}\n{{- messages[0]['content'] }}\n{%- set remaining_messages = messages[1:] %}\n{%- else %}\n{%- set remaining_messages = messages %}\n{%- endif %}\n{{- 'You are a Falcon assistant skilled in function calling. You are helpful, respectful, and concise.\\n\\n# Tools\\n\\nYou have access to the following functions. You MUST use them to answer questions when needed. For each function call, you MUST return a JSON object inside <tool_call></tool_call> tags.\\n\\n<tools>' + tools|tojson(indent=2) + '</tools>\\n\\n# Output Format\\n\\nYour response MUST follow this format when making function calls:\\n<tool_call>\\n[\\n  {\"name\": \"function_name\", \"arguments\": {\"arg1\": \"value1\", \"arg2\": \"value2\"}},\\n  {\"name\": \"another_function\", \"arguments\": {\"arg\": \"value\"}}\\n]\\n</tool_call>\\nIf no function calls are needed, respond normally without the tool_call tags.\\n' }}\n{%- for message in remaining_messages %}\n{%- if message['role'] == 'user' %}\n{{- '<|user|>\\n' + message['content'] + '\\n' }}\n{%- elif message['role'] == 'assistant' %}\n{%- if message.content %}\n{{- '<|assistant|>\\n' + message['content'] }}\n{%- endif %}\n{%- if message.tool_calls %}\n{{- '\\n<tool_call>\\n' }}\n{{- message.tool_calls|tojson(indent=2) }}\n{{- '\\n</tool_call>' }}\n{%- endif %}\n{{- eos_token + '\\n' }}\n{%- elif message['role'] == 'tool' %}\n{{- '<|assistant|>\\n<tool_response>\\n' + message['content'] + '\\n</tool_response>\\n' }}\n{%- endif %}\n{%- endfor %}\n{{- '<|assistant|>\\n' if add_generation_prompt }}\n{%- else %}\n{%- for message in messages %}\n{%- if message['role'] == 'system' %}\n{{- '<|system|>\\n' + message['content'] + '\\n' }}\n{%- elif message['role'] == 'user' %}\n{{- '<|user|>\\n' + message['content'] + '\\n' }}\n{%- elif message['role'] == 'assistant' %}\n{%- if not loop.last %}\n{{- '<|assistant|>\\n' + message['content'] + eos_token + '\\n' }}\n{%- else %}\n{{- '<|assistant|>\\n' + message['content'] + eos_token }}\n{%- endif %}\n{%- endif %}\n{%- if loop.last and add_generation_prompt %}\n{{- '<|assistant|>\\n' }}\n{%- endif %}\n{%- endfor %}\n{%- endif %}": "{%- for message in messages %}\n{%- if message['role'] == 'system' %}\n{{- '<|system|>\\n' + message['content'] + '\\n' }}\n{%- elif message['role'] == 'user' %}\n{{- '<|user|>\\n' + message['content'] + '\\n' }}\n{%- elif message['role'] == 'assistant' %}\n{%- if not loop.last %}\n{{- '<|assistant|>\\n' + message['content'] + eos_token + '\\n' }}\n{%- else %}\n{{- '<|assistant|>\\n' + message['content'] + eos_token }}\n{%- endif %}\n{%- endif %}\n{%- if loop.last and add_generation_prompt %}\n{{- '<|assistant|>\\n' }}\n{%- endif %}\n{%- endfor %}",
+    # Mistral-7B-Instruct-v0.3
+    '{%- if messages[0]["role"] == "system" %}\n    {%- set system_message = messages[0]["content"] %}\n    {%- set loop_messages = messages[1:] %}\n{%- else %}\n    {%- set loop_messages = messages %}\n{%- endif %}\n{%- if not tools is defined %}\n    {%- set tools = none %}\n{%- endif %}\n{%- set user_messages = loop_messages | selectattr("role", "equalto", "user") | list %}\n\n{#- This block checks for alternating user/assistant messages, skipping tool calling messages #}\n{%- set ns = namespace() %}\n{%- set ns.index = 0 %}\n{%- for message in loop_messages %}\n    {%- if not (message.role == "tool" or message.role == "tool_results" or (message.tool_calls is defined and message.tool_calls is not none)) %}\n        {%- if (message["role"] == "user") != (ns.index % 2 == 0) %}\n            {{- raise_exception("After the optional system message, conversation roles must alternate user/assistant/user/assistant/...") }}\n        {%- endif %}\n        {%- set ns.index = ns.index + 1 %}\n    {%- endif %}\n{%- endfor %}\n\n{{- bos_token }}\n{%- for message in loop_messages %}\n    {%- if message["role"] == "user" %}\n        {%- if tools is not none and (message == user_messages[-1]) %}\n            {{- "[AVAILABLE_TOOLS] [" }}\n            {%- for tool in tools %}\n                {%- set tool = tool.function %}\n                {{- \'{"type": "function", "function": {\' }}\n                {%- for key, val in tool.items() if key != "return" %}\n                    {%- if val is string %}\n                        {{- \'"\' + key + \'": "\' + val + \'"\' }}\n                    {%- else %}\n                        {{- \'"\' + key + \'": \' + val|tojson }}\n                    {%- endif %}\n                    {%- if not loop.last %}\n                        {{- ", " }}\n                    {%- endif %}\n                {%- endfor %}\n                {{- "}}" }}\n                {%- if not loop.last %}\n                    {{- ", " }}\n                {%- else %}\n                    {{- "]" }}\n                {%- endif %}\n            {%- endfor %}\n            {{- "[/AVAILABLE_TOOLS]" }}\n            {%- endif %}\n        {%- if loop.last and system_message is defined %}\n            {{- "[INST] " + system_message + "\\n\\n" + message["content"] + "[/INST]" }}\n        {%- else %}\n            {{- "[INST] " + message["content"] + "[/INST]" }}\n        {%- endif %}\n    {%- elif message.tool_calls is defined and message.tool_calls is not none %}\n        {{- "[TOOL_CALLS] [" }}\n        {%- for tool_call in message.tool_calls %}\n            {%- set out = tool_call.function|tojson %}\n            {{- out[:-1] }}\n            {%- if not tool_call.id is defined or tool_call.id|length != 9 %}\n                {{- raise_exception("Tool call IDs should be alphanumeric strings with length 9!") }}\n            {%- endif %}\n            {{- \', "id": "\' + tool_call.id + \'"}\' }}\n            {%- if not loop.last %}\n                {{- ", " }}\n            {%- else %}\n                {{- "]" + eos_token }}\n            {%- endif %}\n        {%- endfor %}\n    {%- elif message["role"] == "assistant" %}\n        {{- " " + message["content"]|trim + eos_token}}\n    {%- elif message["role"] == "tool_results" or message["role"] == "tool" %}\n        {%- if message.content is defined and message.content.content is defined %}\n            {%- set content = message.content.content %}\n        {%- else %}\n            {%- set content = message.content %}\n        {%- endif %}\n        {{- \'[TOOL_RESULTS] {"content": \' + content|string + ", " }}\n        {%- if not message.tool_call_id is defined or message.tool_call_id|length != 9 %}\n            {{- raise_exception("Tool call IDs should be alphanumeric strings with length 9!") }}\n        {%- endif %}\n        {{- \'"call_id": "\' + message.tool_call_id + \'"}[/TOOL_RESULTS]\' }}\n    {%- else %}\n        {{- raise_exception("Only user and assistant roles are supported, with the exception of an initial optional system message!") }}\n    {%- endif %}\n{%- endfor %}\n': "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{% if (messages[0]['role'] == 'system' and messages|length == 2) %}{{ message['content'] + '[/INST]' }}{% else %}{{ '[INST] ' + message['content'] + '[/INST]' }}{% endif %}{% elif message['role'] == 'assistant' %}{{ ' ' + message['content'] + eos_token }}{% elif (message['role'] == 'system' and messages|length == 2) %}{{ '[INST] ' + message['content'] + ' \n\n' }}{% else %}{{ raise_exception('Only system, user and assistant roles are supported!') }}{% endif %}{% endfor %}",
+    # Qwen3
+    "{%- if tools %}\n    {{- '<|im_start|>system\\n' }}\n    {%- if messages[0].role == 'system' %}\n        {{- messages[0].content + '\\n\\n' }}\n    {%- endif %}\n    {{- \"# Tools\\n\\nYou may call one or more functions to assist with the user query.\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>\" }}\n    {%- for tool in tools %}\n        {{- \"\\n\" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- \"\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\\"name\\\": <function-name>, \\\"arguments\\\": <args-json-object>}\\n</tool_call><|im_end|>\\n\" }}\n{%- else %}\n    {%- if messages[0].role == 'system' %}\n        {{- '<|im_start|>system\\n' + messages[0].content + '<|im_end|>\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}\n{%- for message in messages[::-1] %}\n    {%- set index = (messages|length - 1) - loop.index0 %}\n    {%- if ns.multi_step_tool and message.role == \"user\" and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}\n        {%- set ns.multi_step_tool = false %}\n        {%- set ns.last_query_index = index %}\n    {%- endif %}\n{%- endfor %}\n{%- for message in messages %}\n    {%- if (message.role == \"user\") or (message.role == \"system\" and not loop.first) %}\n        {{- '<|im_start|>' + message.role + '\\n' + message.content + '<|im_end|>' + '\\n' }}\n    {%- elif message.role == \"assistant\" %}\n        {%- set content = message.content %}\n        {%- set reasoning_content = '' %}\n        {%- if message.reasoning_content is defined and message.reasoning_content is not none %}\n            {%- set reasoning_content = message.reasoning_content %}\n        {%- else %}\n            {%- if '</think>' in message.content %}\n                {%- set content = message.content.split('</think>')[-1].lstrip('\\n') %}\n                {%- set reasoning_content = message.content.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') %}\n            {%- endif %}\n        {%- endif %}\n        {%- if loop.index0 > ns.last_query_index %}\n            {%- if loop.last or (not loop.last and reasoning_content) %}\n                {{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content.strip('\\n') + '\\n</think>\\n\\n' + content.lstrip('\\n') }}\n            {%- else %}\n                {{- '<|im_start|>' + message.role + '\\n' + content }}\n            {%- endif %}\n        {%- else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n        {%- endif %}\n        {%- if message.tool_calls %}\n            {%- for tool_call in message.tool_calls %}\n                {%- if (loop.first and content) or (not loop.first) %}\n                    {{- '\\n' }}\n                {%- endif %}\n                {%- if tool_call.function %}\n                    {%- set tool_call = tool_call.function %}\n                {%- endif %}\n                {{- '<tool_call>\\n{\"name\": \"' }}\n                {{- tool_call.name }}\n                {{- '\", \"arguments\": ' }}\n                {%- if tool_call.arguments is string %}\n                    {{- tool_call.arguments }}\n                {%- else %}\n                    {{- tool_call.arguments | tojson }}\n                {%- endif %}\n                {{- '}\\n</tool_call>' }}\n            {%- endfor %}\n        {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if loop.first or (messages[loop.index0 - 1].role != \"tool\") %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- message.content }}\n        {{- '\\n</tool_response>' }}\n        {%- if loop.last or (messages[loop.index0 + 1].role != \"tool\") %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n    {%- if enable_thinking is defined and enable_thinking is false %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n    {%- endif %}\n{%- endif %}": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}",
 }
 
 
@@ -345,18 +362,47 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
     if processor_chat_template is not None:
         tokenizer_chat_template = processor_chat_template
         ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
-
     if tokenizer_chat_template is not None and tokenizer_chat_template in COMPLEX_CHAT_TEMPLATES:
         ov_tokenizer_model.set_rt_info(COMPLEX_CHAT_TEMPLATES[tokenizer_chat_template], "simplified_chat_template")
     return ov_tokenizer_model
 
 
-SKIP_CHECK_TRACE_MODELS = ("deepseek", "deepseek-v2", "deepseek-v3")
+SKIP_CHECK_TRACE_MODELS = (
+    "deepseek",
+    "deepseek-v2",
+    "deepseek-v3",
+    "esm",
+    "levit",
+    "llama4",
+)
+
+if is_transformers_version("<", "4.41"):
+    SKIP_CHECK_TRACE_MODELS += ("gemma",)
 
 
 def allow_skip_tracing_check(library_name, model_type):
     if is_openvino_version("<", "2025.0.0"):
         return False
-    if library_name == "diffusers":
+    if library_name in ["diffusers", "sentence_transformers"]:
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
+
+
+# TO DO: load_preprocessors should be removed once this is included in https://github.com/huggingface/optimum/blob/fa87c66967595b8af4de529500868840a3443611/optimum/utils/save_utils.py#L27 (
+def load_preprocessors(
+    src_name_or_path: Union[str, Path], subfolder: str = "", trust_remote_code: bool = False, model_type: str = None
+):
+    preprocessors = maybe_load_preprocessors(
+        src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+    )
+    if model_type == "phi4mm":
+        # audio feature extractor config overrides image processor config during saving, need to save it explicitly
+        try:
+            preprocessors.append(
+                AutoImageProcessor.from_pretrained(
+                    src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception:
+            pass
+    return preprocessors

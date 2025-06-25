@@ -32,6 +32,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
@@ -41,10 +42,10 @@ from ...exporters.openvino.utils import SSM_MODELS
 from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
+    _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVWeightQuantizationConfig,
-    _check_default_4bit_configs,
-    get_default_int4_config,
+    get_default_quantization_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
@@ -102,6 +103,10 @@ TEXT_GENERATION_EXAMPLE = r"""
 """
 
 
+# inheritage from PushToHubMixin added as workaround for transformers>=4.52.0 and nncf<=2.16.0 compatibility
+# during dataset preparatioon nncf checks isinstance(model, PreTrainedModel.__bases__)
+# in transformers 4.52.0 PreTrainedModel does not include GenerationMixin and this check failed for OVModelForCausalLM
+# TO DO: remove it after migration on new nncf
 def has_cache_inputs(model):
     return any(
         "past_key_values" in key.get_any_name()
@@ -110,16 +115,15 @@ def has_cache_inputs(model):
         for key in model.inputs
     )
 
-
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
     """,
 )
-class OVBaseDecoderModel(OVModel):
+class OVBaseDecoderModel(OVModel, PushToHubMixin):
     def __init__(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -167,7 +171,6 @@ class OVBaseDecoderModel(OVModel):
         self.ssm_cache_output_names = [key for key in self.output_names if "present_ssm_states" in key]
         self.conv_cache_output_names = [key for key in self.output_names if "present_conv_states" in key]
         # Keeping the original model for serialization
-        self._original_model = self.model.clone() if not compile_only else None
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
         self._past_length = 0
@@ -179,7 +182,7 @@ class OVBaseDecoderModel(OVModel):
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
         if self.use_cache and not self.stateful:
-            logger.warn(
+            logger.warning(
                 "Provided model does not contain state. It may lead to sub-optimal performance."
                 "Please reexport model with updated OpenVINO version >= 2023.3.0 calling the `from_pretrained` method with original model "
                 "and `export=True` parameter"
@@ -217,6 +220,17 @@ class OVBaseDecoderModel(OVModel):
         if not self._compile_only and enable_compilation:
             self.compile()
 
+    @staticmethod
+    def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
+        ppp = PrePostProcessor(model)
+        for key in model.inputs:
+            if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
+                ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
+        for key in model.outputs:
+            if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
+                ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
+        return ppp.build()
+
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful or self._compile_only:
             return
@@ -236,20 +250,13 @@ class OVBaseDecoderModel(OVModel):
                 if inference_precision_hint in STR_TO_OV_TYPE:
                     pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
 
-            ppp = PrePostProcessor(self.model)
-            for key in self.model.inputs:
-                if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
-                    ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
-            for key in self.model.outputs:
-                if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
-                    ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
-
-            self.model = ppp.build()
+            self.model = self._get_model_with_updated_pkv_precision(self.model, pkv_precision)
             self._pkv_precision = pkv_precision
+            self.request = None
         else:
             if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
+                self.model = self._get_model_with_updated_pkv_precision(self.model, Type.f32)
                 self._pkv_precision = Type.f32
-                self.model = self._original_model.clone()
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
@@ -266,9 +273,13 @@ class OVBaseDecoderModel(OVModel):
 
         if self._compile_only:
             raise ValueError(
-                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`save_pretrained()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
+        model_to_save = (
+            self.model
+            if self._pkv_precision == Type.f32
+            else self._get_model_with_updated_pkv_precision(self.model.clone(), Type.f32)
+        )
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
@@ -283,7 +294,7 @@ class OVBaseDecoderModel(OVModel):
         self._save_openvino_config(save_directory)
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
@@ -373,7 +384,7 @@ class OVBaseDecoderModel(OVModel):
 
     def _reshape(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int,
         sequence_length: int,
         height: int = None,
@@ -381,7 +392,7 @@ class OVBaseDecoderModel(OVModel):
     ):
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         if height is not None:
@@ -566,10 +577,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if self._first_iter_beam_search:
             inputs, duplication_indices = self._deduplicate_inputs(inputs)
+
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         if self.stateful:
             # Need a marker to differentiate the first generate iteration from the others in
             # the first condition at the function beginning above.
@@ -580,7 +592,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not self.stateful:
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-                past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+                past_key_values = tuple(
+                    np.copy(self.request.get_tensor(key).data) for key in self.key_value_output_names
+                )
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
                     self.config.model_type == "falcon" and self.config.new_decoder_architecture
                 ):
@@ -865,11 +879,20 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            quantization_config = get_default_int4_config(config.name_or_path)
-            if quantization_config.get("dataset", None) is not None:
-                quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
-
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+            default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
+            quantization_config = cls._prepare_quantization_config(
+                default_config or _DEFAULT_4BIT_WQ_CONFIG, load_in_8bit
+            )
+            if quantization_config.dataset is not None:
+                quantization_config.trust_remote_code = kwargs.get("trust_remote_code", False)
+        else:
+            quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.bits == 4:
+                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
+                if default_config:
+                    logger.info(
+                        f"For the given model, we recommend the following `quantization_config` : {default_config}"
+                    )
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
 
@@ -910,17 +933,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             if compile_only:
                 raise ValueError(
-                    "quantization is not supported with `compile_only` mode, please intialize model without this option"
+                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
                 )
 
             from optimum.intel.openvino.quantization import OVQuantizer
-
-            default_config = _check_default_4bit_configs(config.name_or_path)
-
-            if default_config:
-                logger.info(
-                    f"For the given model, we recommend the following `quantization_config` : {default_config}"
-                )
 
             quantizer = OVQuantizer(causal_model)
             quantization_config_copy = copy.deepcopy(quantization_config)

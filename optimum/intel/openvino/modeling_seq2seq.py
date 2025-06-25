@@ -16,40 +16,48 @@ import logging
 import os
 from pathlib import Path
 from tempfile import gettempdir
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
 import torch
-import transformers
-from openvino.runtime import Core
+from huggingface_hub import snapshot_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from openvino import Core
+from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     AutoModelForVision2Seq,
+    GenerationConfig,
     Pix2StructForConditionalGeneration,
+    PretrainedConfig,
     WhisperForConditionalGeneration,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
+from transformers.utils import http_user_agent
 
+from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig, OVQuantizer
 from ..utils import is_transformers_version
-from .configuration import OVQuantizationConfig, OVQuantizationConfigBase
-from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
-from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
+from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
+from .modeling_base import OVBaseModel
+from .utils import (
+    ONNX_DECODER_NAME,
+    ONNX_DECODER_WITH_PAST_NAME,
+    ONNX_ENCODER_NAME,
+    OV_DECODER_NAME,
+    OV_DECODER_WITH_PAST_NAME,
+    OV_ENCODER_NAME,
+    OV_TO_PT_TYPE,
+    TemporaryDirectory,
+    _print_compiled_model_properties,
+)
 
-
-if is_transformers_version(">=", "4.43.0"):
-    from transformers.cache_utils import EncoderDecoderCache
-else:
-    EncoderDecoderCache = dict
-
-if TYPE_CHECKING:
-    from transformers import PretrainedConfig
 
 core = Core()
 
@@ -59,11 +67,11 @@ _TOKENIZER_FOR_DOC = "AutoTokenizer"
 
 INPUTS_DOCSTRING = r"""
     Arguments:
-        encoder (`openvino.runtime.Model`):
+        encoder (`openvino.Model`):
             The OpenVINO Runtime model associated to the encoder.
-        decoder (`openvino.runtime.Model`):
+        decoder (`openvino.Model`):
             The OpenVINO Runtime model associated to the decoder.
-        decoder_with_past (`openvino.runtime.Model`):
+        decoder_with_past (`openvino.Model`):
             The OpenVINO Runtime model associated  to the decoder with past key values.
         config (`transformers.PretrainedConfig`):
             [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
@@ -310,30 +318,70 @@ IMAGE_TO_TEXT_EXAMPLE = r"""
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
+class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
     main_input_name = "input_ids"
     export_feature = "text2text-generation"
 
     def __init__(
         self,
-        encoder: openvino.runtime.Model,
-        decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
-        config: transformers.PretrainedConfig = None,
+        encoder: openvino.Model,
+        decoder: openvino.Model,
+        decoder_with_past: openvino.Model = None,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        super().__init__(
-            encoder=encoder, decoder=decoder, decoder_with_past=decoder_with_past, config=config, **kwargs
-        )
+        self.config = config
+        self.use_cache = decoder_with_past is not None or model_has_state(decoder)
+        self.model_save_dir = model_save_dir
+        self._compile_only = kwargs.get("compile_only", False)
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.preprocessors = kwargs.get("preprocessors", [])
+
+        if self.is_dynamic and not self._compile_only:
+            encoder = self._reshape(encoder, -1, -1, is_decoder=False)
+            decoder = self._reshape(decoder, -1, -1)
+            if decoder_with_past is not None:
+                decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
+
+        generation_config = kwargs.get("generation_config", None)
+        self.generation_config = generation_config or GenerationConfig.from_model_config(config)
+
+        if is_transformers_version(">=", "4.44.99"):
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            except (KeyError, TypeError):
+                misplaced_generation_parameters = {}
+            if len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(self.generation_config, param_name, param_value)
+                    setattr(self.config, param_name, None)
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
 
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
-        self.encoder = OVEncoder(self.encoder_model, parent_model=self)
-        self.decoder = OVDecoder(self.decoder_model, parent_model=self)
+        self.encoder = OVEncoder(encoder, parent_model=self)
+        self.decoder = OVDecoder(decoder, parent_model=self)
 
-        if self.use_cache and not model_has_state(self.decoder_model):
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
+        if self.use_cache and not model_has_state(self.decoder.model):
+            self.decoder_with_past = OVDecoder(decoder_with_past, parent_model=self)
         if enable_compilation:
             self.compile()
 
@@ -347,6 +395,250 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     @property
     def dtype(self) -> Optional[torch.dtype]:
         return self.encoder.dtype or self.decoder.dtype
+
+    @property
+    def _ov_submodel_names(self) -> List[str]:
+        submodel_names = ["encoder", "decoder"]
+        if self.decoder_with_past is not None:
+            submodel_names.append("decoder_with_past")
+        return submodel_names
+
+    @property
+    def encoder_model(self) -> openvino.Model:
+        logger.warning(
+            "Access to the `encoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `encoder.model` instead"
+        )
+        return self.encoder.model
+
+    @property
+    def decoder_model(self) -> openvino.Model:
+        logger.warning(
+            "Access to the `decoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder.model` instead"
+        )
+        return self.decoder.model
+
+    @property
+    def decoder_with_past_model(self) -> openvino.Model:
+        logger.warning(
+            "Access to the `decoder_with_past_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder_with_past.model` instead"
+        )
+        return getattr(self.decoder_with_past, "model", None)
+
+    @property
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
+        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        file_names = {
+            "encoder": OV_ENCODER_NAME,
+            "decoder": OV_DECODER_NAME,
+            "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
+        }
+        for name, model in self.ov_submodels.items():
+            dst_path = os.path.join(save_directory, file_names[name])
+            openvino.save_model(model, dst_path, compress_to_fp16=False)
+
+        self._save_openvino_config(save_directory)
+        if self.generation_config is not None:
+            try:
+                self.generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: PretrainedConfig,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        encoder_file_name: Optional[str] = None,
+        decoder_file_name: Optional[str] = None,
+        decoder_with_past_file_name: Optional[str] = None,
+        local_files_only: bool = False,
+        use_cache: bool = True,
+        from_onnx: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        generation_config = kwargs.pop("generation_config", None)
+        subfolder = kwargs.pop("subfolder", "")
+
+        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
+        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
+        default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
+        encoder_file_name = encoder_file_name or default_encoder_file_name
+        decoder_file_name = decoder_file_name or default_decoder_file_name
+        decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
+        decoder_with_past = None
+
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        compile_only = kwargs.pop("compile_only", False)
+        device = kwargs.pop("device", "CPU")
+        ov_config = kwargs.pop("ov_config", None)
+
+        # Load model from hub
+        if not os.path.isdir(model_id):
+            allow_patterns = {
+                encoder_file_name,
+                decoder_file_name,
+                decoder_with_past_file_name,
+                encoder_file_name.replace(".xml", ".bin"),
+                decoder_file_name.replace(".xml", ".bin"),
+                decoder_with_past_file_name.replace(".xml", ".bin"),
+                cls.config_name,
+            }
+
+            ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
+            if not from_onnx:
+                ignore_patterns.extend(["*.onnx", "*.onnx_data"])
+
+            model_save_folder = snapshot_download(
+                model_id,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+                revision=revision,
+                token=token,
+                user_agent=http_user_agent,
+                allow_patterns=allow_patterns,
+                ignore_patterns=ignore_patterns,
+            )
+
+            model_save_dir = Path(model_save_folder)
+
+        else:
+            model_save_dir = Path(model_id)
+
+        file_names = {
+            "encoder": model_save_dir / encoder_file_name,
+            "decoder": model_save_dir / decoder_file_name,
+            "decoder_with_past": model_save_dir / decoder_with_past_file_name,
+        }
+        if not compile_only:
+            encoder = cls.load_model(file_names["encoder"], quantization_config)
+            decoder = cls.load_model(file_names["decoder"], quantization_config)
+            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+        else:
+            model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
+            encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
+            decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
+
+            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
+                decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
+
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                if getattr(generation_config, "cache_implementation", None) is not None:
+                    generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
+
+        return cls(
+            encoder=encoder,
+            decoder=decoder,
+            decoder_with_past=decoder_with_past,
+            config=config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            generation_config=generation_config,
+            device=device,
+            ov_config=ov_config,
+            compile_only=compile_only,
+            **kwargs,
+        )
+
+    @classmethod
+    def _export(
+        cls,
+        model_id: str,
+        config: PretrainedConfig,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        task: Optional[str] = None,
+        use_cache: bool = True,
+        trust_remote_code: bool = False,
+        load_in_8bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        cls._model_save_dir_tempdirectory_instance = save_dir
+
+        if task is None:
+            task = cls.export_feature
+            if use_cache:
+                task = task + "-with-past"
+
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
+        stateful = kwargs.get("stateful", True)
+        variant = kwargs.pop("variant", None)
+
+        # now we use model_kwargs only for text-to-speech models to specify vocoder
+        model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
+
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            ov_config=ov_config,
+            stateful=stateful,
+            variant=variant,
+            model_kwargs=model_kwargs,
+        )
+
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            compile_only=compile_only,
+            **kwargs,
+        )
 
     @add_start_docstrings_to_model_forward(
         SEQ2SEQ_MODEL_DOCSTRING.format("batch_size, sequence_length")
@@ -424,6 +716,23 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     def _reorder_cache(self, past, beam_idx) -> Tuple[Tuple[torch.FloatTensor]]:
         return self.decoder._reorder_cache(past, beam_idx)
 
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size if not is_decoder else -1
+            if inputs.get_any_name().startswith("past_key_values"):
+                shapes[inputs][2] = -1
+            elif inputs.get_any_name().startswith("cache_position"):
+                shapes[inputs][0] = sequence_length
+            elif is_decoder and not inputs.get_any_name().startswith("encoder"):
+                if not inputs.get_any_name().startswith("beam_idx"):
+                    shapes[inputs][1] = -1
+            else:
+                shapes[inputs][1] = sequence_length
+        model.reshape(shapes)
+        return model
+
     def reshape(self, batch_size: int, sequence_length: int):
         """
         Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
@@ -436,9 +745,16 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         """
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        super().reshape(batch_size, sequence_length)
+
+        logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
+        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.encoder.model = self._reshape(self.encoder.model, batch_size, sequence_length, is_decoder=False)
+        self.decoder.model = self._reshape(self.decoder.model, batch_size, sequence_length)
+        if self.decoder_with_past is not None:
+            self.decoder_with_past.model = self._reshape(self.decoder_with_past.model, batch_size, sequence_length)
+
         self.clear_requests()
         return self
 
@@ -446,25 +762,29 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        super().half()
+
+        if self._compile_only:
+            raise ValueError(
+                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        for submodel in self.ov_submodels.values():
+            apply_moc_transformations(submodel, cf=False)
+            compress_model_transformation(submodel)
+
         self.clear_requests()
         return self
 
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        self.encoder.request = None
-        self.decoder.request = None
-        if self.decoder_with_past is not None:
-            self.decoder_with_past.request = None
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name).request = None
 
     def compile(self):
-        self.encoder._compile()
-        self.decoder._compile()
-        if self.decoder_with_past is not None:
-            self.decoder_with_past._compile()
+        for submodel_name in self._ov_submodel_names:
+            getattr(self, submodel_name)._compile()
 
 
 class OVEncoder:
@@ -472,11 +792,11 @@ class OVEncoder:
     Encoder model for OpenVINO inference.
 
     Arguments:
-        request (`openvino.runtime.ie_api.InferRequest`):
+        request (`openvino.ie_api.InferRequest`):
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
+    def __init__(self, model: openvino.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
         self._comple_only = parent_model._compile_only
@@ -557,13 +877,13 @@ class OVDecoder:
     Decoder model for OpenVINO inference.
 
     Arguments:
-        request (`openvino.runtime.ie_api.InferRequest`):
+        request (`openvino.ie_api.InferRequest`):
             The OpenVINO inference request associated to the decoder.
         device (`torch.device`):
             The device type used by this process.
     """
 
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
+    def __init__(self, model: openvino.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
         self._compile_only = parent_model._compile_only
@@ -665,7 +985,7 @@ class OVDecoder:
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         self._past_length += input_ids.shape[1]
 
         out_past_key_values = ((),)
@@ -673,7 +993,9 @@ class OVDecoder:
         if not self.stateful:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
             # self-attention layer and 2 to the cross-attention layer)
-            out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+            out_past_key_values = tuple(
+                np.copy(self.request.get_tensor(key).data) for key in self.key_value_output_names
+            )
 
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
             # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
@@ -753,10 +1075,10 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
 
     def __init__(
         self,
-        encoder: openvino.runtime.Model,
-        decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
-        config: transformers.PretrainedConfig = None,
+        encoder: openvino.Model,
+        decoder: openvino.Model,
+        decoder_with_past: openvino.Model = None,
+        config: PretrainedConfig = None,
         **kwargs,
     ):
         if config.decoder.model_type == "gpt2":
@@ -822,7 +1144,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
@@ -907,7 +1229,7 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+    def _reshape(self, model: openvino.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
@@ -1030,7 +1352,8 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         compile_only = kwargs.get("compile_only", False)
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        if not compile_only and isinstance(quantization_config, OVQuantizationConfig):
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
+        if not compile_only and is_data_aware_quantization:
             model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
                 model_id, config, load_in_8bit=False, **kwargs
             )
@@ -1119,3 +1442,13 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             "decoder_position_ids": decoder_position_ids,
             "cache_position": cache_position,
         }
+
+    def _get_logits_processor(self, generation_config: GenerationConfig, *args, **kwargs):
+        forced_decoder_ids = generation_config.forced_decoder_ids
+        # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
+        # see for details https://github.com/huggingface/transformers/issues/37172
+        if is_transformers_version(">=", "4.50.0"):
+            generation_config.forced_decoder_ids = None
+        logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
+        generation_config.forced_decoder_ids = forced_decoder_ids
+        return logits_processor

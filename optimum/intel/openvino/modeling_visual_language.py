@@ -1,12 +1,14 @@
 import copy
+import enum
+import inspect
 import logging
+import math
 import os
 import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from types import MethodType
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino as ov
@@ -18,6 +20,7 @@ from transformers import (
     AutoConfig,
     AutoImageProcessor,
     AutoModelForCausalLM,
+    AutoModelForVision2Seq,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -55,10 +58,22 @@ except ImportError:
 if TYPE_CHECKING:
     from PIL.Image import Image
 
+    if is_transformers_version(">=", "4.42.0"):
+        from transformers.image_utils import VideoInput
+    else:
+        VideoInput = List[Image]
+
 
 logger = logging.getLogger(__name__)
 
 core = ov.Core()
+
+
+class InputMode(enum.Enum):
+    LANGUAGE = 0
+    VISION = 1
+    SPEECH = 2
+    VISION_SPEECH = 3
 
 
 class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
@@ -107,7 +122,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         self.request = None
         self.text_emb_request = None
@@ -124,6 +139,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
         batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
@@ -171,6 +187,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             inputs["position_ids"] = position_ids
 
+        if "token_type_ids" in self.input_names:
+            if token_type_ids is None:
+                token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
+            inputs["token_type_ids"] = token_type_ids
+
         if "beam_idx" in self.input_names:
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
@@ -201,7 +222,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = self.request.get_tensor("logits").data
-        logits = torch.from_numpy(logits).to(self.device)
+        logits = torch.from_numpy(logits).clone().to(self.device)
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
 
@@ -275,12 +296,43 @@ class OVVisionProjection(OVModelPart):
         return self.request(img_features)[0]
 
 
+class OVVisionResampler(OVVisionProjection):
+    _model_name = "vision_resampler"
+
+
+class OVMultiModalProjector(OVVisionProjection):
+    _model_name = "multi_modal_projector"
+
+
+class OVAudioEmbeddings(OVModelPart):
+    _model_name = "audio_embeddings"
+
+    def forward(self, audio_signal):
+        self._compile()
+        return self.request(audio_signal)[0]
+
+
+class OVAudioEncoder(OVModelPart):
+    _model_name = "audio_encoder"
+
+    def forward(self, audio_feature, audio_mask):
+        self._compile()
+        return self.request({"audio_feature": audio_feature, "audio_mask": audio_mask})[0]
+
+
 MODEL_PARTS_CLS_MAPPING = {
     "resampler": OVResampler,
     "language_model": OVModelWithEmbedForCausalLM,
     "vision_embeddings": OVVisionEmbedding,
     "vision_projection": OVVisionProjection,
+    "vision_resampler": OVVisionResampler,
+    "multi_modal_projector": OVMultiModalProjector,
     "vision_embeddings_merger": OVVisionEmbedding,
+    "audio_embeddings": OVAudioEmbeddings,
+    "audio_forward_embeddings": OVAudioEmbeddings,
+    "audio_encoder": OVAudioEncoder,
+    "audio_vision_projection": OVAudioEmbeddings,
+    "audio_speech_projection": OVAudioEmbeddings,
 }
 
 
@@ -356,7 +408,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         for _, component in self.components.items():
@@ -572,7 +624,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         return model
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
@@ -695,9 +747,20 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         rope_deltas=None,
         images=None,
         second_per_grid_ts=None,
+        token_type_ids=None,
+        pixel_attention_mask=None,
+        input_image_embeds: Optional[torch.FloatTensor] = None,
+        image_pixel_values: Optional[torch.FloatTensor] = None,
+        image_attention_mask=None,
+        audio_input_features: Optional[torch.FloatTensor] = None,
+        input_audio_embeds: Optional[torch.FloatTensor] = None,
+        audio_embed_sizes=None,
+        audio_attention_mask=None,
+        input_mode=None,
         **kwargs,
     ):
-        pixel_values = pixel_values if pixel_values is not None else images
+        if pixel_values is None:
+            pixel_values = images if images is not None else image_pixel_values
         inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(
             input_ids,
             pixel_values,
@@ -712,6 +775,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             video_grid_thw=video_grid_thw,
             rope_deltas=rope_deltas,
             second_per_grid_ts=second_per_grid_ts,
+            pixel_attention_mask=pixel_attention_mask,
+            input_image_embeds=input_image_embeds,
+            image_attention_mask=image_attention_mask,
+            input_audio_embeds=input_audio_embeds if input_audio_embeds is not None else audio_input_features,
+            audio_embed_sizes=audio_embed_sizes,
+            audio_attention_mask=audio_attention_mask,
+            input_mode=input_mode,
             **kwargs,
         )
         return self.language_model.forward(
@@ -719,6 +789,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
+            token_type_ids=token_type_ids,
             past_key_values=past_key_values,
             **kwargs,
         )
@@ -787,6 +858,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         if attention_mask is not None and position_ids is None:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
+
+            # position_ids in Gemma3 are 1-indexed
+            if self.config.model_type == "gemma3":
+                position_ids += 1
+
             if past_key_values is not None:
                 position_ids = position_ids[:, -input_ids.shape[1] :]
 
@@ -797,7 +873,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             model_inputs = {"input_ids": input_ids}
 
         if pixel_values is None:
-            pixel_values = kwargs.get("images")
+            pixel_values = kwargs.get("input_image_embeds", kwargs.get("images", kwargs.get("image_pixel_values")))
 
         model_inputs.update(
             {
@@ -812,6 +888,12 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "pixel_values_videos": kwargs.get("pixel_values_videos"),
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
+                "token_type_ids": kwargs.get("token_type_ids"),
+                "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
+                "image_attention_mask": kwargs.get("image_attention_mask"),
+                "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
+                "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
+                "input_mode": kwargs.get("input_mode"),
             }
         )
         return model_inputs
@@ -828,6 +910,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         """
         Preprocess input instruction and an image.
@@ -1005,9 +1089,15 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
             if image is not None:
@@ -1094,6 +1184,57 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         feature_lens = torch.tensor(feature_lens, dtype=torch.long, device=image_features.device)
         return image_features, feature_lens
 
+    def add_image_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        pixel_values,
+        attention_mask,
+        position_ids,
+        image_sizes,
+        legacy_processing,
+        **kwargs,
+    ):
+        from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
+
+        # ! infer image_num_patches from image_sizes
+        image_num_patches = [
+            image_size_to_num_patches(
+                image_size=imsize,
+                grid_pinpoints=self.config.image_grid_pinpoints,
+                patch_size=self.config.vision_config.image_size,
+            )
+            for imsize in image_sizes
+        ]
+        # figure out if pixel_values is concatenated or stacked
+        if pixel_values.dim() == 5:
+            # stacking when input is (batch_size, num_patches, num_channels, height, width)
+            _pixel_values_list = [pix_val[:num_patch] for pix_val, num_patch in zip(pixel_values, image_num_patches)]
+            pixel_values = torch.cat(_pixel_values_list, dim=0)
+        elif pixel_values.dim() != 4:
+            # otherwise has to be stacked from list of (num_patches, num_channels, height, width)
+            raise ValueError(f"pixel_values of shape {pixel_values.shape}, expect to be of 4 or 5 dimensions")
+        vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
+        if vision_embeds is not None:
+            image_newline = torch.tensor(self.config.image_newline)
+            image_features = torch.split(torch.from_numpy(vision_embeds), image_num_patches, dim=0)
+            image_features, feature_lens = self.pack_image_features(
+                image_features,
+                image_sizes,
+                image_newline=image_newline,
+            )
+            inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                image_features,
+                inputs_embeds,
+                feature_lens=feature_lens,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                legacy_processing=legacy_processing,
+                **kwargs,
+            )
+        return inputs_embeds, attention_mask, position_ids
+
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L416
     def get_multimodal_embeddings(
         self,
@@ -1105,8 +1246,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         image_sizes=None,
         **kwargs,
     ):
-        from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
-
         inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
 
         if pixel_values is not None and self._support_new_processing and past_key_values is None:
@@ -1117,44 +1256,16 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             legacy_processing = True
 
         if pixel_values is not None and pixel_values.size(0) > 0:
-            # ! infer image_num_patches from image_sizes
-            image_num_patches = [
-                image_size_to_num_patches(
-                    image_size=imsize,
-                    grid_pinpoints=self.config.image_grid_pinpoints,
-                    patch_size=self.config.vision_config.image_size,
-                )
-                for imsize in image_sizes
-            ]
-            # figure out if pixel_values is concatenated or stacked
-            if pixel_values.dim() == 5:
-                # stacking when input is (batch_size, num_patches, num_channels, height, width)
-                _pixel_values_list = [
-                    pix_val[:num_patch] for pix_val, num_patch in zip(pixel_values, image_num_patches)
-                ]
-                pixel_values = torch.cat(_pixel_values_list, dim=0)
-            elif pixel_values.dim() != 4:
-                # otherwise has to be stacked from list of (num_patches, num_channels, height, width)
-                raise ValueError(f"pixel_values of shape {pixel_values.shape}, expect to be of 4 or 5 dimensions")
-            vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
-            if vision_embeds is not None:
-                image_newline = torch.tensor(self.config.image_newline)
-                image_features = torch.split(torch.from_numpy(vision_embeds), image_num_patches, dim=0)
-                image_features, feature_lens = self.pack_image_features(
-                    image_features,
-                    image_sizes,
-                    image_newline=image_newline,
-                )
-                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
-                    image_features,
-                    inputs_embeds,
-                    feature_lens=feature_lens,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    legacy_processing=legacy_processing,
-                    **kwargs,
-                )
+            inputs_embeds, attention_mask, position_ids = self.add_image_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values,
+                attention_mask,
+                position_ids,
+                image_sizes,
+                legacy_processing,
+                **kwargs,
+            )
 
         if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
@@ -1170,9 +1281,10 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         attention_mask,
         position_ids=None,
         legacy_processing=False,
+        image_token_index=None,
         **kwargs,
     ):
-        image_token_index = self.config.image_token_index
+        image_token_index = self.config.image_token_index if image_token_index is None else image_token_index
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
 
@@ -1294,7 +1406,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
             final_attention_mask |= image_to_overwrite
             position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
         else:
-            special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
+            special_image_mask = (input_ids == image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
             image_features = image_features.to(inputs_embeds.dtype)
             final_embedding = inputs_embeds.masked_scatter(special_image_mask, image_features)
             final_attention_mask = attention_mask
@@ -1305,6 +1417,256 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         for_inputs_embeds_ids = input_ids.clone()
         for_inputs_embeds_ids[(input_ids == self.config.image_token_index)] = 0
         return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
+
+
+class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
+    additional_parts = ["vision_resampler", "multi_modal_projector"]
+    auto_model_class = AutoModelForVision2Seq
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        image_features = self.vision_embeddings(pixel_values).last_hidden_state
+        image_features = self.multi_modal_projector(image_features)
+        return image_features
+
+    def pack_image_features(self, image_features, image_sizes, image_newline=None):
+        """
+        Reshape, unpad and then pack each image_feature into a single image_features tensor containing all visual vectors.
+
+        Args:
+            image_features (`List[torch.Tensor]` of length num_images, each of shape `(num_patches, image_length, embed_dim)`)
+                List of image feature tensor, each contains all the visual feature of all patches.
+            image_sizes (`torch.Tensor` of shape `(num_images, 2)`)
+                Actual image size of each images (H, W).
+            vision_feature_select_strategy (`str`)
+                The feature selection strategy used to select the vision feature from the vision backbone.
+            image_newline (`torch.Tensor` of shape `(embed_dim)`)
+                New line embedding vector.
+        Returns:
+            image_features (`torch.Tensor` of shape `(all_feat_len, embed_dim)`)
+            feature_lens (`List[int]`)
+                token length of each image in image_features
+        """
+        from transformers.models.llava_next_video.modeling_llava_next_video import (
+            get_anyres_image_grid_shape,
+            unpad_image,
+        )
+
+        new_image_features = []
+        feature_lens = []
+        vision_feature_select_strategy = self.config.vision_feature_select_strategy
+        for image_idx, image_feature in enumerate(image_features):
+            if image_feature.shape[0] > 1:
+                base_image_feature = image_feature[0]
+                image_feature = image_feature[1:]
+                height = width = self.config.vision_config.image_size // self.config.vision_config.patch_size
+
+                num_patch_height, num_patch_width = get_anyres_image_grid_shape(
+                    image_sizes[image_idx],
+                    self.config.image_grid_pinpoints,
+                    self.config.vision_config.image_size,
+                )
+
+                if (
+                    np.prod(image_feature.shape) % (num_patch_height * num_patch_width * height * width) != 0
+                    and vision_feature_select_strategy == "default"
+                ):
+                    logger.warning_once(
+                        "Image feature shape does not line up with the provided patch size. "
+                        "You may be using the `default` vision_feature_select_strategy with a"
+                        " visual encoder that does not have CLS."
+                    )
+
+                image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
+                image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
+                image_feature = image_feature.flatten(1, 2).flatten(2, 3)
+                image_feature = unpad_image(image_feature, image_sizes[image_idx])
+                if image_newline is not None:
+                    image_feature = torch.cat(
+                        (
+                            image_feature,
+                            image_newline[:, None, None]
+                            .expand(*image_feature.shape[:-1], 1)
+                            .to(image_feature.device, image_feature.dtype),
+                        ),
+                        dim=-1,
+                    )
+                image_feature = image_feature.flatten(1, 2).transpose(0, 1)
+                image_feature = torch.cat((base_image_feature, image_feature), dim=0)
+            else:
+                image_feature = image_feature[0]
+                if image_newline is not None:
+                    image_feature = torch.cat((image_feature, image_newline[None].to(image_feature)), dim=0)
+            new_image_features.append(image_feature)
+            feature_lens.append(image_feature.size(0))
+        image_features = torch.cat(new_image_features, dim=0)
+        feature_lens = torch.tensor(feature_lens, dtype=torch.long, device=image_features.device)
+        return image_features, feature_lens
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if getattr(processor, "chat_template", None) is not None:
+            chat_prompt = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+            if image is not None:
+                chat_prompt[0]["content"].append({"type": "image"})
+            if video is not None:
+                chat_prompt[0]["content"].append({"type": "video"})
+            prompt = processor.apply_chat_template(chat_prompt, add_generation_prompt=True, tokenize=False)
+        else:
+            prompt = text
+            if image is not None and "<image>" not in prompt:
+                prompt = "<image>\n" + prompt
+            if video is not None and "<video>" not in prompt:
+                prompt = "<video>\n" + prompt
+
+        if is_transformers_version(">", "4.47.99") and getattr(processor, "patch_size", None) is None:
+            if (
+                getattr(config, "vision_config", None) is not None
+                and getattr(config.vision_config, "patch_size", None) is not None
+            ):
+                processor.patch_size = config.vision_config.patch_size
+            else:
+                raise ValueError(
+                    "Processor does not have `patch_size` attribute. Please fix the processor or provide `patch_size` in the config."
+                )
+
+        inputs = processor(images=image, text=prompt, videos=video, return_tensors="pt")
+        return inputs
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        image_sizes=None,
+        pixel_values_videos=None,
+        **kwargs,
+    ):
+        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+
+        if (
+            pixel_values is not None
+            and pixel_values.size(0) > 0
+            and self._support_new_processing
+            and past_key_values is None
+        ):
+            legacy_processing = (
+                (input_ids == self.config.image_token_index).sum(1).max() < self.config.image_seq_length
+            ).item()
+        elif (
+            pixel_values_videos is not None
+            and pixel_values_videos.size(0) > 0
+            and self._support_new_processing
+            and past_key_values is None
+        ):
+            legacy_processing = (
+                (input_ids == self.config.video_token_index).sum(1).max() < self.config.video_seq_length
+            ).item()
+        else:
+            legacy_processing = True
+
+        legacy_processing = (
+            legacy_processing.item() if isinstance(legacy_processing, torch.Tensor) else legacy_processing
+        )
+
+        if pixel_values is not None and pixel_values.size(0) > 0:
+            inputs_embeds, attention_mask, position_ids = self.add_image_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values,
+                attention_mask,
+                position_ids,
+                image_sizes,
+                legacy_processing,
+                **kwargs,
+            )
+
+        if pixel_values_videos is not None and pixel_values_videos.size(0) > 0:
+            inputs_embeds, attention_mask, position_ids = self.add_video_features(
+                input_ids,
+                inputs_embeds,
+                pixel_values_videos,
+                attention_mask,
+                position_ids,
+                legacy_processing=legacy_processing,
+                **kwargs,
+            )
+
+        if legacy_processing and pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
+            attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def add_video_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        pixel_values_videos,
+        attention_mask,
+        position_ids,
+        legacy_processing,
+        **kwargs,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L732-L751
+        video_features = self.get_video_features(pixel_values_videos, input_ids)
+        if video_features is not None and len(video_features) != 0:
+            video_features = [feature.flatten(0, 1) for feature in video_features]
+            video_feature_lens = [feature.size(0) for feature in video_features]
+            video_features = torch.cat(video_features, dim=0)
+            video_feature_lens = torch.tensor(video_feature_lens, dtype=torch.long, device=video_features.device)
+
+            if legacy_processing:
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(
+                    video_features,
+                    inputs_embeds,
+                    video_feature_lens,
+                    input_ids,
+                    attention_mask,
+                    position_ids,
+                    legacy_processing,
+                    self.config.video_token_index,
+                )
+            else:
+                inputs_embeds = (
+                    torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+                )
+                special_image_mask = (input_ids == self.config.video_token_index).unsqueeze(-1)
+                special_image_mask = special_image_mask.expand_as(inputs_embeds)
+                if inputs_embeds[special_image_mask].numel() != video_features.numel():
+                    n_video_tokens = (input_ids == self.config.video_token_index).sum().item()
+                    n_video_features = video_features.shape[0]
+                    raise ValueError(
+                        f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                    )
+                inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, video_features)
+        return inputs_embeds, attention_mask, position_ids
+
+    def get_video_features(self, pixel_values, input_ids=None, **kwargs):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/llava_next_video/modeling_llava_next_video.py#L835
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        batch_size, frames, channels, height, width = pixel_values.shape
+        pixel_values = pixel_values.reshape(batch_size * frames, channels, height, width)
+        selected_video_features = self.vision_embeddings(pixel_values).last_hidden_state
+        video_features = self.vision_resampler(selected_video_features)
+        video_features = self.multi_modal_projector(video_features)
+        video_features = torch.split(torch.from_numpy(video_features), frames, dim=0)
+        return video_features
 
 
 class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
@@ -1337,9 +1699,15 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
         import torchvision.transforms as T
         from torchvision.transforms.functional import InterpolationMode
 
@@ -1454,7 +1822,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
 
     # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
     def _prepare_generation_config(
-        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
         using_model_generation_config = False
         if generation_config is None:
@@ -1604,7 +1972,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
     def _set_2d_pos_cache(self, max_size):
         pos_embed = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
-        self._pos_embed = pos_embed
+        self._pos_embeds = pos_embed
 
     def _adjust_pos_cache(self, tgt_sizes):
         max_h = torch.max(tgt_sizes[:, 0])
@@ -1717,9 +2085,15 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
             prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -1914,9 +2288,15 @@ class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if tokenizer is None:
             raise ValueError("Tokenizer is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
         if image is not None and processor is None:
             raise ValueError("Processor is required.")
         text = f"<image>\n{text}" if image is not None else text
@@ -1966,11 +2346,12 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         )
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
+        self.image_dim_out = self.config.img_processor["image_dim_out"]
 
     def get_vision_embeddings(self, pixel_values, image_sizes, **kwargs):
         num_images, num_crops, c, h, w = pixel_values.shape
         img_features = self.vision_embeddings(pixel_values.flatten(0, 1)).last_hidden_state.reshape(
-            num_images, num_crops, -1, self.config.img_processor["image_dim_out"]
+            num_images, num_crops, -1, self.image_dim_out
         )
         image_features_proj = self.hd_feature_transform(img_features, image_sizes)
         return image_features_proj
@@ -2075,9 +2456,15 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
         if image is not None and "<|image_1|>" not in text:
             text = "<|image_1|>\n" + text
         if getattr(processor.tokenizer, "chat_template", None) is not None:
@@ -2130,21 +2517,65 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
         if is_transformers_version(">=", "4.45.0"):
             from transformers.models.qwen2_vl.modeling_qwen2_vl import (
-                Qwen2VLForConditionalGeneration,
                 VisionRotaryEmbedding,
             )
 
             self._rotary_pos_emb = VisionRotaryEmbedding(
                 self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
             )
-            self.get_rope_index = MethodType(Qwen2VLForConditionalGeneration.get_rope_index, self)
-            self.prepare_inputs_for_generation = MethodType(
-                Qwen2VLForConditionalGeneration.prepare_inputs_for_generation, self
-            )
         else:
             raise ValueError(
                 f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
             )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        pixel_values=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
+        if past_key_values is not None:
+            if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
+                inputs_embeds = inputs_embeds[:, -cache_position.shape[0] :]
+            elif inputs_embeds is not None:
+                input_ids = input_ids[:, -cache_position.shape[0] :]
+            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                input_ids = input_ids[:, cache_position]
+
+        if cache_position[0] != 0:
+            pixel_values = None
+            pixel_values_videos = None
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
+            model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
+        else:
+            model_inputs = {"input_ids": input_ids, "inputs_embeds": None}
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "pixel_values": pixel_values,
+                "pixel_values_videos": pixel_values_videos,
+                "image_grid_thw": image_grid_thw,
+                "video_grid_thw": video_grid_thw,
+                "cache_position": cache_position,
+            }
+        )
+        return model_inputs
 
     # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
     def _update_model_kwargs_for_generation(
@@ -2165,6 +2596,156 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             model_kwargs["rope_deltas"] = outputs.rope_deltas
 
         return model_kwargs
+
+    # Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1423
+    def get_rope_index(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        image_grid_thw: Optional[torch.LongTensor] = None,
+        video_grid_thw: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
+
+        Explanation:
+            Each embedding sequence contains vision embedding and text embedding or just contains text embedding.
+
+            For pure text embedding sequence, the rotary position embedding has no difference with modern LLMs.
+            Examples:
+                input_ids: [T T T T T], here T is for text.
+                temporal position_ids: [0, 1, 2, 3, 4]
+                height position_ids: [0, 1, 2, 3, 4]
+                width position_ids: [0, 1, 2, 3, 4]
+
+            For vision and text embedding sequence, we calculate 3D rotary position embedding for vision part
+            and 1D rotary position embedding for text part.
+            Examples:
+                Assume we have a video input with 3 temporal patches, 2 height patches and 2 width patches.
+                input_ids: [V V V V V V V V V V V V T T T T T], here V is for vision.
+                vision temporal position_ids: [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
+                vision height position_ids: [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1]
+                vision width position_ids: [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
+                text temporal position_ids: [3, 4, 5, 6, 7]
+                text height position_ids: [3, 4, 5, 6, 7]
+                text width position_ids: [3, 4, 5, 6, 7]
+                Here we calculate the text start position_ids as the max vision position_ids plus 1.
+
+        Args:
+            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
+                Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
+                it.
+            image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
+                The temporal, height and width of feature shape of each image in LLM.
+            video_grid_thw (`torch.LongTensor` of shape `(num_videos, 3)`, *optional*):
+                The temporal, height and width of feature shape of each video in LLM.
+            attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+                Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
+
+                - 1 for tokens that are **not masked**,
+                - 0 for tokens that are **masked**.
+
+        Returns:
+            position_ids (`torch.LongTensor` of shape `(3, batch_size, sequence_length)`)
+            mrope_position_deltas (`torch.Tensor` of shape `(batch_size)`)
+        """
+        spatial_merge_size = self.config.vision_config.spatial_merge_size
+        image_token_id = self.config.image_token_id
+        video_token_id = self.config.video_token_id
+        vision_start_token_id = self.config.vision_start_token_id
+        mrope_position_deltas = []
+        if input_ids is not None and (image_grid_thw is not None or video_grid_thw is not None):
+            total_input_ids = input_ids
+            if attention_mask is None:
+                attention_mask = torch.ones_like(total_input_ids)
+            position_ids = torch.ones(
+                3, input_ids.shape[0], input_ids.shape[1], dtype=input_ids.dtype, device=input_ids.device
+            )
+            image_index, video_index = 0, 0
+            for i, input_ids in enumerate(total_input_ids):
+                input_ids = input_ids[attention_mask[i].to(input_ids.device) == 1]
+                image_nums, video_nums = 0, 0
+                vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(1)
+                vision_tokens = input_ids[vision_start_indices + 1]
+                image_nums = (vision_tokens == image_token_id).sum()
+                video_nums = (vision_tokens == video_token_id).sum()
+                input_tokens = input_ids.tolist()
+                llm_pos_ids_list: list = []
+                st = 0
+                remain_images, remain_videos = image_nums, video_nums
+                for _ in range(image_nums + video_nums):
+                    if image_token_id in input_tokens and remain_images > 0:
+                        ed_image = input_tokens.index(image_token_id, st)
+                    else:
+                        ed_image = len(input_tokens) + 1
+                    if video_token_id in input_tokens and remain_videos > 0:
+                        ed_video = input_tokens.index(video_token_id, st)
+                    else:
+                        ed_video = len(input_tokens) + 1
+                    if ed_image < ed_video:
+                        t, h, w = (
+                            image_grid_thw[image_index][0],
+                            image_grid_thw[image_index][1],
+                            image_grid_thw[image_index][2],
+                        )
+                        image_index += 1
+                        remain_images -= 1
+                        ed = ed_image
+                    else:
+                        t, h, w = (
+                            video_grid_thw[video_index][0],
+                            video_grid_thw[video_index][1],
+                            video_grid_thw[video_index][2],
+                        )
+                        video_index += 1
+                        remain_videos -= 1
+                        ed = ed_video
+                    llm_grid_t, llm_grid_h, llm_grid_w = (
+                        t.item(),
+                        h.item() // spatial_merge_size,
+                        w.item() // spatial_merge_size,
+                    )
+                    text_len = ed - st
+
+                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                    llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+
+                    t_index = torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
+                    h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
+                    w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
+                    llm_pos_ids_list.append(torch.stack([t_index, h_index, w_index]) + text_len + st_idx)
+                    st = ed + llm_grid_t * llm_grid_h * llm_grid_w
+
+                if st < len(input_tokens):
+                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                    text_len = len(input_tokens) - st
+                    llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+
+                llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
+                position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(position_ids.device)
+                mrope_position_deltas.append(llm_positions.max() + 1 - len(total_input_ids[i]))
+            mrope_position_deltas = torch.tensor(mrope_position_deltas, device=input_ids.device).unsqueeze(1)
+            return position_ids, mrope_position_deltas
+        else:
+            if attention_mask is not None:
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)
+                max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
+                mrope_position_deltas = max_position_ids + 1 - attention_mask.shape[-1]
+            else:
+                position_ids = (
+                    torch.arange(input_ids.shape[1], device=input_ids.device)
+                    .view(1, 1, -1)
+                    .expand(3, input_ids.shape[0], -1)
+                )
+                mrope_position_deltas = torch.zeros(
+                    [input_ids.shape[0], 1],
+                    device=input_ids.device,
+                    dtype=input_ids.dtype,
+                )
+
+            return position_ids, mrope_position_deltas
 
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
         hidden_states = self.vision_embeddings(pixel_values)[0]
@@ -2305,33 +2886,29 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
         if image is not None:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                        },
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
-        else:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
 
@@ -2748,33 +3325,29 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
         if image is not None:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                        },
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
-        else:
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
+            conversation[0]["content"].insert(0, {"type": "image"})
+        if video is not None:
+            conversation[0]["content"].insert(0, {"type": "video"})
+
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
-        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
     # Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1602
@@ -2806,9 +3379,15 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         processor: Optional[AutoImageProcessor] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("processor is required")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
         if image is None:
             return processor(text=text, return_tensors="pt")
         processed_inputs = processor.format_and_preprocess_phrase_grounding_input(
@@ -2819,9 +3398,946 @@ class _OVMaira2ForCausalLM(_OVLlavaForCausalLM):
         return processed_inputs
 
 
+class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        return self.vision_embeddings(pixel_values).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1323-L1339
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        if input_ids is None:
+            special_image_mask = inputs_embeds == torch.from_numpy(
+                self.get_text_embeddings(torch.tensor([[self.config.image_token_index]], dtype=torch.long))[0]
+            )
+        else:
+            special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+            special_image_mask = special_image_mask.expand_as(inputs_embeds)
+
+            image_features = image_features.to(inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+
+        inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+        return inputs
+
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs: ModelOutput,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        num_new_tokens: int = 1,
+    ) -> Dict[str, Any]:
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            num_new_tokens=num_new_tokens,
+        )
+
+        # Token type ids used only for first inference mask generation
+        model_kwargs.pop("token_type_ids", None)
+
+        return model_kwargs
+
+
+class _OVGotOCR2ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+        return self.vision_embeddings(pixel_values).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L836-L845
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        n_image_tokens = (input_ids == self.config.image_token_index).sum()
+        n_image_features = image_features.shape[0] * image_features.shape[1]
+        if n_image_tokens != n_image_features:
+            raise ValueError(
+                f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+            )
+        special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
+        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: Optional[str] = None,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("processor is required")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        if image is None:
+            raise ValueError("Image is required")
+        processed_inputs = processor(image, return_tensors="pt")
+        return processed_inputs
+
+
+class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids, **kwargs):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/smolvlm/modeling_smolvlm.py#L899-L942
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+        batch_size, num_images, num_channels, height, width = pixel_values.shape
+        pixel_values = pixel_values
+        pixel_values = pixel_values.view(batch_size * num_images, *pixel_values.shape[2:])
+
+        # Remove padding images - padding images are full 0.
+        nb_values_per_image = pixel_values.shape[1:].numel()
+        real_images_inds = (pixel_values == 0.0).sum(dim=(-1, -2, -3)) != nb_values_per_image
+
+        if not any(real_images_inds):
+            # no images, leave one empty image.
+            real_images_inds[0] = True
+
+        pixel_values = pixel_values[real_images_inds].contiguous()
+        pixel_attention_mask = kwargs.get("pixel_attention_mask")
+
+        # Handle the vision attention mask
+        if pixel_attention_mask is None:
+            pixel_attention_mask = torch.ones(
+                size=[pixel_values.shape[i] for i in (0, 2, 3)],
+                dtype=torch.bool,
+                device=pixel_values.device,
+            )
+        else:
+            # Remove padding images from the mask
+            pixel_attention_mask = pixel_attention_mask.view(batch_size * num_images, *pixel_attention_mask.shape[2:])
+            pixel_attention_mask = pixel_attention_mask[real_images_inds].contiguous()
+
+        patch_size = self.config.vision_config.patch_size
+        num_patches_per_side = self.config.vision_config.image_size // patch_size
+        patches_subgrid = pixel_attention_mask.unfold(dimension=1, size=patch_size, step=patch_size)
+        patches_subgrid = patches_subgrid.unfold(dimension=2, size=patch_size, step=patch_size)
+        patch_attention_mask = (patches_subgrid.sum(dim=(-1, -2)) > 0).bool()
+        batch_size_, _, max_im_h, max_im_w = pixel_values.shape
+        max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
+        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        position_ids = torch.full(size=(batch_size_, max_nb_patches_h * max_nb_patches_w), fill_value=0)
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            nb_patches_h = p_attn_mask[:, 0].sum()
+            nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+        return self.vision_embeddings(
+            pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, patch_position_ids=position_ids
+        ).last_hidden_state
+
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/idefics3/modeling_idefics3.py#L881
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        vision_hidden_size = image_features.shape[2]
+        special_image_token_mask = input_ids == self.config.image_token_id
+        #  Fixes RuntimeError: a leaf Variable that requires grad is being used in an in-place operation.
+        new_inputs_embeds = inputs_embeds.clone()
+        reshaped_image_hidden_states = image_features.view(-1, vision_hidden_size)
+        # cast to the dtype of the input_embeds to support quantized models
+        reshaped_image_hidden_states = reshaped_image_hidden_states.to(inputs_embeds.device, inputs_embeds.dtype)
+        new_inputs_embeds[special_image_token_mask] = reshaped_image_hidden_states
+        inputs_embeds = new_inputs_embeds
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+
+        if video is not None:
+            raise ValueError("video input is not supported")
+
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+
+class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/smolvlm/modeling_smolvlm.py#L803
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        _, patch_size, _ = image_features.shape
+
+        image_mask = input_ids == self.config.image_token_id
+        num_image_tokens = image_mask.sum(dim=1)
+        if not torch.all(num_image_tokens % patch_size == 0):
+            raise ValueError("At least one sample has <image> tokens not divisible by patch_size.")
+
+        blocks_per_sample = num_image_tokens // patch_size
+
+        offsets = torch.nn.functional.pad(blocks_per_sample.cumsum(dim=0), (1, 0), value=0)
+        block_offset = offsets[:-1]
+        row_cum = image_mask.cumsum(dim=-1)
+        chunk_idx = (row_cum - 1) // patch_size
+        local_idx = (row_cum - 1) % patch_size
+        block_idx = block_offset.unsqueeze(1) + chunk_idx
+
+        image_embeds = torch.zeros_like(inputs_embeds)
+        image_embeds[image_mask] = image_features[block_idx[image_mask], local_idx[image_mask], :]
+
+        inputs_embeds = torch.where(image_mask.unsqueeze(-1), image_embeds, inputs_embeds)
+
+        return inputs_embeds, attention_mask, position_ids
+
+
+class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
+    additional_parts = [
+        "vision_projection",
+        "audio_embeddings",
+        "audio_forward_embeddings",
+        "audio_encoder",
+        "audio_vision_projection",
+        "audio_speech_projection",
+    ]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            language_model,
+            text_embeddings,
+            vision_embeddings,
+            config,
+            device,
+            dynamic_shapes,
+            ov_config,
+            model_save_dir,
+            quantization_config,
+            **kwargs,
+        )
+        self.sub_GN = torch.tensor(self.config.sub_GN)
+        self.glb_GN = torch.tensor(self.config.glb_GN)
+        self.audio_config = (
+            config.audio_processor["config"] if hasattr(config, "audio_processor") else config.audio_config.to_dict()
+        )
+        self.chunk_size = self.audio_config.get("chunk_size", -1)
+        self.left_chunk = self.audio_config.get("left_chunk", 18)
+        self.time_reduction = self.audio_config.get("time_reduction", 8)
+        self.image_config = (
+            config.img_processor if hasattr(config, "img_processor") else config.vision_config.to_dict()
+        )
+        self.image_size = self.image_config.get("crop_size", 448)
+        self.patch_size = self.image_config.get("patch_size", 14)
+        self.num_patches_per_side = self.image_size // self.patch_size
+        self._IMAGE_SPECIAL_TOKEN_ID = (
+            200010 if "image_token_id" not in self.image_config else self.image_config["image_token_id"]
+        )
+        self._AUDIO_SPECIAL_TOKEN_ID = (
+            200011 if "audio_token_id" not in self.audio_config else self.audio_config["audio_token_id"]
+        )
+        self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE = [-9999, -1]  # For backward compatibility
+        self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE = [float("-inf"), -10000]  # For backward compatibility
+        self.image_dim_out = self.image_config.get("image_dim_out", self.image_config["hidden_size"])
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L669
+    def image_embed(
+        self,
+        input_ids: torch.LongTensor,
+        image_pixel_values: torch.FloatTensor,
+        image_attention_mask,
+        inputs_embeds,
+        image_sizes=None,
+        **kwargs,
+    ):
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+        positions_tuple = torch.nonzero(input_ids == self._IMAGE_SPECIAL_TOKEN_ID, as_tuple=True)
+
+        if len(positions_tuple[-1]) == 0:
+            return None
+        batch_size = image_pixel_values.shape[0]
+
+        img_features = self.get_img_features(
+            image_pixel_values.flatten(0, 1),
+            image_attention_mask=image_attention_mask.flatten(0, 1).to(dtype=bool),
+        )
+
+        base_feat_size = int(np.sqrt(img_features.shape[1]))
+        img_features = img_features.view(batch_size, -1, base_feat_size**2, self.image_dim_out)
+        image_sizes = image_sizes.view(-1, 2)
+
+        output_imgs = []
+        for idx in range(batch_size):
+            height, width = image_sizes[idx]
+            height_ratio = height // self.image_size
+            width_ratio = width // self.image_size
+            area_ratio = height_ratio * width_ratio
+
+            global_img = img_features[idx, :1]
+            global_img = global_img.reshape(1, base_feat_size, base_feat_size, self.image_dim_out).contiguous()
+            temporary_extensor = self.sub_GN.repeat(1, base_feat_size, 1, 1)
+            global_img = torch.cat([global_img, temporary_extensor], dim=2).reshape(1, -1, self.image_dim_out)
+
+            sub_img = img_features[idx, 1:]
+            sub_img = sub_img[:area_ratio]
+            sub_img = (
+                sub_img.reshape(height_ratio, width_ratio, base_feat_size, base_feat_size, self.image_dim_out)
+                .transpose(1, 2)
+                .reshape(1, height_ratio * base_feat_size, width_ratio * base_feat_size, self.image_dim_out)
+                .contiguous()
+            )
+
+            if image_attention_mask is not None:
+                reshaped_image_attention_mask = (
+                    image_attention_mask[idx, 1 : area_ratio + 1, 0::2, 0::2]
+                    .reshape(height_ratio, width_ratio, base_feat_size, base_feat_size)
+                    .transpose(1, 2)
+                    .reshape(1, height_ratio * base_feat_size, width_ratio * base_feat_size)
+                )
+                useful_height = int(reshaped_image_attention_mask[0, :, 0].sum().item())
+                useful_width = int(reshaped_image_attention_mask[0, 0, :].sum().item())
+                sub_img = sub_img[:, :useful_height, :useful_width]
+                temporary_extensor = self.sub_GN.repeat(1, useful_height, 1, 1)
+            else:
+                temporary_extensor = self.sub_GN.repeat(1, height_ratio * base_feat_size, 1, 1)
+
+            sub_img = torch.cat([sub_img, temporary_extensor], dim=2).reshape(1, -1, self.image_dim_out)
+
+            # Merge global and sub
+            output_imgs.append(torch.cat([sub_img, self.glb_GN, global_img], dim=1))
+
+        img_set_tensor = []
+        for output_img in output_imgs:
+            img_feature_proj = torch.from_numpy(self.vision_projection(output_img))
+            img_set_tensor.append(img_feature_proj)
+
+        merged_img_set_tensor = torch.cat(img_set_tensor, dim=1).squeeze(0)
+
+        image_embeds = inputs_embeds.index_put(indices=positions_tuple, values=merged_img_set_tensor, accumulate=False)
+
+        return image_embeds
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1241
+    def audio_embed(
+        self,
+        input_ids: torch.LongTensor,
+        audio_input_embeds: torch.FloatTensor,
+        inputs_embeds,
+        audio_embed_sizes=None,
+        audio_projection_mode="speech",
+        **kwargs,
+    ):
+        input_shape = input_ids.size()
+        input_ids = input_ids.view(-1, input_shape[-1])
+
+        positions_tuple = torch.nonzero(input_ids == self._AUDIO_SPECIAL_TOKEN_ID, as_tuple=True)
+
+        if len(positions_tuple[-1]) == 0:
+            return None
+
+        audio_embeds = self.get_audio_features(audio_input_embeds, audio_projection_mode)
+
+        merged_audio_embeds = torch.cat(
+            [audio_embeds[i, : audio_embed_sizes[i], :] for i in range(len(audio_embed_sizes))], dim=0
+        )
+        inputs_embeds = inputs_embeds.index_put(indices=positions_tuple, values=merged_audio_embeds, accumulate=False)
+
+        return inputs_embeds
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1165
+    def get_audio_features(
+        self,
+        input_embeds: torch.FloatTensor,
+        audio_projection_mode: str = "speech",
+    ):
+        xs_pad = self.audio_embeddings(input_embeds)
+        input_tensor, pos_k, pos_v, hs_mask, masks = self.forward_embeddings(xs_pad)
+
+        unfolded = False
+        ori_bz, seq_len, D = input_tensor.shape
+        max_seq_len = 500  # maximum position for absolute positional encoding
+        masks_unfold = None
+        if seq_len > max_seq_len:
+            # audio sequence is longer than max_seq_len, unfold it into chunks of max_seq_len
+            unfolded = True
+            # the unfold op will drop residual frames, pad it to the multiple of max_seq_len
+            if seq_len % max_seq_len > 0:
+                chunk_pad_size = max_seq_len - (seq_len % max_seq_len)
+            else:
+                chunk_pad_size = 0
+            if chunk_pad_size > 0:
+                input_tensor_pad = torch.nn.functional.pad(
+                    torch.from_numpy(input_tensor), (0, 0, 0, chunk_pad_size), "constant", 0
+                )
+                input_tensor = input_tensor_pad
+
+            input_tensor = self.unfold_tensor(input_tensor, max_seq_len)
+            if masks is not None:
+                # revise hs_mask here because the previous calculated hs_mask did not consider extra pad
+                subsampled_pad_mask = masks.squeeze(1)  # [bz, subsampled_unmask_seq_len]
+                extra_padded_subsamlped_pad_mask = torch.nn.functional.pad(
+                    subsampled_pad_mask, (0, chunk_pad_size), "constant", False
+                )  # extra padding to the pad mask
+                extra_padded_subsamlped_pad_mask = extra_padded_subsamlped_pad_mask.unsqueeze(-1).float()
+                masks_unfold = self.unfold_tensor(
+                    extra_padded_subsamlped_pad_mask, max_seq_len
+                )  # unfold the pad mask like we did to the input tensor
+                masks_unfold = masks_unfold.squeeze(-1).bool()  # unfold op does not support bool tensor
+            else:
+                masks_unfold = None
+        hs_mask = self.calculate_hs_mask(input_tensor, masks_unfold)
+        audio_features = self.audio_encoder(input_tensor, hs_mask)
+        if unfolded:
+            embed_dim = audio_features.shape[-1]
+            audio_features = np.reshape(audio_features, (ori_bz, -1, embed_dim))
+            # if we ever padded before unfolding, we need to remove the padding
+            if chunk_pad_size > 0:
+                audio_features = audio_features[:, :-chunk_pad_size, :]
+        audio_encoder = (
+            self.audio_vision_projection if audio_projection_mode == "vision" else self.audio_speech_projection
+        )
+        audio_set_tensor = audio_encoder(audio_features)
+
+        return torch.from_numpy(audio_set_tensor)
+
+    def _chunk_size_selection(self, chunk_size=None, left_chunk=None):
+        """If chunk size is a list, we will randomly select a chunk size."""
+        if isinstance(chunk_size, list):
+            # Variable chunk size during training
+            chunk_size_index = int(torch.randint(low=0, high=len(chunk_size), size=(1,)))
+            chunk_size_train_eff = chunk_size[chunk_size_index]
+            if not isinstance(left_chunk, list):
+                raise ValueError("Since chunk_size is a list, left_chunk must be a list")
+            if len(left_chunk) != len(chunk_size):
+                raise ValueError("The length of left_chunk must be the same as length of chunk_size.")
+            left_chunk_train_eff = left_chunk[chunk_size_index]
+        else:
+            chunk_size_train_eff = chunk_size
+            left_chunk_train_eff = left_chunk
+
+        return chunk_size_train_eff, left_chunk_train_eff
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1121
+    def forward_embeddings(self, xs_pad, masks=None, chunk_size_nc=None, left_chunk_nc=None):
+        """Forwarding the inputs through the top embedding layers
+
+        Args:
+            xs_pad: torch.Tensor
+                input tensor
+            masks: torch.Tensor
+                input mask
+            chunk_size_nc: (optional, default is None) chunk size for non-causal layers
+            left_chunk_nc: (optional, default is None) # of left chunks for non-causal layers
+        """
+        seq_len = int(self.compute_lens_change(xs_pad.shape[1]))
+        if seq_len <= 0:
+            raise ValueError(
+                f"""The sequence length after time reduction is invalid: {seq_len}.
+                Your input feature is too short. Consider filtering out the very
+                short sentence from data loader""",
+            )
+
+        batch_size = xs_pad.shape[0]
+
+        enc_streaming_mask = self._streaming_mask(seq_len, batch_size, self.chunk_size, self.left_chunk)
+
+        input_tensor = xs_pad
+
+        input_tensor = self.audio_forward_embeddings(input_tensor)
+
+        streaming_mask = enc_streaming_mask
+        if streaming_mask is not None and masks is not None:
+            hs_mask = masks & streaming_mask
+        else:
+            hs_mask = streaming_mask
+
+        if chunk_size_nc is not None:
+            enc_streaming_mask_nc = self._streaming_mask(seq_len, batch_size, chunk_size_nc, left_chunk_nc)
+            if masks is not None:
+                hs_mask_nc = masks & enc_streaming_mask_nc
+            else:
+                hs_mask_nc = enc_streaming_mask_nc
+        else:
+            hs_mask_nc = None
+
+        if chunk_size_nc is None:
+            return input_tensor, None, None, hs_mask, None
+        return input_tensor, None, None, hs_mask, None, hs_mask_nc
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1101
+    def _streaming_mask(self, seq_len, batch_size, chunk_size, left_chunk):
+        chunk_size_train_eff, left_chunk_train_eff = self._chunk_size_selection(chunk_size, left_chunk)
+
+        # Create mask matrix for streaming
+        # S stores start index. if chunksize is 18, s is [0,18,36,....]
+        chunk_start_idx = np.arange(0, seq_len, chunk_size_train_eff)
+        # avoid randomness when run evaluation or decoding
+
+        enc_streaming_mask = (
+            self.adaptive_enc_mask(seq_len, chunk_start_idx, left_window=left_chunk_train_eff)
+            .unsqueeze(0)
+            .expand([batch_size, -1, -1])
+        )
+        return enc_streaming_mask
+
+    def compute_lens_change(self, feature_lens):
+        """feature_lens: int
+        return updated feature lens.
+
+        This used to return a different lambda function for each case that computed
+        the right thing.  That does not work within Torchscript.  If you really
+        need this to be faster, create nn.Module()-s for all the cases and return
+        one of them.  Torchscript does support that.
+        """
+        nemo_conv_settings = self.audio_config.get("nemo_conv_settings")
+        if nemo_conv_settings is None:
+            nemo_conv_settings = {"conv_channels": self.audio_config["nemo_conv_channels"]}
+        # Handle the special causal case
+        subsampling_causal_cond = nemo_conv_settings.get("subsampling", "dw_striding") in [
+            "dw_striding",
+            "striding",
+            "striding_conv1d",
+        ]
+        is_causal = nemo_conv_settings.get("is_causal", False)
+        if is_causal and subsampling_causal_cond:
+            lens_change = (
+                torch.ceil(feature_lens / self.time_reduction).long()
+                if isinstance(feature_lens, torch.Tensor)
+                else math.ceil(feature_lens / self.time_reduction)
+            )
+            feature_lens_remainder = feature_lens % self.time_reduction
+            if isinstance(feature_lens, torch.Tensor):
+                lens_change[feature_lens_remainder != 1] += 1
+            elif feature_lens_remainder != 1:
+                lens_change += 1
+                return lens_change
+        ceil_func = math.ceil if isinstance(feature_lens, int) else torch.ceil
+        return ceil_func(feature_lens / self.time_reduction)
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1146
+    def calculate_hs_mask(self, xs_pad, mask):
+        max_audio_length = xs_pad.shape[1]
+        batch_size = xs_pad.shape[0]
+        enc_streaming_mask = self._streaming_mask(max_audio_length, batch_size, self.chunk_size, self.left_chunk)
+        if mask is None:
+            return enc_streaming_mask
+
+        feature_lens = mask.sum(1)
+        padding_length = feature_lens
+        pad_mask = torch.arange(0, max_audio_length).expand(padding_length.size(0), -1) < padding_length.unsqueeze(1)
+        pad_mask = pad_mask.unsqueeze(1)
+        pad_mask = pad_mask & enc_streaming_mask
+        return pad_mask
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1034
+    @staticmethod
+    def unfold_tensor(xs_pad, max_seq_len):
+        """
+        For a given tensor with shape of (N, T, D), if sequence length T is longer than max_seq_len,
+        this function unfold it to a (NT', max_seq_len, D) where T' is T // max_seq_len.
+        Args:
+            xs_pad: N, T, D
+        """
+        _, _, D = xs_pad.shape
+        xs_pad = xs_pad.transpose(-1, -2)  # convert to N, D, T
+        # N x D x 1 x T => N x (D x max_seq_len) x T'
+        xs_pad = torch.nn.functional.unfold(
+            xs_pad[..., None, :],
+            kernel_size=(1, max_seq_len),
+            stride=(1, max_seq_len),
+        )
+
+        new_bsz, _, slen = xs_pad.shape
+        # N x D x max_seq_len x T'
+        xs_pad = xs_pad.view(new_bsz, -1, max_seq_len, slen)
+        # N x T' x max_seq_len x D
+        xs_pad = xs_pad.permute(0, 3, 2, 1).contiguous()
+        # NT' x max_seq_len x D
+        xs_pad = xs_pad.view(-1, max_seq_len, D)
+        return xs_pad
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1053
+    @staticmethod
+    def adaptive_enc_mask(x_len, chunk_start_idx, left_window=0, right_window=0):
+        """
+        The function is very important for Transformer Transducer Streaming mode
+        Args:
+            xs_len (int): sequence length
+            chunk_start_idx (list): first idx of each chunk, such as [0,18,36,48]. It also supports adaptive chunk size [0,10,15,45]
+            left_window (int): how many left chunks can be seen
+            right_window (int): how many right chunks can be seen. It is used for chunk overlap model.
+            Returns:
+                mask (torch.Tensor): a mask tensor for streaming model
+                Torch 1.0.1
+                tensor([[1., 1., 0., 0.],
+                        [0., 1., 1., 0.],
+                        [0., 0., 1., 1.]])
+                Torch 1.4.1
+                tensor([[True., True., False., False.],
+                        [False., True., True., False.],
+                        [False., False., True., True.]])
+        """
+        chunk_start_idx = torch.Tensor(chunk_start_idx).long()  # first idx of each chunk, such as [0,18,36,48].
+        start_pad = torch.nn.functional.pad(
+            chunk_start_idx, (1, 0)
+        )  # append 0 to the beginning, so it becomes [0, 0, 18, 36, 48]
+        end_pad = torch.nn.functional.pad(
+            chunk_start_idx, (0, 1), value=x_len
+        )  # append x_len to the end, so it becomes [0,18,36,48, x_len]
+        seq_range = torch.arange(0, x_len).unsqueeze(-1)  # seq_range size: [x_len, 1]
+        idx = ((seq_range < end_pad) & (seq_range >= start_pad)).nonzero()[:, 1]  # idx size: [x_len]
+        end_pad[idx]  # boundary size: [x_len]
+        seq_range_expand = (
+            torch.arange(0, x_len).unsqueeze(0).expand(x_len, -1)
+        )  # seq_range_expand size [x_len, x_len]
+        idx_left = idx - left_window
+        idx_left[idx_left < 0] = 0
+        boundary_left = start_pad[idx_left]
+        mask_left = seq_range_expand >= boundary_left.unsqueeze(-1)
+        idx_right = idx + right_window
+        idx_right[idx_right > len(chunk_start_idx)] = len(chunk_start_idx)
+        boundary_right = end_pad[idx_right]
+        mask_right = seq_range_expand < boundary_right.unsqueeze(-1)
+        return mask_left & mask_right
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L494-L512
+    @staticmethod
+    def get_vision_position_ids(pixel_values, patch_attention_mask, patch_size=14, num_patches_per_side=32):
+        batch_size = pixel_values.shape[0]
+        max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+        max_nb_patches_h, max_nb_patches_w = max_im_h // patch_size, max_im_w // patch_size
+        boundaries = torch.arange(1 / num_patches_per_side, 1.0, 1 / num_patches_per_side)
+        position_ids = torch.full(
+            size=(
+                batch_size,
+                max_nb_patches_h * max_nb_patches_w,
+            ),
+            fill_value=0,
+        )
+
+        for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+            nb_patches_h = p_attn_mask[:, 0].sum()
+            nb_patches_w = p_attn_mask[0].sum()
+
+            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+            pos_ids = (bucket_coords_h[:, None] * num_patches_per_side + bucket_coords_w).flatten()
+            position_ids[batch_idx][p_attn_mask.view(-1)] = pos_ids
+        return position_ids
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1561
+    def embed_tokens_extend(
+        self,
+        input_ids: torch.LongTensor,
+        input_image_embeds: torch.FloatTensor = None,
+        input_audio_embeds: torch.FloatTensor = None,
+        image_sizes=None,
+        image_attention_mask=None,
+        audio_embed_sizes=None,
+        audio_projection_mode="speech",
+        past_key_values=None,
+    ):
+        if past_key_values is not None:
+            return self.language_model.embed_tokens(input_ids)
+
+        new_input_ids = input_ids.clone()
+        new_input_ids[
+            (input_ids >= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[0])
+            & (input_ids <= self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE[1])
+        ] = self._IMAGE_SPECIAL_TOKEN_ID
+        new_input_ids[
+            (input_ids >= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[0])
+            & (input_ids <= self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE[1])
+        ] = self._AUDIO_SPECIAL_TOKEN_ID
+        input_ids = new_input_ids
+        image_position_mask = (input_ids == self._IMAGE_SPECIAL_TOKEN_ID).unsqueeze(-1)
+        non_image_position_mask = ~image_position_mask
+        hidden_states = torch.from_numpy(self.language_model.embed_tokens(input_ids))
+        vision_hidden_states = self.image_embed(
+            input_ids=input_ids,
+            inputs_embeds=hidden_states,
+            image_pixel_values=input_image_embeds,
+            image_sizes=image_sizes,
+            image_attention_mask=image_attention_mask,
+        )
+        audio_hidden_states = self.audio_embed(
+            input_ids=input_ids,
+            inputs_embeds=hidden_states,
+            audio_input_embeds=input_audio_embeds,
+            audio_embed_sizes=audio_embed_sizes,
+            audio_projection_mode=audio_projection_mode,
+        )
+        if vision_hidden_states is not None and audio_hidden_states is not None:
+            hidden_states = vision_hidden_states * image_position_mask + audio_hidden_states * non_image_position_mask
+        elif vision_hidden_states is not None:
+            hidden_states = vision_hidden_states
+        elif audio_hidden_states is not None:
+            hidden_states = audio_hidden_states
+
+        return hidden_states
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        input_image_embeds: Optional[torch.FloatTensor] = None,
+        image_sizes: Optional[torch.LongTensor] = None,
+        image_attention_mask=None,
+        input_audio_embeds: Optional[torch.FloatTensor] = None,
+        audio_embed_sizes=None,
+        input_mode=None,
+        **kwargs,
+    ):
+        if pixel_values is not None and input_image_embeds is None:
+            input_image_embeds = pixel_values
+        audio_projection_mode = None
+        if input_audio_embeds is not None:
+            if isinstance(input_mode, torch.Tensor):
+                assert len(input_mode) == 1
+                input_mode = input_mode[0].item()
+            if input_mode is None:
+                input_mode = 1 if input_image_embeds is not None else 2
+            input_mode = InputMode(input_mode)
+
+            if input_mode in [InputMode.VISION_SPEECH, InputMode.VISION]:
+                audio_projection_mode = "vision"
+            elif input_mode == InputMode.SPEECH:
+                audio_projection_mode = "speech"
+            elif input_mode == InputMode.LANGUAGE:
+                audio_projection_mode = "speech"
+            else:
+                raise ValueError(f"Invalid input_mode: {input_mode}")
+        inputs_embeds = self.embed_tokens_extend(
+            input_ids=input_ids,
+            input_image_embeds=input_image_embeds,
+            input_audio_embeds=input_audio_embeds,
+            image_sizes=image_sizes,
+            image_attention_mask=image_attention_mask,
+            audio_embed_sizes=audio_embed_sizes,
+            audio_projection_mode=audio_projection_mode,
+            past_key_values=kwargs.get("past_key_values"),
+        )
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        user_prompt = "<|user|>"
+        assistant_prompt = "<|assistant|>"
+        prompt_suffix = "<|end|>"
+        image_token = getattr(processor.tokenizer, "image_token", "<|image_1|>")
+        audio_token = getattr(processor.tokenizer, "audio_token", "<|audio_1|>")
+        if audio is not None and audio_token not in text:
+            text = audio_token + text
+        if image is not None and image_token not in text:
+            text = image_token + text
+        if processor.tokenizer.chat_template is None:
+            if not text.startswith(user_prompt):
+                text = user_prompt + text + prompt_suffix + assistant_prompt
+        else:
+            text = processor.tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True
+            )
+        audio_input = {}
+        if "audio" in inspect.signature(processor.__call__).parameters:
+            sample_rate = None
+            if isinstance(audio, tuple):
+                audio, sample_rate = audio
+            if isinstance(audio, list) and len(audio) == 1 and isinstance(audio[0], tuple):
+                audio, sample_rate = audio[0]
+            audio_input["audio"] = audio
+            if sample_rate is not None:
+                audio_input["sampling_rate"] = sample_rate
+        else:
+            audio_input["audios"] = audio
+        inputs = processor(text=text, images=image, **audio_input, return_tensors="pt")
+        return inputs
+
+    def get_img_features(self, pixel_values, image_attention_mask):
+        patch_position_ids = self.get_vision_position_ids(
+            pixel_values, image_attention_mask, self.patch_size, self.num_patches_per_side
+        )
+        return torch.from_numpy(
+            self.vision_embeddings(
+                pixel_values=pixel_values,
+                patch_attention_mask=image_attention_mask,
+                patch_position_ids=patch_position_ids,
+            )[0]
+        )
+
+
+class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        if input_ids is not None and input_ids.shape[1] == 1:
+            return None
+        # Llama4 preprocessor creates bf16 tensor for pixel values, it can not be represented as numpy array
+        if pixel_values.dtype != torch.float32:
+            pixel_values.to(torch.float32)
+        return self.vision_embeddings(pixel_values.to(torch.float32)).last_hidden_state
+
+    # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1743-L1759
+    def merge_vision_text_embeddings(
+        self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
+    ):
+        image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
+        inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
+        original_inputs_embeds_shape = inputs_embeds.shape
+        special_image_mask = (input_ids == self.config.image_token_index).unsqueeze(-1)
+        final_mask = special_image_mask.to(inputs_embeds.device)
+        inputs_embeds = inputs_embeds.view(-1, inputs_embeds.size(-1))
+
+        final_mask_1d = final_mask[..., 0].reshape(-1)
+        num_tokens_to_fill = final_mask_1d.sum()
+
+        if num_tokens_to_fill != image_features.size(0):
+            raise ValueError(
+                f"Mismatch: final_mask wants {num_tokens_to_fill} embeddings, "
+                f"but multi_modal_projector returned {image_features.size(0)}"
+            )
+
+        expanded_mask = final_mask_1d.unsqueeze(-1).expand(-1, inputs_embeds.size(-1))
+        inputs_embeds.masked_scatter_(expanded_mask, image_features)
+
+        inputs_embeds = inputs_embeds.view(original_inputs_embeds_shape)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+
+        if video is not None:
+            raise ValueError("video input is not supported")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        if image is not None:
+            conversation[0]["content"].insert(0, {"type": "image"})
+
+        text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt")
+        return inputs
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,
     "llava_next": _OVLlavaNextForCausalLM,
+    "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
@@ -2829,4 +4345,11 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
+    "got_ocr2": _OVGotOCR2ForCausalLM,
+    "gemma3": _OVGemma3ForCausalLM,
+    "idefics3": _OVIdefics3ForCausalLM,
+    "smolvlm": _OVSmolVLForCasualLM,
+    "phi4mm": _OVPhi4MMForCausalLM,
+    "phi4_multimodal": _OVPhi4MMForCausalLM,
+    "llama4": _OVLlama4ForCausalLM,
 }

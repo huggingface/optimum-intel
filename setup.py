@@ -28,10 +28,9 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum~=1.24",
-    "transformers>=4.36,<4.50",
+    "optimum==1.26.*",
+    "transformers>=4.36,<4.53",
     "datasets>=1.4.0",
-    "sentencepiece",
     "setuptools",
     "scipy",
     "onnx",
@@ -43,9 +42,9 @@ TESTS_REQUIRE = [
     "parameterized",
     "Pillow",
     "evaluate",
-    "diffusers",
     "py-cpuinfo",
     "sacremoses",
+    "sentencepiece",
     "torchaudio",
     "rjieba",
     "timm",
@@ -59,15 +58,17 @@ TESTS_REQUIRE = [
     "datasets[audio]>=1.4.0",
     "tbb",
     "langchain-huggingface",
+    "hf_xet",
+    "num2words",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf>=2.14.0"],
-    "openvino": ["nncf>=2.14.0", "openvino>=2024.5.0", "openvino-tokenizers>=2024.5.0"],
-    "neural-compressor": ["neural-compressor[pt]>3.0", "accelerate", "transformers<4.46"],
-    "ipex": ["intel-extension-for-pytorch>=2.4", "transformers>4.46,<4.48", "accelerate"],
+    "nncf": ["nncf>=2.16.0"],
+    "openvino": ["nncf>=2.16.0", "openvino>=2025.1.0", "openvino-tokenizers>=2025.1.0"],
+    "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46"],
+    "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.50,<4.53", "accelerate"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

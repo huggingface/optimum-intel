@@ -80,6 +80,8 @@ except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
         [
             "OVQuantizer",
+            "OVCalibrationDataset",
+            "OVPipelineQuantizationConfig",
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
@@ -90,6 +92,8 @@ else:
     _import_structure["openvino"].extend(
         [
             "OVQuantizer",
+            "OVCalibrationDataset",
+            "OVPipelineQuantizationConfig",
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
@@ -114,6 +118,8 @@ except OptionalDependencyNotAvailable:
         "OVStableDiffusion3InpaintPipeline",
         "OVLatentConsistencyModelPipeline",
         "OVLatentConsistencyModelImg2ImgPipeline",
+        "OVLTXPipeline",
+        "OVLTXImage2VideoPipeline",
         "OVFluxPipeline",
         "OVFluxImg2ImgPipeline",
         "OVFluxInpaintPipeline",
@@ -122,6 +128,7 @@ except OptionalDependencyNotAvailable:
         "OVPipelineForImage2Image",
         "OVPipelineForText2Image",
         "OVPipelineForInpainting",
+        "OVPipelineForText2Video",
         "OVDiffusionPipeline",
     ]
 else:
@@ -138,6 +145,7 @@ else:
             "OVStableDiffusion3InpaintPipeline",
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXPipeline",
             "OVFluxPipeline",
             "OVFluxImg2ImgPipeline",
             "OVFluxInpaintPipeline",
@@ -146,6 +154,7 @@ else:
             "OVPipelineForImage2Image",
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
+            "OVPipelineForText2Video",
             "OVDiffusionPipeline",
         ]
     )
@@ -175,6 +184,7 @@ else:
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
             "OVModelForSpeechSeq2Seq",
+            "OVModelForTextToSpeechSeq2Seq",
             "OVModelForVision2Seq",
             "OVModelForVisualCausalLM",
             "OVModelForSequenceClassification",
@@ -183,6 +193,8 @@ else:
             "OVModelOpenCLIPVisual",
             "OVModelOpenCLIPText",
             "OVModelOpenCLIPForZeroShotImageClassification",
+            "OVModelForZeroShotImageClassification",
+            "OVSamModel",
         ]
     )
 
@@ -262,16 +274,20 @@ if TYPE_CHECKING:
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import (
+            OVCalibrationDataset,
             OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
+            OVPipelineQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVWeightQuantizationConfig,
         )
     else:
         from .openvino import (
+            OVCalibrationDataset,
             OVDynamicQuantizationConfig,
             OVMixedQuantizationConfig,
+            OVPipelineQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVWeightQuantizationConfig,
@@ -308,6 +324,7 @@ if TYPE_CHECKING:
             OVPipelineForInpainting,
             OVPipelineForText2Image,
             OVSanaPipeline,
+            OVSanaSprintPipeline,
             OVStableDiffusion3Img2ImgPipeline,
             OVStableDiffusion3InpaintPipeline,
             OVStableDiffusion3Pipeline,
@@ -340,9 +357,11 @@ if TYPE_CHECKING:
             OVModelForSeq2SeqLM,
             OVModelForSequenceClassification,
             OVModelForSpeechSeq2Seq,
+            OVModelForTextToSpeechSeq2Seq,
             OVModelForTokenClassification,
             OVModelForVision2Seq,
             OVModelForVisualCausalLM,
+            OVModelForZeroShotImageClassification,
             OVModelOpenCLIPForZeroShotImageClassification,
             OVModelOpenCLIPText,
             OVModelOpenCLIPVisual,
