@@ -46,7 +46,7 @@ jobs:
           python -m pip install --upgrade setuptools
           python -m pip install git+https://github.com/huggingface/doc-builder
           python -m pip install .[quality]
-          python -m pip install openvino nncf neural-compressor[pt] diffusers
+          python -m pip install openvino nncf neural-compressor[pt] diffusers accelerate
       - name: Make documentation
         shell: bash
         run: |
