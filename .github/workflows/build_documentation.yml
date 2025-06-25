@@ -9,13 +9,56 @@ on:
       - v*-release
 
 jobs:
-   build:
-    uses: huggingface/doc-builder/.github/workflows/build_main_documentation.yml@main
-    with:
-      commit_sha: ${{ github.sha }}
-      package: optimum-intel
-      version_tag_suffix: ""
-      additional_args: --version main
-    secrets:
-      token: ${{ secrets.HUGGINGFACE_PUSH }}
-      hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
+  build_documentation:
+    runs-on: ubuntu-22.04
+    env:
+      COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.number }}
+      EVENT_CONTEXT: ${{ toJSON(github.event) }}
+      PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache-dependency-path: "kit/package-lock.json"
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Set environment variables
+        run: |
+          cd optimum
+          version=`echo "$(grep '^__version__ =' intel/version.py | cut -d '=' -f 2- | xargs)"`
+          if [[ $version == *.dev0 ]]
+          then
+            echo "VERSION=main" >> $GITHUB_ENV
+          else
+            echo "VERSION=v$version" >> $GITHUB_ENV
+          fi
+          cd ..
+      - name: Setup environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade setuptools
+          python -m pip install git+https://github.com/huggingface/doc-builder
+          python -m pip install .[quality]
+      - name: Make documentation
+        shell: bash
+        run: |
+          doc-builder build optimum.intel docs/source/ \
+            --repo_name optimum-intel \
+            --build_dir intel-doc-build/ \
+            --version ${{ env.VERSION }} \
+            --version_tag_suffix "" \
+            --html \
+            --clean \
+      - name: Push documentation
+        run: |
+          sudo chmod -R ugo+rwx intel-doc-build
+          cd intel-doc-build
+          sudo mv optimum.intel optimum-intel
+          doc-builder push optimum-intel --doc_build_repo_id "hf-doc-build/doc-build" --token "${{ secrets.HF_DOC_BUILD_PUSH }}" --commit_msg "Updated with commit $COMMIT_SHA See: https://github.com/huggingface/optimum-intel/commit/$COMMIT_SHA" --n_retries 5
