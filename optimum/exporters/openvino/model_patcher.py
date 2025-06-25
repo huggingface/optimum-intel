@@ -6458,8 +6458,6 @@ class Llama4TextModelPatcher(ModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-
-
 class ConvSequenceTransform(torch.nn.Module):
     def __init__(self, conv_kernel_size, use_conv_bias, conv1, act, conv_bias):
         super().__init__()
