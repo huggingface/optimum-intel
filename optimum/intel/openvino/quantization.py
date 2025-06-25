@@ -815,7 +815,7 @@ class OVCalibrationDatasetBuilder:
                     inputs = self._wrap_sample_as_array(item, add_batch_dim=True)
                 else:
                     tokenizer = tokenizer or get_tokenizer()
-                    inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="np")
+                    inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="pt")
 
                 self.model.generate(**inputs, max_new_tokens=seq_len)
         finally:
