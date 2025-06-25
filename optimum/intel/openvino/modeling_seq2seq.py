@@ -477,7 +477,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
         decoder_with_past = None
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         compile_only = kwargs.pop("compile_only", False)
         device = kwargs.pop("device", "CPU")
         ov_config = kwargs.pop("ov_config", None)
@@ -521,10 +520,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             "decoder_with_past": model_save_dir / decoder_with_past_file_name,
         }
         if not compile_only:
-            encoder = cls.load_model(file_names["encoder"], quantization_config)
-            decoder = cls.load_model(file_names["decoder"], quantization_config)
+            encoder = cls.load_model(file_names["encoder"])
+            decoder = cls.load_model(file_names["decoder"])
             if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"])
         else:
             model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
             encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
@@ -551,19 +550,29 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
-        return cls(
+        model = cls(
             encoder=encoder,
             decoder=decoder,
             decoder_with_past=decoder_with_past,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
-            generation_config=generation_config,
             device=device,
             ov_config=ov_config,
             compile_only=compile_only,
             **kwargs,
         )
+
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        if quantization_config is not None:
+            from optimum.intel import OVQuantizer
+
+            quantizer = OVQuantizer(model)
+            quantization_config_copy = quantization_config.clone()
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+
+        return model
 
     @classmethod
     def _export(
