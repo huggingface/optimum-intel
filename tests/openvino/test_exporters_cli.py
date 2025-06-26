@@ -400,6 +400,20 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "model": {"int8": 65},
             },
         ),
+        (
+            "text2text-generation-with-past",
+            "t5",
+            "int8",
+            "--dataset c4 --num-samples 1",
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 30, "decoder": 62},
+            (
+                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+            ),
+        ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [
@@ -957,6 +971,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
+        self.maxDiff = 100000
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
@@ -971,9 +986,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = model_cls.from_pretrained(tmpdir)
 
-            if "automatic-speech-recognition" in task and model.decoder_with_past is None:
-                del expected_num_weight_nodes_per_model["decoder_with_past"]
-                del expected_fake_nodes_per_model["decoder_with_past"]
+            if (
+                "automatic-speech-recognition" in task or "text2text-generation" in task
+            ) and model.decoder_with_past is None:
+                expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
+                expected_fake_nodes_per_model.pop("decoder_with_past", None)
 
             check_compression_state_per_model(
                 self,

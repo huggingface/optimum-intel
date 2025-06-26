@@ -482,6 +482,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             and (
                 task in ["fill-mask", "zero-shot-image-classification"]
                 or task.startswith("text-generation")
+                or task.startswith("text2text-generation")
                 or task.startswith("automatic-speech-recognition")
                 or task.startswith("feature-extraction")
             )
@@ -491,6 +492,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForCausalLM
 
                 model_cls = OVModelForCausalLM
+            elif task.startswith("text2text-generation"):
+                from optimum.intel import OVModelForSeq2SeqLM
+
+                model_cls = OVModelForSeq2SeqLM
             elif task == "image-text-to-text":
                 from optimum.intel import OVModelForVisualCausalLM
 
