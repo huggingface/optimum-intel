@@ -333,12 +333,10 @@ class OVBaseModel(OptimizedModel):
 
     def _save_openvino_config(self, save_directory: Union[str, Path]):
         if self._openvino_config is not None:
-            quantization_config = self._openvino_config.quantization_config
-            if not isinstance(quantization_config.dataset, (str, type(None))):
-                quantization_config.dataset = None
-            ov_config = copy.deepcopy(self._openvino_config)
-            ov_config.quantization_config = self._openvino_config.quantization_config.to_dict()
-            ov_config.save_pretrained(save_directory)
+            if not isinstance(self._openvino_config.quantization_config.dataset, (str, type(None))):
+                self._openvino_config.quantization_config.dataset = None
+
+            self._openvino_config.save_pretrained(save_directory)
 
     @classmethod
     def _from_pretrained(
