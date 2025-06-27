@@ -6457,6 +6457,142 @@ class Llama4TextModelPatcher(ModelPatcher):
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
 
+def _rotate_every_two(x: torch.Tensor) -> torch.Tensor:
+    x1 = x[:, :, :, ::2]
+    x2 = x[:, :, :, 1::2]
+    x = torch.stack((-x2, x1), dim=-1)
+    return x.flatten(-2)  # in einsum notation: rearrange(x, '... d j -> ... (d j)')
+
+
+def _apply_rotary_pos_emb(tensor: torch.Tensor, sin: torch.Tensor, cos: torch.Tensor) -> torch.Tensor:
+    sin = torch.repeat_interleave(sin[:, None, :, :], 2, 3)
+    cos = torch.repeat_interleave(cos[:, None, :, :], 2, 3)
+    return (tensor * cos) + (_rotate_every_two(tensor) * sin)
+
+def _apply_rotary(rp, q, k):
+    """
+    Apply rotary position embeddings to queries and keys.
+
+    Args:
+        rp (Tensor): Rotary position embeddings
+        q (Tensor): Query tensor [batch, heads, seq_len, dim]
+        k (Tensor): Key tensor [batch, heads, seq_len, dim]
+
+    Returns:
+        Tuple[Tensor, Tensor]: Rotated queries and keys
+    """
+    sin, cos = torch.split(rp, rp.shape[-1] // 2, dim=-1)
+    key = _apply_rotary_pos_emb(k, sin, cos)
+    query = _apply_rotary_pos_emb(q, sin, cos)
+    return query, key
+
+def _ernie_emb_forward(self, seq_length, position_ids=None):
+    """
+    Compute rotary position embeddings for given sequence length.
+
+    Args:
+        seq_length (int): Maximum sequence length
+        position_ids (Tensor, optional): Custom position indices. Defaults to None.
+
+    Returns:
+        Tensor: Rotary position embeddings of shape [1, 1, seq_length, head_dim]
+    """
+    indices = torch.arange(0, self.head_dim, 2, dtype=torch.float32)
+    indices = 1 / self.base ** (indices / self.head_dim)
+    if position_ids is None:
+        position_ids = torch.arange(
+            0, seq_length, 1, dtype=torch.float32
+        ).unsqueeze(1)
+        position_ids = position_ids / self.compression_ratio
+        sinusoid_inp = position_ids * indices.unsqueeze(0)
+    else:
+        position_ids = position_ids / self.compression_ratio
+        seq_length = position_ids.shape[-1]
+        sinusoid_inp = position_ids.unsqueeze(-1).to(torch.float32) * indices.unsqueeze(0)
+    pos_emb = torch.cat([torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)], dim=-1)
+    pos_emb = pos_emb.view(-1, seq_length, self.head_dim)
+    pos_emb = pos_emb.detach()
+    return pos_emb
+
+def _rope_attn(
+    self,
+    mix_layer,
+    query_states,
+    key_states,
+    value_states,
+    attention_mask,
+    position_ids,
+    output_attentions=False,
+    past_key_value=None,
+    use_cache=False,
+    attn_mask_start_row_indices=None,
+):
+    """Attention computation with rotary embeddings.
+
+    Args:
+        mix_layer (Optional[torch.Tensor]): Combined QKV projection
+        query_states (torch.Tensor): Query states
+        key_states (torch.Tensor): Key states
+        value_states (torch.Tensor): Value states
+        attention_mask (Optional[torch.Tensor]): Attention mask
+        position_ids (Optional[torch.Tensor]): Position indices
+        output_attentions (bool): Return attention weights
+        past_key_value (Optional[Tuple[torch.Tensor, torch.Tensor]]): Cached states
+        use_cache (bool): Cache new states
+        attn_mask_start_row_indices (Optional[torch.Tensor]): Variable length indices
+
+    Returns:
+        Tuple containing:
+            - attention_output: Result tensor
+            - attention_weights: Optional weights
+            - updated_key_value_cache: Optional cache
+    """
+
+    if mix_layer is not None:
+        chunk_size = mix_layer.size(-1) // 3
+        query_states, key_states, value_states = torch.split(
+            mix_layer, 
+            [chunk_size, chunk_size, chunk_size], 
+            dim=-1
+        )
+    query_states = query_states.permute(0, 2, 1, 3)
+    key_states = key_states.permute(0, 2, 1, 3)
+    value_states = value_states.permute(0, 2, 1, 3)
+
+    query_states_dtype = query_states.dtype
+
+    kv_seq_len = key_states.shape[-2]
+    offset = 0
+    if past_key_value is not None:
+        offset = past_key_value[0].shape[-2]
+        kv_seq_len += offset
+
+    cos_sin = self.rotary_emb(kv_seq_len)  # [b,h,s,d]->[b,s,h,d]
+    if offset > 0:
+        cos_sin = cos_sin[:, offset:]
+    query_states, key_states = _apply_rotary(cos_sin, query_states, key_states)
+
+    query_states = query_states.to(query_states_dtype)
+    key_states = key_states.to(query_states_dtype)
+    if past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+    # shape: [2, b, s, kvh, d]
+    past_key_value = [key_states, value_states] if use_cache else None
+    seq_length = query_states.shape[2]
+    attn_output, attn_weights = self.attn_func(
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        attn_mask_start_row_indices,
+        seq_length,
+    )
+    return attn_output, attn_weights, past_key_value
+        
+        
 def _ernie_core_attn(
     self,
     q,
@@ -6479,25 +6615,14 @@ def _ernie_core_attn(
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: Attention output and weights
     """
-    origin_dtype = q.dtype
-
-    q = q.permute(0, 2, 1, 3)
-    k = k.permute(0, 2, 1, 3)
-    v = v.permute(0, 2, 1, 3)
-
-    # Handle GQA case - repeat k and v heads to match q heads
     if self.is_gqa:
         # [batch, num_key_value_heads, seq_len, head_dim] -> [batch, num_heads, seq_len, head_dim]
         repeat_factor = self.num_heads // self.num_key_value_heads
         k = self.repeat_kv(k, repeat_factor)
         v = self.repeat_kv(v, repeat_factor)
-
-    if attention_mask is not None:
-        attention_mask = attention_mask.to(torch.float32)
-        attention_mask = attention_mask[:, None, None, :]
-    
+        
     out = F.scaled_dot_product_attention(
-        q, k, v, attn_mask=attention_mask, dropout_p=self.config.attention_probs_dropout_prob, is_causal=False
+        q, k, v, attn_mask=None, dropout_p=self.config.attention_probs_dropout_prob, is_causal=True
     )
 
     # combine heads
@@ -6531,19 +6656,35 @@ class ErnieModelPatcher(DecoderModelPatcher):
             output_hidden_states=None,
             **kwargs,
         ):
-            return self.__orig_forward(
-                input_ids=input_ids,
+            outputs = self.ernie(
+                input_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
-                attn_mask_start_row_indices=attn_mask_start_row_indices,
                 token_type_ids=token_type_ids,
+                attn_mask_start_row_indices=attn_mask_start_row_indices,
                 inputs_embeds=inputs_embeds,
-                labels=labels,
                 use_cache=use_cache,
                 past_key_values=past_key_values,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
-                **kwargs,)
+                return_dict=True,
+            )
+
+            hidden_states = outputs.last_hidden_state
+            logits = self.lm_head(hidden_states)
+
+            loss = None
+            if labels is not None:
+                loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+
+            return CausalLMOutputWithPast(
+                loss=loss,
+                logits=logits,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+            )
+
 
         model.forward = types.MethodType(forward, model)
 
@@ -6552,11 +6693,18 @@ class ErnieModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for layer in self._model.ernie.layers:
-            layer.self_attn._orig_core_attn = layer.self_attn.core_attn
-            layer.self_attn.core_attn = types.MethodType(_ernie_core_attn, layer.self_attn)
+            layer.self_attn._orig_core_attn = layer.self_attn.attn_func
+            layer.self_attn.attn_func = types.MethodType(_ernie_core_attn, layer.self_attn)
+            layer.self_attn._orig_rope_attn = layer.self_attn.rope_attn
+            layer.self_attn.rope_attn = types.MethodType(_rope_attn, layer.self_attn)
+            layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
+            layer.self_attn.rotary_emb.forward = types.MethodType(_ernie_emb_forward, layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
         for layer in self._model.ernie.layers:
-            layer.self_attn.core_attn = layer.self_attn._orig_core_attn
+            layer.self_attn.attn_func = layer.self_attn._orig_core_attn
+            layer.self_attn.rope_attn = layer.self_attn._orig_rope_attn
+            layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
+            
