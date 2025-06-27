@@ -29,6 +29,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
+    OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForCustomTasks,
@@ -40,8 +41,11 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
+    OVModelForZeroShotImageClassification,
+    OVSamModel,
     OVStableDiffusion3Pipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
@@ -73,6 +77,9 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
         "llava": OVModelForVisualCausalLM,
+        "sam": OVSamModel,
+        "speecht5": OVModelForTextToSpeechSeq2Seq,
+        "clip": OVModelForZeroShotImageClassification,
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -80,18 +87,22 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
+        "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
     if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.update({"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline})
+        SUPPORTED_ARCHITECTURES.update(
+            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline}
+        )
 
-    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava")
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
     def _openvino_export(
         self,
         model_type: str,
         stateful: bool = True,
         patch_16bit_model: bool = False,
+        model_kwargs: dict = None,
     ):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
@@ -124,6 +135,7 @@ class ExportModelTest(unittest.TestCase):
                     task=supported_task,
                     preprocessors=preprocessors,
                     stateful=stateful,
+                    model_kwargs=model_kwargs,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -180,7 +192,10 @@ class ExportModelTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
-        self._openvino_export(model_type)
+        model_kwargs = None
+        if model_type == "speecht5":
+            model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
+        self._openvino_export(model_type, model_kwargs=model_kwargs)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):
@@ -206,11 +221,15 @@ class ExportModelTest(unittest.TestCase):
         supported_tasks = (task, task + "-with-past") if "text-generation" in task else (task,)
         for supported_task in supported_tasks:
             with TemporaryDirectory() as tmpdirname:
+                model_kwargs = None
+                if model_type == "speecht5":
+                    model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
                 export_from_model(
                     model=model,
                     output=Path(tmpdirname),
                     task=supported_task,
                     preprocessors=preprocessors,
+                    model_kwargs=model_kwargs,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -302,6 +321,7 @@ class CustomExportModelTest(unittest.TestCase):
             out_features=256,
         )
         model = SentenceTransformer(modules=[word_embedding_model, pooling_model, dense_model])
+        model.to(torch.device("cpu"))
 
         with TemporaryDirectory() as tmpdirname:
             export_from_model(model, output=tmpdirname, task="feature-extraction")

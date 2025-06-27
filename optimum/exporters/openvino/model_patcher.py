@@ -23,6 +23,7 @@ import torch
 import torch.nn.functional as F
 from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
+from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.base import OnnxConfig
@@ -166,7 +167,7 @@ def patch_update_causal_mask(
 
 def unpatch_update_causal_mask(model, inner_model_name="model", patch_extrnal_model=False):
     inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
-    if inner_model is not None and hasattr(inner_model, "._orig_update_causal_mask"):
+    if inner_model is not None and hasattr(inner_model, "_orig_update_causal_mask"):
         inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
 
@@ -2655,8 +2656,11 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.42.0")
-        if hasattr(self._model.model.layers[0].self_attn, "rotary_emb") and hasattr(
-            self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"
+        if (
+            hasattr(self._model, "model")
+            and hasattr(self._model.model, "layers")
+            and hasattr(self._model.model.layers[0].self_attn, "rotary_emb")
+            and hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache")
         ):
             for layer in self._model.model.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
@@ -2830,14 +2834,113 @@ class GptNeoxModelPatcher(DecoderModelPatcher):
         unpatch_update_causal_mask(self._model, "gpt_neox")
 
 
+# Adopted from https://github.com/huggingface/optimum/blob/v1.24.0/optimum/bettertransformer/models/attention.py#L96
+def _gptj_attn(self, query, key, value, attention_mask=None, head_mask=None):
+    if head_mask is not None:
+        return self._orig_attn(query, key, value, attention_mask, head_mask)
+
+    batch_size = query.shape[0]
+
+    mask_value = torch.finfo(value.dtype).min
+    mask_value = torch.full([], mask_value, dtype=value.dtype)
+
+    # in gpt-neo-x and gpt-j the query and keys are always in fp32
+    # thus we need to cast them to the value dtype
+    if getattr(self, "downcast_qk", False):
+        query = query.to(value.dtype)
+        key = key.to(value.dtype)
+
+    if batch_size == 1 and attention_mask is not None and attention_mask[0, 0, -1, -1] < -1:
+        return self._orig_attn(query, key, value, attention_mask, head_mask)
+
+    dropout_p = self.dropout_prob_attn if self.training else 0.0
+    if batch_size == 1 or self.training:
+        if query.shape[2] > 1:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
+            )
+    else:
+        query_length, key_length = query.size(-2), key.size(-2)
+
+        # causal_mask is always [True, ..., True] otherwise, so executing this
+        # is unnecessary
+        if query_length > 1:
+            if not is_transformers_version(">=", "4.44.99"):
+                causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].to(torch.bool)
+
+                causal_mask = torch.where(causal_mask, 0, mask_value)
+
+                # torch.Tensor.expand does no memory copy
+                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
+                if attention_mask is not None:
+                    attention_mask = causal_mask + attention_mask
+
+            else:
+                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+
+        sdpa_result = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
+        )
+
+    # in gpt-neo-x and gpt-j the query and keys are always in fp32
+    # thus we need to cast them to the value dtype
+    if getattr(self, "downcast_qk", False):
+        sdpa_result = sdpa_result.to(value.dtype)
+
+    return sdpa_result, None
+
+
+def gptj_attn_forward(
+    self,
+    hidden_states: torch.FloatTensor,
+    layer_past: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = False,
+    output_attentions: Optional[bool] = False,
+    cache_position: Optional[torch.LongTensor] = None,
+):
+    if output_attentions:
+        self._attn = self._orig_attn
+
+    return self._orig_forward(
+        hidden_states,
+        layer_past,
+        attention_mask,
+        position_ids,
+        head_mask,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        cache_position=cache_position,
+    )
+
+
 class GptJModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.45.0", "transformer")
+        if is_transformers_version(">=", "4.49"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            for block in self._model.transformer.h:
+                block.attn._orig_forward = block.attn.forward
+                block.attn.forward = types.MethodType(gptj_attn_forward, block.attn)
+                block.attn._orig_attn = block.attn._attn
+                block.attn._attn = types.MethodType(_gptj_attn, block.attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         unpatch_update_causal_mask(self._model, "transformer")
+        if is_transformers_version(">=", "4.49"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for block in self._model.transformer.h:
+                block.attn.forward = block.attn._orig_forward
+                block.attn._attn = block.attn._orig_attn
 
 
 class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
@@ -2852,6 +2955,99 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
+
+
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/attention.py#L721
+def _bloom_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor,
+    alibi: torch.Tensor,
+    attention_mask: torch.Tensor,
+    layer_past=None,
+    head_mask: Optional[torch.Tensor] = None,
+    use_cache: bool = False,
+    output_attentions: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
+):
+    from transformers.models.bloom.modeling_bloom import dropout_add
+
+    if head_mask is not None or output_attentions:
+        return self._orig_forward(
+            hidden_states,
+            residual,
+            alibi,
+            attention_mask,
+            layer_past=layer_past,
+            head_mask=head_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            cache_position=cache_position,
+        )
+    batch_size, q_length, _ = hidden_states.shape
+    # [batch_size, seq_length, 3 x hidden_size]
+    fused_qkv = self.query_key_value(hidden_states)
+    # 3 x [batch_size, num_heads, seq_length, head_dim]
+    query_layer, key_layer, value_layer = self._reshape(fused_qkv)
+
+    if layer_past is not None:
+        cache_kwargs = {"cache_position": cache_position}
+        key_layer, value_layer = layer_past.update(key_layer, value_layer, self.layer_idx, cache_kwargs)
+
+    alibi = alibi.reshape(batch_size, -1, *alibi.shape[1:])
+
+    if attention_mask is not None:  # no matter the length, we just slice it
+        kv_length = cache_position[-1] + 1  # cache position is 0-indexed while length should start from 1
+        causal_mask = attention_mask[:, :, :, :kv_length]
+        alibi = torch.masked_fill(alibi, causal_mask.bool(), torch.finfo(alibi.dtype).min)
+
+    context_layer = torch.nn.functional.scaled_dot_product_attention(
+        query_layer,
+        key_layer,
+        value_layer,
+        attn_mask=alibi,
+        dropout_p=self.dropout_prob_attn if self.training else 0.0,
+    )
+
+    # Transform [batch_size, num_heads, seq_length, head_dim] to [batch_size, seq_length, num_heads * head_dim]
+    context_layer = context_layer.transpose(1, 2)
+    context_layer = context_layer.reshape(batch_size, q_length, self.hidden_size)
+
+    # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
+    if self.pretraining_tp > 1 and self.slow_but_exact:
+        slices = self.hidden_size / self.pretraining_tp
+        output_tensor = torch.zeros_like(context_layer)
+        for i in range(self.pretraining_tp):
+            output_tensor = output_tensor + F.linear(
+                context_layer[:, :, int(i * slices) : int((i + 1) * slices)],
+                self.dense.weight[:, int(i * slices) : int((i + 1) * slices)],
+            )
+    else:
+        output_tensor = self.dense(context_layer)
+
+    output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
+
+    outputs = (output_tensor, layer_past)
+
+    return outputs
+
+
+class BloomModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "sdpa"
+            for block in self._model.transformer.h:
+                block.self_attention._orig_forward = block.self_attention.forward
+                block.self_attention.forward = types.MethodType(_bloom_attn_forward, block.self_attention)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            for block in self._model.transformer.h:
+                block.self_attention.forward = block.self_attention._orig_forward
 
 
 def _gpt_neo_attn_forward(
@@ -2985,7 +3181,7 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
                 and (cache_position_index > len(args) and "cache_position" not in kwargs)
             ):
                 past_seen_tokens = legacy_pkv[0][0].shape[-2]
-                input_ids = args[input_ids_index]
+                input_ids = args[input_ids_index] if "input_ids" not in kwargs else kwargs["input_ids"]
                 cache_position = torch.arange(
                     past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
                 )
@@ -3287,6 +3483,13 @@ def llava_next_video_vision_embed_forward(self, pixel_values):
     return selected_image_feature
 
 
+# Modified from https://huggingface.co/microsoft/maira-2/blob/main/modeling_maira2.py#L68
+def maira_vision_embed_forward(self, pixel_values):
+    vision_feature_select_strategy = self.config.vision_feature_select_strategy
+    vision_feature_layer = self.config.vision_feature_layer
+    return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
+
+
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -3296,6 +3499,23 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class MairaImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(maira_vision_embed_forward, model)
 
         super().__init__(config, model, model_kwargs)
 
@@ -4079,6 +4299,7 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
             past_key_values=None,
             inputs_embeds=None,
             input_ids=None,
+            use_cache=True,
         ):
             from transformers.cache_utils import DynamicCache
 
@@ -4089,6 +4310,7 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
                 position_ids=position_ids,
                 past_key_values=new_past_key_values,
                 inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
             )
             if past_key_values is not None:
                 result["past_key_values"] = result["past_key_values"].to_legacy_cache()
@@ -4574,7 +4796,10 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         model.__orig_forward = model.forward
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
-        model.forward = model.get_image_features
+        if hasattr(model, "model") and hasattr(model.model, "get_image_features"):
+            model.forward = model.model.get_image_features
+        else:
+            model.forward = model.get_image_features
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4640,12 +4865,18 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         model.__orig_forward = model.forward
-        model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+        if is_transformers_version("<", "4.52"):
+            model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+        else:
+            model.model._orig_update_causual_mask = model.model._update_causal_mask
+            model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, model.model)
 
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
-        def forward(self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds):
+        def forward(
+            self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
+        ):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
@@ -4654,18 +4885,24 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
+            forward_kwargs = {}
 
-            causal_mask = self._update_causal_mask_mm(
-                attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
-            )
+            if is_transformers_version("<", "4.52"):
+                attention_mask = self._update_causal_mask_mm(
+                    attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
+                )
+            else:
+                forward_kwargs["token_type_ids"] = token_type_ids
 
             result = self.__orig_forward(
                 input_ids=None,
-                attention_mask=causal_mask,
+                attention_mask=attention_mask,
                 position_ids=position_ids,
                 cache_position=cache_position,
                 past_key_values=pkv,
                 inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                **forward_kwargs,
             )
             upd_pkv = result["past_key_values"]
             result["past_key_values"] = upd_pkv.to_legacy_cache()
@@ -4677,6 +4914,8 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        if hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
@@ -4873,4 +5112,1347 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.vision_model.forward = self._model.vision_model._orig_forward
         self._model.vision_model.embeddings.forward = self._model.vision_model.embeddings._orig_forward
         for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+# Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/decoder_models.py#L367
+def _blenderbot_attn_forward_legacy(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    if output_attentions or layer_head_mask is not None:
+        return self._orig_forward(
+            hidden_states, key_value_states, past_key_value, attention_mask, layer_head_mask, output_attentions
+        )
+    """Input shape: Batch x Time x Channel"""
+
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    is_cross_attention = key_value_states is not None
+
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states)
+    # get key, value proj
+    # `past_key_value[0].shape[2] == key_value_states.shape[1]`
+    # is checking that the `sequence_length` of the `past_key_value` is the same as
+    # the provided `key_value_states` to support prefix tuning
+    if is_cross_attention and past_key_value is not None and past_key_value[0].shape[2] == key_value_states.shape[1]:
+        # reuse k,v, cross_attentions
+        key_states = past_key_value[0]
+        value_states = past_key_value[1]
+    elif is_cross_attention:
+        # cross_attentions
+        key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
+        value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
+    elif past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+    else:
+        # self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+    if self.is_decoder:
+        # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+        # Further calls to cross_attention layer can then reuse all cross-attention
+        # key/value_states (first "if" case)
+        # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+        # all previous decoder key/value_states. Further calls to uni-directional self-attention
+        # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+        # if encoder bi-directional self-attention `past_key_value` is always `None`
+        past_key_value = (key_states, value_states)
+
+    query_states = self._shape(query_states, tgt_len, bsz)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        dropout_p=self.dropout if self.training else 0.0,
+        is_causal=False,
+    )
+
+    if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned aross GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.52.3/src/transformers/models/blenderbot/modeling_blenderbot.py#L156
+def _blenderbot_attn_forward_new(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states=None,
+    past_key_value=None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+    cache_position: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    from transformers.cache_utils import EncoderDecoderCache
+
+    """Input shape: Batch x Time x Channel"""
+
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    if output_attentions or layer_head_mask is not None:
+        return self._orig_forward(
+            hidden_states,
+            key_value_states,
+            past_key_value,
+            attention_mask,
+            layer_head_mask,
+            output_attentions,
+            cache_position,
+        )
+    is_cross_attention = key_value_states is not None
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states).view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+    query_states = query_states
+
+    if past_key_value is not None:
+        if isinstance(past_key_value, EncoderDecoderCache):
+            is_updated = past_key_value.is_updated.get(self.layer_idx)
+            if is_cross_attention:
+                # after the first generated id, we can subsequently re-use all key/value_states from cache
+                curr_past_key_value = past_key_value.cross_attention_cache
+            else:
+                curr_past_key_value = past_key_value.self_attention_cache
+        else:
+            curr_past_key_value = past_key_value
+
+    current_states = key_value_states if is_cross_attention else hidden_states
+    if is_cross_attention and past_key_value is not None and is_updated:
+        # reuse k,v, cross_attentions
+        key_states = curr_past_key_value.key_cache[self.layer_idx]
+        value_states = curr_past_key_value.value_cache[self.layer_idx]
+    else:
+        key_states = self.k_proj(current_states)
+        value_states = self.v_proj(current_states)
+        key_states = key_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+        if past_key_value is not None:
+            # save all key/value_states to cache to be re-used for fast auto-regressive generation
+            cache_position = cache_position if not is_cross_attention else None
+            key_states, value_states = curr_past_key_value.update(
+                key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+            )
+            # set flag that curr layer for cross-attn is already updated so we can re-use in subsequent calls
+            if is_cross_attention:
+                past_key_value.is_updated[self.layer_idx] = True
+
+    proj_shape = (bsz, self.num_heads, -1, self.head_dim)
+    # difference with original, removed query_states = query_states.reshape(*proj_shape) * self.scale as scale is part of SDPA
+    query_states = query_states.reshape(*proj_shape)
+    key_states = key_states.reshape(*proj_shape)
+    value_states = value_states.reshape(*proj_shape)
+
+    # Difference with original, use SDPA instead of eager attention
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        dropout_p=self.dropout if self.training else 0.0,
+        is_causal=False,
+    )
+
+    if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned aross GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+if is_transformers_version(">=", "4.52"):
+    _blenderbot_attn_forward = _blenderbot_attn_forward_new
+else:
+    _blenderbot_attn_forward = _blenderbot_attn_forward_legacy
+
+
+def modulewise_patch(model, module_cls, patch_forward):
+    for _, module in model.named_children():
+        if isinstance(module, module_cls):
+            module._orig_forward = module.forward
+            module.forward = types.MethodType(patch_forward, module)
+            return
+        else:
+            if len(list(module.children())) > 0:
+                modulewise_patch(module, module_cls, patch_forward)
+
+
+def modulewise_unpatch(model, module_cls):
+    for _, module in model.named_children():
+        if isinstance(module, module_cls):
+            if hasattr(module, "_orig_forward"):
+                module.forward = module._orig_forward
+        else:
+            if len(list(module.children())) > 0:
+                modulewise_unpatch(module, module_cls)
+
+
+class BlenderbotModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+
+            modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+
+            modulewise_unpatch(self._model, BlenderbotAttention)
+
+
+class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
+
+            modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
+
+            modulewise_unpatch(self._model, BlenderbotSmallAttention)
+
+
+class BlenderbotStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotModelPatcher):
+    pass
+
+
+class BlenderbotSmallStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotSmallModelPatcher):
+    pass
+
+
+class PegasusModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
+
+            modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
+
+            modulewise_unpatch(self._model, PegasusAttention)
+
+
+# Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L596
+# No modifications, transformers>=4.52.0 this method realization breaks tracing
+def _qwen2moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    """ """
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    # router_logits: (batch * sequence_length, n_experts)
+    router_logits = self.gate(hidden_states)
+
+    routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+    routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+    if self.norm_topk_prob:
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+    # we cast back to the input dtype
+    routing_weights = routing_weights.to(hidden_states.dtype)
+
+    final_hidden_states = torch.zeros(
+        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    )
+
+    # One hot encode the selected experts to create an expert mask
+    # this will be used to easily index which expert is going to be sollicitated
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+    # Loop over all available experts in the model and perform the computation on each expert
+    for expert_idx in range(self.num_experts):
+        expert_layer = self.experts[expert_idx]
+        idx, top_x = torch.where(expert_mask[expert_idx])
+
+        # Index the correct hidden states and compute the expert hidden state for
+        # the current expert. We need to make sure to multiply the output hidden
+        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+        # However `index_add_` only support torch tensors for indexing so we'll use
+        # the `top_x` tensor here.
+        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+
+    final_hidden_states = final_hidden_states + shared_expert_output
+
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states, router_logits
+
+
+class Qwen2MoEPatcher(UpdateCausalMaskModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.52.0"):
+            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+
+            modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.52.0"):
+            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+
+            modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
+
+
+class PegasusStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, PegasusModelPatcher):
+    pass
+
+
+class MarianModelPatcher(Seq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.marian.modeling_marian import MarianAttention
+
+            modulewise_patch(self._model, MarianAttention, _blenderbot_attn_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.49.0"):
+            from transformers.models.marian.modeling_marian import MarianAttention
+
+            modulewise_unpatch(self._model, MarianAttention)
+
+
+class MarianStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, MarianModelPatcher):
+    pass
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
+# this is a patch to avoid PyTorch FE issue
+# with the same tensor names on input and intermediate tensor for speaker_embeddings
+def speecht5_decoder_prenet_forward(
+    self,
+    input_values: torch.Tensor,
+    speaker_embeddings: Optional[torch.Tensor] = None,
+):
+    inputs_embeds = input_values
+    for layer in self.layers:
+        inputs_embeds = torch.nn.functional.relu(layer(inputs_embeds))
+        inputs_embeds = self._consistent_dropout(inputs_embeds, self.config.speech_decoder_prenet_dropout)
+
+    inputs_embeds = self.final_layer(inputs_embeds)
+    inputs_embeds = self.encode_positions(inputs_embeds)
+
+    if speaker_embeddings is not None:
+        # this is a patch to avoid for PyTorch FE issue!!!
+        # with the same tensor names on input and intermediate tensor in a model
+        speaker_embeddings_norm = torch.nn.functional.normalize(speaker_embeddings)
+        speaker_embeddings_unsqueeze = speaker_embeddings_norm.unsqueeze(1).expand(-1, inputs_embeds.size(1), -1)
+        inputs_embeds = torch.cat([inputs_embeds, speaker_embeddings_unsqueeze], dim=-1)
+        inputs_embeds = torch.nn.functional.relu(self.speaker_embeds_layer(inputs_embeds))
+
+    return inputs_embeds
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L993
+# this is a patch to avoid CPU plugin issue that is happened on 16-th iteration of token generation
+# values computed by self-attention attn_output = torch.bmm(attn_probs, value_states) in a decoder gets incorrect
+def speecht5_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    position_bias: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+    serialize: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    is_cross_attention = key_value_states is not None
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states) * self.scaling
+    # get key, value proj
+    if is_cross_attention and past_key_value is not None:
+        # reuse k,v, cross_attentions
+        key_states = past_key_value[0]
+        value_states = past_key_value[1]
+    elif is_cross_attention:
+        # cross_attentions
+        key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
+        value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
+    elif past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+    else:
+        # self_attention
+        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+    if self.is_decoder:
+        # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+        # Further calls to cross_attention layer can then reuse all cross-attention
+        # key/value_states (first "if" case)
+        # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+        # all previous decoder key/value_states. Further calls to uni-directional self-attention
+        # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+        # if encoder bi-directional self-attention `past_key_value` is always `None`
+        past_key_value = (key_states, value_states)
+
+    proj_shape = (bsz * self.num_heads, -1, self.head_dim)
+    query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+    key_states = key_states.view(*proj_shape)
+    value_states = value_states.view(*proj_shape)
+
+    src_len = key_states.size(1)
+    attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+
+    if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
+        raise ValueError(
+            f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is"
+            f" {attn_weights.size()}"
+        )
+
+    # relative attention bias
+    if position_bias is not None:
+        reshape_q = query_states.contiguous().view(bsz * self.num_heads, -1, self.head_dim).transpose(0, 1)
+        rel_pos_bias = torch.matmul(reshape_q, position_bias.transpose(-2, -1))
+        rel_pos_bias = rel_pos_bias.transpose(0, 1).view(
+            bsz * self.num_heads, position_bias.size(0), position_bias.size(1)
+        )
+        attn_weights += rel_pos_bias
+
+    if attention_mask is not None:
+        if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+            raise ValueError(
+                f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+            )
+        attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+
+    if layer_head_mask is not None:
+        if layer_head_mask.size() != (self.num_heads,):
+            raise ValueError(
+                f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
+                f" {layer_head_mask.size()}"
+            )
+        attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+        attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+    if output_attentions:
+        # this operation is a bit awkward, but it's required to
+        # make sure that attn_weights keeps its gradient.
+        # In order to do so, attn_weights have to be reshaped
+        # twice and have to be reused in the following
+        attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+        attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+    else:
+        attn_weights_reshaped = None
+
+    attn_probs = torch.nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+
+    # this is a patch to avoid CPU plugin issue!!!
+    # issue is happened on 16-th iteration of token generation
+    # since 16-th iteration of token generation, values computed by self-attention in a decoder gets incorrect
+    eps = 1e-30
+    attn_output = torch.bmm(attn_probs + eps, value_states)
+
+    if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned across GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, attn_weights_reshaped, past_key_value
+
+
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1175
+# this is a patch for a model to avoid incorrect tracing
+# cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple are computed using encoder_hidden_states
+def speecht5_decoder_layer_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: Optional[bool] = False,
+    use_cache: Optional[bool] = True,
+    serialize: bool = False,
+):
+    residual = hidden_states
+
+    # Self Attention
+    # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
+    self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
+    # add present self-attn cache to positions 1,2 of present_key_value tuple
+    hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states=hidden_states,
+        past_key_value=self_attn_past_key_value,
+        attention_mask=attention_mask,
+        layer_head_mask=layer_head_mask,
+        output_attentions=output_attentions,
+        serialize=serialize,
+    )
+
+    hidden_states = self.dropout(hidden_states)
+    hidden_states = residual + hidden_states
+    hidden_states = self.self_attn_layer_norm(hidden_states)
+
+    # Cross-Attention Block
+    cross_attn_present_key_value = None
+    cross_attn_weights = None
+    if encoder_hidden_states is not None:
+        residual = hidden_states
+
+        # this is a patch for a model to avoid incorrect tracing!!!
+        # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
+        # are computed using encoder_hidden_states
+        if past_key_value is not None and len(past_key_value) > 3:
+            cross_attn_past_key_value = past_key_value[-2:]
+        else:
+            cross_attn_past_key_value = None
+        hidden_states, cross_attn_weights, cross_attn_present_key_value = self.encoder_attn(
+            hidden_states=hidden_states,
+            key_value_states=encoder_hidden_states,
+            attention_mask=encoder_attention_mask,
+            layer_head_mask=cross_attn_layer_head_mask,
+            past_key_value=cross_attn_past_key_value,
+            output_attentions=output_attentions,
+        )
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = residual + hidden_states
+        hidden_states = self.encoder_attn_layer_norm(hidden_states)
+
+        # add cross-attn to positions 3,4 of present_key_value tuple
+        present_key_value = present_key_value + cross_attn_present_key_value
+
+    # Fully Connected
+    hidden_states = hidden_states + self.feed_forward(hidden_states)
+    hidden_states = self.final_layer_norm(hidden_states)
+
+    outputs = (hidden_states,)
+
+    if output_attentions:
+        outputs += (self_attn_weights, cross_attn_weights)
+
+    if use_cache:
+        outputs += (present_key_value,)
+
+    return outputs
+
+
+class OVSpeechT5ModelPatcher(ModelPatcher):
+    def __enter__(self):
+        if self.real_config._behavior != "vocoder":
+            setattr(self._model, self.orig_forward_name, self.patched_forward)
+        if self.real_config._behavior == "decoder":
+            self._model.speecht5.decoder.prenet.__orig_forward = self._model.speecht5.decoder.prenet.forward
+            self._model.speecht5.decoder.prenet.forward = types.MethodType(
+                speecht5_decoder_prenet_forward, self._model.speecht5.decoder.prenet
+            )
+            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                layer.__orig_forward = layer.forward
+                layer.forward = types.MethodType(speecht5_decoder_layer_forward, layer)
+                layer.self_attn.__orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.real_config._behavior != "vocoder":
+            setattr(self._model, self.orig_forward_name, self.orig_forward)
+        if self.real_config._behavior == "decoder":
+            self._model.speecht5.decoder.prenet.forward = types.MethodType(
+                self._model.speecht5.decoder.prenet.__orig_forward, self._model.speecht5.decoder.prenet
+            )
+            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                layer.forward = types.MethodType(layer.__orig_forward, layer)
+                layer.self_attn.forward = types.MethodType(layer.self_attn.__orig_forward, layer.self_attn)
+
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        def patched_encoder_forward(
+            input_ids: torch.FloatTensor = None,
+        ):
+            encoder_attention_mask = torch.ones_like(input_ids)
+
+            hidden_states = self._model.prenet(input_ids)
+
+            encoder_out = self._model.wrapped_encoder(
+                hidden_states=hidden_states,
+                attention_mask=encoder_attention_mask,
+                return_dict=True,
+            )
+            # downsample encoder attention mask
+            if isinstance(model, SpeechT5EncoderWithSpeechPrenet):
+                encoder_attention_mask = model.prenet._get_feature_vector_attention_mask(
+                    encoder_out[0].shape[1], encoder_attention_mask
+                )
+
+            result = {
+                "encoder_outputs": encoder_out.last_hidden_state,
+                "encoder_attention_mask": encoder_attention_mask,
+            }
+            return result
+
+        def patched_decoder_forward(
+            inputs_embeds=None,
+            speaker_embeddings=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
+            past_key_values=None,
+        ):
+            return_legacy_cache = False
+
+            if past_key_values is not None:
+                only_self_cache = [cache_item[:2] for cache_item in past_key_values]
+                past_key_values = only_self_cache
+                return_legacy_cache = True
+
+            output_sequence = inputs_embeds
+            output_cross_attentions = False
+            bsz = output_sequence.size(0)
+
+            # Run the decoder prenet on the entire output sequence.
+            decoder_hidden_states = model.speecht5.decoder.prenet(output_sequence, speaker_embeddings)
+            # Run the decoder layers on the last element of the prenet output.
+            decoder_out = model.speecht5.decoder.wrapped_decoder(
+                hidden_states=decoder_hidden_states[:, -1:],
+                attention_mask=None,
+                encoder_hidden_states=encoder_hidden_states[0],
+                encoder_attention_mask=encoder_attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+                output_attentions=output_cross_attentions,
+                return_dict=True,
+            )
+
+            # if output_cross_attentions:
+            #    cross_attentions.append(torch.cat(decoder_out.cross_attentions, dim=0))
+
+            last_decoder_output = decoder_out.last_hidden_state.squeeze(1)
+
+            # Predict the new mel spectrum for this step in the sequence.
+            spectrum = model.speech_decoder_postnet.feat_out(last_decoder_output)
+            spectrum = spectrum.view(bsz, model.config.reduction_factor, model.config.num_mel_bins)
+
+            # Extend the output sequence with the new mel spectrum.
+            new_spectrogram = spectrum[:, -1, :].view(bsz, 1, model.config.num_mel_bins)
+            output_sequence_out = torch.cat((output_sequence, new_spectrogram), dim=1)
+            # Predict the probability that this is the stop token.
+            prob = torch.sigmoid(model.speech_decoder_postnet.prob_out(last_decoder_output))
+
+            if return_legacy_cache:
+                only_self_cache = [cache_item[:2] for cache_item in decoder_out.past_key_values]
+                past_key_values = only_self_cache
+
+            result = {
+                "output_sequence_out": output_sequence_out,
+                "spectrum": spectrum,
+                "prob": prob,
+                "past_key_values": past_key_values,
+            }
+            return result
+
+        def patched_postnet_forward(raw_spectrogram: torch.FloatTensor):
+            raw_spectrogram = raw_spectrogram.transpose(0, 1).flatten(1, 2)
+            spectrogram = model.speech_decoder_postnet.postnet(raw_spectrogram)
+            result = {"postnet_spectrogram": spectrogram}
+            return result
+
+        def patched_vocoder_forward(spectrogram: torch.FloatTensor):
+            waveform = model(spectrogram)
+            result = {"waveform": waveform}
+            return result
+
+        if self.real_config._behavior == "encoder":
+            self.patched_forward = patched_encoder_forward
+        elif self.real_config._behavior == "decoder":
+            self.patched_forward = patched_decoder_forward
+        elif self.real_config._behavior == "postnet":
+            self.patched_forward = patched_postnet_forward
+        elif self.real_config._behavior == "vocoder":
+            self.patched_forward = patched_vocoder_forward
+        else:
+            raise ValueError("Unknown ")
+        self.orig_forward = self.patched_forward
+
+
+class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        if hasattr(model.config, "vision_lora") and model.config.vision_lora is not None:
+            model.set_lora_adapter("vision")
+        if hasattr(model.config, "speech_lora") and model.config.speech_lora is not None:
+            model.set_lora_adapter("speech")
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
+        # moved audio and vision features processing outside model
+        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
+            from transformers.cache_utils import DynamicCache
+
+            pkv = DynamicCache.from_legacy_cache(past_key_values)
+            outputs = self.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=use_cache,
+                past_key_values=pkv,
+            )
+            hidden_states = outputs[0]
+            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+            logits = self.lm_head(hidden_states)
+            return (logits, outputs.past_key_values.to_legacy_cache())
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(lm_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1121
+        def forward(self, audio_input):
+            if hasattr(self, "_forward_embeddings_code"):
+                audio_input, masks = self._forward_embeddings_core(audio_input, None)
+            else:
+                audio_input, masks = self.embed(audio_input, None)
+            return audio_input
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Phi4MMAudioEncoderPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1201-L1212
+        def forward(self, audio_feature, audio_mask):
+            if hasattr(self, "init_relative_attention_bias"):
+                relative_attention_bias = self.init_relative_attention_bias(audio_feature)
+
+                _simplified_path = self.extra_layer_output_idx == -1 and relative_attention_bias is None
+
+                if _simplified_path:
+                    audio_feature, *_ = self.encoders(audio_feature, None, None, audio_mask)
+                else:
+                    for layer in self.encoders:
+                        audio_feature, _, _, _ = layer(
+                            audio_feature,
+                            None,
+                            None,
+                            audio_mask,
+                            relative_attention_bias=relative_attention_bias,
+                        )
+            else:
+                relative_attention_bias = self.relative_attention_bias_layer(audio_feature)
+                attention_mask = audio_mask.unsqueeze(1) + relative_attention_bias
+                for layer in self.encoders:
+                    audio_feature = layer(audio_feature, attention_mask)
+            return audio_feature
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        def get_img_features_legacy(
+            self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None
+        ) -> torch.FloatTensor:
+            LAYER_IDX = self.layer_idx
+            TYPE_FEATURE = self.type_feature
+
+            if self.freeze_img_processor:
+                with torch.no_grad():
+                    if patch_attention_mask is not None:
+                        img_processor_output = self.img_processor(
+                            pixel_values,
+                            output_hidden_states=True,
+                            patch_attention_mask=patch_attention_mask,
+                            position_ids=patch_position_ids,
+                        )
+                    else:
+                        img_processor_output = self.img_processor(
+                            pixel_values, output_hidden_states=True, position_ids=patch_position_ids
+                        )
+                    img_feature = img_processor_output.hidden_states[LAYER_IDX]
+            else:
+                if patch_attention_mask is not None:
+                    img_processor_output = self.img_processor(
+                        pixel_values,
+                        output_hidden_states=True,
+                        patch_attention_mask=patch_attention_mask,
+                        position_ids=patch_position_ids,
+                    )
+                else:
+                    img_processor_output = self.img_processor(
+                        pixel_values, output_hidden_states=True, position_ids=patch_position_ids
+                    )
+                img_feature = img_processor_output.hidden_states[LAYER_IDX]
+
+            if TYPE_FEATURE == "patch":
+                patch_feature = img_feature
+                if self.image_token_compression is not None:
+                    # reshape to 2D tensor
+                    width = int(math.sqrt(patch_feature.size(1)))
+                    patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+                    # convert to NCHW
+                    patch_feature = patch_feature.permute(0, 3, 1, 2)
+                    if getattr(self, "img_processor_padding", None) is not None:
+                        patch_feature = self.img_processor_padding(patch_feature)
+                    patch_feature = self.image_token_compression(patch_feature)
+                    # convert to NHWC
+                    patch_feature = patch_feature.permute(0, 2, 3, 1)
+                    patch_feature = patch_feature.view(
+                        -1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1)
+                    )
+                elif getattr(self, "img_processor_padding", None) is not None:
+                    width = int(math.sqrt(patch_feature.size(1)))
+                    patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+                    # convert to NCHW
+                    patch_feature = patch_feature.permute(0, 3, 1, 2)
+                    patch_feature = self.img_processor_padding(patch_feature)
+                    # convert to NHWC
+                    patch_feature = patch_feature.permute(0, 2, 3, 1)
+                    patch_feature = patch_feature.view(
+                        -1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1)
+                    )
+                return patch_feature
+
+            if TYPE_FEATURE == "cls_patch":
+                if self.image_token_compression is not None:
+                    # reshape to 2D tensor
+                    patch_feature = img_feature[:, 1:]
+                    cls_feature = img_feature[:, 0]
+                    width = math.sqrt(patch_feature.size(1))
+                    patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+                    patch_feature = self.image_token_compression(patch_feature)
+                    patch_feature = patch_feature.view(-1, patch_feature.size(-2) * patch_feature.size(-1))
+                    img_feature = torch.cat([cls_feature, patch_feature], dim=1)
+                return img_feature
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L649
+        # added possibility to provide patch_position_ids
+        def get_img_features(
+            self, pixel_values: torch.FloatTensor, patch_attention_mask=None, patch_position_ids=None
+        ):
+            img_processor_output = self.img_processor(
+                pixel_values,
+                patch_attention_mask=patch_attention_mask,
+                output_hidden_states=True,
+                position_ids=patch_position_ids,
+            )
+            img_feature = img_processor_output.hidden_states[self.layer_idx]
+
+            patch_feature = img_feature
+            # reshape to 2D tensor
+            width = int(math.sqrt(patch_feature.size(1)))
+            patch_feature = patch_feature.view(-1, width, width, patch_feature.size(-1))
+            # convert to NCHW
+            patch_feature = patch_feature.permute(0, 3, 1, 2)
+            if getattr(self, "img_processor_padding", None) is not None:
+                patch_feature = self.img_processor_padding(patch_feature)
+            patch_feature = self.image_token_compression(patch_feature)
+            # convert to NHWC
+            patch_feature = patch_feature.permute(0, 2, 3, 1)
+            patch_feature = patch_feature.view(
+                -1, patch_feature.size(1) * patch_feature.size(2), patch_feature.size(-1)
+            )
+            return patch_feature
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(
+            get_img_features_legacy if hasattr(model, "type_feature") else get_img_features, model
+        )
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L563
+        # added possibility calculate position_ids outside
+        def transformer_fwd(
+            self,
+            pixel_values,
+            patch_attention_mask: Optional[torch.BoolTensor] = None,
+            position_ids: Optional[torch.FloatTensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+        ) -> Union[Tuple, BaseModelOutputWithPooling]:
+            from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+
+            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+            output_hidden_states = (
+                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            )
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+            batch_size = pixel_values.size(0)
+            if patch_attention_mask is None:
+                patch_attention_mask = torch.ones(
+                    size=(
+                        batch_size,
+                        pixel_values.size(2) // self.config.patch_size,
+                        pixel_values.size(3) // self.config.patch_size,
+                    ),
+                    dtype=torch.bool,
+                    device=pixel_values.device,
+                )
+
+            hidden_states = self.embeddings(
+                pixel_values=pixel_values, patch_attention_mask=patch_attention_mask, position_ids=position_ids
+            )
+
+            patch_attention_mask = patch_attention_mask.view(batch_size, -1)
+            # The call to `_upad_input` in `_flash_attention_forward` is expensive
+            # So when the `patch_attention_mask` is full of 1s (i.e. attending to the whole sequence),
+            # avoiding passing the attention_mask, which is equivalent to attending to the full sequence
+            if not torch.any(~patch_attention_mask):
+                attention_mask = None
+            else:
+                attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
+
+            encoder_outputs = self.encoder(
+                inputs_embeds=hidden_states,
+                attention_mask=attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+
+            last_hidden_state = encoder_outputs[0]
+            last_hidden_state = self.post_layernorm(last_hidden_state)
+
+            pooled_output = self.head(
+                hidden_state=last_hidden_state,
+                attention_mask=patch_attention_mask,
+            )
+
+            if not return_dict:
+                return (last_hidden_state, pooled_output) + encoder_outputs[1:]
+
+            return BaseModelOutputWithPooling(
+                last_hidden_state=last_hidden_state,
+                pooler_output=pooled_output,
+                hidden_states=encoder_outputs.hidden_states,
+                attentions=encoder_outputs.attentions,
+            )
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L76
+        # used SDPA instead of eager attention
+        def attn_forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = False,
+        ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+            if output_attentions:
+                return super().forward(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    output_attentions=output_attentions,
+                )
+
+            batch_size, q_len, _ = hidden_states.size()
+
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+            # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+            # Reference: https://github.com/pytorch/pytorch/issues/112577.
+            if query_states.device.type == "cuda" and attention_mask is not None:
+                query_states = query_states.contiguous()
+                key_states = key_states.contiguous()
+                value_states = value_states.contiguous()
+
+            # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+            # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+            is_causal = False
+
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=attention_mask,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=is_causal,
+            )
+
+            attn_output = attn_output.transpose(1, 2).contiguous()
+            attn_output = attn_output.view(batch_size, q_len, self.embed_dim)
+
+            attn_output = self.out_proj(attn_output)
+
+            return attn_output, None
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L488
+        # moved position_ids calculation outside of model
+        def embd_forward(
+            self,
+            pixel_values: torch.FloatTensor,
+            patch_attention_mask: torch.BoolTensor,
+            position_ids: torch.FloatTensor = None,
+        ) -> torch.Tensor:
+            batch_size = pixel_values.size(0)
+
+            patch_embeds = self.patch_embedding(pixel_values)
+            embeddings = patch_embeds.flatten(2).transpose(1, 2)
+
+            if position_ids is None:
+                max_im_h, max_im_w = pixel_values.size(2), pixel_values.size(3)
+                max_nb_patches_h, max_nb_patches_w = max_im_h // self.patch_size, max_im_w // self.patch_size
+                boundaries = torch.arange(1 / self.num_patches_per_side, 1.0, 1 / self.num_patches_per_side)
+                position_ids = torch.full(
+                    size=(
+                        batch_size,
+                        max_nb_patches_h * max_nb_patches_w,
+                    ),
+                    fill_value=0,
+                )
+
+                for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
+                    nb_patches_h = p_attn_mask[:, 0].sum()
+                    nb_patches_w = p_attn_mask[0].sum()
+
+                    fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                    fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+
+                    bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
+                    bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
+
+                    pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
+                    position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+
+            position_ids = position_ids.to(self.position_embedding.weight.device)
+
+            embeddings = embeddings + self.position_embedding(position_ids)
+            return embeddings
+
+        if (
+            getattr(self._model.img_processor.encoder.layers[0].self_attn.config, "_attn_implementation", "eager")
+            != "sdpa"
+        ):
+            for layer in self._model.img_processor.encoder.layers:
+                layer.self_attn._orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(attn_forward, layer.self_attn)
+        self._model.img_processor._orig_forward = self._model.img_processor.forward
+        self._model.img_processor.forward = types.MethodType(transformer_fwd, self._model.img_processor)
+        self._model.img_processor.embeddings._orig_forward = self._model.img_processor.embeddings.forward
+        self._model.img_processor.embeddings.forward = types.MethodType(
+            embd_forward, self._model.img_processor.embeddings
+        )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for layer in self._model.img_processor.encoder.layers:
+            if hasattr(layer.self_attn, "_orig_frward"):
+                layer.self_attn.forward = layer.self_attn._orig_forward
+        self._model.img_processor.forward = self._model.img_processor._orig_forward
+        self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward
+
+
+class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
+        def get_image_embeddings(self, pixel_values):
+            image_features = self.get_image_features(
+                pixel_values=pixel_values,
+                vision_feature_layer=self.config.vision_config.vision_feature_layer,
+                vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+            )
+            vision_flat = image_features.view(-1, image_features.size(-1))
+            projected_vision_flat = self.multi_modal_projector(vision_flat)
+            return projected_vision_flat
+
+        model.forward = types.MethodType(get_image_embeddings, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+# modified from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L229
+# use real cos / sin instead of complex
+def llama4_rope_forward(self, x, position_ids):
+    if "dynamic" in self.rope_type:
+        self._dynamic_frequency_update(position_ids, device=x.device)
+    # Core RoPE block
+    inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+    position_ids_expanded = position_ids[:, None, :].float()
+    # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
+    device_type = x.device.type
+    device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+    with torch.autocast(device_type=device_type, enabled=False):
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+
+    return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
+# use real cos / sin instead of complex
+# Modified from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/llama4/modeling_llama4.py#L247
+# Based on https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/deepseek_v3/modeling_deepseek_v3.py#L292
+# Native DeepSeek apply rotary emb works in the same way like llama4 apply rotary emb
+def llama4_apply_rotary_emb(
+    xq: torch.Tensor, xk: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    from transformers.models.llama.modeling_llama import rotate_half
+
+    xq_ = xq.float()
+    xk_ = xk.float()
+    cos = cos.unsqueeze(2)
+    sin = sin.unsqueeze(2)
+    b, h, s, d = xq_.shape
+    xq_ = xq_.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+
+    b, h, s, d = xk_.shape
+    xk_ = xk_.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+
+    q_embed = (xq_ * cos) + (rotate_half(xq_) * sin)
+    k_embed = (xk_ * cos) + (rotate_half(xk_) * sin)
+    return q_embed.type_as(xq), k_embed.type_as(xk)
+
+
+# https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L329
+# use real cos / sin instead of complex
+def llama4_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
+    past_key_value=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    from transformers.models.llama4.modeling_llama4 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
+
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+
+    query_states = self.q_proj(hidden_states).view(hidden_shape)
+    key_states = self.k_proj(hidden_states).view(*input_shape, -1, self.head_dim)
+    value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+    if self.use_rope:  # the 16E model skips rope for long context on certain layers
+        cos, sin = position_embeddings[0], position_embeddings[1]
+        query_states, key_states = llama4_apply_rotary_emb(
+            query_states, key_states, cos.to(query_states.device), sin.to(query_states.device)
+        )
+
+    if hasattr(self, "qk_norm"):  # the 128E model does not use qk_norm
+        query_states = self.qk_norm(query_states)
+        key_states = self.qk_norm(key_states)
+
+    # Use temperature tuning from https://arxiv.org/abs/2501.19399) to NoROPE layers
+    if self.attn_temperature_tuning and not self.use_rope:
+        attn_scales = (
+            torch.log(torch.floor((cache_position.float() + 1.0) / self.floor_scale) + 1.0) * self.attn_scale + 1.0
+        )
+        attn_scales = attn_scales.view((1, input_shape[-1], 1, 1)).expand((*input_shape, 1, 1))  # batch size > 1
+        query_states = (query_states * attn_scales).to(query_states.dtype)
+
+    query_states = query_states.transpose(1, 2)
+    key_states = key_states.transpose(1, 2)
+
+    if past_key_value is not None:
+        # sin and cos are specific to RoPE models; cache_position needed for the static cache
+        cache_kwargs = {"cache_position": cache_position}
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    attention_interface = eager_attention_forward
+    if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
+            attention_interface = eager_attention_forward
+        else:
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+    attn_output, attn_weights = attention_interface(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=0.0 if not self.training else self.attention_dropout,
+        scaling=self.scaling,
+        **kwargs,
+    )
+
+    attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+    return attn_output, attn_weights
+
+
+# modified from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L157
+# due to openvino transformations issue removed routed_out.view(-1, hidden_dim) in scatter_add_
+def llama4_moe_forward(self, hidden_states):
+    batch, seq_len, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, self.hidden_dim)
+    router_logits = self.router(hidden_states).transpose(0, 1)
+    tokens_per_expert = batch * seq_len
+
+    router_top_value, router_indices = torch.topk(router_logits.transpose(0, 1), self.top_k, dim=1)
+    router_scores = (
+        torch.full_like(router_logits.transpose(0, 1), float("-inf"))
+        .scatter_(1, router_indices, router_top_value)
+        .transpose(0, 1)
+    )
+    # We do this to make sure we have -inf for non topK tokens before going through the !
+    # Here we are just creating a tensor to index each and every single one of the hidden states. Let s maybe register a buffer for this!
+    router_indices = (
+        torch.arange(tokens_per_expert, device=hidden_states.device).view(1, -1).expand(router_scores.size(0), -1)
+    )
+    router_scores = torch.sigmoid(router_scores.float()).to(hidden_states.dtype)
+
+    router_indices = router_indices.reshape(-1, 1).expand(-1, hidden_dim)
+    routed_in = torch.gather(
+        input=hidden_states,
+        dim=0,
+        index=router_indices,
+    ).to(hidden_states.device)
+    # we gather inputs corresponding to each expert based on the router indices
+    routed_in = routed_in * router_scores.reshape(-1, 1)
+    routed_out = self.experts(routed_in)
+    out = self.shared_expert(hidden_states)
+    # now that we finished expert computation -> we scatter add because we gathered previously
+    # we have to do this because we used all experts on all tokens. This is faster than the for loop, tho you are compute bound
+    # this scales a lot better if you do EP!
+    out.scatter_add_(dim=0, index=router_indices, src=routed_out)
+    return out, router_scores
+
+
+class Llama4TextModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
+        self._model.model.rotary_emb.forward = types.MethodType(llama4_rope_forward, self._model.model.rotary_emb)
+        for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
+            if layer.is_moe_layer:
+                layer.feed_forward._orig_forward = layer.feed_forward.forward
+                layer.feed_forward.forward = types.MethodType(llama4_moe_forward, layer.feed_forward)
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(llama4_attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
+        for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
+            if layer.is_moe_layer:
+                layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward

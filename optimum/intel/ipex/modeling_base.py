@@ -61,14 +61,16 @@ from ..utils.modeling_utils import recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2", "qwen2", "mistral")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 _IPEX_MINIMUM_VERSION_FOR_COMPILE = "2.5.0"
 # Page attention model cannot use torch.compile for now.
 if is_torch_version("<", "2.6"):
     _COMPILE_NOT_READY_MODEL_TYPES = ("electra", "roformer", "gpt_neox", "beit", "llama", "falcon", "gpt2", "qwen2")
+elif is_torch_version("<", "2.7"):
+    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2", "mistral")
 else:
-    _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2")
+    _COMPILE_NOT_READY_MODEL_TYPES = ("mistral",)
 
 
 try:
@@ -132,7 +134,6 @@ class IPEXModel(OptimizedModel):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        warmup: Optional[bool] = True,
         **kwargs,
     ):
         config = config or model.config
@@ -146,7 +147,7 @@ class IPEXModel(OptimizedModel):
         self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
         self._add_patch = _is_patched_with_ipex(model, self.export_feature, self.use_cache)
-        self.model.config.compile = self.can_compile(self.model, self.use_cache)
+        self.model.config.compile = self.can_compile()
 
         self.input_names = set(inspect.signature(model.forward).parameters)
 
@@ -161,18 +162,10 @@ class IPEXModel(OptimizedModel):
         if getattr(self.model.config, "compile", False):
             self.apply_torch_compile()
 
-        if warmup and not getattr(self.model.config, "compile", False):
-            self._init_warmup()
-
     @classmethod
-    def _from_transformers(cls, *args, **kwargs):
-        return cls._from_pretrained(*args, **kwargs)
-
-    @classmethod
-    def _from_pretrained(
+    def from_pretrained(
         cls,
         model_id: Union[str, Path],
-        config: PretrainedConfig,
         **kwargs,
     ):
         """
@@ -185,11 +178,11 @@ class IPEXModel(OptimizedModel):
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
         """
-        if getattr(config, "torchscript", False):
-            raise ValueError("IPEXModel is no longer support torchscript models.")
 
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
-        return cls(model, config=model.config, **kwargs)
+        if getattr(model.config, "torchscript", False):
+            raise ValueError("IPEXModel is no longer support torchscript models.")
+        return cls(model, config=kwargs.pop("config", model.config), **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
@@ -232,16 +225,16 @@ class IPEXModel(OptimizedModel):
     def can_generate(self):
         return isinstance(self, GenerationMixin)
 
-    @staticmethod
-    def can_compile(model, use_cache):
+    def can_compile(self):
         if (
-            model.device.type != "cpu"
-            or model.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
+            self.model.device.type != "cpu"
+            or self.model.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES
             or is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_COMPILE)
-            or getattr(model.config, "quantization_config", None)
+            or getattr(self.model.config, "quantization_config", None)
         ):
             return False
-        if use_cache and not model._supports_static_cache:
+
+        if self.use_cache and not self.model._supports_cache_class and not self._add_patch:
             return False
 
         return True
@@ -251,16 +244,15 @@ class IPEXModel(OptimizedModel):
 
         # System level optimization
         inductor_config.cpp_wrapper = True
+        if self._add_patch and self.export_feature == "text-generation":
+            # To avoid int value recompile.
+            torch._dynamo.config.allow_unspec_int_on_nn_module = True
+            # Patched model can disable cpp wrapper to get better performance.
+            inductor_config.cpp_wrapper = False
+
         os.environ["TORCHINDUCTOR_FREEZING"] = "1"
         logger.info("Enable torch.compile optimization")
         self.model.forward = torch.compile(self.model.forward)
-
-    def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        with torch.no_grad():
-            self.model(**inputs)
-            self.model(**inputs)
-        logger.info("Warm up end")
 
 
 class IPEXModelForSequenceClassification(IPEXModel):
@@ -306,10 +298,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
-        warmup: Optional[bool] = True,
         **kwargs,
     ):
-        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache)
+        super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
         if self._add_patch:
             self._supports_cache_class = True
         GenerationMixin.__init__(self)
@@ -333,9 +324,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
-        if warmup and not getattr(self.model.config, "compile", False):
-            self._init_warmup()
-
     @torch.no_grad()
     def forward(
         self,
@@ -343,15 +331,67 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         attention_mask: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        if self.add_patch and input_ids is not None and attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-        return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+        if self.add_patch:
+            if input_ids is not None and attention_mask is None:
+                attention_mask = torch.ones_like(input_ids)
+
+            kwargs = self.prepare_page_attn_inputs(input_ids, attention_mask, **kwargs)
+
+        results = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+        if self.add_patch and self.use_cache and results.get("past_key_values", None) is not None:
+            self.postprocess_ipex_paged_cache(results["past_key_values"], kwargs["input_lens"])
+
+        return results
+
+    def prepare_page_attn_inputs(self, input_ids, attention_mask, **kwargs):
+        if not hasattr(self, "batch_size") or (input_ids.shape[0] != getattr(self, "batch_size", 0)):
+            self.batch_size = input_ids.shape[0]
+            self.decode_index = torch.arange(self.batch_size, dtype=torch.int).to(input_ids.device)
+            self.decode_query_len_tensor = torch.arange(self.batch_size + 1, dtype=torch.int).to(input_ids.device)
+
+        kwargs["input_lens"] = attention_mask.sum(-1).to(torch.int32)
+        kwargs["seq_len_tensor"] = torch.cat(
+            (kwargs["input_lens"].new_tensor([0]), kwargs["input_lens"].cumsum(-1).int())
+        )
+        kwargs["query_len_tensor"] = (
+            kwargs["seq_len_tensor"].clone() if input_ids.shape[-1] != 1 else self.decode_query_len_tensor
+        )
+        if self.use_cache and kwargs.get("past_key_values", None) is not None:
+            self.preprocess_ipex_paged_cache(kwargs["past_key_values"], kwargs["input_lens"])
+
+        kwargs["index"] = (
+            attention_mask.view(-1).nonzero().squeeze().int() if input_ids.shape[-1] != 1 else self.decode_index
+        )
+        # The int value will be recognized as constant if we pass it in the forward.
+        # To avoid recompile, we pass the int value through config so the torch.compile will not recognize it as constant.
+        self.model.config.max_input_lens = kwargs["input_lens"].max().item()
+
+        return kwargs
+
+    def preprocess_ipex_paged_cache(self, past_key_values, input_lens):
+        batch_size = input_lens.shape[0]
+        past_key_values_length = past_key_values.get_seq_length()
+        if past_key_values_length == 0:
+            past_key_values.alloc_slot_for_prefill(input_lens, batch_size)
+        else:
+            past_key_values.alloc_slot_for_decode(batch_size)
+
+    def postprocess_ipex_paged_cache(self, past_key_values, input_lens):
+        past_key_values_length = past_key_values.get_seq_length()
+        # Use inplace op to keep the same memory address, avoid recompile
+        if past_key_values_length == 0:
+            past_key_values._seen_tokens = past_key_values._seen_tokens.add_(input_lens)
+        else:
+            past_key_values._seen_tokens = past_key_values._seen_tokens.add_(1)
 
     def _prepare_generation_config(
-        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
         kwargs["use_cache"] = self.use_cache
-        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_config, model_kwargs = super()._prepare_generation_config(
+            generation_config, use_model_defaults, **kwargs
+        )
         generation_method = generation_config.get_generation_mode().value
         if (
             getattr(self.model.config, "compile", False)
@@ -428,12 +468,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return result
 
-    def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        logger.info("Warm up end")
-
 
 class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
@@ -445,10 +479,9 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
-        warmup: Optional[bool] = True,
         **kwargs,
     ):
-        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache)
+        super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
@@ -468,9 +501,6 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
 
-        if warmup and not getattr(self.model.config, "compile", False):
-            self._init_warmup()
-
     @torch.no_grad()
     def forward(
         self,
@@ -481,9 +511,11 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         return self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
     def _prepare_generation_config(
-        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
-        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_config, model_kwargs = super()._prepare_generation_config(
+            generation_config, use_model_defaults, **kwargs
+        )
         # Use static cache for torch.compile
         if getattr(self.model.config, "compile", False):
             generation_config.cache_implementation = "static"
@@ -514,12 +546,6 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
         return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
-
-    def _init_warmup(self):
-        inputs = prepare_jit_inputs(self.model, self.export_feature, False)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        self.generate(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], max_new_tokens=4)
-        logger.info("Warm up end")
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):

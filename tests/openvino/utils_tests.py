@@ -13,13 +13,14 @@
 #  limitations under the License.
 import unittest
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 import openvino as ov
 import torch
 
 from optimum.intel.openvino.modeling_base import OVBaseModel
+from optimum.intel.utils.import_utils import is_openvino_version
 
 
 MODEL_NAMES = {
@@ -27,6 +28,7 @@ MODEL_NAMES = {
     "aquila": "katuni4ka/tiny-random-aquilachat",
     "aquila2": "katuni4ka/tiny-random-aquila2",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
+    "arctic": "katuni4ka/tiny-random-snowflake",
     "bge": "BAAI/bge-small-en-v1.5",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
@@ -39,9 +41,11 @@ MODEL_NAMES = {
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
+    "clip": "hf-tiny-model-private/tiny-random-CLIPModel",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "cohere": "hf-internal-testing/tiny-random-CohereForCausalLM",
     "chatglm": "katuni4ka/tiny-random-chatglm2",
+    "chatglm4": "katuni4ka/tiny-random-glm4",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "codegen2": "katuni4ka/tiny-random-codegen2",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
@@ -60,6 +64,7 @@ MODEL_NAMES = {
     "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
     "detr": "hf-internal-testing/tiny-random-DetrModel",
     "electra": "hf-internal-testing/tiny-random-electra",
+    "esm": "hf-internal-testing/tiny-random-EsmModel",
     "exaone": "katuni4ka/tiny-random-exaone",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
     "gemma2": "katuni4ka/tiny-random-gemma2",
@@ -90,6 +95,7 @@ MODEL_NAMES = {
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
+    "llama4": "katuni4ka/tiny-random-llama-4-8E",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
     "llava_next_video": "katuni4ka/tiny-random-llava-next-video",
@@ -106,7 +112,7 @@ MODEL_NAMES = {
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
-    "mixtral_awq": "TitanML/tiny-mixtral-AWQ-4bit",
+    "mixtral_awq": "katuni4ka/tiny-mixtral-AWQ-4bit",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
@@ -128,18 +134,23 @@ MODEL_NAMES = {
     "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
     "phi3-moe": "katuni4ka/phi-3.5-moe-tiny-random",
     "phi3_v": "katuni4ka/tiny-random-phi3-vision",
+    "phi4mm": "katuni4ka/tiny-random-phi-4-multimodal",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "qwen2_5_vl": "katuni4ka/tiny-random-qwen2.5-vl",
+    "qwen3": "katuni4ka/tiny-random-qwen3",
+    "qwen3-moe": "katuni4ka/tiny-random-qwen3moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
+    "sam": "fxmarty/sam-vit-tiny-random",
     "smolvlm": "katuni4ka/tiny-random-smolvlm2",
+    "speecht5": "hf-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
@@ -149,10 +160,10 @@ MODEL_NAMES = {
     "stable-diffusion-3": "yujiepan/stable-diffusion-3-tiny-random",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
     "starcoder2": "hf-internal-testing/tiny-random-Starcoder2ForCausalLM",
+    "siglip": "katuni4ka/tiny-random-SiglipModel",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
-    "arctic": "katuni4ka/tiny-random-snowflake",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
     "swin-window": "yujiepan/tiny-random-swin-patch4-window7-224",
     "t5": "hf-internal-testing/tiny-random-t5",
@@ -167,18 +178,20 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "wav2vec2-hf": "hf-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
-    "whisper": "yujiepan/whisper-v3-tiny-random",
+    "whisper": "katuni4ka/tiny-random-whisper",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
-    "glm4": "katuni4ka/tiny-random-glm4",
+    "glm4": "snake7gun/tiny-random-glm4",
     "glm": "katuni4ka/tiny-random-glm-edge",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
     "st-bert": "sentence-transformers/all-MiniLM-L6-v2",
     "st-mpnet": "sentence-transformers/all-mpnet-base-v2",
     "sana": "katuni4ka/tiny-random-sana",
+    "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
+    "ltx-video": "katuni4ka/tiny-random-ltx-video",
 }
 
 
@@ -190,29 +203,121 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (68,),
-    "roberta": (68,),
-    "albert": (84,),
-    "vit": (64,),
-    "blenderbot": (70,),
-    "gpt2": (44,),
-    "wav2vec2": (34,),
-    "distilbert": (66,),
-    "t5": (64, 104, 84),
-    "stable-diffusion": (242, 42, 34, 64),
-    "stable-diffusion-xl": (366, 42, 34, 64, 66),
-    "stable-diffusion-xl-refiner": (366, 42, 34, 66),
-    "open-clip": (20, 28),
-    "stable-diffusion-3": (66, 58, 42, 30, 30, 32),
-    "flux": (56, 28, 24, 64, 64),
-    "flux-fill": (56, 28, 24, 64, 64),
-    "llava": (30, 1, 9),
-    "llava_next": (30, 1, 9),
-    "minicpmv": (30, 1, 26, 6),
-    "llava_next_video": (30, 1, 7, 0, 2),
-    "nanollava": (30, 1, 15),
-    "qwen2_vl": (30, 1, 1, 10),
-    "sana": (58, 28, 28, 18),
+    "bert": {"model": 68},
+    "roberta": {"model": 68},
+    "albert": {"model": 84},
+    "vit": {"model": 64},
+    "blenderbot": {"model": 70},
+    "gpt2": {"model": 44},
+    "wav2vec2": {"model": 34},
+    "distilbert": {"model": 66},
+    "t5": {
+        "encoder": 64,
+        "decoder": 104,
+        "decoder_with_past": 84,
+    },
+    "stable-diffusion": {
+        "unet": 242,
+        "vae_decoder": 42,
+        "vae_encoder": 34,
+        "text_encoder": 64,
+    },
+    "stable-diffusion-xl": {
+        "unet": 366,
+        "vae_decoder": 42,
+        "vae_encoder": 34,
+        "text_encoder": 64,
+        "text_encoder_2": 66,
+    },
+    "stable-diffusion-xl-refiner": {
+        "unet": 366,
+        "vae_decoder": 42,
+        "vae_encoder": 34,
+        "text_encoder_2": 66,
+    },
+    "open-clip": {
+        "text_model": 20,
+        "visual_model": 28,
+    },
+    "stable-diffusion-3": {
+        "transformer": 66,
+        "vae_decoder": 58,
+        "vae_encoder": 42,
+        "text_encoder": 30,
+        "text_encoder_2": 30,
+        "text_encoder_3": 32,
+    },
+    "flux": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
+    "flux-fill": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
+    "llava": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 9,
+    },
+    "llava_next": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 9,
+    },
+    "minicpmv": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 26,
+        "resampler_model": 6,
+    },
+    "llava_next_video": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 7,
+        "vision_resampler_model": 0,
+        "multi_modal_projector_model": 2,
+    },
+    "nanollava": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 15,
+    },
+    "qwen2_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+    },
+    "sana": {
+        "transformer": 58,
+        "vae_decoder": 28,
+        "vae_encoder": 28,
+        "text_encoder": 18,
+    },
+    "ltx-video": {
+        "transformer": 34,
+        "vae_decoder": 28,
+        "vae_encoder": 28,
+        "text_encoder": 64,
+    },
+    "sam": {
+        "vision_encoder_model": 102 if is_openvino_version("<", "2025.2.0") else 150,
+        "prompt_encoder_mask_decoder_model": 100,
+    },
+    "speecht5": {
+        "encoder": 28,
+        "decoder": 52,
+        "postnet": 10,
+        "vocoder": 80,
+    },
+    "clip": {"model": 130},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -231,7 +336,7 @@ def get_num_quantized_nodes(model):
         "f8e4m3": "f8e4m3",
         "f8e5m2": "f8e5m2",
     }
-    num_weight_nodes = {n: 0 for n in types_map.values()}
+    num_weight_nodes = dict.fromkeys(types_map.values(), 0)
     ov_model = model if isinstance(model, ov.Model) else model.model
     for elem in ov_model.get_ops():
         if "FakeQuantize" in elem.name:
@@ -281,9 +386,8 @@ def patch_awq_for_inference(to_patch):
 
             out_shape = x.shape[:-1] + (out_features,)
             x = x.to(torch.float16)
-
-            out = dequantize_gemm(qweight, qzeros, scales, w_bit, group_size)
-            out = torch.matmul(x, out)
+            out = dequantize_gemm(qweight.to(torch.int32), qzeros.to(torch.int32), scales, w_bit, group_size)
+            out = torch.matmul(x, out.to(x.dtype))
 
             out = out + bias if bias is not None else out
             out = out.reshape(out_shape)
@@ -303,20 +407,21 @@ def patch_awq_for_inference(to_patch):
 
 def check_compression_state_per_model(
     test_case: unittest.TestCase,
-    models: List[Union[ov.Model, OVBaseModel]],
-    expected_num_weight_nodes_per_model: List[Dict[str, int]],
-    expected_num_fake_nodes_per_model: Optional[List[int]] = None,
+    models: Dict[str, Union[ov.Model, OVBaseModel]],
+    expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
+    expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
-    actual_num_weights_per_model = [{}] * len(models)
-    actual_num_fake_nodes_per_model = [0] * len(models)
-    for i, (submodel, expected_num_weight_nodes) in enumerate(zip(models, expected_num_weight_nodes_per_model)):
+    actual_num_weights_per_model = {}
+    actual_num_fake_nodes_per_model = {}
+    for submodel_name, submodel in models.items():
+        expected_num_weight_nodes = expected_num_weight_nodes_per_model[submodel_name]
         ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
-        expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+        expected_num_weight_nodes.update(dict.fromkeys(set(num_weight_nodes) - set(expected_num_weight_nodes), 0))
 
-        actual_num_weights_per_model[i] = num_weight_nodes
-        actual_num_fake_nodes_per_model[i] = num_fake_nodes
+        actual_num_weights_per_model[submodel_name] = num_weight_nodes
+        actual_num_fake_nodes_per_model[submodel_name] = num_fake_nodes
 
         test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
@@ -326,3 +431,12 @@ def check_compression_state_per_model(
     # Check fake nodes
     if expected_num_fake_nodes_per_model is not None:
         test_case.assertEqual(expected_num_fake_nodes_per_model, actual_num_fake_nodes_per_model)
+
+
+def get_num_sdpa(model):
+    ov_model = model if isinstance(model, ov.Model) else model.model
+    num_sdpa = 0
+    for op in ov_model.get_ops():
+        if op.type_info.name == "ScaledDotProductAttention":
+            num_sdpa += 1
+    return num_sdpa

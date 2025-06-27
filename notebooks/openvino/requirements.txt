@@ -1,6 +1,7 @@
-optimum-intel[openvino]
-datasets
+optimum-intel[openvino,nncf]
 evaluate[evaluator]
 ipywidgets
-pillow
 torchaudio
+diffusers
+datasets
+pillow

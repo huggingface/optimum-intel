@@ -29,7 +29,7 @@ jobs:
         run: |
           pip install --upgrade pip
           # .[quality] installs too many dependencies
-          # TODO: we should remove the the version pinning at some point
+          # TODO: we should remove the version pinning at some point
           pip install "black~=23.1" "ruff==0.4.4"
 
       - name: Check style with black

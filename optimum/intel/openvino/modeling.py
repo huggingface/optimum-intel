@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
 import logging
 import os
 from pathlib import Path
@@ -35,6 +34,7 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForZeroShotImageClassification,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
@@ -49,9 +49,11 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
     XVectorOutput,
 )
+from transformers.models.clip.modeling_clip import CLIPOutput
 
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
+from .modeling_sam import OVSamModel
 from .utils import _is_timm_ov_dir
 
 
@@ -65,7 +67,7 @@ MODEL_START_DOCSTRING = r"""
     This model inherits from [`optimum.intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
-        model (`openvino.runtime.Model`): is the main class used to run OpenVINO Runtime inference.
+        model (`openvino.Model`): is the main class used to run OpenVINO Runtime inference.
         config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
             is the Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the configuration.
@@ -75,7 +77,7 @@ MODEL_START_DOCSTRING = r"""
         dynamic_shapes (`bool`, defaults to `True`):
             All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
         ov_config (`Optional[Dict]`, defaults to `None`):
-            The dictionnary containing the informations related to the model compilation.
+            The dictionary containing the information related to the model compilation.
         compile (`bool`, defaults to `True`):
             Disable the model compilation during the loading step when set to `False`.
             Can be useful to avoid unnecessary compilation, in the case where the model needs to be statically reshaped, the device modified or if FP16 conversion is enabled.
@@ -118,7 +120,7 @@ class OVModel(OVBaseModel):
     base_model_prefix = "openvino_model"
     auto_model_class = AutoModel
 
-    def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
+    def __init__(self, model: openvino.Model, config: transformers.PretrainedConfig = None, **kwargs):
         super().__init__(model, config, **kwargs)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -392,6 +394,9 @@ class OVModelForFeatureExtraction(OVModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
+        if "decoder_input_ids" in self.input_names:
+            inputs["decoder_input_ids"] = input_ids
+
         outputs = self._inference(inputs)
         last_hidden_state = (
             torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
@@ -399,6 +404,13 @@ class OVModelForFeatureExtraction(OVModel):
             else outputs["last_hidden_state"]
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
+
+    @classmethod
+    def _from_pretrained(cls, model_id: Union[str, Path], config: PretrainedConfig, *args, **kwargs):
+        if config.model_type == "sam":
+            return OVSamModel._from_pretrained(model_id, config, *args, **kwargs)
+        else:
+            return super()._from_pretrained(model_id, config, *args, **kwargs)
 
 
 MASKED_LM_EXAMPLE = r"""
@@ -944,3 +956,45 @@ class OVModelForCustomTasks(OVModel):
                 model_outputs[key_name] = torch.from_numpy(value).to(self.device) if not np_inputs else value
 
         return ModelOutput(**model_outputs)
+
+
+class OVModelForZeroShotImageClassification(OVModel):
+    auto_model_class = AutoModelForZeroShotImageClassification
+    export_feature = "zero-shot-image-classification"
+
+    def forward(self, input_ids, pixel_values, attention_mask: Optional[torch.Tensor] = None, **kwargs):
+        self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = input_ids.cpu().numpy()
+            pixel_values = pixel_values.cpu().numpy()
+            attention_mask = attention_mask.cpu().numpy() if attention_mask is not None else attention_mask
+        inputs = {"input_ids": input_ids, "pixel_values": pixel_values}
+        # Add the attention_mask when needed
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask if attention_mask is not None else np.ones_like(input_ids)
+        outputs = self._inference(inputs)
+        logits_per_image = (
+            torch.from_numpy(outputs["logits_per_image"]).to(self.device)
+            if not np_inputs
+            else outputs["logits_per_image"]
+        )
+        logits_per_text = (
+            torch.from_numpy(outputs["logits_per_text"]).to(self.device)
+            if not np_inputs
+            else outputs["logits_per_text"]
+        )
+        text_embeds = (
+            torch.from_numpy(outputs["text_embeds"]).to(self.device) if not np_inputs else outputs["text_embeds"]
+        )
+        image_embeds = (
+            torch.from_numpy(outputs["image_embeds"]).to(self.device) if not np_inputs else outputs["image_embeds"]
+        )
+
+        return CLIPOutput(
+            logits_per_image=logits_per_image,
+            logits_per_text=logits_per_text,
+            text_embeds=text_embeds,
+            image_embeds=image_embeds,
+        )

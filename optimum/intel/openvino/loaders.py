@@ -19,12 +19,12 @@ import openvino
 import torch
 from diffusers.loaders.textual_inversion import TextualInversionLoaderMixin, load_textual_inversion_state_dicts
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from openvino.runtime import Type
-from openvino.runtime import opset11 as ops
-from openvino.runtime.passes import Manager, Matcher, MatcherPass, WrapType
+from openvino import Type
+from openvino import opset11 as ops
+from openvino.passes import Manager, Matcher, MatcherPass, WrapType
 from transformers import PreTrainedTokenizer
 
-from .utils import TEXTUAL_INVERSION_EMBEDDING_KEY
+from .utils import TEXTUAL_INVERSION_EMBEDDING_KEYS
 
 
 try:
@@ -48,8 +48,9 @@ class InsertTextEmbedding(MatcherPass):
 
         def callback(matcher: Matcher) -> bool:
             root = matcher.get_match_root()
-            if root.get_friendly_name() == TEXTUAL_INVERSION_EMBEDDING_KEY:  # there should be a better way to do this
+            if root.get_friendly_name() in TEXTUAL_INVERSION_EMBEDDING_KEYS:  # there should be a better way to do this
                 add_ti = root
+                friendly_name = root.get_friendly_name()
                 consumers = matcher.get_match_value().get_target_inputs()
                 for token_id, embedding in zip(tokens_ids, embeddings):
                     ti_weights = ops.constant(embedding, Type.f32, name=str(token_id))
@@ -57,7 +58,7 @@ class InsertTextEmbedding(MatcherPass):
                     add_ti = ops.concat(
                         nodes=[add_ti, ti_weights_unsqueeze],
                         axis=0,
-                        name=f"{TEXTUAL_INVERSION_EMBEDDING_KEY}.textual_inversion_{token_id}",
+                        name=f"{friendly_name}.textual_inversion_{token_id}",
                     )
 
                 for consumer in consumers:
@@ -65,6 +66,7 @@ class InsertTextEmbedding(MatcherPass):
 
                 # Use new operation for additional matching
                 self.register_new_node(add_ti)
+                return True
 
             # Root node wasn't replaced or changed
             return False
@@ -79,7 +81,7 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
         pretrained_model_name_or_path: Union[str, List[str], Dict[str, torch.Tensor], List[Dict[str, torch.Tensor]]],
         token: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional["PreTrainedTokenizer"] = None,  # noqa: F821
-        text_encoder: Optional["openvino.runtime.Model"] = None,  # noqa: F821
+        text_encoder: Optional["openvino.Model"] = None,  # noqa: F821
         **kwargs,
     ):
         if not hasattr(self, "tokenizer"):
@@ -95,9 +97,9 @@ class OVTextualInversionLoaderMixin(TextualInversionLoaderMixin):
             raise ValueError(
                 f"{self.__class__.__name__} requires `self.text_encoder` for calling `{self.load_textual_inversion.__name__}`"
             )
-        elif not isinstance(self.text_encoder.model, openvino.runtime.Model):
+        elif not isinstance(self.text_encoder.model, openvino.Model):
             raise ValueError(
-                f"{self.__class__.__name__} requires `self.text_encoder` of type `openvino.runtime.Model` for calling `{self.load_textual_inversion.__name__}`"
+                f"{self.__class__.__name__} requires `self.text_encoder` of type `openvino.Model` for calling `{self.load_textual_inversion.__name__}`"
             )
 
         # 1. Set correct tokenizer and text encoder

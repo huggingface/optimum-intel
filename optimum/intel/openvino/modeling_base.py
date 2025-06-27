@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 import warnings
@@ -36,7 +36,12 @@ from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedMode
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
+from .configuration import (
+    OVConfig,
+    OVDynamicQuantizationConfig,
+    OVWeightQuantizationConfig,
+    _quantization_config_from_dict,
+)
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -63,10 +68,11 @@ class OVBaseModel(OptimizedModel):
     _supports_cache_class = False
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
+    _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
 
     def __init__(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -176,7 +182,7 @@ class OVBaseModel(OptimizedModel):
         """
         if self._compile_only and isinstance(device, str):
             raise ValueError(
-                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`to()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         if isinstance(device, str):
@@ -205,7 +211,7 @@ class OVBaseModel(OptimizedModel):
         return None
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.runtime.Model]:
+    def ov_submodels(self) -> Dict[str, openvino.Model]:
         return {submodel_name: getattr(self, submodel_name) for submodel_name in self._ov_submodel_names}
 
     @property
@@ -219,7 +225,7 @@ class OVBaseModel(OptimizedModel):
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-    ) -> openvino.runtime.Model:
+    ) -> openvino.Model:
         """
         Loads the model.
 
@@ -230,7 +236,7 @@ class OVBaseModel(OptimizedModel):
                 Quantization config to apply after model is loaded.
         """
 
-        def fix_op_names_duplicates(model: openvino.runtime.Model):
+        def fix_op_names_duplicates(model: openvino.Model):
             names = set()
             for op in model.get_ops():
                 friendly_name = op.get_friendly_name()
@@ -395,25 +401,38 @@ class OVBaseModel(OptimizedModel):
         compile_only = kwargs.get("compile_only", False)
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
 
-        model = None
         if not compile_only:
-            model = cls.load_model(model_cache_path, quantization_config=quantization_config)
+            ov_model = cls.load_model(
+                model_cache_path, quantization_config=None if is_data_aware_quantization else quantization_config
+            )
         else:
-            model = cls._compile_model(
+            ov_model = cls._compile_model(
                 model_cache_path,
                 kwargs.get("device"),
                 kwargs.get("ov_config"),
                 model_save_dir=model_cache_path.parent,
             )
 
-        return cls(
-            model,
+        model = cls(
+            ov_model,
             config=config,
             model_save_dir=model_cache_path.parent,
             quantization_config=quantization_config,
             **kwargs,
         )
+
+        if is_data_aware_quantization:
+            from optimum.intel import OVQuantizer
+
+            quantizer = OVQuantizer(model)
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+
+        return model
 
     @classmethod
     @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
@@ -459,7 +478,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=r"(.*)?openvino(.*)?\_model(.*)?.xml$" if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
@@ -504,7 +523,7 @@ class OVBaseModel(OptimizedModel):
         if not quantization_config and load_in_8bit:
             quantization_config = OVWeightQuantizationConfig(bits=8)
         elif isinstance(quantization_config, dict):
-            quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
+            quantization_config = _quantization_config_from_dict(quantization_config)
 
         return quantization_config
 
@@ -556,7 +575,7 @@ class OVBaseModel(OptimizedModel):
         return model_cache_path
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
@@ -692,7 +711,7 @@ class OVBaseModel(OptimizedModel):
 
     def _reshape(
         self,
-        model: openvino.runtime.Model,
+        model: openvino.Model,
         batch_size: int,
         sequence_length: int,
         height: int = None,
@@ -726,7 +745,7 @@ class OVBaseModel(OptimizedModel):
         """
         if self._compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False

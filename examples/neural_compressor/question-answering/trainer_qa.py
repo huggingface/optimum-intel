@@ -46,7 +46,7 @@ class QuestionAnsweringINCTrainer(INCTrainer):
             and getattr(self.model.config, "framework", None) in {"pytorch", "pytorch_fx"}
             and self.use_cpu_amp
         ):
-            logger.warn(
+            logger.warning(
                 f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
             )
             self.use_cpu_amp = False
