@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 from transformers import PreTrainedModel, TFPreTrainedModel
-from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling, CausalLMOutputWithPast
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.utils import is_tf_available
 
@@ -6631,6 +6631,125 @@ def _ernie_core_attn(
 
     return out, None
         
+def _ernie_forward(
+    self,
+    input_ids=None,
+    position_ids=None,
+    token_type_ids=None,
+    attention_mask=None,
+    attn_mask_start_row_indices=None,
+    inputs_embeds=None,
+    use_cache=None,
+    past_key_values=None,
+    output_attentions=False,
+    output_hidden_states=None,
+    return_dict=False,
+):
+    """Forward pass through the ERNIE model.
+
+    Args:
+        input_ids (Optional[torch.Tensor]): Input token IDs
+        position_ids (Optional[torch.Tensor]): Position indices
+        attention_mask (Optional[torch.Tensor]): Attention mask
+        attn_mask_start_row_indices (Optional[torch.Tensor]): Variable length attention indices
+        inputs_embeds (Optional[torch.Tensor]): Precomputed embeddings
+        use_cache (Optional[bool]): Whether to cache key/value states
+        past_key_values (Optional[Tuple[Tuple[torch.Tensor]]]): Cached key/value states
+        output_attentions (Optional[bool]): Whether to output attention weights
+        output_hidden_states (Optional[bool]): Whether to output all hidden states
+        return_dict (Optional[bool]): Whether to return dict or tuple
+
+    Returns:
+        Union[Tuple, BaseModelOutputWithPast]:
+            Various outputs depending on configuration, including:
+            - last_hidden_state: Final layer hidden states
+            - past_key_values: Cached key/value states if use_cache=True
+            - hidden_states: All hidden states if output_hidden_states=True
+            - attentions: Attention weights if output_attentions=True
+    """
+    use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+    # retrieve input_ids and inputs_embeds
+    if input_ids is not None and inputs_embeds is not None:
+        raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+    elif input_ids is not None:
+        _, seq_length = input_ids.shape
+    elif inputs_embeds is not None:
+        _, seq_length, _ = inputs_embeds.shape
+    else:
+        raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
+
+    if past_key_values is None:
+        past_key_values = tuple([None] * len(self.layers))
+    
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+    inputs_embeds = inputs_embeds.to(self.embed_tokens.weight.dtype)
+
+    hidden_states = inputs_embeds
+
+    # decoder layers
+    all_hidden_states = () if output_hidden_states else None
+    all_self_attns = () if output_attentions else None
+    next_decoder_cache = () if use_cache else None
+
+    for idx, (decoder_layer) in enumerate(self.layers):
+
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        past_key_value = past_key_values[idx] if past_key_values is not None else None
+
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask,
+            attn_mask_start_row_indices,
+            position_ids,
+            token_type_ids,
+            output_attentions,
+            past_key_value,
+            use_cache,
+        )
+
+        if isinstance(layer_outputs, (tuple, list)):
+            hidden_states = layer_outputs[0]
+        else:
+            hidden_states = layer_outputs
+
+        if use_cache:
+            next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
+
+        if output_attentions:
+            all_self_attns += (layer_outputs[1],)
+
+    hidden_states = self.norm(hidden_states)
+
+    # add hidden states from the last decoder layer
+    if output_hidden_states:
+        all_hidden_states += (hidden_states,)
+
+    next_cache = next_decoder_cache if use_cache else None
+
+    if not return_dict:
+        return tuple(
+            v
+            for v in [
+                hidden_states,
+                next_cache,
+                all_hidden_states,
+                all_self_attns,
+            ]
+            if v is not None
+        )
+
+    return BaseModelOutputWithPast(
+        last_hidden_state=hidden_states,
+        past_key_values=next_cache,
+        hidden_states=all_hidden_states,
+        attentions=all_self_attns,
+    )
+
+        
 class ErnieModelPatcher(DecoderModelPatcher):
     
     def __init__(
@@ -6692,6 +6811,8 @@ class ErnieModelPatcher(DecoderModelPatcher):
     
     def __enter__(self):
         super().__enter__()
+        self._model.ernie._orig_forward = self._model.ernie.forward
+        self._model.ernie.forward = types.MethodType(_ernie_forward, self._model.ernie)
         for layer in self._model.ernie.layers:
             layer.self_attn._orig_core_attn = layer.self_attn.attn_func
             layer.self_attn.attn_func = types.MethodType(_ernie_core_attn, layer.self_attn)
@@ -6703,8 +6824,8 @@ class ErnieModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        self._model.ernie.forward = self._model.ernie._orig_forward
         for layer in self._model.ernie.layers:
             layer.self_attn.attn_func = layer.self_attn._orig_core_attn
             layer.self_attn.rope_attn = layer.self_attn._orig_rope_attn
             layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
-            
