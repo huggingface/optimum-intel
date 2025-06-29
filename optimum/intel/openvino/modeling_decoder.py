@@ -115,6 +115,7 @@ def has_cache_inputs(model):
         for key in model.inputs
     )
 
+
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
