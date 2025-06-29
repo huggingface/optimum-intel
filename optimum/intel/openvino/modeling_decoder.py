@@ -14,9 +14,9 @@
 import copy
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass
 
 import numpy as np
 import openvino
