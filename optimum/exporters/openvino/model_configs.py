@@ -92,8 +92,8 @@ from .model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
-    FalconModelPatcher,
     FalconMambaPatcher,
+    FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
@@ -4372,7 +4372,7 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
 
 class MambaCacheDummyInputGenerator(DummyInputGenerator):
     """
-    Generates dummy past_key_values inputs for seq2seq architectures.
+    Generates dummy past_ssm_states, past_conv_states and cache_position inputs for Mamba architectures.
     """
 
     SUPPORTED_INPUT_NAMES = ("past_ssm_states", "past_conv_states", "cache_position")
@@ -4461,9 +4461,11 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
             conv_name = "present_conv_states"
 
         for i in range(self._normalized_config.num_layers):
+            # [batch_size, d_state, d_model]
             inputs_or_outputs[f"{ssm_name}.{i}"] = {0: "batch_size"}
 
         for i in range(self._normalized_config.num_layers):
+            # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{conv_name}.{i}"] = {0: "batch_size"}
 
     def patch_model_for_export(

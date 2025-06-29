@@ -1135,6 +1135,9 @@ class OVMambaForCausalLM(OVModelForCausalLM):
     ):
         inputs = {"input_ids": input_ids.cpu().numpy()}
         if "cache_position" in self.input_names:
+            if cache_position is None:
+                # initialize it as for prefill stage
+                cache_position = torch.arange(0, self.config.conv_kernel, device=input_ids.device)
             inputs["cache_position"] = cache_position.cpu().numpy()
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = cache_position.cpu().numpy()

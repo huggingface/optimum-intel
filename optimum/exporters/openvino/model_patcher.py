@@ -6861,4 +6861,3 @@ class FalconMambaPatcher(MambaPatcher):
                 layer.mixer.conv1d.bias,
             )
             layer.mixer.conv_sequence_transform = torch.jit.script(conv_transform)
-
