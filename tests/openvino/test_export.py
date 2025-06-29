@@ -80,6 +80,7 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
+        "mamba": OVModelForCausalLM,
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
