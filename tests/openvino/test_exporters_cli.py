@@ -90,6 +90,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("text-generation-with-past", "mamba"),
     ]
 
     if is_transformers_version(">=", "4.45"):
@@ -123,6 +124,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "mamba": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
