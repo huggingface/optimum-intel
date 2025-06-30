@@ -190,7 +190,7 @@ class OVModelOpenCLIPBase(OVModel):
             local_files_only=local_files_only,
         )
 
-        from_pretrained_method = cls._from_transformers if _export else cls._from_pretrained
+        from_pretrained_method = cls._export if _export else cls._from_pretrained
         return from_pretrained_method(
             model_id=model_id,
             config=config,
@@ -221,7 +221,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
         self.tokenize_cfg = tokenize_cfg
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
@@ -346,7 +346,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
         self.preprocess_cfg = preprocess_cfg
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,

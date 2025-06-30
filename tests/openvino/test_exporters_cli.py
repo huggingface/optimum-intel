@@ -60,7 +60,6 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -202,7 +201,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
+            {"encoder": 8, "decoder": 12, "decoder_with_past": 11}
             if is_transformers_version("<=", "4.36.0")
             else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
             (
@@ -216,9 +215,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 10, "decoder": 12, "decoder_with_past": 11}
+            {"encoder": 9, "decoder": 13, "decoder_with_past": 12}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
+            else {"encoder": 9, "decoder": 14, "decoder_with_past": 25},
             (
                 {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 11}, "decoder_with_past": {"f8e4m3": 9}}
                 if is_transformers_version("<=", "4.36.0")
@@ -231,7 +230,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e4m3": 16},
@@ -243,7 +242,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "nf4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "nf4": 5},
@@ -255,7 +254,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "nf4_f8e5m2",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e5m2": 11, "nf4": 5},
@@ -267,7 +266,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "int4": 5},
@@ -279,7 +278,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4_f8e5m2",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e5m2": 2, "int4": 28},
@@ -309,7 +308,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e5m2",
             "--dataset laion/220k-GPT4Vision-captions-from-LIVIS --num-samples 1 --trust-remote-code",
             {
-                "unet": 174,
+                "unet": 198,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -329,7 +328,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "f8e4m3",
             "--dataset laion/filtered-wit --num-samples 1 --trust-remote-code",
             {
-                "unet": 79,
+                "unet": 87,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -439,6 +438,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
+            {"model": {"int8": 4, "int4": 14}},
+        ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --awq",
             {"model": {"int8": 4, "int4": 14}},
         ),
         (
@@ -934,7 +939,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
-            awq_str = b"Applying data-aware AWQ" if is_nncf_version(">", "2.16") else b"Applying AWQ"
+            awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
             self.assertTrue("--awq" not in option or awq_str in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
