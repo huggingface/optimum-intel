@@ -6676,6 +6676,7 @@ class MambaPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         self._patching_specs = []
+        from transformers import PretrainedConfig
         from transformers.cache_utils import MambaCache
 
         class MambaCacheWrap(MambaCache):
