@@ -92,6 +92,7 @@ from .model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
+    ErnieModelPatcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
@@ -4366,3 +4367,17 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+@register_in_tasks_manager("ernie4-5", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return ErnieModelPatcher(self, model, model_kwargs=model_kwargs)
