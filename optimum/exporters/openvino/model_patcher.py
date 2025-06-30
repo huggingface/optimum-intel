@@ -6457,6 +6457,7 @@ class Llama4TextModelPatcher(ModelPatcher):
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
 
+
 def _rotate_every_two(x: torch.Tensor) -> torch.Tensor:
     x1 = x[:, :, :, ::2]
     x2 = x[:, :, :, 1::2]
@@ -6514,9 +6515,9 @@ def _ernie_emb_forward(self, seq_length, position_ids=None):
     pos_emb = pos_emb.detach()
     return pos_emb
 
+
 def _rope_attn(
     self,
-    mix_layer,
     query_states,
     key_states,
     value_states,
@@ -6548,13 +6549,6 @@ def _rope_attn(
             - updated_key_value_cache: Optional cache
     """
 
-    if mix_layer is not None:
-        chunk_size = mix_layer.size(-1) // 3
-        query_states, key_states, value_states = torch.split(
-            mix_layer, 
-            [chunk_size, chunk_size, chunk_size], 
-            dim=-1
-        )
     query_states = query_states.permute(0, 2, 1, 3)
     key_states = key_states.permute(0, 2, 1, 3)
     value_states = value_states.permute(0, 2, 1, 3)
@@ -6621,8 +6615,13 @@ def _ernie_core_attn(
         k = self.repeat_kv(k, repeat_factor)
         v = self.repeat_kv(v, repeat_factor)
         
+    L, S = q.size(-2), k.size(-2)
+    temp_mask = torch.ones(S, S, dtype=torch.float32).tril(diagonal=0)
+    attention_mask = temp_mask[-L:, :]
+    attention_mask = (1 - attention_mask) * -1e10
+        
     out = F.scaled_dot_product_attention(
-        q, k, v, attn_mask=None, dropout_p=self.config.attention_probs_dropout_prob, is_causal=True
+        q, k, v, attn_mask=attention_mask, dropout_p=self.config.attention_probs_dropout_prob, is_causal=False
     )
 
     # combine heads
@@ -6630,7 +6629,7 @@ def _ernie_core_attn(
     out = out.contiguous().view(out.size(0), out.size(1), -1)
 
     return out, None
-        
+
 def _ernie_forward(
     self,
     input_ids=None,
@@ -6775,7 +6774,7 @@ class ErnieModelPatcher(DecoderModelPatcher):
             output_hidden_states=None,
             **kwargs,
         ):
-            outputs = self.ernie(
+            outputs = self.model(
                 input_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
@@ -6811,9 +6810,9 @@ class ErnieModelPatcher(DecoderModelPatcher):
     
     def __enter__(self):
         super().__enter__()
-        self._model.ernie._orig_forward = self._model.ernie.forward
-        self._model.ernie.forward = types.MethodType(_ernie_forward, self._model.ernie)
-        for layer in self._model.ernie.layers:
+        self._model.model._orig_forward = self._model.model.forward
+        self._model.model.forward = types.MethodType(_ernie_forward, self._model.model)
+        for layer in self._model.model.layers:
             layer.self_attn._orig_core_attn = layer.self_attn.attn_func
             layer.self_attn.attn_func = types.MethodType(_ernie_core_attn, layer.self_attn)
             layer.self_attn._orig_rope_attn = layer.self_attn.rope_attn
@@ -6824,8 +6823,8 @@ class ErnieModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-        self._model.ernie.forward = self._model.ernie._orig_forward
-        for layer in self._model.ernie.layers:
+        self._model.model.forward = self._model.model._orig_forward
+        for layer in self._model.model.layers:
             layer.self_attn.attn_func = layer.self_attn._orig_core_attn
             layer.self_attn.rope_attn = layer.self_attn._orig_rope_attn
             layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward

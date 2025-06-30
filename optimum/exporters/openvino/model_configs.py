@@ -4324,7 +4324,7 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
 
 
-@register_in_tasks_manager("ernie", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager("ernie4-5", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
