@@ -1134,6 +1134,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
     )
 
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba",)
+    if is_transformers_version(">=", "4.39"):
+        SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
@@ -1264,6 +1268,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3-moe": 2,
+        "mamba": 0,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1296,12 +1301,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in ov_outputs)
-        self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        is_stateful = ov_model.config.model_type not in not_stateful
-        self.assertEqual(ov_model.stateful, is_stateful)
-        if is_stateful:
-            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
+            self.assertTrue("cache_params" in ov_outputs)
+        else:
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
         expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
         num_sdpa = get_num_sdpa(ov_model.model)
@@ -1328,7 +1336,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Compare tensor outputs
         atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
-        if "awq" not in model_arch and "gptq" not in model_arch:
+        if "awq" not in model_arch and "gptq" not in model_arch and model_arch not in self.SUPPORTED_SSM_ARCHITECTURES:
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
 
         # Qwen tokenizer does not support padding
@@ -1554,6 +1562,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
+        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
+            pytest.skip(f"Skipping unsupported architecture: {model_arch}")
+
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
