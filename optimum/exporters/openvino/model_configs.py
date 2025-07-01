@@ -4460,7 +4460,6 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
             # [batch_size, d_state, d_model]
             inputs_or_outputs[f"{ssm_name}.{i}"] = {0: "batch_size"}
 
-        for i in range(self._normalized_config.num_layers):
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{conv_name}.{i}"] = {0: "batch_size"}
 
