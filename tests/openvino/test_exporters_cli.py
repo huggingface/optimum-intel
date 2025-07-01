@@ -951,7 +951,6 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
-        self.maxDiff = 100000
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -989,7 +988,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
-        self.maxDiff = 100000
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "

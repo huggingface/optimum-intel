@@ -1325,7 +1325,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 pass
 
             submodels = model.ov_submodels
-            self.maxDiff = 1000000
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
