@@ -107,15 +107,6 @@ TEXT_GENERATION_EXAMPLE = r"""
 # during dataset preparatioon nncf checks isinstance(model, PreTrainedModel.__bases__)
 # in transformers 4.52.0 PreTrainedModel does not include GenerationMixin and this check failed for OVModelForCausalLM
 # TO DO: remove it after migration on new nncf
-def has_cache_inputs(model):
-    return any(
-        "past_key_values" in key.get_any_name()
-        or "past_ssm" in key.get_any_name()
-        or "past_conv" in key.get_any_name()
-        for key in model.inputs
-    )
-
-
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
