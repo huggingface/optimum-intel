@@ -4473,7 +4473,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 
         dummy_inputs = {}
         input_names = [key for key in self.inputs.keys() if not key.startswith("past_")]
-        if self.use_past_in_inputs and self.use_cache_branch is not False:
+        if self.use_past_in_inputs:
             input_names.extend(["past_ssm_states", "past_conv_states"])
 
         for input_name in input_names:
