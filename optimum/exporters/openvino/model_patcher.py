@@ -6470,6 +6470,7 @@ def _apply_rotary_pos_emb(tensor: torch.Tensor, sin: torch.Tensor, cos: torch.Te
     cos = torch.repeat_interleave(cos[:, None, :, :], 2, 3)
     return (tensor * cos) + (_rotate_every_two(tensor) * sin)
 
+
 def _apply_rotary(rp, q, k):
     """
     Apply rotary position embeddings to queries and keys.
@@ -6487,6 +6488,7 @@ def _apply_rotary(rp, q, k):
     query = _apply_rotary_pos_emb(q, sin, cos)
     return query, key
 
+
 def _ernie_emb_forward(self, seq_length, position_ids=None):
     """
     Compute rotary position embeddings for given sequence length.
@@ -6501,9 +6503,7 @@ def _ernie_emb_forward(self, seq_length, position_ids=None):
     indices = torch.arange(0, self.head_dim, 2, dtype=torch.float32)
     indices = 1 / self.base ** (indices / self.head_dim)
     if position_ids is None:
-        position_ids = torch.arange(
-            0, seq_length, 1, dtype=torch.float32
-        ).unsqueeze(1)
+        position_ids = torch.arange(0, seq_length, 1, dtype=torch.float32).unsqueeze(1)
         position_ids = position_ids / self.compression_ratio
         sinusoid_inp = position_ids * indices.unsqueeze(0)
     else:
@@ -6585,8 +6585,8 @@ def _rope_attn(
         seq_length,
     )
     return attn_output, attn_weights, past_key_value
-        
-        
+
+
 def _ernie_core_attn(
     self,
     q,
@@ -6614,12 +6614,12 @@ def _ernie_core_attn(
         repeat_factor = self.num_heads // self.num_key_value_heads
         k = self.repeat_kv(k, repeat_factor)
         v = self.repeat_kv(v, repeat_factor)
-        
+
     L, S = q.size(-2), k.size(-2)
     temp_mask = torch.ones(S, S, dtype=torch.float32).tril(diagonal=0)
     attention_mask = temp_mask[-L:, :]
     attention_mask = (1 - attention_mask) * -1e10
-        
+
     out = F.scaled_dot_product_attention(
         q, k, v, attn_mask=attention_mask, dropout_p=self.config.attention_probs_dropout_prob, is_causal=False
     )
@@ -6629,6 +6629,7 @@ def _ernie_core_attn(
     out = out.contiguous().view(out.size(0), out.size(1), -1)
 
     return out, None
+
 
 def _ernie_forward(
     self,
@@ -6680,7 +6681,7 @@ def _ernie_forward(
 
     if past_key_values is None:
         past_key_values = tuple([None] * len(self.layers))
-    
+
     if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
     inputs_embeds = inputs_embeds.to(self.embed_tokens.weight.dtype)
@@ -6693,7 +6694,6 @@ def _ernie_forward(
     next_decoder_cache = () if use_cache else None
 
     for idx, (decoder_layer) in enumerate(self.layers):
-
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
@@ -6748,9 +6748,8 @@ def _ernie_forward(
         attentions=all_self_attns,
     )
 
-        
+
 class ErnieModelPatcher(DecoderModelPatcher):
-    
     def __init__(
         self,
         config: "OnnxConfig",
@@ -6758,7 +6757,7 @@ class ErnieModelPatcher(DecoderModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        
+
         def forward(
             self,
             input_ids,
@@ -6803,11 +6802,10 @@ class ErnieModelPatcher(DecoderModelPatcher):
                 attentions=outputs.attentions,
             )
 
-
         model.forward = types.MethodType(forward, model)
 
         super().__init__(config, model, model_kwargs)
-    
+
     def __enter__(self):
         super().__enter__()
         self._model.model._orig_forward = self._model.model.forward
