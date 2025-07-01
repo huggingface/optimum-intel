@@ -667,11 +667,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
         # Encode if needed : first prediction pass
         if encoder_outputs is None:
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+
+        if labels is not None and decoder_input_ids is None:
+            # get decoder inputs from shifting lm labels to the right
+            decoder_input_ids = self._shift_right(labels)
 
         # Decode
         if past_key_values is None or self.decoder_with_past is None:
@@ -795,6 +800,27 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def compile(self):
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name)._compile()
+
+    def _shift_right(self, input_ids):
+        decoder_start_token_id = self.config.decoder_start_token_id
+        pad_token_id = self.config.pad_token_id
+
+        if decoder_start_token_id is None:
+            raise ValueError(
+                "self.model.config.decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id. "
+                "See T5 docs for more information."
+            )
+
+        shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+        shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
+        shifted_input_ids[..., 0] = decoder_start_token_id
+
+        if pad_token_id is None:
+            raise ValueError("self.model.config.pad_token_id has to be defined.")
+        # replace possible -100 values in labels by `pad_token_id`
+        shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
+
+        return shifted_input_ids
 
 
 class OVEncoder:
