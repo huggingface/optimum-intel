@@ -1859,6 +1859,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 }
             ),
         ),
+        (
+            OVQuantizationConfig(
+                advanced_parameters=nncf.AdvancedCompressionParameters(),
+            ),
+        ),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
