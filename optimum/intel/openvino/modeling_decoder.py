@@ -160,17 +160,13 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
-        self.use_cache = has_cache_inputs(model) or model_has_sinks
+        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
         stateful = kwargs.pop("stateful", None)  # stateful model only if it is converted with stateful=True
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self.ssm_cache_input_names = [key for key in self.input_names if "past_ssm_states" in key]
-        self.conv_cache_input_names = [key for key in self.input_names if "past_conv_states" in key]
-        self.ssm_cache_output_names = [key for key in self.output_names if "present_ssm_states" in key]
-        self.conv_cache_output_names = [key for key in self.output_names if "present_conv_states" in key]
         # Keeping the original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
@@ -1133,6 +1129,44 @@ class OVMambaForCausalLM(OVModelForCausalLM):
     2. state-space model - ssm_states:  (batch_size, hidden_dim, num_state_features)
     This class supports stateful and stateless inference using OpenVINO.
     """
+
+    def __init__(
+        self,
+        model: openvino.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            model=model,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+
+        def has_cache_inputs(model):
+            return any(
+                "past_key_values" in key.get_any_name()
+                or "past_ssm" in key.get_any_name()
+                or "past_conv" in key.get_any_name()
+                for key in model.inputs
+            )
+
+        model_has_sinks = model_has_state(self.model)
+        self.use_cache = has_cache_inputs(model) or model_has_sinks
+
+        self.ssm_cache_input_names = [key for key in self.input_names if "past_ssm_states" in key]
+        self.conv_cache_input_names = [key for key in self.input_names if "past_conv_states" in key]
+        self.ssm_cache_output_names = [key for key in self.output_names if "present_ssm_states" in key]
+        self.conv_cache_output_names = [key for key in self.output_names if "present_conv_states" in key]
 
     def forward(
         self,
