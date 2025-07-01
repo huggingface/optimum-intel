@@ -6666,7 +6666,6 @@ class MambaPatcher(ModelPatcher):
                 self.ssm_state_size = config.state_size
                 self.conv_kernel_size = config.conv_kernel
                 self.device = torch.device(device) if device is not None else torch.device("cpu")
-                # print(config.num_hidden_layers)
 
                 if conv_states is not None:
                     self.conv_states = conv_states
