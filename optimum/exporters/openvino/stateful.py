@@ -272,7 +272,7 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
-def patch_stateful_ssm(ov_model):
+def patch_stateful_ssm(ov_model: ov.Model):
     cache_input_names = [key_name for key in ov_model.inputs for key_name in key.get_names() if "past_" in key_name]
     cache_output_names = [
         key_name for key in ov_model.outputs for key_name in key.get_names() if "present" in key_name

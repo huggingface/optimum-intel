@@ -4423,6 +4423,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MambaCacheDummyInputGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MambaCacheDummyInputGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -4503,6 +4504,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     "falcon-mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class FalconMambaOpenVINOConfig(MambaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
