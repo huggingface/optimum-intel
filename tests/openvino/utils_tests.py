@@ -63,7 +63,7 @@ MODEL_NAMES = {
     "donut": "fxmarty/tiny-doc-qa-vision-encoder-decoder",
     "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
     "detr": "hf-internal-testing/tiny-random-DetrModel",
-    "erenie4_5": "snake7gun/tiny-random-erenie4_5",
+    "ernie4_5": "snake7gun/tiny-random-ernie4_5",
     "electra": "hf-internal-testing/tiny-random-electra",
     "esm": "hf-internal-testing/tiny-random-EsmModel",
     "exaone": "katuni4ka/tiny-random-exaone",

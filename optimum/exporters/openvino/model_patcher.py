@@ -6802,6 +6802,8 @@ class ErnieModelPatcher(DecoderModelPatcher):
                 attentions=outputs.attentions,
             )
 
+        # Trigger 'use_cache=true' for stateful model.
+        # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/config.json#L23
         model.forward = types.MethodType(forward, model)
 
         super().__init__(config, model, model_kwargs)
@@ -6812,10 +6814,18 @@ class ErnieModelPatcher(DecoderModelPatcher):
         self._model.model.forward = types.MethodType(_ernie_forward, self._model.model)
         for layer in self._model.model.layers:
             layer.self_attn._orig_core_attn = layer.self_attn.attn_func
+            # Switch to standard SDPA OP for optimization in Plugin.
+            # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/modeling_ernie4_5.py#L484
             layer.self_attn.attn_func = types.MethodType(_ernie_core_attn, layer.self_attn)
+
             layer.self_attn._orig_rope_attn = layer.self_attn.rope_attn
+            # Reshape the QKV and kvcache from [batch, seq_len, heads, dim] to  [batch, heads, seq_len, dim] for better performance.
+            # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/modeling_ernie4_5.py#L575
             layer.self_attn.rope_attn = types.MethodType(_rope_attn, layer.self_attn)
+
             layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
+            # replace with a general ROPE implementation for graph fusion.
+            # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/modeling_ernie4_5.py#L82
             layer.self_attn.rotary_emb.forward = types.MethodType(_ernie_emb_forward, layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
