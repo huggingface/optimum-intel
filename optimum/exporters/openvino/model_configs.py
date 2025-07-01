@@ -4429,12 +4429,10 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         if self.use_past_in_inputs:
             common_inputs = {"input_ids": {0: "batch_size", 1: "sequence_length"}}
             self.add_past_key_values(common_inputs, direction="inputs")
-            # common_inputs["attention_mask"] = {0: "batch_size", 1: "past_sequence_length + 1"}
             common_inputs["cache_position"] = {0: "cache_sequence_length"}
         else:
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
-                # "attention_mask": {0: "batch_size", 1: "sequence_length"},
                 "cache_position": {0: "cache_sequence_length"},
             }
         return common_inputs
