@@ -4505,6 +4505,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 )
 class FalconMambaOpenVINOConfig(MambaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
