@@ -999,6 +999,30 @@ class OVWeightCompressionTest(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.51.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "llama4",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 22, "int4": 48},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 16},
+                    },
+                ),
+            ]
+        )
+
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         (OVModelForCausalLM, "gpt2", False),
         (OVModelForMaskedLM, "bert", False),
@@ -1301,6 +1325,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 pass
 
             submodels = model.ov_submodels
+            self.maxDiff = 1000000
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
@@ -1879,6 +1904,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
                         full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", dataset="wikitext2"),
                     ),
                 }
+            ),
+        ),
+        (
+            OVQuantizationConfig(
+                advanced_parameters=nncf.AdvancedCompressionParameters(),
             ),
         ),
     )

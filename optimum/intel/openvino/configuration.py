@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import copy
+import dataclasses
 import inspect
 import json
 import logging
@@ -530,7 +531,20 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         # Unpack kwargs dict
         result = super().to_dict()
         result = result | result.pop("kwargs", {})
+        self._dataclasses_to_dict(result)
         return result
+
+    @staticmethod
+    def _dataclasses_to_dict(d: dict):
+        """
+        Search for dataclasses in the dict and convert them to dicts.
+        """
+        for k in d:
+            v = d[k]
+            if isinstance(v, dict):
+                OVQuantizationConfigBase._dataclasses_to_dict(v)
+            elif dataclasses.is_dataclass(v):
+                d[k] = dataclasses.asdict(v)
 
 
 @dataclass

@@ -764,7 +764,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             )
 
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
-        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.is_dynamic = batch_size == -1 and sequence_length == -1
         self.encoder.model = self._reshape(self.encoder.model, batch_size, sequence_length, is_decoder=False)
         self.decoder.model = self._reshape(self.decoder.model, batch_size, sequence_length)
         if self.decoder_with_past is not None:
