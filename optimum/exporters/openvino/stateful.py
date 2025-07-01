@@ -22,7 +22,7 @@ import openvino as ov
 from openvino import opset13
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
-from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS
+from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS, SSM_MODELS
 
 
 def model_has_state(ov_model: ov.Model):
@@ -272,14 +272,12 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
-def patch_stateful_ssm(config, ov_model):
+def patch_stateful_ssm(ov_model):
     cache_input_names = [key_name for key in ov_model.inputs for key_name in key.get_names() if "past_" in key_name]
     cache_output_names = [
         key_name for key in ov_model.outputs for key_name in key.get_names() if "present" in key_name
     ]
 
-    print(cache_output_names)
-    print(ov_model.outputs)
     if not cache_input_names or not cache_output_names:
         return
 
@@ -291,20 +289,15 @@ def patch_stateful_ssm(config, ov_model):
     for cache_name_pair in zip(cache_input_names, cache_output_names):
         input_output_map[cache_name_pair[0]] = cache_name_pair[1]
 
-    print(input_output_map)
-
     apply_make_stateful_transformation(ov_model, input_output_map)
     build_state_initializer(ov_model, batch_dim)
-
-
-SSM_MODELS = ["mamba", "falcon-mamba"]
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
     if config.model_type.replace("_", "-") in SSM_MODELS:
-        return patch_stateful_ssm(config, ov_model)
+        return patch_stateful_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 

@@ -166,7 +166,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
-        self.key_value_output_names = [key for key in self.output_names if "present." in key]
+        self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self.ssm_cache_input_names = [key for key in self.input_names if "past_ssm_states" in key]
         self.conv_cache_input_names = [key for key in self.input_names if "past_conv_states" in key]
         self.ssm_cache_output_names = [key for key in self.output_names if "present_ssm_states" in key]
@@ -1105,8 +1105,8 @@ class MambaOutput(ModelOutput):
     Class for the MAMBA model outputs.
 
     Args:
-        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
-            Sequence of hidden-states at the output of the last layer of the model.
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of logits at the output layer of the model.
         cache_params (`MambaCache`):
             The state of the model at the last time step. Can be used in a forward method with the next `input_ids` to
             avoid providing the old `input_ids`.
@@ -1125,6 +1125,15 @@ class MambaOutput(ModelOutput):
 
 
 class OVMambaForCausalLM(OVModelForCausalLM):
+    """
+    OpenVINO-based causal language model class designed to run models that include Mamba blocks.
+    This model assumes a fixed-size Mamba context for sequential computation.
+    The context for each mamba block consists of two tensors:
+    1. convolutional cache tensor - conv_states: (batch_size, hidden_dim, conv_kernel)
+    2. state-space model - ssm_states:  (batch_size, hidden_dim, num_state_features)
+    This class supports stateful and stateless inference using OpenVINO.
+    """
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
