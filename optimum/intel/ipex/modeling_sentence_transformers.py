@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 import torch
 from sentence_transformers import SentenceTransformer
-from sentence_transformers.models import Transformer
+from sentence_transformers.models import Pooling, Transformer
 from sentence_transformers.models.Transformer import _save_pretrained_wrapper
 from sentence_transformers.util import import_from_string
 from transformers import MT5Config, T5Config
@@ -89,3 +89,42 @@ class IPEXSentenceTransformer(SentenceTransformer):
                 pass
 
         return import_from_string(class_ref)
+
+    def _load_auto_model(
+        self,
+        model_name_or_path: str,
+        token: Optional[str],
+        cache_folder: Optional[str],
+        revision: Optional[str] = None,
+        trust_remote_code: bool = False,
+        local_files_only: bool = False,
+        model_kwargs: dict[str, Any] = None,
+        tokenizer_kwargs: dict[str, Any] = None,
+        config_kwargs: dict[str, Any] = None,
+        has_modules: bool = False,
+    ) -> list[torch.nn.Module]:
+        shared_kwargs = {
+            "token": token,
+            "trust_remote_code": trust_remote_code,
+            "revision": revision,
+            "local_files_only": local_files_only,
+        }
+        model_kwargs = shared_kwargs if model_kwargs is None else {**shared_kwargs, **model_kwargs}
+        tokenizer_kwargs = shared_kwargs if tokenizer_kwargs is None else {**shared_kwargs, **tokenizer_kwargs}
+        config_kwargs = shared_kwargs if config_kwargs is None else {**shared_kwargs, **config_kwargs}
+
+        transformer_model = IPEXTransformer(
+            model_name_or_path,
+            cache_dir=cache_folder,
+            model_args=model_kwargs,
+            tokenizer_args=tokenizer_kwargs,
+            config_args=config_kwargs,
+            backend=self.backend,
+        )
+        pooling_model = Pooling(transformer_model.get_word_embedding_dimension(), "mean")
+        if not local_files_only:
+            self.model_card_data.set_base_model(model_name_or_path, revision=revision)
+        return [transformer_model, pooling_model]
+
+    def _get_model_type(self, *args, **kwargs) -> str:
+        return "IPEXSentenceTransformer"
