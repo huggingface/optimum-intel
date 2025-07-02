@@ -96,6 +96,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "mamba"),
+                ("text-generation-with-past", "falcon-mamba"),
             ]
         )
 
@@ -131,6 +132,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "mamba": 2,
+        "falcon-mamba": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

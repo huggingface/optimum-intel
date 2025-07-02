@@ -73,6 +73,7 @@ MODEL_NAMES = {
     "gemma3": "katuni4ka/tiny-random-gemma3",
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
+    "falcon-mamba": "rkazants/tiny-falcon-mamba",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "flux": "katuni4ka/tiny-random-flux",
     "flux-fill": "katuni4ka/tiny-random-flux-fill",
@@ -320,6 +321,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "clip": {"model": 130},
     "mamba": {"model": 258},
+    "falcon-mamba": {"model": 258},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"

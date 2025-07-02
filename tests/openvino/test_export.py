@@ -83,7 +83,7 @@ class ExportModelTest(unittest.TestCase):
     }
 
     if is_transformers_version(">=", "4.39"):
-        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
