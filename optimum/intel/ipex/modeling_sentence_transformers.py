@@ -125,3 +125,6 @@ class IPEXSentenceTransformer(SentenceTransformer):
         if not local_files_only:
             self.model_card_data.set_base_model(model_name_or_path, revision=revision)
         return [transformer_model, pooling_model]
+
+    def _get_model_type(self, *args, **kwargs) -> str:
+        return "IPEXSentenceTransformer"
