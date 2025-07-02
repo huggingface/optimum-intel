@@ -436,7 +436,11 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForTextToSpeechSeq2Seq.from_pretrained(\'microsoft/speecht5_tts\', vocoder=\'microsoft/speecht5_hifigan\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+    on:click={() =>
+      navigator.clipboard.writeText(
+        `optimum-cli export openvino -m microsoft/speecht5_tts --model-kwargs '{"vocoder":"microsoft/speecht5_hifigan"}' --weight-format int8 save_dir`
+      )
+    }>
                     ✅
                 </button>
             </td>
