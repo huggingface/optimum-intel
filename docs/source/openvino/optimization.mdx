@@ -436,12 +436,12 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
-    on:click={() =>
-      navigator.clipboard.writeText(
-        `optimum-cli export openvino -m microsoft/speecht5_tts --model-kwargs '{"vocoder":"microsoft/speecht5_hifigan"}' --weight-format int8 save_dir`
-      )
-    }>
-                    ✅
+                  on:click={() =>
+                    navigator.clipboard.writeText(
+                      `optimum-cli export openvino -m microsoft/speecht5_tts --model-kwargs '{"vocoder":"microsoft/speecht5_hifigan"}' --weight-format int8 save_dir`
+                    )
+                  }>
+                  ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
