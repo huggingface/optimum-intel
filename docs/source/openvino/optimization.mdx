@@ -58,13 +58,8 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">text-generation<br>(OVModelForCausalLM)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format int8 ./save_dir');
-                    let m=document.getElementById('copyMsg');
-                    m.style.display='block';
-                    clearTimeout(window._copyTimeout);
-                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
-                ">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format int8 ./save_dir')">
                     ✅
                 </button>
             </td>
