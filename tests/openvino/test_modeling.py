@@ -1269,6 +1269,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen3": 2,
         "qwen3-moe": 2,
         "mamba": 0,
+        "falcon-mamba": 0,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
