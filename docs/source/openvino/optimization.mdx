@@ -58,52 +58,92 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">text-generation<br>(OVModelForCausalLM)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format int8 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format int4 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format int4 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode int8 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -111,40 +151,70 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">image-text-to-text<br>(OVModelForVisualCausalLM)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --weight-format int4 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --weight-format int4 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --weight-format int4 --dataset contextual ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --weight-format int4 --dataset contextual ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --quant-mode int8 --dataset contextual ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --task image-text-to-text -m OpenGVLab/InternVL2-1B --trust-remote-code --quant-mode int8 --dataset contextual ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -154,40 +224,70 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">text-to-image, text-to-video<br>(OVDiffusionPipeline)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m dreamlike-art/dreamlike-anime-1.0 --weight-format int8 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m dreamlike-art/dreamlike-anime-1.0 --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m dreamlike-art/dreamlike-anime-1.0 --weight-format int8 --dataset conceptual_captions ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m dreamlike-art/dreamlike-anime-1.0 --weight-format int8 --dataset conceptual_captions ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(bits=8, quant_method=\'hybrid\', dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVWeightQuantizationConfig(bits=8, quant_method=\'hybrid\', dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m dreamlike-art/dreamlike-anime-1.0 --quant-mode int8 --dataset conceptual_captions ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m dreamlike-art/dreamlike-anime-1.0 --quant-mode int8 --dataset conceptual_captions ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVDiffusionPipeline.from_pretrained(\'dreamlike-art/dreamlike-anime-1.0\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -203,14 +303,24 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 10 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 10 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'openai/whisper-large-v3-turbo\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'librispeech\', num_samples=10)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'openai/whisper-large-v3-turbo\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'librispeech\', num_samples=10)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -220,52 +330,92 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">feature-extraction<br>(OVModelForFeatureExtraction)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --weight-format int8 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --weight-format int4 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --weight-format int4 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode int8 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -273,52 +423,92 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">feature-extraction<br>(OVSentenceTransformer)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --weight-format int8 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --weight-format int4 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --weight-format int4 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode int8 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -326,52 +516,92 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">fill-mask<br>(OVModelForMaskedLM)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --weight-format int8 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --weight-format int4 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --weight-format int4 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode int8 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode int8 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -379,52 +609,92 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
         <tr>
             <td style="text-align: center; vertical-align: middle;">zero-shot-image-classification<br>(OVModelForZeroShotImageClassification)</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int8 ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int4 --dataset conceptual_captions ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int4 --dataset conceptual_captions ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">-</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 --dataset conceptual_captions ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 --dataset conceptual_captions ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode nf4_f8e4m3 --dataset conceptual_captions ./save_dir')">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode nf4_f8e4m3 --dataset conceptual_captions ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'conceptual_captions\'))).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'conceptual_captions\'))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
@@ -433,8 +703,13 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">text-to-audio<br>(OVModelForTextToSpeechSeq2Seq)</td>
             <td style="text-align: center; vertical-align: middle;">✅</td>
             <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForTextToSpeechSeq2Seq.from_pretrained(\'microsoft/speecht5_tts\', vocoder=\'microsoft/speecht5_hifigan\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                <button onclick="
+                    navigator.clipboard.writeText('OVModelForTextToSpeechSeq2Seq.from_pretrained(\'microsoft/speecht5_tts\', vocoder=\'microsoft/speecht5_hifigan\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 1000);
+                ">
                     ✅
                 </button>
             </td>
