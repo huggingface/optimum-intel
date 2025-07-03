@@ -1,0 +1,9 @@
+<script>
+    function copyCommand(command) {
+        navigator.clipboard.writeText(command);
+        let m = document.getElementById('copyMsg');
+        m.style.display = 'block';
+        clearTimeout(window._copyTimeout);
+        window._copyTimeout = setTimeout(() => m.style.display = 'none', 1000);
+    }
+</script>
