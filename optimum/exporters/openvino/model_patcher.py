@@ -17,7 +17,7 @@ import inspect
 import logging as log
 import math
 import types
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -6581,6 +6581,7 @@ class MambaPatcher(ModelPatcher):
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
+        ssm_rms_normalization: Optional[Callable] = None,
     ):
         self._patching_specs = []
         from transformers import PretrainedConfig
@@ -6726,7 +6727,7 @@ class MambaPatcher(ModelPatcher):
             return filterd_outputs
 
         self.patched_forward = patched_forward
-        self.ssm_rms_normalization = None
+        self.ssm_rms_normalization = ssm_rms_normalization
 
     def __enter__(self):
         super().__enter__()
@@ -6753,16 +6754,3 @@ class MambaPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
         for layer in self._model.backbone.layers:
             layer.mixer.forward = layer.mixer._orig_forward
-
-
-class FalconMambaPatcher(MambaPatcher):
-    def __init__(
-        self,
-        config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
-        model_kwargs: Optional[Dict[str, Any]] = None,
-    ):
-        from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
-
-        super().__init__(config, model, model_kwargs)
-        self.ssm_rms_normalization = rms_forward

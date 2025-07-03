@@ -92,7 +92,6 @@ from .model_patcher import (
     DBRXModelPatcher,
     DeciLMModelPatcher,
     DeepseekPatcher,
-    FalconMambaPatcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
@@ -4418,6 +4417,9 @@ class MambaCacheDummyInputGenerator(DummyInputGenerator):
         raise ValueError(f"Unsupported input name {input_name}")
 
 
+@register_in_tasks_manager(
+    "falcon-mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
 @register_in_tasks_manager("mamba", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MambaCacheDummyInputGenerator)
@@ -4466,7 +4468,14 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
-        return MambaPatcher(self, model, model_kwargs)
+        model_type = getattr(model.config, "model_type", None)
+        ssm_rms_normalization = None
+        if model_type == "falcon_mamba":
+            from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
+
+            ssm_rms_normalization = rms_forward
+
+        return MambaPatcher(self, model, model_kwargs, ssm_rms_normalization)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -4494,15 +4503,3 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
                 )
 
         return dummy_inputs
-
-
-@register_in_tasks_manager(
-    "falcon-mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
-)
-class FalconMambaOpenVINOConfig(MambaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
-        return FalconMambaPatcher(self, model, model_kwargs)
