@@ -374,59 +374,6 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
         </tr>
         <tr>
-            <td style="text-align: center; vertical-align: middle;">zero-shot-image-classification<br>(OVModelForZeroShotImageClassification)</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int8 ./save_dir')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int4 --dataset conceptual_captions ./save_dir')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">–</td>
-            <td style="text-align: center; vertical-align: middle;">-</td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 --dataset conceptual_captions ./save_dir')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode nf4_f8e4m3 --dataset conceptual_captions ./save_dir')">
-                    ✅
-                </button>
-            </td>
-            <td style="text-align: center; vertical-align: middle;">
-                <button
-                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'conceptual_captions\'))).save_pretrained(\'save_dir\')')">
-                    ✅
-                </button>
-            </td>
-        </tr>
-        <tr>
             <td style="text-align: center; vertical-align: middle;">text2text-generation<br>(OVModelForSeq2SeqLM)</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
@@ -475,6 +422,59 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">
                 <button
                     onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\', smooth_quant_alpha=-1))).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+        </tr>
+        <tr>
+            <td style="text-align: center; vertical-align: middle;">zero-shot-image-classification<br>(OVModelForZeroShotImageClassification)</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int8 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --weight-format int4 --dataset conceptual_captions ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 --dataset conceptual_captions ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'conceptual_captions\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode nf4_f8e4m3 --dataset conceptual_captions ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'conceptual_captions\'))).save_pretrained(\'save_dir\')')">
                     ✅
                 </button>
             </td>
