@@ -17,7 +17,7 @@ import inspect
 import logging as log
 import math
 import types
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, Callable
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -90,7 +90,6 @@ def eager_mask(
     """
     from transformers.masking_utils import causal_mask_function, sdpa_mask_older_torch
 
-
     mask_function = mask_function or causal_mask_function
 
     # The masks for eager attention are simply boolean mask from sdpa, casted to 0 and -inf
@@ -114,6 +113,7 @@ def eager_mask(
     # we need 0s where the tokens should be taken into account, and -inf otherwise (mask is already of boolean type)
     mask = torch.where(mask, torch.tensor(0.0, device=mask.device, dtype=dtype), min_dtype)
     return mask
+
 
 if is_transformers_version(">", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, sdpa_mask_older_torch
@@ -701,11 +701,13 @@ class LlamaModelPatcher(DecoderModelPatcher):
         if is_transformers_version("<", "4.53"):
             # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
             # fill causal mask in slightly different way for avoid overflow on some platforms
-            patch_update_causal_mask(self._model, "4.39.0", "model" if hasattr(self._model, "model") else "transformer")
+            patch_update_causal_mask(
+                self._model, "4.39.0", "model" if hasattr(self._model, "model") else "transformer"
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-    
+
         if is_transformers_version("<", "4.53"):
             unpatch_update_causal_mask(self._model, "model" if hasattr(self._model, "model") else "transformer")
 
