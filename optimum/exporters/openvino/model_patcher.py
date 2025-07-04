@@ -17,7 +17,7 @@ import inspect
 import logging as log
 import math
 import types
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, Callable
 
 import torch
 import torch.nn.functional as F
@@ -54,6 +54,72 @@ if TYPE_CHECKING:
 
     if is_tf_available():
         from transformers.modeling_tf_utils import TFPreTrainedModel
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.53.1/src/transformers/masking_utils.py#L448
+def eager_mask(
+    batch_size: int,
+    cache_position: torch.Tensor,
+    kv_length: int,
+    kv_offset: int = 0,
+    mask_function: Callable = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    dtype: torch.dtype = torch.float32,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    Create a 4D float mask of shape `(batch_size, 1, query_length, kv_length)` where a value of 0 indicates that
+    the element should take part in the attention computation, and -inf (minimum value for the given `dtype`) that
+    it should not.
+
+    Args:
+        batch_size (`int`):
+            The batch size of the input sequence.
+        cache_position (`torch.Tensor`):
+            A tensor of shape (query_length,) indicating the current indices of the input sequence elements.
+        kv_length (`int`):
+            The size that the key and value states will have during the attention computation.
+        kv_offset (`int`, optional):
+            An optional offset to indicate at which first position the key and values states will refer to.
+        mask_function (`Callable`):
+            The mask factory function describing the mask pattern.
+        attention_mask (`torch.Tensor`, optional):
+            The 2D attention mask corresponding to padded tokens of shape (batch_size, number_of_seen_tokens+q_length)
+        dtype (`torch.dtype`, optional):
+            The dtype to use for the mask. By default, `torch.float32`.
+    """
+    from transformers.masking_utils import causal_mask_function, sdpa_mask_older_torch
+
+
+    mask_function = mask_function or causal_mask_function
+
+    # The masks for eager attention are simply boolean mask from sdpa, casted to 0 and -inf
+    _ = kwargs.pop("allow_is_causal_skip", None)
+    mask = sdpa_mask_older_torch(
+        batch_size=batch_size,
+        cache_position=cache_position,
+        kv_length=kv_length,
+        kv_offset=kv_offset,
+        mask_function=mask_function,
+        attention_mask=attention_mask,
+        allow_is_causal_skip=False,
+        allow_torch_fix=False,
+        **kwargs,
+    )
+
+    # difference with original modeling
+    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # during execution on platforms with default lower precision (bfloat16, float16)
+    min_dtype = torch.finfo(torch.float16).min
+    # we need 0s where the tokens should be taken into account, and -inf otherwise (mask is already of boolean type)
+    mask = torch.where(mask, torch.tensor(0.0, device=mask.device, dtype=dtype), min_dtype)
+    return mask
+
+if is_transformers_version(">", "4.53"):
+    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, sdpa_mask_older_torch
+
+    ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+    ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask_older_torch)
 
 
 def ov_compatible_repeat_interleave(input_tensor, repeats, dim=None, output_size=None):
@@ -632,13 +698,16 @@ class LlamaModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
-        # fill causal mask in slightly different way for avoid overflow on some platforms
-        patch_update_causal_mask(self._model, "4.39.0", "model" if hasattr(self._model, "model") else "transformer")
+        if is_transformers_version("<", "4.53"):
+            # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
+            # fill causal mask in slightly different way for avoid overflow on some platforms
+            patch_update_causal_mask(self._model, "4.39.0", "model" if hasattr(self._model, "model") else "transformer")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "model" if hasattr(self._model, "model") else "transformer")
+    
+        if is_transformers_version("<", "4.53"):
+            unpatch_update_causal_mask(self._model, "model" if hasattr(self._model, "model") else "transformer")
 
 
 # copied from https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548 to unblock export with transformers 4.42
@@ -2826,12 +2895,14 @@ class GptNeoxModelPatcher(DecoderModelPatcher):
         if is_transformers_version("<", "4.44.99"):
             for layer in self._model.gpt_neox.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
-        else:
+        elif is_transformers_version("<", "4.53"):
             patch_update_causal_mask(self._model, "4.45.0", "gpt_neox")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "gpt_neox")
+
+        if is_transformers_version("<", "4.53"):
+            unpatch_update_causal_mask(self._model, "gpt_neox")
 
 
 # Adopted from https://github.com/huggingface/optimum/blob/v1.24.0/optimum/bettertransformer/models/attention.py#L96
