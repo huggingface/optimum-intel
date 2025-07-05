@@ -6498,11 +6498,14 @@ class ConvSequenceTransform(torch.nn.Module):
 
 class SelectiveScan(torch.nn.Module):
     def forward(self, ssm, u, dt, A, B, C, D):
+        # dt - [batch, seq_len, intermediate_size]
+        # A - [intermediate_size, ssm_state_size]
+        # B [batch, seq_len, ssm_state_size]
+        # u, hidden states - [batch, seq_len, intermediate_size]
         dA = torch.einsum("bld,dn->bldn", dt, A)
         dB_u = torch.einsum("bld,bld,bln->bldn", dt, u, B)
         dA_cumsum = torch.nn.functional.pad(dA[:, 1:], (0, 0, 0, 0, 0, 1)).flip(1).cumsum(1).exp().flip(1)
         x = dB_u * dA_cumsum + (ssm.unsqueeze(1) * dA[:, :1].exp())
-        x = x.cumsum(1) / (dA_cumsum + 1e-12)
         y = torch.einsum("bldn,bln->bld", x, C)
         return y + u * D, x[:, -1, :, :]
 
@@ -6557,6 +6560,8 @@ def mamba_mixer_forward(
 
     discrete_time_step = self.dt_proj(time_step)  # [batch, seq_len, intermediate_size]
     discrete_time_step = torch.nn.functional.softplus(discrete_time_step)  # [batch, intermediate_size, seq_len]
+
+    # 3.b. Discretization: B and C to [batch, seq_len, intermediate_size, ssm_state_size] (SRAM)
     A = -torch.exp(self.A_log.float())
     B = B.float()
     D = self.D.float()
