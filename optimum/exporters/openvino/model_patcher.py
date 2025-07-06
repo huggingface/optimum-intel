@@ -6589,9 +6589,10 @@ class MambaPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
         ssm_rms_normalization: Optional[Callable] = None,
     ):
-        self._patching_specs = []
         from transformers import PretrainedConfig
         from transformers.cache_utils import MambaCache
+
+        super().__init__(config, model, model_kwargs)
 
         class MambaCacheWrap(MambaCache):
             def __init__(
@@ -6653,90 +6654,30 @@ class MambaPatcher(ModelPatcher):
                 self.conv_states[layer_idx] = conv_state
                 return self.conv_states[layer_idx]
 
-        def forward_wrap(
-            self, input_ids, attention_mask=None, cache_position=None, past_ssm_states=None, past_conv_states=None
+        def patched_forward(
+            input_ids, attention_mask=None, cache_position=None, past_ssm_states=None, past_conv_states=None
         ):
-            use_cache = False
-            cache_params = None
-            if past_ssm_states is not None and past_conv_states is not None:
-                use_cache = True
-                cache_params = MambaCacheWrap(
-                    self.config,
-                    input_ids.shape[0],
-                    conv_states=list(past_conv_states),
-                    ssm_states=list(past_ssm_states),
-                )
-            result = self.__orig_forward(
-                input_ids=input_ids, cache_position=cache_position, cache_params=cache_params, use_cache=use_cache
+            cache_params = MambaCacheWrap(
+                self.real_config._config,
+                input_ids.shape[0],
+                conv_states=list(past_conv_states),
+                ssm_states=list(past_ssm_states),
             )
-            if use_cache:
-                return {
-                    "logits": result.logits,
-                    "ssm_states": result.cache_params.ssm_states,
-                    "conv_states": result.cache_params.conv_states,
-                }
-            return result
-
-        model.__orig_forward = model.forward
-        model.forward = types.MethodType(forward_wrap, model)
-        self._model = model
-
-        self.orig_forward_name = "forward" if hasattr(self._model, "forward") else "call"
-        self.orig_forward = getattr(self._model, self.orig_forward_name)
-
-        self.model_kwargs = model_kwargs if model_kwargs is not None else {}
-        self.real_config = config
-
-        allow_past_in_outputs = hasattr(self.real_config, "use_past") and self.real_config.use_past
-
-        @functools.wraps(self.orig_forward)
-        def patched_forward(*args, **kwargs):
-            signature = inspect.signature(self.orig_forward)
-            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
-
-            outputs = self.orig_forward(*args, **kwargs)
-
-            # This code block handles different cases of the filterd_outputs input to align it with the expected
-            # format of outputs. It is common for the output type of a model to vary, such as tensor, list,
-            # tuple, etc. For Transformers models, the output is encapsulated in a ModelOutput object that
-            # contains the output names of the model. In the case of Timm classification models, the output
-            # is of type tensor. By default, it is assumed that the output names mentioned in the ONNX config
-            # match the outputs in order.
-            filterd_outputs = {}
-            if isinstance(outputs, dict):
-                for name, value in outputs.items():
-                    output_name = config.torch_to_onnx_output_map.get(name, name)
-                    if (
-                        output_name in config.outputs
-                        or (
-                            allow_past_in_outputs and (name.startswith("ssm_states") or name.startswith("conv_states"))
-                        )
-                        or any(key.startswith(output_name) for key in config.outputs.keys())
-                    ):
-                        filterd_outputs[name] = value
-            elif isinstance(outputs, (list, tuple)):
-                outputs_list = list(config.outputs.keys())
-                filterd_outputs = dict(zip(outputs_list, outputs))
-            else:
-                if len(config.outputs) > 1:
-                    num_outputs = len(config.outputs)
-                    outputs_str = ", ".join(config.outputs.keys())
-                    raise ValueError(
-                        f"config.outputs should have only one outputs, but it has {num_outputs} keys: {outputs_str}"
-                    )
-                else:
-                    name = list(config.outputs.keys())[0]
-                    filterd_outputs[name] = outputs
-                name = list(config.outputs.keys())[0]
-                filterd_outputs[name] = outputs
-
-            return filterd_outputs
+            result = self.orig_forward(
+                input_ids=input_ids, cache_position=cache_position, cache_params=cache_params, use_cache=True
+            )
+            return {
+                "logits": result.logits,
+                "ssm_states": result.cache_params.ssm_states,
+                "conv_states": result.cache_params.conv_states,
+            }
 
         self.patched_forward = patched_forward
         self.ssm_rms_normalization = ssm_rms_normalization
 
     def __enter__(self):
         super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
         selective_scan = SelectiveScan()
 
         for layer in self._model.backbone.layers:
@@ -6757,6 +6698,6 @@ class MambaPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
+        setattr(self._model, self.orig_forward_name, self.orig_forward)
         for layer in self._model.backbone.layers:
             layer.mixer.forward = layer.mixer._orig_forward
