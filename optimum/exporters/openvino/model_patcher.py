@@ -6506,6 +6506,7 @@ class SelectiveScan(torch.nn.Module):
         dB_u = torch.einsum("bld,bld,bln->bldn", dt, u, B)
         dA_cumsum = torch.nn.functional.pad(dA[:, 1:], (0, 0, 0, 0, 0, 1)).flip(1).cumsum(1).exp().flip(1)
         x = dB_u * dA_cumsum + (ssm.unsqueeze(1) * dA[:, :1].exp())
+        x = x.cumsum(1) / (dA_cumsum + 1e-12)
         y = torch.einsum("bldn,bln->bld", x, C)
         return y + u * D, x[:, -1, :, :]
 
