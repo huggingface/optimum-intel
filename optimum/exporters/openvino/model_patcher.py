@@ -6657,20 +6657,29 @@ class MambaPatcher(ModelPatcher):
         def patched_forward(
             input_ids, attention_mask=None, cache_position=None, past_ssm_states=None, past_conv_states=None
         ):
-            cache_params = MambaCacheWrap(
-                self.real_config._config,
-                input_ids.shape[0],
-                conv_states=list(past_conv_states),
-                ssm_states=list(past_ssm_states),
-            )
+            use_cache = False
+            cache_params = None
+            if past_ssm_states is not None and past_conv_states is not None:
+                use_cache = True
+                cache_params = MambaCacheWrap(
+                    self.real_config._config,
+                    input_ids.shape[0],
+                    conv_states=list(past_conv_states),
+                    ssm_states=list(past_ssm_states),
+                )
+
             result = self.orig_forward(
-                input_ids=input_ids, cache_position=cache_position, cache_params=cache_params, use_cache=True
+                input_ids=input_ids, cache_position=cache_position, cache_params=cache_params, use_cache=use_cache
             )
-            return {
-                "logits": result.logits,
-                "ssm_states": result.cache_params.ssm_states,
-                "conv_states": result.cache_params.conv_states,
-            }
+
+            if use_cache:
+                result = {
+                    "logits": result.logits,
+                    "ssm_states": result.cache_params.ssm_states,
+                    "conv_states": result.cache_params.conv_states,
+                }
+
+            return result
 
         self.patched_forward = patched_forward
         self.ssm_rms_normalization = ssm_rms_normalization
