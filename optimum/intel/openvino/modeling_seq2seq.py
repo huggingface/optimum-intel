@@ -802,6 +802,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             getattr(self, submodel_name)._compile()
 
     def _shift_right(self, input_ids):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.53.1/src/transformers/models/t5/modeling_tf_t5.py#L957
         decoder_start_token_id = self.config.decoder_start_token_id
         pad_token_id = self.config.pad_token_id
 
