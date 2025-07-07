@@ -4502,6 +4502,8 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         return MambaPatcher(self, model, model_kwargs, self.ssm_rms_normalization)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # need to override `generate_dummy_inputs` since mamba model has other states: ssm_states and conv_states
+        # which we separate and call them as past_ssm_states and past_conv_states
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
 
         dummy_inputs = {}
