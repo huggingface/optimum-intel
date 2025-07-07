@@ -76,6 +76,7 @@ MODEL_NAMES = {
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "flux": "katuni4ka/tiny-random-flux",
     "flux-fill": "katuni4ka/tiny-random-flux-fill",
+    "flux-kontext": "snake7gun/flux-kontext-random",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
