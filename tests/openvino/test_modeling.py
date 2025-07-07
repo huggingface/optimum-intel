@@ -1200,6 +1200,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
         "minicpm3",
         "deepseek",
+        "ernie4_5",
     )
 
     EXPECTED_NUM_SDPA = {
@@ -1264,6 +1265,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3-moe": 2,
+        "ernie4_5": 2,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
