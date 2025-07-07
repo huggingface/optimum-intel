@@ -6496,6 +6496,7 @@ class ConvSequenceTransform(torch.nn.Module):
         return hidden_states, upd_conv_state
 
 
+# Vectorized implementation of the selective scan to compute SSM states and scan outputs at each time step
 class SelectiveScan(torch.nn.Module):
     def forward(self, ssm, u, dt, A, B, C, D):
         # dt - [batch, seq_len, intermediate_size]
@@ -6511,6 +6512,10 @@ class SelectiveScan(torch.nn.Module):
         return y + u * D, x[:, -1, :, :]
 
 
+# The original implementation of this forward method can be found at:
+# https://github.com/huggingface/transformers/blob/main/src/transformers/models/mamba/modeling_mamba.py#L233
+#
+# This patch modifies the method to vectorize the selective scan procedure, enabling correct graph tracing
 def mamba_mixer_forward(
     self,
     input_states,
@@ -6581,6 +6586,11 @@ def mamba_mixer_forward(
     return contextualized_states
 
 
+# This patcher class serves the following purposes:
+# 1. Inject a MambaCache structure into the original model to simplify input and output handling related to SSM states
+# 2. Apply JIT scripting to the ConvSequenceTransform module, as its behavior differs depending on if-branching
+# whether the cache contains a single element or multiple elements
+# 3. Vectorize the selective scan operation to ensure correct behavior during JIT tracing
 class MambaPatcher(ModelPatcher):
     def __init__(
         self,
