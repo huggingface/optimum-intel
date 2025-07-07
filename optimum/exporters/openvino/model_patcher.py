@@ -117,7 +117,7 @@ def eager_mask(
 
 if is_transformers_version(">", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, sdpa_mask_older_torch
-
+    # TODO : register to eager_openvino and sdpa_openvino instead
     ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
     ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask_older_torch)
 
