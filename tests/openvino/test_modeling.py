@@ -1174,10 +1174,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("gemma3-text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe", "ernie4_5")
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
+        
+    if is_transformers_version(">=", "4.52.0"):
+        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -1294,8 +1297,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
-
-        ov_outputs = ov_model(**tokens)
+        if model_arch == "ernie4_5":
+            # As the offical example, ernie4_5 can only accept input_ids
+            # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/README.md?code=true#L92
+            ov_outputs = ov_model(tokens.input_ids)
+        else:
+            ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
