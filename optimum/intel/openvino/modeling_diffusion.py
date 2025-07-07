@@ -120,7 +120,7 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
-    
+
 if is_diffusers_version(">", "0.34.0"):
     from diffusers import FluxKontextPipeline
 else:
@@ -201,35 +201,15 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 )
 
         self.unet = OVModelUnet(unet, self, DIFFUSION_MODEL_UNET_SUBFOLDER) if unet is not None else None
-        self.transformer = (
-            OVModelTransformer(transformer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER)
-            if transformer is not None
-            else None
-        )
+        self.transformer = OVModelTransformer(transformer, self, DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER) if transformer is not None else None
 
         if unet is None and transformer is None:
             raise ValueError("`unet` or `transformer` model should be provided for pipeline work")
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
-        self.vae_encoder = (
-            OVModelVaeEncoder(vae_encoder, self, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER)
-            if vae_encoder is not None
-            else None
-        )
-        self.text_encoder = (
-            OVModelTextEncoder(text_encoder, self, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)
-            if text_encoder is not None
-            else None
-        )
-        self.text_encoder_2 = (
-            OVModelTextEncoder(text_encoder_2, self, DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
-            if text_encoder_2 is not None
-            else None
-        )
-        self.text_encoder_3 = (
-            OVModelTextEncoder(text_encoder_3, self, DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER)
-            if text_encoder_3 is not None
-            else None
-        )
+        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER) if vae_encoder is not None else None
+        self.text_encoder = OVModelTextEncoder(text_encoder, self, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER) if text_encoder is not None else None
+        self.text_encoder_2 = OVModelTextEncoder(text_encoder_2, self, DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER) if text_encoder_2 is not None else None
+        self.text_encoder_3 = OVModelTextEncoder(text_encoder_3, self, DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER) if text_encoder_3 is not None else None
         # We wrap the VAE Decoder & Encoder in a single object to simulate diffusers API
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
 
@@ -310,9 +290,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 The directory where to save the model files
         """
         if self._compile_only:
-            raise ValueError(
-                "`save_pretrained()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`save_pretrained()` is not supported with `compile_only` mode, please initialize model without this option")
 
         save_directory = Path(save_directory)
 
@@ -330,11 +308,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 dst_path = save_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.save_model(model.model, dst_path, compress_to_fp16=False)
-                model_dir = (
-                    self.model_save_dir
-                    if not isinstance(self.model_save_dir, TemporaryDirectory)
-                    else self.model_save_dir.name
-                )
+                model_dir = self.model_save_dir if not isinstance(self.model_save_dir, TemporaryDirectory) else self.model_save_dir.name
                 config_path = Path(model_dir) / save_path.name / CONFIG_NAME
                 if config_path.is_file():
                     config_save_path = save_path / CONFIG_NAME
@@ -365,11 +339,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         Saves a model configuration into a directory, so that it can be re-loaded using the
         [`from_pretrained`] class method.
         """
-        model_dir = (
-            self.model_save_dir
-            if not isinstance(self.model_save_dir, TemporaryDirectory)
-            else self.model_save_dir.name
-        )
+        model_dir = self.model_save_dir if not isinstance(self.model_save_dir, TemporaryDirectory) else self.model_save_dir.name
         save_dir = Path(save_directory)
         original_config = Path(model_dir) / self.config_name
         if original_config.exists():
@@ -527,11 +497,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
-            if (
-                "GPU" in device.upper()
-                and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg
-                and is_openvino_version("<=", "2025.0")
-            ):
+            if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg and is_openvino_version("<=", "2025.0"):
                 vae_model_path = models["vae_decoder"]
                 required_upcast = check_scale_available(vae_model_path)
                 if required_upcast:
@@ -672,15 +638,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self._device = device.upper()
             self.clear_requests()
         elif device is not None:
-            raise ValueError(
-                "The `device` argument should be a string representing the device on which the model should be loaded."
-            )
+            raise ValueError("The `device` argument should be a string representing the device on which the model should be loaded.")
 
         if dtype is not None and dtype != self.dtype:
-            raise NotImplementedError(
-                f"Cannot change the dtype of the model from {self.dtype} to {dtype}. "
-                f"Please export the model with the desired dtype."
-            )
+            raise NotImplementedError(f"Cannot change the dtype of the model from {self.dtype} to {dtype}. " f"Please export the model with the desired dtype.")
 
         return self
 
@@ -690,9 +651,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         height = model.inputs[0].get_partial_shape()[-2]
         if height.is_dynamic:
             return -1
-        return height.get_length() * (
-            self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio
-        )
+        return height.get_length() * (self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio)
 
     @property
     def width(self) -> int:
@@ -700,9 +659,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         width = model.inputs[0].get_partial_shape()[-1]
         if width.is_dynamic:
             return -1
-        return width.get_length() * (
-            self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio
-        )
+        return width.get_length() * (self.vae_scale_factor if hasattr(self, "vae_scale_factor") else self.vae_spatial_compression_ratio)
 
     @property
     def batch_size(self) -> int:
@@ -798,9 +755,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "hidden_states":
                 in_channels = self.transformer.config.get("in_channels", None)
                 if in_channels is None:
-                    in_channels = (
-                        shapes[inputs][1] if inputs.get_partial_shape().rank.get_length() == 4 else shapes[inputs][2]
-                    )
+                    in_channels = shapes[inputs][1] if inputs.get_partial_shape().rank.get_length() == 4 else shapes[inputs][2]
                     if in_channels.is_dynamic:
                         logger.warning(
                             "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
@@ -814,11 +769,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             elif inputs.get_any_name() == "pooled_projections":
                 shapes[inputs] = [batch_size, self.transformer.config["pooled_projection_dim"]]
             elif inputs.get_any_name() == "img_ids":
-                shapes[inputs] = (
-                    [batch_size, packed_height_width, 3]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [packed_height_width, 3]
-                )
+                shapes[inputs] = [batch_size, packed_height_width, 3] if is_diffusers_version("<", "0.31.0") else [packed_height_width, 3]
             elif inputs.get_any_name() == "txt_ids":
                 shapes[inputs] = [batch_size, -1, 3] if is_diffusers_version("<", "0.31.0") else [-1, 3]
             elif inputs.get_any_name() in ["height", "width", "num_frames", "rope_interpolation_scale"]:
@@ -892,9 +843,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def reshape(self, batch_size: int, height: int, width: int, num_images_per_prompt: int = -1, num_frames: int = -1):
         if self._compile_only:
-            raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`reshape()` is not supported with `compile_only` mode, please initialize model without this option")
 
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
 
@@ -905,15 +854,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 tokenizer_max_len = -1
             else:
                 tokenizer_max_len = (
-                    getattr(self.tokenizer, "model_max_length", -1)
-                    if self.tokenizer is not None
-                    else getattr(self.tokenizer_2, "model_max_length", -1)
+                    getattr(self.tokenizer, "model_max_length", -1) if self.tokenizer is not None else getattr(self.tokenizer_2, "model_max_length", -1)
                 )
 
         if self.unet is not None:
-            self.unet.model = self._reshape_unet(
-                self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
-            )
+            self.unet.model = self._reshape_unet(self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len)
         if self.transformer is not None:
             self.transformer.model = self._reshape_transformer(
                 self.transformer.model,
@@ -924,14 +869,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 tokenizer_max_len,
                 num_frames=num_frames,
             )
-        self.vae_decoder.model = self._reshape_vae_decoder(
-            self.vae_decoder.model, height, width, num_images_per_prompt, num_frames=num_frames
-        )
+        self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width, num_images_per_prompt, num_frames=num_frames)
 
         if self.vae_encoder is not None:
-            self.vae_encoder.model = self._reshape_vae_encoder(
-                self.vae_encoder.model, batch_size, height, width, num_frames=num_frames
-            )
+            self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width, num_frames=num_frames)
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
@@ -940,16 +881,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 batch_size,
                 (
                     getattr(self.tokenizer, "model_max_length", -1)
-                    if "Gemma" not in self.tokenizer.__class__.__name__
-                    and not self.__class__.__name__.startswith("OVLTX")
+                    if "Gemma" not in self.tokenizer.__class__.__name__ and not self.__class__.__name__.startswith("OVLTX")
                     else -1
                 ),
             )
 
         if self.text_encoder_2 is not None:
-            self.text_encoder_2.model = self._reshape_text_encoder(
-                self.text_encoder_2.model, batch_size, getattr(self.tokenizer_2, "model_max_length", -1)
-            )
+            self.text_encoder_2.model = self._reshape_text_encoder(self.text_encoder_2.model, batch_size, getattr(self.tokenizer_2, "model_max_length", -1))
 
         if self.text_encoder_3 is not None:
             self.text_encoder_3.model = self._reshape_text_encoder(self.text_encoder_3.model, batch_size, -1)
@@ -962,9 +900,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
         if self._compile_only:
-            raise ValueError(
-                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`half()` is not supported with `compile_only` mode, please initialize model without this option")
 
         for submodel in self.ov_submodels.values():
             compress_model_transformation(submodel)
@@ -975,9 +911,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     def clear_requests(self):
         if self._compile_only:
-            raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option")
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name).request = None
 
@@ -1064,9 +998,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         # Disable this behavior for static shape pipeline
         if self.auto_model_class.__name__.startswith("Sana") and shapes_overridden:
             sig_resolution_bining_idx = (
-                list(sig.parameters).index("use_resolution_binning")
-                if "use_resolution_binning" in sig.parameters
-                else len(sig.parameters)
+                list(sig.parameters).index("use_resolution_binning") if "use_resolution_binning" in sig.parameters else len(sig.parameters)
             )
             if len(args) > sig_resolution_bining_idx:
                 args[sig_resolution_bining_idx] = False
@@ -1120,11 +1052,7 @@ class OVPipelinePart(ConfigMixin):
 
     def _compile(self):
         if self.request is None:
-            if (
-                "CACHE_DIR" not in self.ov_config.keys()
-                and not str(self.model_save_dir).startswith(gettempdir())
-                and "GPU" in self._device
-            ):
+            if "CACHE_DIR" not in self.ov_config.keys() and not str(self.model_save_dir).startswith(gettempdir()) and "GPU" in self._device:
                 self.ov_config["CACHE_DIR"] = os.path.join(self.model_save_dir, "model_cache")
 
             logger.info(f"Compiling the {self.model_name} to {self._device} ...")
@@ -1144,15 +1072,10 @@ class OVPipelinePart(ConfigMixin):
             self._device = device.upper()
             self.request = None
         elif device is not None:
-            raise ValueError(
-                "The `device` argument should be a string representing the device on which the model should be loaded."
-            )
+            raise ValueError("The `device` argument should be a string representing the device on which the model should be loaded.")
 
         if dtype is not None and dtype != self.dtype:
-            raise NotImplementedError(
-                f"Cannot change the dtype of the model from {self.dtype} to {dtype}. "
-                f"Please export the model with the desired dtype."
-            )
+            raise NotImplementedError(f"Cannot change the dtype of the model from {self.dtype} to {dtype}. " f"Please export the model with the desired dtype.")
 
         return self
 
@@ -1170,9 +1093,7 @@ class OVPipelinePart(ConfigMixin):
 class OVModelTextEncoder(OVPipelinePart):
     def __init__(self, model: openvino.Model, parent_pipeline: OVDiffusionPipeline, model_name: str = ""):
         super().__init__(model, parent_pipeline, model_name)
-        self.hidden_states_output_names = [
-            name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")
-        ]
+        self.hidden_states_output_names = [name for out in self.model.outputs for name in out.names if name.startswith("hidden_states")]
         self.input_names = [inp.get_any_name() for inp in self.model.inputs]
 
     def forward(
@@ -1196,11 +1117,7 @@ class OVModelTextEncoder(OVPipelinePart):
             model_outputs["pooler_output"] = torch.from_numpy(ov_outputs[1])
         if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
             model_outputs["last_hidden_state"] = torch.from_numpy(ov_outputs[self.hidden_states_output_names[-1]])
-        if (
-            self.hidden_states_output_names
-            and output_hidden_states
-            or getattr(self.config, "output_hidden_states", False)
-        ):
+        if self.hidden_states_output_names and output_hidden_states or getattr(self.config, "output_hidden_states", False):
             hidden_states = [torch.from_numpy(ov_outputs[out_name]) for out_name in self.hidden_states_output_names]
             model_outputs["hidden_states"] = hidden_states
 
@@ -1357,9 +1274,7 @@ class OVModelVaeEncoder(OVPipelinePart):
             model_outputs["latents"] = model_outputs.pop("latent_sample")
 
         if "latent_parameters" in model_outputs:
-            model_outputs["latent_dist"] = DiagonalGaussianDistribution(
-                parameters=model_outputs.pop("latent_parameters")
-            )
+            model_outputs["latent_dist"] = DiagonalGaussianDistribution(parameters=model_outputs.pop("latent_parameters"))
 
         if return_dict:
             return model_outputs
@@ -1476,9 +1391,7 @@ class OVStableDiffusionPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMix
     auto_model_class = StableDiffusionPipeline
 
 
-class OVStableDiffusionImg2ImgPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionImg2ImgPipeline
-):
+class OVStableDiffusionImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionImg2ImgPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_img2img#diffusers.StableDiffusionImg2ImgPipeline).
     """
@@ -1488,9 +1401,7 @@ class OVStableDiffusionImg2ImgPipeline(
     auto_model_class = StableDiffusionImg2ImgPipeline
 
 
-class OVStableDiffusionInpaintPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionInpaintPipeline
-):
+class OVStableDiffusionInpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionInpaintPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_inpaint#diffusers.StableDiffusionInpaintPipeline).
     """
@@ -1523,9 +1434,7 @@ class OVStableDiffusionXLPipeline(OVDiffusionPipeline, OVTextualInversionLoaderM
         return add_time_ids
 
 
-class OVStableDiffusionXLImg2ImgPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLImg2ImgPipeline
-):
+class OVStableDiffusionXLImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLImg2ImgPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLImg2ImgPipeline).
     """
@@ -1549,9 +1458,7 @@ class OVStableDiffusionXLImg2ImgPipeline(
     ):
         if self.config.requires_aesthetics_score:
             add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
-            add_neg_time_ids = list(
-                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
-            )
+            add_neg_time_ids = list(negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,))
         else:
             add_time_ids = list(original_size + crops_coords_top_left + target_size)
             add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
@@ -1562,9 +1469,7 @@ class OVStableDiffusionXLImg2ImgPipeline(
         return add_time_ids, add_neg_time_ids
 
 
-class OVStableDiffusionXLInpaintPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLInpaintPipeline
-):
+class OVStableDiffusionXLInpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLInpaintPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLInpaintPipeline).
     """
@@ -1588,9 +1493,7 @@ class OVStableDiffusionXLInpaintPipeline(
     ):
         if self.config.requires_aesthetics_score:
             add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
-            add_neg_time_ids = list(
-                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
-            )
+            add_neg_time_ids = list(negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,))
         else:
             add_time_ids = list(original_size + crops_coords_top_left + target_size)
             add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
@@ -1601,9 +1504,7 @@ class OVStableDiffusionXLInpaintPipeline(
         return add_time_ids, add_neg_time_ids
 
 
-class OVLatentConsistencyModelPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelPipeline
-):
+class OVLatentConsistencyModelPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency#diffusers.LatentConsistencyModelPipeline).
     """
@@ -1613,9 +1514,7 @@ class OVLatentConsistencyModelPipeline(
     auto_model_class = LatentConsistencyModelPipeline
 
 
-class OVLatentConsistencyModelImg2ImgPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelImg2ImgPipeline
-):
+class OVLatentConsistencyModelImg2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelImg2ImgPipeline):
     """
     OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency_img2img#diffusers.LatentConsistencyModelImg2ImgPipeline).
     """
@@ -1631,17 +1530,13 @@ class OVStableDiffusion3Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMi
     auto_model_class = StableDiffusion3Pipeline
 
 
-class OVStableDiffusion3Img2ImgPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3Img2ImgPipeline
-):
+class OVStableDiffusion3Img2ImgPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3Img2ImgPipeline):
     main_input_name = "image"
     export_feature = "image-to-image"
     auto_model_class = StableDiffusion3Img2ImgPipeline
 
 
-class OVStableDiffusion3InpaintPipeline(
-    OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3InpaintPipeline
-):
+class OVStableDiffusion3InpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, StableDiffusion3InpaintPipeline):
     main_input_name = "image"
     export_feature = "inpainting"
     auto_model_class = StableDiffusion3InpaintPipeline
@@ -1664,15 +1559,18 @@ class OVFluxInpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
     export_feature = "inpainting"
     auto_model_class = FluxInpaintPipeline
 
+
 class OVFluxFillPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxFillPipeline):
     main_input_name = "image"
     export_feature = "inpainting"
     auto_model_class = FluxFillPipeline
 
+
 class OVFluxKontextPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxKontextPipeline):
     main_input_name = "image"
     export_feature = "image-to-image"
     auto_model_class = FluxKontextPipeline
+
 
 class OVSanaPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaPipeline):
     main_input_name = "prompt"
@@ -1706,10 +1604,7 @@ SUPPORTED_OV_PIPELINES = [
 
 def _get_ov_class(pipeline_class_name: str, throw_error_if_not_exist: bool = True):
     for ov_pipeline_class in SUPPORTED_OV_PIPELINES:
-        if (
-            ov_pipeline_class.__name__ == pipeline_class_name
-            or ov_pipeline_class.auto_model_class.__name__ == pipeline_class_name
-        ):
+        if ov_pipeline_class.__name__ == pipeline_class_name or ov_pipeline_class.auto_model_class.__name__ == pipeline_class_name:
             return ov_pipeline_class
 
     if throw_error_if_not_exist:
@@ -1776,8 +1671,8 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
-    
-    
+
+
 if is_diffusers_version(">", "0.34.0"):
     SUPPORTED_OV_PIPELINES.extend([OVFluxKontextPipeline])
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxKontextPipeline
@@ -1794,10 +1689,7 @@ def _get_task_ov_class(mapping, pipeline_class_name):
     def _get_model_name(pipeline_class_name):
         for ov_pipelines_mapping in SUPPORTED_OV_PIPELINES_MAPPINGS:
             for model_name, ov_pipeline_class in ov_pipelines_mapping.items():
-                if (
-                    ov_pipeline_class.__name__ == pipeline_class_name
-                    or ov_pipeline_class.auto_model_class.__name__ == pipeline_class_name
-                ):
+                if ov_pipeline_class.__name__ == pipeline_class_name or ov_pipeline_class.auto_model_class.__name__ == pipeline_class_name:
                     return model_name
 
     model_name = _get_model_name(pipeline_class_name)

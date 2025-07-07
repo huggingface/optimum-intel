@@ -255,7 +255,8 @@ class OVFluxKontextPipeline(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino", "diffusers"])
-        
+
+
 class OVSanaPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
