@@ -17,7 +17,7 @@ import inspect
 import logging as log
 import math
 import types
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -6597,7 +6597,6 @@ class MambaPatcher(ModelPatcher):
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
-        ssm_rms_normalization: Optional[Callable] = None,
     ):
         from transformers import PretrainedConfig
         from transformers.cache_utils import MambaCache
@@ -6692,7 +6691,15 @@ class MambaPatcher(ModelPatcher):
             return result
 
         self.patched_forward = patched_forward
-        self.ssm_rms_normalization = ssm_rms_normalization
+
+        model_type = getattr(self.real_config._config, "model_type", None)
+        self.ssm_rms_normalization = None
+
+        # falcon-mamba model has only difference from mamba that is RMS normalization for B, C, and time-step coefficients
+        if model_type == "falcon_mamba":
+            from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
+
+            self.ssm_rms_normalization = rms_forward
 
     def __enter__(self):
         super().__enter__()
