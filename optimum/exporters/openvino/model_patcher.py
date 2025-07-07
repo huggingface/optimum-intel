@@ -88,7 +88,7 @@ def eager_mask(
         dtype (`torch.dtype`, optional):
             The dtype to use for the mask. By default, `torch.float32`.
     """
-    from transformers.masking_utils import causal_mask_function, sdpa_mask_older_torch, sdpa_mask
+    from transformers.masking_utils import causal_mask_function, sdpa_mask_older_torch
 
     mask_function = mask_function or causal_mask_function
 
@@ -117,6 +117,7 @@ def eager_mask(
 
 if is_transformers_version(">", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, sdpa_mask_older_torch
+
     # TODO : register to eager_openvino and sdpa_openvino instead
     ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
     ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask_older_torch)
@@ -4981,10 +4982,9 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
             result["past_key_values"] = upd_pkv.to_legacy_cache()
             return result
 
-
         if is_transformers_version("<", "4.53"):
             model.forward = types.MethodType(forward, model)
-    
+
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
