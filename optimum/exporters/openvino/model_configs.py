@@ -4427,6 +4427,36 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
 
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "text-generation",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        use_past: bool = False,
+        use_past_in_inputs: bool = False,
+        preprocessors: Optional[List[Any]] = None,
+        legacy: bool = False,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=use_past,
+            use_past_in_inputs=use_past_in_inputs,
+            preprocessors=preprocessors,
+            legacy=legacy,
+        )
+        model_type = getattr(config, "model_type", None)
+        self.ssm_rms_normalization = None
+
+        # falcon-mamba model has only difference from mamba that is RMS normalization for B, C, and time-step coefficients
+        if model_type == "falcon_mamba":
+            from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
+
+            self.ssm_rms_normalization = rms_forward
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {
@@ -4462,20 +4492,14 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
             # [batch_size, d_state, d_model]
             inputs_or_outputs[f"{ssm_name}.{i}"] = {0: "batch_size"}
 
+        for i in range(self._normalized_config.num_layers):
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{conv_name}.{i}"] = {0: "batch_size"}
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ):
-        model_type = getattr(model.config, "model_type", None)
-        ssm_rms_normalization = None
-        if model_type == "falcon_mamba":
-            from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
-
-            ssm_rms_normalization = rms_forward
-
-        return MambaPatcher(self, model, model_kwargs, ssm_rms_normalization)
+        return MambaPatcher(self, model, model_kwargs, self.ssm_rms_normalization)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
