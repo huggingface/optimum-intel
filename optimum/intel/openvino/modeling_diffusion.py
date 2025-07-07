@@ -120,6 +120,11 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
+    
+if is_diffusers_version(">", "0.34.0"):
+    from diffusers import FluxKontextPipeline
+else:
+    FluxKontextPipeline = object
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
@@ -1659,12 +1664,15 @@ class OVFluxInpaintPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
     export_feature = "inpainting"
     auto_model_class = FluxInpaintPipeline
 
-
 class OVFluxFillPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxFillPipeline):
     main_input_name = "image"
     export_feature = "inpainting"
     auto_model_class = FluxFillPipeline
 
+class OVFluxKontextPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, FluxKontextPipeline):
+    main_input_name = "image"
+    export_feature = "image-to-image"
+    auto_model_class = FluxKontextPipeline
 
 class OVSanaPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, SanaPipeline):
     main_input_name = "prompt"
@@ -1768,6 +1776,11 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+    
+    
+if is_diffusers_version(">", "0.34.0"):
+    SUPPORTED_OV_PIPELINES.extend([OVFluxKontextPipeline])
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux"] = OVFluxKontextPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,
