@@ -88,7 +88,7 @@ def eager_mask(
         dtype (`torch.dtype`, optional):
             The dtype to use for the mask. By default, `torch.float32`.
     """
-    from transformers.masking_utils import causal_mask_function, sdpa_mask_older_torch
+    from transformers.masking_utils import causal_mask_function, sdpa_mask_older_torch, sdpa_mask
 
     mask_function = mask_function or causal_mask_function
 
@@ -4940,7 +4940,7 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
         model.__orig_forward = model.forward
         if is_transformers_version("<", "4.52"):
             model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
-        else:
+        elif is_transformers_version("<", "4.53"):
             model.model._orig_update_causual_mask = model.model._update_causal_mask
             model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, model.model)
 
@@ -4981,12 +4981,18 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
             result["past_key_values"] = upd_pkv.to_legacy_cache()
             return result
 
-        model.forward = types.MethodType(forward, model)
+
+        if is_transformers_version("<", "4.53"):
+            model.forward = types.MethodType(forward, model)
+    
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
+
+        if is_transformers_version("<", "4.53"):
+            self._model.forward = self._model.__orig_forward
+
         if hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
 
