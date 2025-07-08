@@ -23,36 +23,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - python-version: "3.9"
-            os: "ubuntu-22.04"
-            transformers-version: "latest"
-            openvino: "ov-stable"
-            nncf: "nncf-stable"
-          - python-version: "3.9"
-            os: "ubuntu-22.04"
-            transformers-version: "latest"
-            openvino: "ov-nightly"
-            nncf: "nncf-stable"
-          - python-version: "3.9"
-            os: "ubuntu-22.04"
-            transformers-version: "latest"
-            openvino: "ov-stable"
-            nncf: "nncf-develop"
-          - python-version: "3.9"
-            os: "ubuntu-22.04"
-            transformers-version: "latest"
-            openvino: "ov-nightly"
-            nncf: "nncf-develop"
+        nncf: ["nncf-stable", "nncf-develop"]
+        openvino: ["ov-stable", "ov-nightly"]
+        transformers-version: ["latest"]
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python ${{ matrix.python-version }}
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.9
 
       - name: Install dependencies
         run: |
