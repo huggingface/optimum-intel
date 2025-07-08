@@ -1377,15 +1377,6 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
     generate = WhisperForConditionalGeneration.generate
 
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: "PretrainedConfig",
-        **kwargs,
-    ):
-        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
-
     class DummyWhisperModel:
         def __init__(self):
             self.encoder = self.Encoder()
