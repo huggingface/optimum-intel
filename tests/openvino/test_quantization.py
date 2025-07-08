@@ -127,7 +127,7 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
     )
-    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq and OVStableDiffusionPipeline
+    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq, OVStableDiffusionPipeline and OVModelForSeq2SeqLM
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
@@ -356,6 +356,23 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": {"int8": 65},
             },
         ),
+        (
+            OVModelForSeq2SeqLM,
+            "t5",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 30, "decoder": 62},
+            (
+                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+            ),
+        ),
     ]
 
     if is_transformers_version(">=", "4.45.0"):
@@ -572,13 +589,18 @@ class OVQuantizerTest(unittest.TestCase):
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            if model_cls == OVModelForSpeechSeq2Seq:
+            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
                 if ov_model.decoder_with_past is None:
-                    del expected_fake_nodes_per_model["decoder_with_past"]
-                    del expected_num_weight_nodes_per_model["decoder_with_past"]
+                    expected_fake_nodes_per_model.pop("decoder_with_past", None)
+                    expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
 
-                input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
-                ov_model.generate(input_features)
+                if model_cls == OVModelForSpeechSeq2Seq:
+                    input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
+                    ov_model.generate(input_features)
+                else:
+                    tokenizer = AutoTokenizer.from_pretrained(model_id)
+                    inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
+                    ov_model.generate(**inputs)
             elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
@@ -972,6 +994,30 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.51.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "llama4",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 22, "int4": 48},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 16},
                     },
                 ),
             ]

@@ -1906,7 +1906,7 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
         if behavior == LlavaNextVideoConfigBehavior.MULTI_MODAL_PROJECTOR:
             return (
                 model.multi_modal_projector
-                if hasattr(model, "multi_model_projector")
+                if hasattr(model, "multi_modal_projector")
                 else model.model.multi_modal_projector
             )
 
