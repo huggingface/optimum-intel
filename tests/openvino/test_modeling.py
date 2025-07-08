@@ -1179,6 +1179,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
+    if is_transformers_version(">=", "4.52.0"):
+        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1200,6 +1203,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
         "minicpm3",
         "deepseek",
+        "ernie4_5",
     )
 
     EXPECTED_NUM_SDPA = {
@@ -1264,6 +1268,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3-moe": 2,
+        "ernie4_5": 2,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1292,8 +1297,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
-
-        ov_outputs = ov_model(**tokens)
+        if model_arch == "ernie4_5":
+            # As the offical example, ernie4_5 can only accept input_ids
+            # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/README.md?code=true#L92
+            ov_outputs = ov_model(tokens.input_ids)
+        else:
+            ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
@@ -1356,8 +1365,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         if is_transformers_version(">=", "4.51"):
             tokens["use_model_defaults"] = False
-
-        ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+        if model_arch == "ernie4_5":
+            # As the offical example, ernie4_5 can only accept input_ids
+            # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/README.md?code=true#L92
+            ov_outputs = ov_model.generate(tokens.input_ids, generation_config=gen_config)
+        else:
+            ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
@@ -1374,9 +1387,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
             additional_inputs = {"past_key_values": DynamicCache()}
         with patch_awq_for_inference("awq" in model_arch):
-            transformers_outputs = transformers_model.generate(
-                **tokens, generation_config=gen_config, **additional_inputs
-            )
+            if model_arch == "ernie4_5":
+                # As the offical example, ernie4_5 can only accept input_ids
+                # https://huggingface.co/baidu/ERNIE-4.5-0.3B-PT/blob/main/README.md?code=true#L92
+                transformers_outputs = transformers_model.generate(
+                    tokens.input_ids, generation_config=gen_config, **additional_inputs
+                )
+            else:
+                transformers_outputs = transformers_model.generate(
+                    **tokens, generation_config=gen_config, **additional_inputs
+                )
         print(f"ov_outputs: {ov_outputs}")
         print(f"transformers_outputs: {transformers_outputs}")
         self.assertTrue(
