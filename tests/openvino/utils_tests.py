@@ -320,8 +320,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 258},
-    "falcon-mamba": {"model": 258},
+    "mamba": {"model": 322},
+    "falcon-mamba": {"model": 322},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
