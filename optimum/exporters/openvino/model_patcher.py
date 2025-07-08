@@ -6458,6 +6458,7 @@ class Llama4TextModelPatcher(ModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Vectorized implementation of ConvSequenceTransform to avoid if-else branching
 class ConvSequenceTransform(torch.nn.Module):
     def __init__(self, conv_kernel_size, use_conv_bias, conv1, act, conv_bias):
         super().__init__()
@@ -6483,16 +6484,32 @@ class ConvSequenceTransform(torch.nn.Module):
         pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (
             cache_position.shape[0] == self.conv_kernel_size
         )
+        # Pad the input
         new_conv_state = torch.nn.functional.pad(hidden_states, (pad_value, 0))
+
+        # Update convolutional state
         upd_cache_position = self.get_positions(conv_state, cache_position)
         upd_conv_state = self.update_conv_state(conv_state, new_conv_state, upd_cache_position)
-        if cache_position.shape[0] == self.conv_kernel_size:
-            hidden_states = self.conv1d(hidden_states)[:, :, : hidden_states.shape[-1]]
-        else:
-            hidden_states = torch.sum(upd_conv_state * self.conv1d.weight[:, 0, :], dim=-1)
-            hidden_states += self.conv_bias
-            hidden_states = hidden_states.unsqueeze(-1)
-        hidden_states = self.act(hidden_states)  # [batch, intermediate_size, seq_len]
+
+        # Compute both versions of hidden_states
+        full_kernel_applied = self.conv1d(hidden_states)[:, :, : hidden_states.shape[-1]]
+        manual_conv_applied = torch.sum(upd_conv_state * self.conv1d.weight[:, 0, :], dim=-1)
+        if self.use_conv_bias:
+            manual_conv_applied = manual_conv_applied + self.conv_bias
+        manual_conv_applied = manual_conv_applied.unsqueeze(-1)
+
+        # Build a mask for selecting the correct result based on kernel size
+        is_full = cache_position.shape[0] == self.conv_kernel_size
+        is_full = torch.tensor(is_full, dtype=hidden_states.dtype, device=hidden_states.device)
+
+        # Reshape for broadcasting
+        is_full = is_full.view(1, 1, 1)
+
+        # Select the correct result
+        hidden_states = is_full * full_kernel_applied + (1 - is_full) * manual_conv_applied
+
+        # Apply activation
+        hidden_states = self.act(hidden_states)
         return hidden_states, upd_conv_state
 
 
@@ -6588,8 +6605,7 @@ def mamba_mixer_forward(
 
 # This patcher class serves the following purposes:
 # 1. Inject a MambaCache structure into the original model to simplify input and output handling related to SSM states
-# 2. Apply JIT scripting to the ConvSequenceTransform module, as its behavior differs depending on if-branching
-# whether the cache contains a single element or multiple elements
+# 2. Patch ConvSequenceTransform module to avoid if-else branching
 # 3. Vectorize the selective scan operation to ensure correct behavior during JIT tracing
 class MambaPatcher(ModelPatcher):
     def __init__(
@@ -6720,7 +6736,7 @@ class MambaPatcher(ModelPatcher):
                 layer.mixer.act,
                 layer.mixer.conv1d.bias,
             )
-            layer.mixer.conv_sequence_transform = torch.jit.script(conv_transform)
+            layer.mixer.conv_sequence_transform = conv_transform
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
