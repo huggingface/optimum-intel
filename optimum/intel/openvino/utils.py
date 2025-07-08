@@ -124,6 +124,7 @@ _HEAD_TO_AUTOMODELS = {
     "fill-mask": "OVModelForMaskedLM",
     "text-generation": "OVModelForCausalLM",
     "text2text-generation": "OVModelForSeq2SeqLM",
+    "text2text-generation-with-past": "OVModelForSeq2SeqLM",
     "text-classification": "OVModelForSequenceClassification",
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",

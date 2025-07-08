@@ -361,6 +361,24 @@ _DEFAULT_4BIT_WQ_CONFIG = {
 
 # Default configs for int8 full quantization
 _DEFAULT_INT8_FQ_CONFIGS = {
+    "google-t5/t5-small": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "google-t5/t5-large": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "google-t5/t5-3b": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
     "FacebookAI/roberta-large": {
         "dtype": "int8",
         "dataset": "wikitext2",
