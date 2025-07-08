@@ -43,11 +43,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip uninstall opencv-python -y && pip install opencv-python-headless
           pip install .[tests,diffusers]
+          pip uninstall opencv-python -y && pip install opencv-python-headless
 
       - name: Install openvino-nightly
         if: ${{ matrix.openvino == 'ov-nightly' }}
