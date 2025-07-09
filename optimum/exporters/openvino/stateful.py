@@ -298,7 +298,7 @@ def patch_stateful_ssm(ov_model: ov.Model):
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
-    if config.model_type.replace("_", "-") in SSM_MODELS:
+    if config.model_type in SSM_MODELS:
         return patch_stateful_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 

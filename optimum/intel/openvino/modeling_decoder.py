@@ -1048,6 +1048,31 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
 
 
 class OVMambaCache(MambaCache):
+    """
+    Cache for mamba model which does not have attention mechanism and key value states.
+
+    Arguments:
+        config (`PretrainedConfig):
+            The configuration file defining the shape-related attributes required to initialize the static cache.
+        batch_size (`int`):
+            The batch size with which the model will be used. Note that a new instance must be instantiated if a
+            smaller batch size is used.
+        dtype (`torch.dtype`, *optional*, defaults to `torch.float16`):
+            The default `dtype` to use when initializing the layer.
+        device (`torch.device` or `str`, *optional*):
+            The device on which the cache should be initialized. Should be the same as the layer.
+        max_batch_size (`int`):
+            Maximum batch size with which the model will be used. Note that a new instance must be instantiated if a
+            smaller batch size is used.
+        conv_states (`List[torch.Tensor]`):
+            A list of convolutional state tensors for each layer, used to cache intermediate state for the convolution
+            component of the Mamba model.
+        ssm_states (`List[torch.Tensor]`):
+            A list of state-space model (SSM) state tensors for each layer, used to cache intermediate state for the
+            SSM component of the Mamba model.
+
+    """
+
     def __init__(
         self,
         config: "PretrainedConfig",
@@ -1087,7 +1112,6 @@ class OVMambaCache(MambaCache):
                     device=self.device,
                     dtype=dtype,
                 )
-
                 self.ssm_states.append(ssm_state)
 
 
@@ -1150,19 +1174,16 @@ class OVMambaForCausalLM(OVModelForCausalLM):
 
         def has_cache_inputs(model):
             return any(
-                "past_key_values" in key.get_any_name()
-                or "past_ssm" in key.get_any_name()
-                or "past_conv" in key.get_any_name()
-                for key in model.inputs
+                "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
             )
 
         model_has_sinks = model_has_state(self.model)
         self.use_cache = has_cache_inputs(model) or model_has_sinks
 
-        self.ssm_cache_input_names = [key for key in self.input_names if "past_ssm_states" in key]
-        self.conv_cache_input_names = [key for key in self.input_names if "past_conv_states" in key]
-        self.ssm_cache_output_names = [key for key in self.output_names if "present_ssm_states" in key]
-        self.conv_cache_output_names = [key for key in self.output_names if "present_conv_states" in key]
+        self.ssm_cache_input_names = [key for key in self.input_names if "cache_params.past.ssm" in key]
+        self.conv_cache_input_names = [key for key in self.input_names if "cache_params.past.conv" in key]
+        self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
+        self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
 
     def forward(
         self,
@@ -1254,10 +1275,11 @@ class OVMambaForCausalLM(OVModelForCausalLM):
                     "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
                 )
             if cache_position[0] > 0:
+                # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
-
-                if attention_mask is not None:
-                    attention_mask = None
+                # models like Mamba typically do not require an attention_mask
+                # for the decoding step after the first token so use attention mask of ones
+                attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
 
             else:
                 # we initialize the `cache_position` to full size of `conv_states` at prefill stage
