@@ -147,6 +147,7 @@ from .model_patcher import (
     StatefulSeq2SeqDecoderPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
+    Zamba2ModelPatcher,
 )
 
 
@@ -4366,3 +4367,111 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        config = normalized_config.config
+        self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
+        self.ssm_state_size = config.mamba_d_state
+        self.conv_kernel_size = config.mamba_d_conv
+        self.n_mamba_heads = config.n_mamba_heads
+        self.num_hidden_layers = config.num_hidden_layers
+        self.mamba_ngroups = config.mamba_ngroups
+        self.mamba_d_state = config.mamba_d_state
+        self.batch_size = batch_size
+        self.mamba_headdim = config.mamba_headdim
+        self.head_dim = config.attention_head_dim
+        self.num_attention_heads = config.num_attention_heads
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        kv_states_cache = []
+        # generate tuples of (key, value, conv_state, ssm_state)
+        for i in range(self.num_hidden_layers):
+            kv_shape = (self.batch_size, self.num_attention_heads, 1, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            kv_states_cache.append(k)
+            kv_states_cache.append(v)
+            conv_state_shape = (
+                self.batch_size,
+                self.intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                self.conv_kernel_size,
+            )
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            kv_states_cache.append(conv_state)
+            ssm_state_shape = (self.batch_size, self.n_mamba_heads, self.mamba_headdim, self.ssm_state_size)
+            ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+            kv_states_cache.append(ssm_state)
+
+        return kv_states_cache
+
+
+@register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
+    PAD_ATTENTION_MASK_TO_PAST = False
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
+
+    def add_past_key_values_states(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + 1"
+            name = "present"
+
+        # generate tuples of (key, value, conv_state, ssm_state)
+        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 1: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 1: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.conv_state"] = {0: "batch_size"}
+            inputs_or_outputs[f"{name}.{i}.ssm_state"] = {0: "batch_size"}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {"input_ids": {0: "batch_size", 1: "sequence_length"}}
+        common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
+        common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+        self.add_past_key_values_states(common_inputs, direction="inputs")
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = {}
+        common_outputs["logits"] = {}
+
+        # outputs in an order of (key, value, conv_state, ssm_state)
+        for idx in range(self._normalized_config.num_layers):
+            common_outputs["key_cache.present.{}".format(idx)] = {}
+            common_outputs["value_cache.present.{}".format(idx)] = {}
+            common_outputs["conv_states.present.{}".format(idx)] = {}
+            common_outputs["ssm_states.present.{}".format(idx)] = {}
+
+        return common_outputs
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        return Zamba2ModelPatcher(self, model, model_kwargs)
