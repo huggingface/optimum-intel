@@ -1173,14 +1173,17 @@ class OVMambaForCausalLM(OVModelForCausalLM):
         cache_position: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        inputs = {"input_ids": input_ids.cpu().numpy()}
+        inputs = {"input_ids": input_ids}
         if "cache_position" in self.input_names:
             if cache_position is None:
                 # initialize it as for prefill stage
-                cache_position = torch.arange(0, self.config.conv_kernel, device=input_ids.device)
-            inputs["cache_position"] = cache_position.cpu().numpy()
+                cache_position = torch.arange(0, self.config.conv_kernel)
+            inputs["cache_position"] = cache_position
         if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = cache_position.cpu().numpy()
+            if attention_mask is None:
+                # during decoding stage it must be a tensor of ones
+                attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+            inputs["attention_mask"] = attention_mask
 
         if not self.stateful:
             if cache_params is None and self.ssm_cache_input_names and self.conv_cache_input_names:

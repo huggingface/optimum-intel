@@ -4374,7 +4374,7 @@ class MambaCacheDummyInputGenerator(DummyInputGenerator):
     Generates dummy past_ssm_states, past_conv_states and cache_position inputs for Mamba architectures.
     """
 
-    SUPPORTED_INPUT_NAMES = ("past_ssm_states", "past_conv_states", "cache_position")
+    SUPPORTED_INPUT_NAMES = ("cache_params", "cache_position")
 
     def __init__(
         self,
@@ -4392,20 +4392,16 @@ class MambaCacheDummyInputGenerator(DummyInputGenerator):
         self.conv_kernel_size = self.normalized_config.config.conv_kernel
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "past_ssm_states":
+        if input_name == "cache_params":
             ssm_shape = [self.batch_size, self.intermediate_size, self.ssm_state_size]
-            return [
-                self.random_float_tensor(ssm_shape, framework=framework, dtype=float_dtype)
-                for _ in range(self.normalized_config.num_layers)
-            ]
-
-        elif input_name == "past_conv_states":
             conv_shape = [self.batch_size, self.intermediate_size, self.conv_kernel_size]
             return [
-                self.random_float_tensor(conv_shape, framework=framework, dtype=float_dtype)
+                (
+                    self.random_float_tensor(ssm_shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(conv_shape, framework=framework, dtype=float_dtype),
+                )
                 for _ in range(self.normalized_config.num_layers)
             ]
-
         elif input_name == "cache_position":
             return self.random_int_tensor(
                 shape=[self.conv_kernel_size],
@@ -4431,6 +4427,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
             "cache_position": {0: "cache_sequence_length"},
         }
         if self.use_past_in_inputs:
@@ -4452,19 +4449,15 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
             raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
 
         if direction == "inputs":
-            ssm_name = "past_ssm_states"
-            conv_name = "past_conv_states"
+            ssm_conv_states_name = "cache_params.past"
         else:
-            ssm_name = "present_ssm_states"
-            conv_name = "present_conv_states"
+            ssm_conv_states_name = "cache_params.present"
 
         for i in range(self._normalized_config.num_layers):
             # [batch_size, d_state, d_model]
-            inputs_or_outputs[f"{ssm_name}.{i}"] = {0: "batch_size"}
-
-        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{ssm_conv_states_name}.ssm.{i}"] = {0: "batch_size"}
             # [batch_size, conv_kernel_size - 1, d_model]
-            inputs_or_outputs[f"{conv_name}.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{ssm_conv_states_name}.conv.{i}"] = {0: "batch_size"}
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -4477,9 +4470,9 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
 
         dummy_inputs = {}
-        input_names = [key for key in self.inputs.keys() if not key.startswith("past_")]
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
         if self.use_past_in_inputs:
-            input_names.extend(["past_ssm_states", "past_conv_states"])
+            input_names.extend(["cache_params"])
 
         for input_name in input_names:
             input_was_inserted = False

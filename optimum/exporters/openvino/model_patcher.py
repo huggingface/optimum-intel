@@ -6680,28 +6680,45 @@ class MambaPatcher(ModelPatcher):
                 return self.conv_states[layer_idx]
 
         def patched_forward(
-            input_ids, attention_mask=None, cache_position=None, past_ssm_states=None, past_conv_states=None
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+            cache_position=None,
         ):
             use_cache = False
-            cache_params = None
-            if past_ssm_states is not None and past_conv_states is not None:
+            wrapped_cache_params = None
+            if cache_params is not None:
                 use_cache = True
-                cache_params = MambaCacheWrap(
+                # past_ssm_conv_states is a list of tuples of (ssm_state, conv_state) for each Mamba block
+                ssm_states = [ssm_conv_state[0] for ssm_conv_state in cache_params]
+                conv_states = [ssm_conv_state[1] for ssm_conv_state in cache_params]
+                wrapped_cache_params = MambaCacheWrap(
                     self.real_config._config,
                     input_ids.shape[0],
-                    conv_states=list(past_conv_states),
-                    ssm_states=list(past_ssm_states),
+                    conv_states=conv_states,
+                    ssm_states=ssm_states,
                 )
 
             result = self.orig_forward(
-                input_ids=input_ids, cache_position=cache_position, cache_params=cache_params, use_cache=use_cache
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                cache_position=cache_position,
+                cache_params=wrapped_cache_params,
+                use_cache=use_cache,
             )
 
             if use_cache:
+                present_ssm_conv_states = []
+                for ssm_state, conv_state in zip(result.cache_params.ssm_states, result.cache_params.conv_states):
+                    present_ssm_conv_states.append(
+                        (
+                            ssm_state,
+                            conv_state,
+                        )
+                    )
                 result = {
                     "logits": result.logits,
-                    "ssm_states": result.cache_params.ssm_states,
-                    "conv_states": result.cache_params.conv_states,
+                    "cache_params_present": present_ssm_conv_states,
                 }
 
             return result
