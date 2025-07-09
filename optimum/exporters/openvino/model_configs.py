@@ -23,6 +23,7 @@ from transformers.utils import is_tf_available
 from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    BartOnnxConfig,
     BlenderbotOnnxConfig,
     BlenderbotSmallOnnxConfig,
     BloomOnnxConfig,
@@ -82,6 +83,8 @@ from .model_patcher import (
     BaichuanModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
+    BlenderbotSmallStatefulSeq2SeqDecoderPatcher,
+    BlenderbotStatefulSeq2SeqDecoderPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -115,6 +118,7 @@ from .model_patcher import (
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MairaImageEmbeddingModelPatcher,
     MarianModelPatcher,
+    MarianStatefulSeq2SeqDecoderPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -124,6 +128,7 @@ from .model_patcher import (
     MPTModelPatcher,
     OVSpeechT5ModelPatcher,
     PegasusModelPatcher,
+    PegasusStatefulSeq2SeqDecoderPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
@@ -133,6 +138,7 @@ from .model_patcher import (
     Phi4MMVisionEmbeddingsPatcher,
     PhiMoEModelPatcher,
     Qwen2_5_VLVisionEmbMergerPatcher,
+    Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
     QwenModelPatcher,
@@ -296,7 +302,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -919,7 +925,9 @@ class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class BioGPTOpenVINOConfig(TextDecoderOnnxConfig):
+class BioGPTOpenVINOConfig(
+    TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOnnxConfig
+):
     # BioGPT does not require position_ids input.
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1536,6 +1544,8 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        model_kwargs = model_kwargs or {}
+        model_kwargs["use_cache"] = True
         if self.patcher_cls is not None:
             return self.patcher_cls(self, model, model_kwargs=model_kwargs)
         # Refer to DecoderModelPatcher.
@@ -1731,7 +1741,7 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             behavior = VLMConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
-            return model.language_model
+            return model.language_model if not hasattr(model, "lm_head") else model
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
@@ -1891,10 +1901,14 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
             behavior = LlavaNextVideoConfigBehavior(behavior)
 
         if behavior == LlavaNextVideoConfigBehavior.MULTI_MODAL_PROJECTOR:
-            return model.multi_modal_projector
+            return (
+                model.multi_modal_projector
+                if hasattr(model, "multi_modal_projector")
+                else model.model.multi_modal_projector
+            )
 
         if behavior == LlavaNextVideoConfigBehavior.VISION_RESAMPLER:
-            return model.vision_resampler
+            return model.vision_resampler if hasattr(model, "vision_resampler") else model.model.vision_resampler
 
         return super().get_model_for_behavior(model, behavior)
 
@@ -1921,6 +1935,17 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return MairaImageEmbeddingModelPatcher(self, model, model_kwargs)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.language_model.get_input_embeddings()
+            text_embedding.config = model.language_model.config
+            return text_embedding
+
+        return super().get_model_for_behavior(model, behavior)
 
 
 @register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
@@ -3498,7 +3523,9 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.model.embed_tokens
+            text_embedding = (
+                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
+            )
             text_embedding.config = model.config
             return text_embedding
 
@@ -3748,10 +3775,67 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "bart",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+        "text-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class BartOpenVINOConfig(BartOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
+
+
+@register_in_tasks_manager(
+    "mbart",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+        "text-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class MBartOpenVINOConfig(BartOpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "m2m-100",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class M2M100OpenVINOConfig(BartOpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
     "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager(
-    "deepseek-v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "deepseek_v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
@@ -3952,7 +4036,16 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return BlenderbotStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
 
 
 @register_in_tasks_manager(
@@ -3971,7 +4064,16 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return BlenderbotSmallStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
 
 
 @register_in_tasks_manager(
@@ -3990,7 +4092,16 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return PegasusStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
 
 
 @register_in_tasks_manager(
@@ -4009,7 +4120,16 @@ class MarianOpenVINOConfig(MarianOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            return MarianStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
+            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
+        return common_inputs
 
 
 class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):

@@ -1231,7 +1231,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon": 2,
         "falcon-40b": 2,
         "persimmon": 2,
-        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
+        "biogpt": 5,
         "aquila": 2,
         "aquila2": 2,
         "xverse": 2,
@@ -1326,7 +1326,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 1e-3 if model_arch == "minicpm" else 1e-4
+        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
@@ -1924,6 +1924,9 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SPEEDUP_CACHE = 1.1
 
     SUPPORT_STATEFUL = ("t5", "mt5")
+    if is_transformers_version(">=", "4.52.0"):
+        SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
+        # all models are stateful on transformers main, but pegasus update is not included in 4.52 yet
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -2003,12 +2006,12 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe(inputs)
+        outputs = pipe(inputs, max_new_tokens=20)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
         ov_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(inputs)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=20)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -2559,7 +2562,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
         if model_arch == "gemma3":
-            patch_update_causal_mask(transformers_model, "4.43.0")
+            patch_update_causal_mask(
+                transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
+                "4.43.0",
+            )
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
@@ -2584,7 +2590,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         # video loader helper only available for transformers >= 4.49
         if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            from transformers.image_utils import load_video
+            if is_transformers_version("<=", "4.52"):
+                from transformers.image_utils import load_video
+            else:
+                from transformers.video_utils import load_video
 
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
@@ -2592,7 +2601,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2)
+            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             transformers_inputs = copy.deepcopy(inputs)
@@ -2716,24 +2725,27 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
 
-        # video loader helper only available for transformers >= 4.49
-        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            from transformers.image_utils import load_video
+            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+                # video loader helper only available for transformers >= 4.49
+                if is_transformers_version("<=", "4.52"):
+                    from transformers.image_utils import load_video
+                else:
+                    from transformers.video_utils import load_video
 
-            video_path = hf_hub_download(
-                repo_id="raushan-testing-hf/videos-test",
-                filename="sample_demo_1.mp4",
-                repo_type="dataset",
-                user_agent=http_user_agent(),
-            )
-            input_video, _ = load_video(video_path, num_frames=2)
-            question = "Why is this video funny?"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
-            outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-            outputs = outputs[:, inputs["input_ids"].shape[1] :]
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            self.assertIsInstance(outputs[0], str)
+                video_path = hf_hub_download(
+                    repo_id="raushan-testing-hf/videos-test",
+                    filename="sample_demo_1.mp4",
+                    repo_type="dataset",
+                    user_agent=http_user_agent(),
+                )
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                question = "Why is this video funny?"
+                inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+                outputs = model.generate(**inputs, max_new_tokens=10)
+                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                outputs = outputs[:, inputs["input_ids"].shape[1] :]
+                outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                self.assertIsInstance(outputs[0], str)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()

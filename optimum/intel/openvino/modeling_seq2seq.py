@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import copy
 import logging
 import os
 from pathlib import Path
@@ -42,9 +41,9 @@ from transformers.utils import http_user_agent
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
-from .. import OVConfig, OVQuantizer
+from .. import OVConfig
 from ..utils import is_transformers_version
-from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
+from .configuration import OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -477,7 +476,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
         decoder_with_past = None
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         compile_only = kwargs.pop("compile_only", False)
         device = kwargs.pop("device", "CPU")
         ov_config = kwargs.pop("ov_config", None)
@@ -521,10 +519,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             "decoder_with_past": model_save_dir / decoder_with_past_file_name,
         }
         if not compile_only:
-            encoder = cls.load_model(file_names["encoder"], quantization_config)
-            decoder = cls.load_model(file_names["decoder"], quantization_config)
+            encoder = cls.load_model(file_names["encoder"])
+            decoder = cls.load_model(file_names["decoder"])
             if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"])
         else:
             model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
             encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
@@ -551,7 +549,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
-        return cls(
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        model = cls(
             encoder=encoder,
             decoder=decoder,
             decoder_with_past=decoder_with_past,
@@ -564,6 +563,17 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             compile_only=compile_only,
             **kwargs,
         )
+
+        if quantization_config is not None:
+            from optimum.intel import OVQuantizer
+
+            quantizer = OVQuantizer(model)
+            quantization_config_copy = quantization_config.clone()
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+
+        return model
 
     @classmethod
     def _export(
@@ -657,11 +667,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
         # Encode if needed : first prediction pass
         if encoder_outputs is None:
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+
+        if labels is not None and decoder_input_ids is None:
+            # get decoder inputs from shifting lm labels to the right
+            decoder_input_ids = self._shift_right(labels)
 
         # Decode
         if past_key_values is None or self.decoder_with_past is None:
@@ -749,7 +764,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             )
 
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
-        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.is_dynamic = batch_size == -1 and sequence_length == -1
         self.encoder.model = self._reshape(self.encoder.model, batch_size, sequence_length, is_decoder=False)
         self.decoder.model = self._reshape(self.decoder.model, batch_size, sequence_length)
         if self.decoder_with_past is not None:
@@ -785,6 +800,28 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def compile(self):
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name)._compile()
+
+    def _shift_right(self, input_ids):
+        # Adopted from https://github.com/huggingface/transformers/blob/v4.53.1/src/transformers/models/t5/modeling_tf_t5.py#L957
+        decoder_start_token_id = self.config.decoder_start_token_id
+        pad_token_id = self.config.pad_token_id
+
+        if decoder_start_token_id is None:
+            raise ValueError(
+                "self.model.config.decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id. "
+                "See T5 docs for more information."
+            )
+
+        shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+        shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
+        shifted_input_ids[..., 0] = decoder_start_token_id
+
+        if pad_token_id is None:
+            raise ValueError("self.model.config.pad_token_id has to be defined.")
+        # replace possible -100 values in labels by `pad_token_id`
+        shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
+
+        return shifted_input_ids
 
 
 class OVEncoder:
@@ -1345,27 +1382,9 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         cls,
         model_id: Union[str, Path],
         config: "PretrainedConfig",
-        load_in_8bit: bool = False,
-        quantization_config: Union[dict, OVQuantizationConfigBase] = None,
         **kwargs,
     ):
-        compile_only = kwargs.get("compile_only", False)
-
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        is_data_aware_quantization = quantization_config is not None and quantization_config.dataset is not None
-        if not compile_only and is_data_aware_quantization:
-            model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
-                model_id, config, load_in_8bit=False, **kwargs
-            )
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.processor = quantization_config.processor or model_id
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
-        else:
-            model = super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(
-                model_id, config, load_in_8bit=load_in_8bit, quantization_config=quantization_config, **kwargs
-            )
-
-        return model
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
     class DummyWhisperModel:
         def __init__(self):

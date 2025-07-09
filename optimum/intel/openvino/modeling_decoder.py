@@ -31,6 +31,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
@@ -95,26 +96,30 @@ TEXT_GENERATION_EXAMPLE = r"""
 """
 
 
+# inheritage from PushToHubMixin added as workaround for transformers>=4.52.0 and nncf<=2.16.0 compatibility
+# during dataset preparatioon nncf checks isinstance(model, PreTrainedModel.__bases__)
+# in transformers 4.52.0 PreTrainedModel does not include GenerationMixin and this check failed for OVModelForCausalLM
+# TO DO: remove it after migration on new nncf
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
     """,
 )
-class OVBaseDecoderModel(OVModel):
+class OVBaseDecoderModel(OVModel, PushToHubMixin):
     def __init__(
         self,
         model: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        if not dynamic_shapes:
-            raise ValueError(
-                "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
+        if dynamic_shapes is not None:
+            logger.warning(
+                f"`dynamic_shapes` was set to {dynamic_shapes}, but this value will be ignored as only dynamic shapes are supported."
             )
 
         compile_only = kwargs.get("compile_only", False)
@@ -125,18 +130,21 @@ class OVBaseDecoderModel(OVModel):
                 "`compile_only` mode does not support disabling compilation."
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
+
         config.is_encoder_decoder = False
+
         super().__init__(
             model,
             config,
             device=device,
-            dynamic_shapes=False if not compile_only else model_has_dynamic_inputs(model),
+            # dynamic_shapes set to False for compile_only=False to make sure the model is not reshaped dynamically
+            dynamic_shapes=model_has_dynamic_inputs(model) if compile_only else False,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
             **kwargs,
         )
-        self.is_dynamic = dynamic_shapes
+        self.is_dynamic = True
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
@@ -153,8 +161,11 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
-        if self.is_dynamic and not self._compile_only:
+
+        # reshape with dynamic shapes is needed for decoder_with_past model to be compatible with inference
+        if not self.stateful and not self._compile_only:
             self.model = self._reshape(self.model, -1, -1)
+
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
         if self.use_cache and not self.stateful:
@@ -210,7 +221,6 @@ class OVBaseDecoderModel(OVModel):
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful or self._compile_only:
             return
-
         pkv_precision = Type.f32
         if not force_fp32:
             device = self._device.upper()
@@ -233,7 +243,7 @@ class OVBaseDecoderModel(OVModel):
             if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
                 self.model = self._get_model_with_updated_pkv_precision(self.model, Type.f32)
                 self._pkv_precision = Type.f32
-                if self.is_dynamic:
+                if self.is_dynamic and not self._compile_only:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
 

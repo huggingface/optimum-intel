@@ -723,7 +723,6 @@ def export_from_model(
                     setattr(model.generation_config, param_name, param_value)
                     setattr(model.config, param_name, None)
 
-        # workaround for https://github.com/huggingface/transformers/issues/37172
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
@@ -942,6 +941,9 @@ def _get_multi_modal_submodels_and_export_configs(
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
+    if hasattr(model, "model") and hasattr(model.model, "image_newline"):
+        model.config.image_newline = model.model.image_newline.tolist()
+
     main_config_cls = TasksManager.get_exporter_config_constructor(
         model=model, task=task, exporter="openvino", library_name=library_name
     )

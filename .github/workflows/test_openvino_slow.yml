@@ -40,6 +40,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Free Disk Space (Ubuntu)
+        if: matrix.runs-on == 'ubuntu-22.04'
+        uses: jlumbroso/free-disk-space@main
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -59,7 +63,7 @@ jobs:
         name: Install specific dependencies and versions required for older transformers
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
 
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2022' ||  matrix.transformers-version == 'main' }i}
+      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2022' ||  matrix.transformers-version == 'main' }}
         name: Install auto-gptq, autoawq
         run: |
           pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu

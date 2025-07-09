@@ -125,9 +125,9 @@ pattern_prefix = (
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
+        (OVModelForCausalLM, "gpt2", 31, 22),
     )
-    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq and OVStableDiffusionPipeline
+    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq, OVStableDiffusionPipeline and OVModelForSeq2SeqLM
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
@@ -146,7 +146,7 @@ class OVQuantizerTest(unittest.TestCase):
                 dtype="f8e4m3",
             ),
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e4m3": 16},
@@ -171,7 +171,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 7,
+                "model": 8,
             },
             {
                 "model": {"f8e4m3": 8, "nf4": 2},
@@ -196,7 +196,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 7,
+                "model": 8,
             },
             {
                 "model": {"f8e5m2": 8, "nf4": 2},
@@ -212,7 +212,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "int4": 10},
@@ -228,7 +228,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "model": 13,
+                "model": 15,
             },
             {
                 "model": {"f8e5m2": 2, "int4": 28},
@@ -245,7 +245,7 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "unet": 174,
+                "unet": 198,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -269,7 +269,7 @@ class OVQuantizerTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "unet": 79,
+                "unet": 87,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -355,6 +355,23 @@ class OVQuantizerTest(unittest.TestCase):
             {
                 "model": {"int8": 65},
             },
+        ),
+        (
+            OVModelForSeq2SeqLM,
+            "t5",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 30, "decoder": 62},
+            (
+                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+            ),
         ),
     ]
 
@@ -572,13 +589,18 @@ class OVQuantizerTest(unittest.TestCase):
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            if model_cls == OVModelForSpeechSeq2Seq:
+            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
                 if ov_model.decoder_with_past is None:
-                    del expected_fake_nodes_per_model["decoder_with_past"]
-                    del expected_num_weight_nodes_per_model["decoder_with_past"]
+                    expected_fake_nodes_per_model.pop("decoder_with_past", None)
+                    expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
 
-                input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
-                ov_model.generate(input_features)
+                if model_cls == OVModelForSpeechSeq2Seq:
+                    input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
+                    ov_model.generate(input_features)
+                else:
+                    tokenizer = AutoTokenizer.from_pretrained(model_id)
+                    inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
+                    ov_model.generate(**inputs)
             elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
@@ -677,9 +699,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            {"model": {"int8": 18, "int4": 23}}
-            if is_transformers_version(">=", "4.49")
-            else {"model": {"int8": 14, "int4": 25}},
+            {"model": {"int8": 18, "int4": 23}},
         ),
         (
             OVModelForCausalLM,
@@ -693,9 +713,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            {"model": {"int8": 18, "int4": 23}}
-            if is_transformers_version(">=", "4.49")
-            else {"model": {"int8": 16, "int4": 24}},
+            {"model": {"int8": 18, "int4": 23}},
         ),
         (
             OVModelForCausalLM,
@@ -712,6 +730,18 @@ class OVWeightCompressionTest(unittest.TestCase):
                 scale_estimation=True,
             ),
             {"model": {"int8": 8, "int4": 12}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
+                quant_method=QuantizationMethod.AWQ,
+            ),
+            {"model": {"int8": 4, "int4": 14}},
         ),
         (
             OVModelForCausalLM,
@@ -964,6 +994,30 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.51.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "llama4",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 22, "int4": 48},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 16},
                     },
                 ),
             ]
@@ -1458,7 +1512,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {
-                "model": 14,
+                "model": 16,
             },
             {
                 "model": {"f8e4m3": 11, "nf4": 5},
@@ -1482,7 +1536,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {
-                "unet": 112,
+                "unet": 124,
                 "vae_decoder": 0,
                 "vae_encoder": 0,
                 "text_encoder": 0,
@@ -1849,6 +1903,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
                         full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", dataset="wikitext2"),
                     ),
                 }
+            ),
+        ),
+        (
+            OVQuantizationConfig(
+                advanced_parameters=nncf.AdvancedCompressionParameters(),
             ),
         ),
     )
