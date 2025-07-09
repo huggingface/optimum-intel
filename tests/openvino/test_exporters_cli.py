@@ -31,7 +31,6 @@ from optimum.exporters.openvino.__main__ import main_export
 from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
     OVFluxFillPipeline,
-    OVFluxKontextPipeline,
     OVFluxPipeline,
     OVLatentConsistencyModelPipeline,
     OVLTXPipeline,
