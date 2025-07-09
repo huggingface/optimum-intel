@@ -24,6 +24,7 @@ from diffusers import (
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
     DiffusionPipeline,
+    FluxKontextPipeline,
 )
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
@@ -611,7 +612,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if "flux-kontext" not in model_arch else FluxKontextPipeline
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
