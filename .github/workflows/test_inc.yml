@@ -38,8 +38,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install .[neural-compressor,tests] intel-extension-for-pytorch==${{ matrix.torch-version }} torch==${{ matrix.torch-version }}
-          pip install diffusers==0.32.2 optimum[exporters]
+          pip install .[neural-compressor,tests] intel-extension-for-pytorch==${{ matrix.torch-version }}
+          pip install diffusers==0.32.2
 
       - name: Assert versions
         run: |
