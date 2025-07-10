@@ -1405,7 +1405,7 @@ class OVQuantizer(OptimumQuantizer):
         output_path = save_directory.joinpath(ov_file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
 
-        model_type = self.model.config.model_type.replace("_", "-")
+        model_type = self.model.config.model_type
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="openvino",
             model=self.model,

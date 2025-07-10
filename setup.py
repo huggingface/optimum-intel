@@ -28,7 +28,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum==1.26.*",
+    "optimum@git+https://github.com/huggingface/optimum.git",
     "transformers>=4.36,<4.53",
     "datasets>=1.4.0",
     "setuptools",
@@ -55,7 +55,7 @@ TESTS_REQUIRE = [
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
     "peft",
-    "datasets[audio]>=1.4.0",
+    "datasets[audio]>=1.4.0,<4.0.0",
     "tbb",
     "langchain-huggingface",
     "hf_xet",

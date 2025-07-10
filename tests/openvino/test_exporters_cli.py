@@ -378,7 +378,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "fill-mask",
-            "xlm_roberta",
+            "xlm-roberta",
             "int8",
             "--library sentence_transformers --dataset c4 --num-samples 1",
             {
