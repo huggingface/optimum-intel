@@ -629,7 +629,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         dtype (`str`, *optional*):
-            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
+            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4', 'cb4_f8e4m3'].
+            Option 'cb4_f8e4m3' represents a codebook with 16 fixed fp8 values in E4M3 format.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -811,11 +812,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.dtype is None:
             self.dtype = "int4" if self.bits == 4 else "int8"
-        if self.dtype not in ["int4", "int8", "mxfp4", "nf4"]:
+        if self.dtype not in ["int4", "int8", "mxfp4", "nf4", "cb4_f8e4m3"]:
             raise ValueError(
-                f"Weights quantization data type must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.dtype}."
+                "Weights quantization data type must be one of the following: "
+                f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4_f8e4m3'], but found: {self.dtype}."
             )
-        if self.dtype in ["mxfp4", "nf4"]:
+        if self.dtype in ["mxfp4", "nf4", "cb4_f8e4m3"]:
             if self.bits != 4:
                 raise ValueError(
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"

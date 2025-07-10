@@ -443,6 +443,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "text-generation-with-past",
+            "gpt2",
+            "cb4_f8e4m3 --group-size 32",
+            {"model": {"int8": 24, "int4": 20, "f8e4m3": 20}},
+        ),
+        (
+            "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             {"model": {"int4": 16}},
