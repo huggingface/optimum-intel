@@ -1,6 +1,6 @@
 """
 The goal of the test in this file is to test that basic functionality of optimum[openvino] works:
-- Load the model with `from_transformers=True`
+- Load the model with automatic conversion from transformers (export)
 - Do inference with appropriate pipeline
 - Save the model to disk
 
@@ -59,7 +59,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model_class_str = MODEL_NAMES[model_id]
         model_class = eval(model_class_str)
-        model = model_class.from_pretrained(model_id, from_transformers=True)
+        model = model_class.from_pretrained(model_id)
         model.save_pretrained(f"{model_id}_ov")
         model = model_class.from_pretrained(f"{model_id}_ov")
 
@@ -81,7 +81,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         """
         model_id = "hf-internal-testing/tiny-random-distilbert"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForSequenceClassification.from_pretrained(model_id)
         model.reshape(1, 16)
         model.half()
         model.to("cpu")

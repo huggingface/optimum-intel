@@ -211,7 +211,7 @@ def ensure_export_task_support_stateful(task: str):
 
 
 def ensure_model_type_support_stateful(model_type: str):
-    return model_type.replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+    return model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
 
 
 def remove_parameters_by_names(model: ov.Model, names: list):

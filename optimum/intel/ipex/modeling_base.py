@@ -305,7 +305,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._supports_cache_class = True
         GenerationMixin.__init__(self)
 
-        model_type = self.config.model_type.replace("_", "-")
+        model_type = self.config.model_type
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
 
         self.config.is_decoder = True
@@ -484,7 +484,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
         GenerationMixin.__init__(self)
 
-        model_type = self.config.model_type.replace("_", "-")
+        model_type = self.config.model_type
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
 
         self.config.is_decoder = False
