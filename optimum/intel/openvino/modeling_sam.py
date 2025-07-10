@@ -117,9 +117,8 @@ class OVSamModel(OVBaseModel):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-
-        for _, component in self.components.items():
-            component.clear_requests()
+        self.vision_encoder.clear_requests()
+        self.prompt_encoder_mask_decoder.clear_requests()
 
     def compile(self):
         self.vision_encoder._compile()
