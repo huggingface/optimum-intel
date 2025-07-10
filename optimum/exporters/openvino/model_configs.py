@@ -3823,7 +3823,7 @@ class MBartOpenVINOConfig(BartOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "m2m-100",
+    "m2m_100",
     *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
     library_name="transformers",
 )
