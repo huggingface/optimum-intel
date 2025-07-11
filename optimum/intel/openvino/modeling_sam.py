@@ -13,6 +13,8 @@ from transformers import AutoConfig, PretrainedConfig, SamModel
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
+from .configuration import OVQuantizationConfigBase
+from .. import OVConfig
 from ...exporters.openvino.utils import save_config
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
@@ -165,6 +167,8 @@ class OVSamModel(OVBaseModel):
         vision_encoder_file_name: Optional[str] = None,
         prompt_encoder_mask_decoder_file_name: Optional[str] = None,
         local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVQuantizationConfigBase, Dict] = None,
         **kwargs,
     ):
         """
@@ -197,6 +201,10 @@ class OVSamModel(OVBaseModel):
                 openvino_prompt_encoder_mask_decoder.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            load_in_8bit(`bool`, *optional*, defaults to `False`):
+                Whether or not to apply 8-bit weight quantization.
+            quantization_config(`Union[OVQuantizationConfigBase, Dict]`, *optional*, defaults to `None`):
+                Quantization configuration to apply to the model.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -271,13 +279,24 @@ class OVSamModel(OVBaseModel):
                 model_save_dir,
             )
 
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         model = cls(
             vision_encoder_model=vision_encoder_model,
             prompt_encoder_mask_decoder_model=prompt_encoder_model,
             config=config,
             model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
+
+        if quantization_config is not None:
+            from optimum.intel import OVQuantizer
+
+            quantizer = OVQuantizer(model)
+            quantization_config_copy = quantization_config.clone()
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
 

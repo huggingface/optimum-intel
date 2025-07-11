@@ -11,7 +11,7 @@ from scipy.ndimage import center_of_mass
 from tqdm import tqdm
 from transformers import SamModel, SamProcessor
 
-from optimum.intel import OVWeightQuantizationConfig
+from optimum.intel import OVWeightQuantizationConfig, OVPipelineQuantizationConfig
 from optimum.intel.openvino import OVSamModel
 
 
@@ -195,18 +195,26 @@ if __name__ == "__main__":
     model_id = "facebook/sam-vit-base"
     for model_id in [
         "facebook/sam-vit-base",
-        "facebook/sam-vit-large",
-        "facebook/sam-vit-huge",
+        # "facebook/sam-vit-large",
+        # "facebook/sam-vit-huge",
     ]:
         quantization_config = None
-        pt_model, processor = load_model("pt", model_id)
-        ov_model_fp32, processor = load_model("ov", model_id, "ov_fp32")
-        # ov_model_int8, processor = load_model("ov", model_id, "int8", OVWeightQuantizationConfig(bits=8))
+        # pt_model, processor = load_model("pt", model_id)
+        # ov_model_fp32, processor = load_model("ov", model_id, "ov_fp32")
+        # ov_model_int8, processor = load_model("ov", model_id, "ov_w_int8", OVWeightQuantizationConfig(bits=8))
+        ov_model_int8, processor = load_model(
+            "ov", model_id, "ov_ve-w-int8", OVPipelineQuantizationConfig(
+                {
+                    "vision_encoder_model": OVWeightQuantizationConfig(bits=8),
+                    # "prompt_encoder_mask_decoder_model": OVWeightQuantizationConfig(bits=8),
+                },
+            )
+        )
 
         # demo_prediction(pt_model, processor, SAVE_DIR / "pt.png")
         # demo_prediction(ov_model_fp32, processor, SAVE_DIR / "ov_fp32.png")
         # demo_prediction(ov_model_int8, processor, SAVE_DIR / "ov_int8.png")
 
-        validate_on_dataset(pt_model, processor, dataset_size=100)
-        validate_on_dataset(ov_model_fp32, processor, dataset_size=100)
-        # validate_on_dataset(ov_model_int8, processor, dataset_size=10)
+        # validate_on_dataset(pt_model, processor, dataset_size=100)
+        # validate_on_dataset(ov_model_fp32, processor, dataset_size=100)
+        validate_on_dataset(ov_model_int8, processor, dataset_size=100)
