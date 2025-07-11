@@ -297,7 +297,7 @@ def infer_library_from_model(
             cache_dir=cache_dir,
             token=token,
         )
-    elif type(model) == type:
+    elif type(model) is type:
         library_name = _infer_library_from_model_or_model_class(model_class=model)
     else:
         library_name = _infer_library_from_model_or_model_class(model=model)
