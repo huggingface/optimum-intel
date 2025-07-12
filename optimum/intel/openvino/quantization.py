@@ -54,7 +54,6 @@ from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
-    is_datasets_version,
     is_diffusers_available,
 )
 from ..utils.modeling_utils import get_model_device
@@ -301,7 +300,6 @@ class OVCalibrationDatasetBuilder:
                     dataset_metadata["id"],
                     num_samples=config.num_samples,
                     dataset_split=dataset_metadata["split"],
-                    trust_remote_code=config.trust_remote_code,
                 )
             elif isinstance(self.model, _OVModelForWhisper):
                 dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
@@ -309,10 +307,10 @@ class OVCalibrationDatasetBuilder:
                     config,
                     dataset_metadata["id"],
                     num_samples=config.num_samples,  # This is an upper bound on how many audios are needed
-                    dataset_config_name=dataset_metadata["name"],
                     dataset_split=dataset_metadata["split"],
-                    trust_remote_code=config.trust_remote_code,
                     streaming=dataset_metadata["streaming"],
+                    data_dir=dataset_metadata.get("data_dir", None),
+                    revision=dataset_metadata.get("revision", None),
                 )
             elif isinstance(self.model, OVModelForZeroShotImageClassification):
                 dataset_metadata = PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS[config.dataset]
@@ -321,7 +319,6 @@ class OVCalibrationDatasetBuilder:
                     dataset_metadata["id"],
                     num_samples=None,
                     dataset_split=dataset_metadata["split"],
-                    trust_remote_code=config.trust_remote_code,
                     streaming=dataset_metadata["streaming"],
                 )
             else:
@@ -355,7 +352,6 @@ class OVCalibrationDatasetBuilder:
                     num_samples=None,
                     dataset_config_name=dataset_metadata["name"],
                     dataset_split=dataset_metadata["split"],
-                    trust_remote_code=config.trust_remote_code,
                     streaming=dataset_metadata["streaming"],
                 )
             elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
@@ -379,11 +375,11 @@ class OVCalibrationDatasetBuilder:
         preprocess_batch: bool = True,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        trust_remote_code: bool = False,
         streaming: bool = False,
         batch_size: Optional[int] = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
+        **dataset_kwargs,
     ) -> OVCalibrationDataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -409,10 +405,6 @@ class OVCalibrationDatasetBuilder:
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
-            trust_remote_code (`bool`, defaults to `False`):
-                Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
-                should only be set to `True` for repositories you trust and in which you have read the code, as it will
-                execute code present on the Hub on your local machine.
             streaming (`bool`, defaults to `False`):
                 Whether to load dataset in streaming mode.
             batch_size (`int`, defaults to 1):
@@ -437,8 +429,8 @@ class OVCalibrationDatasetBuilder:
             preprocess_batch,
             token,
             cache_dir,
-            trust_remote_code,
             streaming,
+            **dataset_kwargs,
         )
 
         return self.build_from_dataset(quantization_config, dataset, batch_size, data_collator, remove_unused_columns)
@@ -541,8 +533,8 @@ class OVCalibrationDatasetBuilder:
         preprocess_batch: bool = True,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        trust_remote_code: bool = False,
         streaming: bool = False,
+        **dataset_kwargs,
     ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -566,10 +558,6 @@ class OVCalibrationDatasetBuilder:
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
-            trust_remote_code (`bool`, defaults to `False`):
-                Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
-                should only be set to `True` for repositories you trust and in which you have read the code, as it will
-                execute code present on the Hub on your local machine.
             streaming (`bool`, defaults to `False`):
                 Whether to load dataset in streaming mode.
         Returns:
@@ -581,14 +569,13 @@ class OVCalibrationDatasetBuilder:
         from datasets import load_dataset
 
         datasets_kwargs = {
+            **dataset_kwargs,
             "name": dataset_config_name,
             "split": dataset_split,
             "token": token,
             "cache_dir": cache_dir,
             "streaming": streaming,
         }
-        if is_datasets_version(">=", "2.20.0"):
-            datasets_kwargs["trust_remote_code"] = trust_remote_code
 
         dataset = load_dataset(dataset_name, **datasets_kwargs)
         dataset = dataset.shuffle(seed=self.seed)
@@ -1534,8 +1521,8 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_batch: bool = True,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        trust_remote_code: bool = False,
         streaming: bool = False,
+        **dataset_kwargs,
     ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -1559,10 +1546,6 @@ class OVQuantizer(OptimumQuantizer):
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
-            trust_remote_code (`bool`, defaults to `False`):
-                Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
-                should only be set to `True` for repositories you trust and in which you have read the code, as it will
-                execute code present on the Hub on your local machine.
             streaming (`bool`, defaults to `False`):
                 Whether to load dataset in streaming mode.
         Returns:
@@ -1586,8 +1569,8 @@ class OVQuantizer(OptimumQuantizer):
             preprocess_batch,
             token,
             cache_dir,
-            trust_remote_code,
             streaming,
+            **dataset_kwargs,
         )
 
 

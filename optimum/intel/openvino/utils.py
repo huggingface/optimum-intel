@@ -189,9 +189,10 @@ PREDEFINED_VISUAL_LM_DATASETS = {
 PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
     "librispeech": {
         "id": "openslr/librispeech_asr",
-        "name": "clean",
+        "data_dir": "clean",
         "split": "validation",
         "streaming": True,
+        "revision": "refs/convert/parquet",
     }
 }
 
