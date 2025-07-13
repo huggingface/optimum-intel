@@ -1368,10 +1368,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
-        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
-            # does not match reference output due to unstable computation for tiny mamba models
-            return
-
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
         if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
             self.skipTest("Incompatible modeling code")
@@ -1567,9 +1563,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
-        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
-            pytest.skip(f"Skipping unsupported architecture: {model_arch}")
-
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:

@@ -6472,13 +6472,12 @@ class ConvSequenceTransform(torch.nn.Module):
         self, conv_state, new_conv_state: torch.Tensor, cache_position: torch.LongTensor
     ) -> torch.Tensor:
         conv_state_1 = conv_state.roll(shifts=-1, dims=-1)
-        upd_conv_state = conv_state_1.scatter(2, cache_position, new_conv_state)
-        return upd_conv_state
+        conv_state_1[:, :, cache_position] = new_conv_state.to(device=conv_state.device, dtype=conv_state.dtype)
+        return conv_state_1
 
     def get_positions(self, conv_state, cache_position):
         cache_position_clamped = cache_position.clamp(0, self.conv_kernel_size - 1)
-        positions = cache_position_clamped.expand(conv_state.shape[0], conv_state.shape[1], -1)
-        return positions
+        return cache_position_clamped
 
     def forward(self, hidden_states, cache_position, conv_state):
         pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (
@@ -6491,22 +6490,27 @@ class ConvSequenceTransform(torch.nn.Module):
         upd_cache_position = self.get_positions(conv_state, cache_position)
         upd_conv_state = self.update_conv_state(conv_state, new_conv_state, upd_cache_position)
 
-        # Compute both versions of hidden_states
-        full_kernel_applied = self.conv1d(hidden_states)[:, :, : hidden_states.shape[-1]]
-        manual_conv_applied = torch.sum(upd_conv_state * self.conv1d.weight[:, 0, :], dim=-1)
+        # compute both versions of hidden_states
+        # 1. cache_position.shape[0] == self.conv_kernel_size, prefill step
+        prefill_kernel_applied = self.conv1d(hidden_states)[:, :, : hidden_states.shape[-1]]
+
+        # the second version
+        # 2. re-compute conv_states for decoding step
+        new_upd_conv_state = upd_conv_state * self.conv1d.weight[:, 0, :]
+        B, C, K = new_upd_conv_state.shape
+        weight = torch.ones(C, 1, K, device=new_upd_conv_state.device, dtype=new_upd_conv_state.dtype)
+        manual_conv_applied = torch.nn.functional.conv1d(new_upd_conv_state, weight, groups=C)
+        manual_conv_applied = manual_conv_applied.squeeze(2)
         if self.use_conv_bias:
             manual_conv_applied = manual_conv_applied + self.conv_bias
-        manual_conv_applied = manual_conv_applied.unsqueeze(-1)
+        decoder_kernel_applied = manual_conv_applied.unsqueeze(-1)
 
         # Build a mask for selecting the correct result based on kernel size
         is_full = cache_position.shape[0] == self.conv_kernel_size
         is_full = torch.tensor(is_full, dtype=hidden_states.dtype, device=hidden_states.device)
 
-        # Reshape for broadcasting
-        is_full = is_full.view(1, 1, 1)
-
         # Select the correct result
-        hidden_states = is_full * full_kernel_applied + (1 - is_full) * manual_conv_applied
+        hidden_states = is_full * prefill_kernel_applied + (1 - is_full) * decoder_kernel_applied
 
         # Apply activation
         hidden_states = self.act(hidden_states)
@@ -6520,12 +6524,13 @@ class SelectiveScan(torch.nn.Module):
         # A - [intermediate_size, ssm_state_size]
         # B [batch, seq_len, ssm_state_size]
         # u, hidden states - [batch, seq_len, intermediate_size]
-        dA = torch.einsum("bld,dn->bldn", dt, A)
-        dB_u = torch.einsum("bld,bld,bln->bldn", dt, u, B)
+        dA = dt.unsqueeze(-1) * A
+        dB_u = dt * u  # shape: (b, l, d)
+        dB_u = dB_u.unsqueeze(-1) * B.unsqueeze(2)  # (b, l, d, 1) * (b, l, 1, n) => (b, l, d, n)
         dA_cumsum = torch.nn.functional.pad(dA[:, 1:], (0, 0, 0, 0, 0, 1)).flip(1).cumsum(1).exp().flip(1)
         x = dB_u * dA_cumsum + (ssm.unsqueeze(1) * dA[:, :1].exp())
         x = x.cumsum(1) / (dA_cumsum + 1e-12)
-        y = torch.einsum("bldn,bln->bld", x, C)
+        y = (x * C.unsqueeze(2)).sum(dim=-1)
         return y + u * D, x[:, -1, :, :]
 
 

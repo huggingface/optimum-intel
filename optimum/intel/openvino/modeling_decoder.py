@@ -154,7 +154,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self.is_dynamic = True
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
-        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
+        self.use_cache = self._has_cache_inputs(model) or model_has_sinks
         stateful = kwargs.pop("stateful", None)  # stateful model only if it is converted with stateful=True
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
@@ -213,6 +213,10 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
         if not self._compile_only and enable_compilation:
             self.compile()
+
+    @staticmethod
+    def _has_cache_inputs(model: openvino.Model) -> bool:
+        return any("past_key_values" in key.get_any_name() for key in model.inputs)
 
     @staticmethod
     def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
@@ -1172,18 +1176,16 @@ class OVMambaForCausalLM(OVModelForCausalLM):
             **kwargs,
         )
 
-        def has_cache_inputs(model):
-            return any(
-                "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
-            )
-
-        model_has_sinks = model_has_state(self.model)
-        self.use_cache = has_cache_inputs(model) or model_has_sinks
-
         self.ssm_cache_input_names = [key for key in self.input_names if "cache_params.past.ssm" in key]
         self.conv_cache_input_names = [key for key in self.input_names if "cache_params.past.conv" in key]
         self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
         self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
+
+    @staticmethod
+    def _has_cache_inputs(model: openvino.Model) -> bool:
+        return any(
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
+        )
 
     def forward(
         self,
@@ -1206,9 +1208,10 @@ class OVMambaForCausalLM(OVModelForCausalLM):
                 attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs["attention_mask"] = attention_mask
 
-        if not self.stateful:
-            if cache_params is None and self.ssm_cache_input_names and self.conv_cache_input_names:
+        if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
+            if cache_params is None:
                 cache_params = OVMambaCache(self.config, input_ids.shape[0])
+
             ssm_cache = cache_params.ssm_states
             conv_cache = cache_params.conv_states
 
@@ -1216,18 +1219,27 @@ class OVMambaForCausalLM(OVModelForCausalLM):
             inputs.update(zip(self.conv_cache_input_names, conv_cache))
         else:
             if cache_params is None:
-                # This is the first iteration in a sequence, reset all states
+                # this is prefill step, reset all states
                 if self.request is not None:
                     self.request.reset_state()
                 self._past_length = 0
 
-        ssm_states, conv_states = [], []
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
         if self.stateful:
             self._past_length += input_ids.shape[1]
+            num_states = len(self.request.query_state()) // 2
+            ssm_states = [None] * num_states
+            conv_states = [None] * num_states
+            for state in self.request.query_state():
+                if "cache_params.past.ssm" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    ssm_states[idx] = state.state.data
+                elif "cache_params.past.conv" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    conv_states[idx] = state.state.data
         else:
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
