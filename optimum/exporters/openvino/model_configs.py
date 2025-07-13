@@ -4412,7 +4412,7 @@ class MambaCacheDummyInputGenerator(DummyInputGenerator):
 
 
 @register_in_tasks_manager(
-    "falcon-mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "falcon_mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager("mamba", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MambaOpenVINOConfig(TextDecoderOnnxConfig):
