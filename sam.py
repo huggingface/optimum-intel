@@ -3,19 +3,22 @@ from pathlib import Path
 
 import aiohttp
 import numpy as np
-import requests
-from PIL import Image
+import torch
 from datasets import load_dataset
 from matplotlib import pyplot as plt
-from scipy.ndimage import center_of_mass
 from tqdm import tqdm
 from transformers import SamModel, SamProcessor
 
-from optimum.intel import OVWeightQuantizationConfig, OVPipelineQuantizationConfig
+from optimum.intel import OVPipelineQuantizationConfig, OVQuantizationConfig, OVWeightQuantizationConfig
 from optimum.intel.openvino import OVSamModel
 
 
+# DEVICE = "cpu"
+# DEVICE = "cuda"
+DEVICE = "mps"
+
 SAVE_DIR = Path("sam")
+
 
 def show_mask(mask, ax, random_color=False):
     if random_color:
@@ -58,7 +61,7 @@ def load_model(backend, model_id, label=None, quantization_config=None):
         model = None
         try:
             model = OVSamModel.from_pretrained(load_dir)
-        except Exception as e:
+        except Exception:
             pass
         if model is None:
             model = OVSamModel.from_pretrained(
@@ -66,11 +69,9 @@ def load_model(backend, model_id, label=None, quantization_config=None):
                 load_in_8bit=False,
                 quantization_config=quantization_config,
             )
-            model.save_pretrained(load_dir)
+            # model.save_pretrained(load_dir)
     else:
-        device = "cuda"
-        # device = "cpu"
-        model = SamModel.from_pretrained(model_id).to(device)
+        model = SamModel.from_pretrained(model_id).to(DEVICE)
     processor = SamProcessor.from_pretrained(model_id)
 
     return model, processor
@@ -80,6 +81,8 @@ def infer_model(model, processor: SamProcessor, image, input_points=None, input_
     inputs = processor(
         image, input_points=input_points, input_boxes=input_boxes, input_labels=input_labels, return_tensors="pt"
     )
+    # Convert float64 to float32:
+    inputs = {k: v.to(torch.float32) if v.dtype == torch.float64 else v for k, v in inputs.items()}
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
     # outputs = model(**inputs, multimask_output=False)
@@ -99,8 +102,11 @@ def demo_prediction(model, processor, save_filename):
     # input_points = [[[450, 600]]]
 
     dataset = load_dataset(
-        "scene_parse_150", "instance_segmentation", split="validation",
-        trust_remote_code=True, storage_options={'client_kwargs': {'timeout': aiohttp.ClientTimeout(total=3600)}}
+        "scene_parse_150",
+        "instance_segmentation",
+        split="validation",
+        revision="refs/pr/4",
+        storage_options={"client_kwargs": {"timeout": aiohttp.ClientTimeout(total=3600)}},
     )
     it = 2
     image = dataset[it]["image"]
@@ -144,10 +150,14 @@ def demo_prediction(model, processor, save_filename):
     plt.cla()
     plt.clf()
 
+
 def validate_on_dataset(model, processor, dataset_size):
     dataset = load_dataset(
-        "scene_parse_150", "instance_segmentation", split="validation",
-        trust_remote_code=True, storage_options={'client_kwargs': {'timeout': aiohttp.ClientTimeout(total=3600)}}
+        "scene_parse_150",
+        "instance_segmentation",
+        split="validation",
+        revision="refs/pr/4",
+        storage_options={"client_kwargs": {"timeout": aiohttp.ClientTimeout(total=3600)}},
     )
     dataset = dataset.shuffle(seed=0)
 
@@ -191,6 +201,7 @@ def validate_on_dataset(model, processor, dataset_size):
     print(f"Mean IoU over {len(iou_scores)} masks: {mean_iou:.4f}")
     return mean_iou
 
+
 if __name__ == "__main__":
     model_id = "facebook/sam-vit-base"
     for model_id in [
@@ -199,22 +210,55 @@ if __name__ == "__main__":
         # "facebook/sam-vit-huge",
     ]:
         quantization_config = None
-        # pt_model, processor = load_model("pt", model_id)
-        # ov_model_fp32, processor = load_model("ov", model_id, "ov_fp32")
-        # ov_model_int8, processor = load_model("ov", model_id, "ov_w_int8", OVWeightQuantizationConfig(bits=8))
-        ov_model_int8, processor = load_model(
-            "ov", model_id, "ov_ve-w-int8", OVPipelineQuantizationConfig(
-                {
-                    "vision_encoder_model": OVWeightQuantizationConfig(bits=8),
-                    # "prompt_encoder_mask_decoder_model": OVWeightQuantizationConfig(bits=8),
-                },
-            )
-        )
+        pt_model, processor = load_model("pt", model_id)
+        # ov_model, processor = load_model("ov", model_id, "ov_fp32")
+        # ov_model, processor = load_model("ov", model_id, "ov_w_int8", OVWeightQuantizationConfig(bits=8))
+        # ov_model, processor = load_model(
+        #     "ov", model_id, "ov_ve-w-int8", OVPipelineQuantizationConfig(
+        #         {
+        #             "vision_encoder": OVWeightQuantizationConfig(bits=8),
+        #             "prompt_encoder_mask_decoder": OVQuantizationConfig(
+        #                 bits=8,
+        #                 ignored_scope={
+        #                     "patterns": [
+        #                         # "^__module\\.model\\.mask_decoder\\.output_hypernetworks_mlps",
+        #                         # "^__module\\.model\\.mask_decoder\\.transformer\\.final_attn_token_to_image",
+        #                         # "^__module\\.model\\.mask_decoder\\.upscale_layer_norm",
+        #                         "^__module\\.model\\.prompt_encoder\\.shared_embedding",
+        #                         "^__module\\.model\\.mask_decoder\\.transformer"
+        #                     ]
+        #                 }
+        #             ),
+        #         },
+        #     )
+        # )
+        # ov_model, processor = load_model(
+        #     "ov",
+        #     model_id,
+        #     "ov_ve-wa-int8",
+        #     OVPipelineQuantizationConfig(
+        #         {
+        #             "vision_encoder": OVQuantizationConfig(bits=8),
+        #             "prompt_encoder_mask_decoder": OVQuantizationConfig(
+        #                 bits=8,
+        #                 ignored_scope={
+        #                     "patterns": [
+        #                         # "^__module\\.model\\.mask_decoder\\.output_hypernetworks_mlps",
+        #                         # "^__module\\.model\\.mask_decoder\\.transformer\\.final_attn_token_to_image",
+        #                         # "^__module\\.model\\.mask_decoder\\.upscale_layer_norm",
+        #                         "^__module\\.model\\.prompt_encoder\\.shared_embedding",
+        #                         "^__module\\.model\\.mask_decoder\\.transformer"
+        #                     ]
+        #                 }
+        #             ),
+        #         },
+        #         dataset="scene_parse",
+        #         num_samples=4,
+        #     ),
+        # )
 
         # demo_prediction(pt_model, processor, SAVE_DIR / "pt.png")
-        # demo_prediction(ov_model_fp32, processor, SAVE_DIR / "ov_fp32.png")
-        # demo_prediction(ov_model_int8, processor, SAVE_DIR / "ov_int8.png")
+        # demo_prediction(ov_model, processor, SAVE_DIR / "ov_int8.png")
 
-        # validate_on_dataset(pt_model, processor, dataset_size=100)
-        # validate_on_dataset(ov_model_fp32, processor, dataset_size=100)
-        validate_on_dataset(ov_model_int8, processor, dataset_size=100)
+        validate_on_dataset(pt_model, processor, dataset_size=1)
+        # validate_on_dataset(ov_model, processor, dataset_size=1)

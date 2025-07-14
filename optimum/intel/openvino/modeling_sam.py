@@ -13,9 +13,9 @@ from transformers import AutoConfig, PretrainedConfig, SamModel
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
-from .configuration import OVQuantizationConfigBase
-from .. import OVConfig
 from ...exporters.openvino.utils import save_config
+from .. import OVConfig
+from .configuration import OVQuantizationConfigBase
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
@@ -92,12 +92,10 @@ class OVSamModel(OVBaseModel):
         self._device = device.upper()
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.vision_encoder_model = vision_encoder_model
-        self.prompt_encoder_mask_decoder_model = prompt_encoder_mask_decoder_model
         self._compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
-        self.vision_encoder = OVSamVisionEncoder(self.vision_encoder_model, self)
-        self.prompt_encoder_mask_decoder = OVSamPromptEncoder(self.prompt_encoder_mask_decoder_model, self)
+        self.vision_encoder = OVSamVisionEncoder(vision_encoder_model, self)
+        self.prompt_encoder_mask_decoder = OVSamPromptEncoder(prompt_encoder_mask_decoder_model, self)
 
         if dynamic_shapes and not self.is_dynamic and not self._compile_only:
             self.reshape()
@@ -144,8 +142,8 @@ class OVSamModel(OVBaseModel):
         """
         src_models = self.ov_submodels
         dst_file_names = {
-            "vision_encoder_model": OV_VISION_ENCODER_MODEL_NAME,
-            "prompt_encoder_mask_decoder_model": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
+            "vision_encoder": OV_VISION_ENCODER_MODEL_NAME,
+            "prompt_encoder_mask_decoder": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
         }
 
         for name in self._ov_submodel_names:
@@ -302,8 +300,26 @@ class OVSamModel(OVBaseModel):
 
     @property
     def _ov_submodel_names(self):
-        model_names = ["vision_encoder_model", "prompt_encoder_mask_decoder_model"]
+        model_names = ["vision_encoder", "prompt_encoder_mask_decoder"]
         return model_names
+
+    @property
+    def ov_submodels(self) -> Dict[str, ov.Model]:
+        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
+
+    @property
+    def vision_encoder_model(self) -> ov.Model:
+        logger.warning(
+            "Access to the `vision_encoder_model` attribute is deprecated and will be removed in optimum-intel v1.25, please use `vision_encoder.model` instead"
+        )
+        return self.vision_encoder.model
+
+    @property
+    def prompt_encoder_mask_decoder_model(self) -> ov.Model:
+        logger.warning(
+            "Access to the `prompt_encoder_mask_decoder_model` attribute is deprecated and will be removed in optimum-intel v1.25, please use `prompt_encoder_mask_decoder.model` instead"
+        )
+        return self.prompt_encoder_mask_decoder.model
 
     def reshape(self, batch_size: int = -1, point_batch_size: int = -1, num_points_per_image: int = -1):
         """
@@ -322,19 +338,19 @@ class OVSamModel(OVBaseModel):
                 "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         vision_encoder_shapes = {}
-        for inputs in self.vision_encoder_model.inputs:
+        for inputs in self.vision_encoder.model.inputs:
             vision_encoder_shapes[inputs] = inputs.get_partial_shape()
             vision_encoder_shapes[inputs][0] = batch_size
-        self.vision_encoder_model.reshape(vision_encoder_shapes)
+        self.vision_encoder.model.reshape(vision_encoder_shapes)
         self.vision_encoder.request = None
         mask_decoder_shapes = {}
-        for inputs in self.prompt_encoder_mask_decoder_model.inputs:
+        for inputs in self.prompt_encoder_mask_decoder.model.inputs:
             mask_decoder_shapes[inputs] = inputs.get_partial_shape()
             mask_decoder_shapes[inputs][0] = batch_size
             if inputs.get_any_name() in ["input_points", "input_labels"]:
                 mask_decoder_shapes[inputs][1] = point_batch_size
                 mask_decoder_shapes[inputs][2] = num_points_per_image
-        self.prompt_encoder_mask_decoder_model.reshape(mask_decoder_shapes)
+        self.prompt_encoder_mask_decoder.model.reshape(mask_decoder_shapes)
         self.prompt_encoder_mask_decoder.request = None
         return self
 
@@ -416,6 +432,6 @@ class OVSamModel(OVBaseModel):
 
     @property
     def is_dynamic(self):
-        return model_has_dynamic_inputs(self.vision_encoder_model) or model_has_dynamic_inputs(
-            self.prompt_encoder_mask_decoder_model
+        return model_has_dynamic_inputs(self.vision_encoder.model) or model_has_dynamic_inputs(
+            self.prompt_encoder_mask_decoder.model
         )

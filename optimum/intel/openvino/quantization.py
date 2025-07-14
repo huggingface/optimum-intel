@@ -72,6 +72,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     PREDEFINED_LANGUAGE_DATASETS,
+    PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS,
@@ -272,6 +273,7 @@ class OVCalibrationDatasetBuilder:
             OVModelForSeq2SeqLM,
             OVModelForVisualCausalLM,
             OVModelForZeroShotImageClassification,
+            OVSamModel,
             OVSentenceTransformer,
         )
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
@@ -285,7 +287,8 @@ class OVCalibrationDatasetBuilder:
         if isinstance(self.model, OVModelForCausalLM):
             return self._prepare_causal_lm_calibration_data(config)
         elif isinstance(
-            self.model, (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification)
+            self.model,
+            (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification, OVSamModel),
         ):
             if config.processor is None:
                 raise ValueError(
@@ -320,6 +323,16 @@ class OVCalibrationDatasetBuilder:
                     num_samples=None,
                     dataset_split=dataset_metadata["split"],
                     streaming=dataset_metadata["streaming"],
+                )
+            elif isinstance(self.model, OVSamModel):
+                dataset_metadata = PREDEFINED_SAM_DATASETS[config.dataset]
+                return self.build_from_dataset_name(
+                    config,
+                    dataset_metadata["id"],
+                    dataset_config_name=dataset_metadata["name"],
+                    dataset_split=dataset_metadata["split"],
+                    streaming=dataset_metadata["streaming"],
+                    revision=dataset_metadata["revision"],
                 )
             else:
                 raise Exception
@@ -465,6 +478,7 @@ class OVCalibrationDatasetBuilder:
             OVModelForSeq2SeqLM,
             OVModelForVisualCausalLM,
             OVModelForZeroShotImageClassification,
+            OVSamModel,
             OVSentenceTransformer,
         )
         from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
@@ -489,6 +503,7 @@ class OVCalibrationDatasetBuilder:
                 OVModelForZeroShotImageClassification,
                 OVSentenceTransformer,
                 OVModelForSeq2SeqLM,
+                OVSamModel,
             ),
         ) or (is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)):
             # Prepare from raw dataset avoiding dataloader creation
@@ -509,6 +524,8 @@ class OVCalibrationDatasetBuilder:
                 return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, OVModelForZeroShotImageClassification):
                 return self._prepare_text_image_encoder_model_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, OVSamModel):
+                return self._prepare_sam_dataset(quantization_config, dataset)
             else:
                 raise RuntimeError("Unsupported model type for calibration dataset collection.")
         else:
@@ -1015,6 +1032,67 @@ class OVCalibrationDatasetBuilder:
             self.model.request = self.model.request.request
 
         return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
+
+    def _prepare_sam_dataset(self, config: OVQuantizationConfigBase, dataset: "Dataset") -> OVCalibrationDataset:
+        def generate_inputs(rng: np.random.Generator, instances_mask: np.ndarray):
+            """
+            Sample random object and background points based on a ground truth annotation.
+            """
+            rnd_instance_id = rng.integers(int(instances_mask.max())) + 1
+            instance_mask = np.equal(instances_mask, rnd_instance_id)
+            background_mask = np.logical_not(instance_mask)
+
+            sampled_points = []
+            sampled_labels = []
+            for label, mask in zip([1, -1], [instances_mask, background_mask]):
+                coords = np.argwhere(mask)
+                n_points = len(coords)
+                n_samples = int(0.1 * rng.random() * np.sqrt(n_points)) + 1
+                points = coords[rng.choice(n_points, size=n_samples, replace=False)]
+                points = [[x, y] for y, x in points]
+                sampled_labels.extend([label] * n_samples)
+                sampled_points.extend(points)
+
+            return sampled_points, sampled_labels
+
+        from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
+
+        models: Dict[str, Union[OVSamVisionEncoder, OVSamPromptEncoder]] = {}
+        collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
+        for submodel_name in self.model._ov_submodel_names:
+            ov_component: Union[OVSamVisionEncoder, OVSamPromptEncoder] = getattr(self.model, submodel_name)
+            models[submodel_name] = ov_component
+            collected_inputs[submodel_name] = []
+            ov_component._compile()
+            ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name])
+        try:
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+
+            rng = np.random.default_rng(self.seed)
+
+            num_samples = config.num_samples or 32
+            pbar = tqdm(total=num_samples, desc="Collecting calibration data")
+            for item in dataset:
+                image = item["image"]
+                instances_mask = np.array(item["annotation"].convert("RGB"))[:, :, 1]
+                if instances_mask.max() == 0:
+                    continue
+                input_points, input_labels = generate_inputs(rng, instances_mask)
+                inputs = processor(
+                    image, input_points=[input_points], input_labels=[input_labels], return_tensors="pt"
+                )
+                self.model(**inputs)
+                pbar.update(1)
+                if pbar.n >= num_samples:
+                    break
+        finally:
+            for model in models.values():
+                model.request = model.request.request
+
+        for model_name in collected_inputs:
+            collected_inputs[model_name] = nncf.Dataset(collected_inputs[model_name])
+
+        return OVCalibrationDataset(collected_inputs)
 
     @staticmethod
     def _wrap_sample_as_array(

@@ -196,6 +196,16 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
     }
 }
 
+PREDEFINED_SAM_DATASETS = {
+    "scene_parse": {
+        "id": "scene_parse_150",
+        "name": "instance_segmentation",
+        "split": "train",
+        "streaming": True,
+        "revision": "refs/pr/4",
+    }
+}
+
 
 NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
 
