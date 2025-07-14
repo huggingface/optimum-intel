@@ -29,6 +29,7 @@ jobs:
             "optimum_openvino_inference.ipynb",
             "question_answering_quantization.ipynb",
             "sentence_transformer_quantization.ipynb",
+            "visual_language_quantization.ipynb",
             # "stable_diffusion_hybrid_quantization.ipynb", TODO: update and ran on a powerful cpu
           ]
 
@@ -45,6 +46,7 @@ jobs:
 
       - name: Install packages
         run: |
+          sudo apt-get update
           sudo apt-get install -y ffmpeg
 
       - name: Install dependencies
