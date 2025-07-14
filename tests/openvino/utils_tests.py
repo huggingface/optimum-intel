@@ -321,7 +321,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "clip": {"model": 130},
     "mamba": {"model": 386},
-    "falcon-mamba": {"model": 386},
+    "falcon-mamba": {"model": 194},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
