@@ -1278,7 +1278,7 @@ class OVMambaForCausalLM(OVModelForCausalLM):
     ):
         # Overwitten -- uses `cache_params` as opposed to `past_key_values`
 
-        if use_cache:
+        if self.use_cache:
             # `cache_position` should have been initialized in `generate`
             if cache_position is None:
                 raise ValueError(
