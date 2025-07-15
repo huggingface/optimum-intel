@@ -4749,7 +4749,11 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.39.0", None, patch_extrnal_model=True)
 
-        if self._model.config._attn_implementation != "sdpa":
+        if is_transformers_version(">=", "4.53.0"):
+            # SDPA attention seems to not match the output of diffusers
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "eager"
+        else:
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
             if is_transformers_version("<", "4.47.0"):
@@ -4763,6 +4767,7 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         unpatch_update_causal_mask(self._model, None, True)
+
         if hasattr(self._model.config, "_orig_attn_implementation"):
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             for layer in self._model.layers:
