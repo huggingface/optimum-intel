@@ -774,7 +774,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVWeightQuantizationConfig(bits=8))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVWeightQuantizationConfig(bits=8)))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -786,7 +786,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVWeightQuantizationConfig(bits=4, dataset=\'coco\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVWeightQuantizationConfig(bits=4, dataset=\'coco\')))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -810,7 +810,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVQuantizationConfig(bits=8, dataset=\'coco\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVQuantizationConfig(bits=8, dataset=\'coco\')))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
