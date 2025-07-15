@@ -6535,7 +6535,7 @@ class SelectiveScan(torch.nn.Module):
 
 
 # The original implementation of this forward method can be found at:
-# https://github.com/huggingface/transformers/blob/main/src/transformers/models/mamba/modeling_mamba.py#L233
+# https://github.com/huggingface/transformers/blob/v4.53.2/src/transformers/models/mamba/modeling_mamba.py#L233
 #
 # This patch modifies the method to vectorize the selective scan procedure, enabling correct graph tracing
 def mamba_mixer_forward(
