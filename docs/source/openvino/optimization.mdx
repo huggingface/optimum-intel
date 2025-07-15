@@ -770,6 +770,99 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
         </tr>
         <tr>
+            <td style="text-align: center; vertical-align: middle;">feature-extraction<br>(OVSamModel)</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m facebook/sam-vit-base --weight-format int8 ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m facebook/sam-vit-base --weight-format int4 --dataset coco ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'coco\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m facebook/sam-vit-base --quant-mode int8 --dataset coco ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'coco\')).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m facebook/sam-vit-base --quant-mode nf4_f8e4m3 --dataset coco ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'coco\'))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+        </tr>
+        <tr>
             <td style="text-align: center; vertical-align: middle;">text-to-audio<br>(OVModelForTextToSpeechSeq2Seq)</td>
             <td style="text-align: center; vertical-align: middle;">✅</td>
             <td style="text-align: center; vertical-align: middle;">
