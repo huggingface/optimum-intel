@@ -197,12 +197,10 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
 }
 
 PREDEFINED_SAM_DATASETS = {
-    "scene_parse": {
-        "id": "scene_parse_150",
-        "name": "instance_segmentation",
+    "coco": {
+        "id": "detection-datasets/coco",
         "split": "train",
         "streaming": True,
-        "revision": "refs/pr/4",
     }
 }
 

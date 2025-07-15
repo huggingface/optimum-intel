@@ -85,6 +85,7 @@ class OVSamModel(OVBaseModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVQuantizationConfigBase, Dict] = None,
         **kwargs,
     ):
         self.config = config
@@ -93,6 +94,12 @@ class OVSamModel(OVBaseModel):
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self._compile_only = kwargs.get("compile_only", False)
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
         enable_compilation = kwargs.get("compile", True)
         self.vision_encoder = OVSamVisionEncoder(vision_encoder_model, self)
         self.prompt_encoder_mask_decoder = OVSamPromptEncoder(prompt_encoder_mask_decoder_model, self)
@@ -151,6 +158,7 @@ class OVSamModel(OVBaseModel):
             dst_file_name = dst_file_names[name]
             dst_path = os.path.join(save_directory, dst_file_name)
             ov.save_model(model, dst_path, compress_to_fp16=False)
+        self._save_openvino_config(save_directory)
 
     @classmethod
     def _from_pretrained(

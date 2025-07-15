@@ -14,8 +14,8 @@ from optimum.intel.openvino import OVSamModel
 
 
 # DEVICE = "cpu"
-# DEVICE = "cuda"
-DEVICE = "mps"
+DEVICE = "cuda"
+# DEVICE = "mps"
 
 SAVE_DIR = Path("sam")
 
@@ -69,7 +69,7 @@ def load_model(backend, model_id, label=None, quantization_config=None):
                 load_in_8bit=False,
                 quantization_config=quantization_config,
             )
-            # model.save_pretrained(load_dir)
+            model.save_pretrained(load_dir)
     else:
         model = SamModel.from_pretrained(model_id).to(DEVICE)
     processor = SamProcessor.from_pretrained(model_id)
@@ -206,59 +206,64 @@ if __name__ == "__main__":
     model_id = "facebook/sam-vit-base"
     for model_id in [
         "facebook/sam-vit-base",
-        # "facebook/sam-vit-large",
-        # "facebook/sam-vit-huge",
+        "facebook/sam-vit-large",
+        "facebook/sam-vit-huge",
     ]:
         quantization_config = None
         pt_model, processor = load_model("pt", model_id)
-        # ov_model, processor = load_model("ov", model_id, "ov_fp32")
-        # ov_model, processor = load_model("ov", model_id, "ov_w_int8", OVWeightQuantizationConfig(bits=8))
-        # ov_model, processor = load_model(
-        #     "ov", model_id, "ov_ve-w-int8", OVPipelineQuantizationConfig(
-        #         {
-        #             "vision_encoder": OVWeightQuantizationConfig(bits=8),
-        #             "prompt_encoder_mask_decoder": OVQuantizationConfig(
-        #                 bits=8,
-        #                 ignored_scope={
-        #                     "patterns": [
-        #                         # "^__module\\.model\\.mask_decoder\\.output_hypernetworks_mlps",
-        #                         # "^__module\\.model\\.mask_decoder\\.transformer\\.final_attn_token_to_image",
-        #                         # "^__module\\.model\\.mask_decoder\\.upscale_layer_norm",
-        #                         "^__module\\.model\\.prompt_encoder\\.shared_embedding",
-        #                         "^__module\\.model\\.mask_decoder\\.transformer"
-        #                     ]
-        #                 }
-        #             ),
-        #         },
-        #     )
-        # )
-        # ov_model, processor = load_model(
-        #     "ov",
-        #     model_id,
-        #     "ov_ve-wa-int8",
-        #     OVPipelineQuantizationConfig(
-        #         {
-        #             "vision_encoder": OVQuantizationConfig(bits=8),
-        #             "prompt_encoder_mask_decoder": OVQuantizationConfig(
-        #                 bits=8,
-        #                 ignored_scope={
-        #                     "patterns": [
-        #                         # "^__module\\.model\\.mask_decoder\\.output_hypernetworks_mlps",
-        #                         # "^__module\\.model\\.mask_decoder\\.transformer\\.final_attn_token_to_image",
-        #                         # "^__module\\.model\\.mask_decoder\\.upscale_layer_norm",
-        #                         "^__module\\.model\\.prompt_encoder\\.shared_embedding",
-        #                         "^__module\\.model\\.mask_decoder\\.transformer"
-        #                     ]
-        #                 }
-        #             ),
-        #         },
-        #         dataset="scene_parse",
-        #         num_samples=4,
-        #     ),
-        # )
+        ov_model, processor = load_model("ov", model_id, "ov_fp32")
+        ov_model_w_int8, processor = load_model(
+            "ov",
+            model_id,
+            "ov_ve-w-int8",
+            OVPipelineQuantizationConfig(
+                {
+                    "vision_encoder": OVWeightQuantizationConfig(bits=8),
+                    # "prompt_encoder_mask_decoder": OVQuantizationConfig(
+                    #     bits=8,
+                    #     ignored_scope={
+                    #         "patterns": [
+                    #             # "^__module\\.model\\.mask_decoder\\.output_hypernetworks_mlps",
+                    #             # "^__module\\.model\\.mask_decoder\\.transformer\\.final_attn_token_to_image",
+                    #             # "^__module\\.model\\.mask_decoder\\.upscale_layer_norm",
+                    #             "^__module\\.model\\.prompt_encoder\\.shared_embedding",
+                    #             "^__module\\.model\\.mask_decoder\\.transformer"
+                    #         ]
+                    #     }
+                    # ),
+                },
+            ),
+        )
+        ov_model_wa_int8, processor = load_model(
+            "ov",
+            model_id,
+            "ov_ve-wa-int8",
+            OVPipelineQuantizationConfig(
+                {
+                    "vision_encoder": OVQuantizationConfig(bits=8),
+                    #     "prompt_encoder_mask_decoder": OVQuantizationConfig(
+                    #         bits=8,
+                    #         ignored_scope={
+                    #             "patterns": [
+                    #                 # "^__module\\.model\\.mask_decoder\\.output_hypernetworks_mlps",
+                    #                 # "^__module\\.model\\.mask_decoder\\.transformer\\.final_attn_token_to_image",
+                    #                 # "^__module\\.model\\.mask_decoder\\.upscale_layer_norm",
+                    #                 "^__module\\.model\\.prompt_encoder\\.shared_embedding",
+                    #                 "^__module\\.model\\.mask_decoder\\.transformer"
+                    #             ]
+                    #         }
+                    #     ),
+                },
+                dataset="coco",
+                num_samples=128,
+            ),
+        )
 
         # demo_prediction(pt_model, processor, SAVE_DIR / "pt.png")
         # demo_prediction(ov_model, processor, SAVE_DIR / "ov_int8.png")
 
-        validate_on_dataset(pt_model, processor, dataset_size=1)
-        # validate_on_dataset(ov_model, processor, dataset_size=1)
+        dataset_size = 100
+        validate_on_dataset(pt_model, processor, dataset_size=dataset_size)
+        validate_on_dataset(ov_model, processor, dataset_size=dataset_size)
+        validate_on_dataset(ov_model_w_int8, processor, dataset_size=dataset_size)
+        validate_on_dataset(ov_model_wa_int8, processor, dataset_size=dataset_size)

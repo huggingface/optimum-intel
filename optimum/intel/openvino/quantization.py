@@ -19,6 +19,7 @@ import os
 from collections import UserDict, deque
 from contextlib import contextmanager
 from io import BytesIO
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -329,10 +330,10 @@ class OVCalibrationDatasetBuilder:
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
-                    dataset_config_name=dataset_metadata["name"],
+                    # dataset_config_name=dataset_metadata["name"],
                     dataset_split=dataset_metadata["split"],
                     streaming=dataset_metadata["streaming"],
-                    revision=dataset_metadata["revision"],
+                    # revision=dataset_metadata["revision"],
                 )
             else:
                 raise Exception
@@ -1034,27 +1035,6 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
 
     def _prepare_sam_dataset(self, config: OVQuantizationConfigBase, dataset: "Dataset") -> OVCalibrationDataset:
-        def generate_inputs(rng: np.random.Generator, instances_mask: np.ndarray):
-            """
-            Sample random object and background points based on a ground truth annotation.
-            """
-            rnd_instance_id = rng.integers(int(instances_mask.max())) + 1
-            instance_mask = np.equal(instances_mask, rnd_instance_id)
-            background_mask = np.logical_not(instance_mask)
-
-            sampled_points = []
-            sampled_labels = []
-            for label, mask in zip([1, -1], [instances_mask, background_mask]):
-                coords = np.argwhere(mask)
-                n_points = len(coords)
-                n_samples = int(0.1 * rng.random() * np.sqrt(n_points)) + 1
-                points = coords[rng.choice(n_points, size=n_samples, replace=False)]
-                points = [[x, y] for y, x in points]
-                sampled_labels.extend([label] * n_samples)
-                sampled_points.extend(points)
-
-            return sampled_points, sampled_labels
-
         from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 
         models: Dict[str, Union[OVSamVisionEncoder, OVSamPromptEncoder]] = {}
@@ -1070,21 +1050,12 @@ class OVCalibrationDatasetBuilder:
 
             rng = np.random.default_rng(self.seed)
 
-            num_samples = config.num_samples or 32
-            pbar = tqdm(total=num_samples, desc="Collecting calibration data")
-            for item in dataset:
+            num_samples = config.num_samples or 128
+            for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
                 image = item["image"]
-                instances_mask = np.array(item["annotation"].convert("RGB"))[:, :, 1]
-                if instances_mask.max() == 0:
-                    continue
-                input_points, input_labels = generate_inputs(rng, instances_mask)
-                inputs = processor(
-                    image, input_points=[input_points], input_labels=[input_labels], return_tensors="pt"
-                )
+                input_points = [[[rng.integers(image.size[0]), rng.integers(image.size[1])]]]
+                inputs = processor(image, input_points=input_points, return_tensors="pt")
                 self.model(**inputs)
-                pbar.update(1)
-                if pbar.n >= num_samples:
-                    break
         finally:
             for model in models.values():
                 model.request = model.request.request
