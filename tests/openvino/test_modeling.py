@@ -1926,7 +1926,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SUPPORT_STATEFUL = ("t5", "mt5")
     if is_transformers_version(">=", "4.52.0"):
         SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
-        # all models are stateful on transformers main, but pegasus update is not included in 4.52 yet
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORT_STATEFUL += ("pegasus",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
