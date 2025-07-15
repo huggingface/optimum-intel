@@ -1519,6 +1519,8 @@ class OVWeightCompressionTest(unittest.TestCase):
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
+    maxDiff = None
+
     PIPELINE_QUANTIZATION_SCOPE = [
         (
             OVModelForCausalLM,
@@ -1577,6 +1579,29 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "vae_decoder": {"int8": 42},
                 "vae_encoder": {"int8": 34},
                 "text_encoder": {"int8": 64},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            False,
+            dict(
+                quantization_configs={
+                    "vision_encoder": dict(
+                        bits=8,
+                        dataset="coco",
+                        num_samples=1,
+                        weight_only=False,
+                    ),
+                }
+            ),
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 0,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 0},
             },
         ),
     ]

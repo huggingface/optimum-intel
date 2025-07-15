@@ -362,6 +362,36 @@ _DEFAULT_4BIT_WQ_CONFIG = {
 
 # Default configs for int8 full quantization
 _DEFAULT_INT8_FQ_CONFIGS = {
+    "facebook/sam-vit-base": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-large": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-huge": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
     "google-t5/t5-small": {
         "dtype": "int8",
         "dataset": "wikitext2",

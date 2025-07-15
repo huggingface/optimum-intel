@@ -1045,20 +1045,30 @@ class OVCalibrationDatasetBuilder:
             collected_inputs[submodel_name] = []
             ov_component._compile()
             ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name])
+
+        # We can avoid inferring the whole model if dataset is required only for the vision encoder model.
+        collect_only_for_vision_encoder = (
+            isinstance(config, OVPipelineQuantizationConfig)
+            and len(config.quantization_configs) == 1
+            and "vision_encoder" in config.quantization_configs
+        )
+
         try:
             processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
 
-            rng = np.random.default_rng(self.seed)
-
             num_samples = config.num_samples or 128
             for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
-                image = item["image"]
-                input_points = [[[rng.integers(image.size[0]), rng.integers(image.size[1])]]]
-                inputs = processor(image, input_points=input_points, return_tensors="pt")
-                self.model(**inputs)
+                inputs = processor(item["image"], input_points=[[[0, 0]]], return_tensors="pt")
+                if collect_only_for_vision_encoder:
+                    collected_inputs["vision_encoder"].append({"pixel_values": inputs["pixel_values"]})
+                else:
+                    self.model(**inputs)
         finally:
             for model in models.values():
                 model.request = model.request.request
+
+        if collect_only_for_vision_encoder:
+            del collected_inputs["prompt_encoder_mask_decoder"]
 
         for model_name in collected_inputs:
             collected_inputs[model_name] = nncf.Dataset(collected_inputs[model_name])
