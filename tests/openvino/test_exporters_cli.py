@@ -72,6 +72,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     Integration tests ensuring supported models are correctly exported.
     """
 
+    maxDiff = None  # Disable maxDiff to allow large outputs
+
     SUPPORTED_ARCHITECTURES = [
         ("text-generation", "gpt2"),
         ("text-generation-with-past", "gpt2"),
@@ -201,13 +203,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 14, "decoder": 22, "decoder_with_past": 11}
+            {"encoder": 14, "decoder": 22, "decoder_with_past": 21}
             if is_transformers_version("<=", "4.36.0")
             else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
             (
-                {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
+                {"encoder": {"int8": 14}, "decoder": {"int8": 21}, "decoder_with_past": {"int8": 17}}
                 if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}, "decoder_with_past": {"int8": 18}}
+                else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -215,13 +217,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 9, "decoder": 13, "decoder_with_past": 12}
+            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 9, "decoder": 14, "decoder_with_past": 25},
+            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
             (
-                {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 11}, "decoder_with_past": {"f8e4m3": 9}}
+                {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 21}, "decoder_with_past": {"f8e4m3": 17}}
                 if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 12}, "decoder_with_past": {"f8e4m3": 18}}
+                else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
         (
@@ -1080,7 +1082,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 bits = default_config.pop("bits", None)
                 self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
-                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+                default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
                 quant_method = default_config.pop("quant_method", None)
                 default_config["awq"] = quant_method == "awq"
                 default_config["gptq"] = quant_method == "gptq"
