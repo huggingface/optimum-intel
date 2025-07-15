@@ -98,7 +98,6 @@ class OVSamModel(OVBaseModel):
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
-        self._set_ov_config_parameters()
 
         enable_compilation = kwargs.get("compile", True)
         self.vision_encoder = OVSamVisionEncoder(vision_encoder_model, self)

@@ -330,10 +330,8 @@ class OVCalibrationDatasetBuilder:
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
-                    # dataset_config_name=dataset_metadata["name"],
                     dataset_split=dataset_metadata["split"],
                     streaming=dataset_metadata["streaming"],
-                    # revision=dataset_metadata["revision"],
                 )
             else:
                 raise Exception
