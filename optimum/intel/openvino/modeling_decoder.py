@@ -14,6 +14,7 @@
 import copy
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -37,6 +38,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
+from ...exporters.openvino.utils import SSM_MODELS
 from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
@@ -55,6 +57,11 @@ from .utils import (
     model_has_dynamic_inputs,
 )
 
+
+if is_transformers_version(">=", "4.43"):
+    from transformers.cache_utils import MambaCache
+else:
+    MambaCache = object
 
 if TYPE_CHECKING:
     try:
@@ -147,7 +154,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self.is_dynamic = True
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
-        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
+        self.use_cache = self._has_cache_inputs(model) or model_has_sinks
         stateful = kwargs.pop("stateful", None)  # stateful model only if it is converted with stateful=True
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
@@ -206,6 +213,10 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
         if not self._compile_only and enable_compilation:
             self.compile()
+
+    @staticmethod
+    def _has_cache_inputs(model: openvino.Model) -> bool:
+        return any("past_key_values" in key.get_any_name() for key in model.inputs)
 
     @staticmethod
     def _get_model_with_updated_pkv_precision(model: openvino.Model, pkv_precision: Type) -> openvino.Model:
@@ -399,7 +410,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
-            elif input_name.startswith("beam_idx"):
+            elif input_name.startswith("beam_idx") or input_name.startswith("cache_position"):
                 shapes[inputs][0] = -1
             else:
                 shapes[inputs][1] = -1
@@ -859,6 +870,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
+        elif model_type in SSM_MODELS:
+            init_cls = OVMambaForCausalLM
         else:
             init_cls = cls
 
@@ -1036,3 +1049,268 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return past_key_values
         else:
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
+
+
+class OVMambaCache(MambaCache):
+    """
+    Cache for mamba model which does not have attention mechanism and key value states.
+
+    Arguments:
+        config (`PretrainedConfig):
+            The configuration file defining the shape-related attributes required to initialize the static cache.
+        batch_size (`int`):
+            The batch size with which the model will be used. Note that a new instance must be instantiated if a
+            smaller batch size is used.
+        dtype (`torch.dtype`, *optional*, defaults to `torch.float16`):
+            The default `dtype` to use when initializing the layer.
+        device (`torch.device` or `str`, *optional*):
+            The device on which the cache should be initialized. Should be the same as the layer.
+        max_batch_size (`int`):
+            Maximum batch size with which the model will be used. Note that a new instance must be instantiated if a
+            smaller batch size is used.
+        conv_states (`List[torch.Tensor]`):
+            A list of convolutional state tensors for each layer, used to cache intermediate state for the convolution
+            component of the Mamba model.
+        ssm_states (`List[torch.Tensor]`):
+            A list of state-space model (SSM) state tensors for each layer, used to cache intermediate state for the
+            SSM component of the Mamba model.
+
+    """
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        batch_size: int = None,
+        dtype: torch.dtype = torch.float32,
+        device: Optional[Union[torch.device, str]] = None,
+        max_batch_size: Optional[int] = None,
+        conv_states: Optional[List[torch.Tensor]] = None,
+        ssm_states: Optional[List[torch.Tensor]] = None,
+    ):
+        self.dtype = dtype
+        self.max_batch_size = batch_size or max_batch_size
+        self.intermediate_size = config.intermediate_size
+        self.ssm_state_size = config.state_size
+        self.conv_kernel_size = config.conv_kernel
+        self.device = torch.device(device) if device is not None else torch.device("cpu")
+
+        if conv_states is not None:
+            self.conv_states = conv_states
+        else:
+            self.conv_states = []
+            for _ in range(config.num_hidden_layers):
+                conv_state: torch.Tensor = torch.zeros(
+                    self.max_batch_size, self.intermediate_size, self.conv_kernel_size, device=self.device, dtype=dtype
+                )
+                self.conv_states.append(conv_state)
+
+        if ssm_states is not None:
+            self.ssm_states = ssm_states
+        else:
+            self.ssm_states: List[torch.Tensor] = []
+            for _ in range(config.num_hidden_layers):
+                ssm_state: torch.Tensor = torch.zeros(
+                    self.max_batch_size,
+                    self.intermediate_size,
+                    self.ssm_state_size,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.ssm_states.append(ssm_state)
+
+
+@dataclass
+class MambaOutput(ModelOutput):
+    """
+    Class for the MAMBA model outputs.
+
+    Args:
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of logits at the output layer of the model.
+        cache_params (`MambaCache`):
+            The state of the model at the last time step. Can be used in a forward method with the next `input_ids` to
+            avoid providing the old `input_ids`.
+
+            Includes both the State space model state matrices after the selective scan, and the Convolutional states
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+    """
+
+    logits: Optional[torch.FloatTensor] = None
+    cache_params: Optional[OVMambaCache] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+
+
+class OVMambaForCausalLM(OVModelForCausalLM):
+    """
+    OpenVINO-based causal language model class designed to run models that include Mamba blocks.
+    This model assumes a fixed-size Mamba context for sequential computation.
+    The context for each mamba block consists of two tensors:
+    1. convolutional cache tensor - conv_states: (batch_size, hidden_dim, conv_kernel)
+    2. state-space model - ssm_states:  (batch_size, hidden_dim, num_state_features)
+    This class supports stateful and stateless inference using OpenVINO.
+    """
+
+    def __init__(
+        self,
+        model: openvino.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            model=model,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+
+        self.ssm_cache_input_names = [key for key in self.input_names if "cache_params.past.ssm" in key]
+        self.conv_cache_input_names = [key for key in self.input_names if "cache_params.past.conv" in key]
+        self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
+        self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
+
+    @staticmethod
+    def _has_cache_inputs(model: openvino.Model) -> bool:
+        return any(
+            "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
+        )
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        cache_params=None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        inputs = {"input_ids": input_ids}
+        if "cache_position" in self.input_names:
+            if cache_position is None:
+                # initialize it as for prefill stage
+                cache_position = torch.arange(0, self.config.conv_kernel)
+            inputs["cache_position"] = cache_position
+        if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                # during decoding stage it must be a tensor of ones
+                attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+            inputs["attention_mask"] = attention_mask
+
+        if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
+            if cache_params is None:
+                cache_params = OVMambaCache(self.config, input_ids.shape[0])
+
+            ssm_cache = cache_params.ssm_states
+            conv_cache = cache_params.conv_states
+
+            inputs.update(zip(self.ssm_cache_input_names, ssm_cache))
+            inputs.update(zip(self.conv_cache_input_names, conv_cache))
+        else:
+            if cache_params is None:
+                # this is prefill step, reset all states
+                if self.request is not None:
+                    self.request.reset_state()
+                self._past_length = 0
+
+        self.request.start_async(inputs, share_inputs=True)
+        self.request.wait()
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+
+        if self.stateful:
+            self._past_length += input_ids.shape[1]
+            num_states = len(self.request.query_state()) // 2
+            ssm_states = [None] * num_states
+            conv_states = [None] * num_states
+            for state in self.request.query_state():
+                if "cache_params.past.ssm" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    ssm_states[idx] = state.state.data
+                elif "cache_params.past.conv" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    conv_states[idx] = state.state.data
+        else:
+            ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
+            conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
+        cache_params = OVMambaCache(self.config, input_ids.shape[0], conv_states=conv_states, ssm_states=ssm_states)
+
+        return MambaOutput(logits=logits, cache_params=cache_params)
+
+    def _update_model_kwargs_for_generation(
+        self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
+    ) -> Dict[str, Any]:
+        model_kwargs["cache_params"] = outputs.get("cache_params", None)
+        if (
+            model_kwargs.get("use_cache", True)
+            and "cache_position" in model_kwargs
+            and model_kwargs["cache_position"] is not None
+        ):
+            model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + num_new_tokens
+
+        if "attention_mask" in model_kwargs:
+            attention_mask = model_kwargs["attention_mask"]
+            model_kwargs["attention_mask"] = torch.cat(
+                [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
+            )
+
+        return model_kwargs
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        inputs_embeds=None,
+        use_cache=None,
+        cache_params=None,
+        cache_position: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ):
+        # Overwitten -- uses `cache_params` as opposed to `past_key_values`
+
+        if self.use_cache:
+            # `cache_position` should have been initialized in `generate`
+            if cache_position is None:
+                raise ValueError(
+                    "`cache_position` should not be None as it should have been initialized in "
+                    "`model.generate`, you are responsible for passing in a valid `cache_position` if "
+                    "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
+                )
+            if cache_position[0] > 0:
+                # decoding stage so it takes the last token
+                input_ids = input_ids[:, -1].unsqueeze(-1)
+                # models like Mamba typically do not require an attention_mask
+                # for the decoding step after the first token so use attention mask of ones
+                attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+
+            else:
+                # we initialize the `cache_position` to full size of `conv_states` at prefill stage
+                # considering padding will be applied when input length is shorter, and truncation
+                # will be applied when it is longer, so it will be equivalent to always have it match
+                # the length of `cache_params.conv_states`, which is `config.conv_kernel`
+                cache_position = torch.arange(0, self.config.conv_kernel, device=input_ids.device)
+
+        if inputs_embeds is not None and cache_params is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids.contiguous()}
+
+        model_inputs.update(
+            {
+                "cache_params": cache_params,
+                "use_cache": use_cache,
+                "cache_position": cache_position,
+                "attention_mask": attention_mask,
+            }
+        )
+        return model_inputs

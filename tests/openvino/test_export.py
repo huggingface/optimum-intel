@@ -82,6 +82,9 @@ class ExportModelTest(unittest.TestCase):
         "clip": OVModelForZeroShotImageClassification,
     }
 
+    if is_transformers_version(">=", "4.39"):
+        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},

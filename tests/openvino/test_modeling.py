@@ -1134,6 +1134,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
     )
 
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    if is_transformers_version(">=", "4.43"):
+        SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
@@ -1264,6 +1268,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
+        "mamba": 0,
+        "falcon-mamba": 0,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1296,12 +1302,26 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in ov_outputs)
-        self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        is_stateful = ov_model.config.model_type not in not_stateful
-        self.assertEqual(ov_model.stateful, is_stateful)
-        if is_stateful:
-            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
+            from optimum.intel.openvino.modeling_decoder import OVMambaCache
+
+            self.assertTrue("cache_params" in ov_outputs)
+            self.assertIsInstance(ov_outputs.cache_params, OVMambaCache)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
+                self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
+                self.assertTrue(
+                    len(ov_outputs.cache_params.conv_states) > 0 and len(ov_outputs.cache_params.ssm_states) > 0
+                )
+        else:
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
         expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
         num_sdpa = get_num_sdpa(ov_model.model)
