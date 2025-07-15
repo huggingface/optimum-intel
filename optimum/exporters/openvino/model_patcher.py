@@ -6625,6 +6625,8 @@ class MambaPatcher(ModelPatcher):
         super().__init__(config, model, model_kwargs)
 
         class MambaCacheWrap(MambaCache):
+            # This class serves to create MambaCache object for additional input data format
+            # when lists of tensors representing convolution and SSM states are separated
             def __init__(
                 self,
                 config: "PretrainedConfig",
@@ -6670,19 +6672,6 @@ class MambaPatcher(ModelPatcher):
                         )
 
                         self.ssm_states.append(ssm_state)
-
-            def update_conv_state(
-                self, layer_idx: int, new_conv_state: torch.Tensor, cache_position: torch.LongTensor
-            ) -> torch.Tensor:
-                conv_state = self.conv_states[layer_idx]
-                cache_position = cache_position.clamp(0, self.conv_kernel_size - 1)
-
-                conv_state = conv_state.roll(shifts=-1, dims=-1)
-                conv_state = conv_state.scatter(
-                    2, cache_position.expand(conv_state.shape[0], conv_state.shape[1], -1), new_conv_state
-                )
-                self.conv_states[layer_idx] = conv_state
-                return self.conv_states[layer_idx]
 
         def patched_forward(
             input_ids,
