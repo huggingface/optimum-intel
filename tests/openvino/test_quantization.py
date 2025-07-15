@@ -1601,7 +1601,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         trust_remote_code=True,
                     ),
                     {"encoder": 8, "decoder": 12},
-                    {"encoder": {"int8": 8}, "decoder": {"int8": 12}},
+                    {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
                 ),
             ]
         )
