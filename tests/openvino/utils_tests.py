@@ -308,8 +308,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder_model": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder_model": 100,
+        "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
+        "prompt_encoder_mask_decoder": 100,
     },
     "speecht5": {
         "encoder": 28,
