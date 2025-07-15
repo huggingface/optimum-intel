@@ -72,6 +72,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     Integration tests ensuring supported models are correctly exported.
     """
 
+    maxDiff = None
+
     SUPPORTED_ARCHITECTURES = [
         ("text-generation", "gpt2"),
         ("text-generation-with-past", "gpt2"),
@@ -413,6 +415,20 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if is_transformers_version("<=", "4.36.0")
                 else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
             ),
+        ),
+        (
+            "feature-extraction",
+            "sam",
+            "int8",
+            "--dataset coco --num-samples 1",
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 61,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 50},
+            },
         ),
     ]
 
