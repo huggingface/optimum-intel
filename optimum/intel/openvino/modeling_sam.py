@@ -317,14 +317,14 @@ class OVSamModel(OVBaseModel):
     @property
     def vision_encoder_model(self) -> ov.Model:
         logger.warning(
-            "Access to the `vision_encoder_model` attribute is deprecated and will be removed in optimum-intel v1.25, please use `vision_encoder.model` instead"
+            "Access to the `vision_encoder_model` attribute is deprecated and will be removed in optimum-intel v1.26, please use `vision_encoder.model` instead"
         )
         return self.vision_encoder.model
 
     @property
     def prompt_encoder_mask_decoder_model(self) -> ov.Model:
         logger.warning(
-            "Access to the `prompt_encoder_mask_decoder_model` attribute is deprecated and will be removed in optimum-intel v1.25, please use `prompt_encoder_mask_decoder.model` instead"
+            "Access to the `prompt_encoder_mask_decoder_model` attribute is deprecated and will be removed in optimum-intel v1.26, please use `prompt_encoder_mask_decoder.model` instead"
         )
         return self.prompt_encoder_mask_decoder.model
 
