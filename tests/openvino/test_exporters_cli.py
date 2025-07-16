@@ -94,6 +94,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
+    if is_transformers_version(">=", "4.39"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "mamba"),
+                ("text-generation-with-past", "falcon-mamba"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -125,6 +133,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "mamba": 2,
+        "falcon-mamba": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

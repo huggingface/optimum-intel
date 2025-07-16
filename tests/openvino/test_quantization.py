@@ -419,7 +419,6 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=preprocess_function,
                 num_samples=2,
                 dataset_split="train",
-                trust_remote_code=True,
                 streaming=streaming,
             )
         else:
@@ -431,7 +430,6 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=preprocess_function,
                 num_samples=2,
                 dataset_split="train",
-                trust_remote_code=True,
                 streaming=streaming,
             )
         return calibration_dataset
@@ -1780,7 +1778,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="test",
-                trust_remote_code=True,
+                revision="refs/pr/3",
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)

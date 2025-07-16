@@ -73,6 +73,7 @@ MODEL_NAMES = {
     "gemma3": "katuni4ka/tiny-random-gemma3",
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
+    "falcon-mamba": "rkazants/tiny-falcon-mamba",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "flux": "katuni4ka/tiny-random-flux",
     "flux-fill": "katuni4ka/tiny-random-flux-fill",
@@ -104,6 +105,7 @@ MODEL_NAMES = {
     "opt125m": "facebook/opt-125m",
     "opt_gptq": "ybelkada/opt-125m-gptq-4bit",
     "maira2": "optimum-internal-testing/tiny-random-maira2",
+    "mamba": "rkazants/tiny-mamba",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
@@ -319,6 +321,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
+    "mamba": {"model": 386},
+    "falcon-mamba": {"model": 194},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
