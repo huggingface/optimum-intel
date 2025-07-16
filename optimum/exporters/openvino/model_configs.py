@@ -291,6 +291,22 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+@register_in_tasks_manager(
+    "smollm3",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
+class SmolLM3OpenVINOConfig(Qwen2OpenVINOConfig):
+    pass
+
+
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
@@ -659,7 +675,6 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     )
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, QwenDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = QwenDummyPastKeyValuesGenerator
-    no_position_ids = False
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)

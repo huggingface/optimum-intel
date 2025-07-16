@@ -1179,6 +1179,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES += ("smollm3",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1264,8 +1267,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
+        "smollm3": 2,
     }
 
+    # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1312,7 +1317,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         if "awq" in model_arch or "gptq" in model_arch:
-            # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
 
         set_seed(SEED)
@@ -1348,14 +1352,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         gen_config = GenerationConfig(
-            max_new_tokens=30,
-            min_new_tokens=30,
-            num_beams=2 if model_arch != "chatglm4" else 1,
+            max_new_tokens=20 if model_arch == "smollm3" else 30,
+            min_new_tokens=20 if model_arch == "smollm3" else 30,
+            num_beams=1 if model_arch == "chatglm4" else 2,
             do_sample=False,
-            eos_token_id=None,
         )
-        if is_transformers_version(">=", "4.51"):
-            tokens["use_model_defaults"] = False
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
@@ -1377,11 +1378,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
             )
-        print(f"ov_outputs: {ov_outputs}")
-        print(f"transformers_outputs: {transformers_outputs}")
+
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
-            "OV output {ov_outputs}\nTransformers output  {transformers_output}",
+            f"OV output {ov_outputs}\nTransformers output  {transformers_outputs}",
         )
 
         del transformers_model

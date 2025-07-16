@@ -142,6 +142,7 @@ MODEL_NAMES = {
     "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
     "qwen2_5_vl": "katuni4ka/tiny-random-qwen2.5-vl",
     "qwen3": "katuni4ka/tiny-random-qwen3",
+    "smollm3": "onnx-internal-testing/tiny-random-SmolLM3ForCausalLM",
     "qwen3_moe": "katuni4ka/tiny-random-qwen3moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
