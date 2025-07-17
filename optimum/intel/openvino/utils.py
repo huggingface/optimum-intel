@@ -196,6 +196,14 @@ PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
     }
 }
 
+PREDEFINED_SAM_DATASETS = {
+    "coco": {
+        "id": "detection-datasets/coco",
+        "split": "train",
+        "streaming": True,
+    }
+}
+
 
 NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
 
