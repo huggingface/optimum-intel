@@ -305,7 +305,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class SmolLM3OpenVINOConfig(Qwen2OpenVINOConfig):
-    pass
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
 
 
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
