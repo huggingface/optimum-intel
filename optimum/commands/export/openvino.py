@@ -72,9 +72,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4_f8e4m3"],
         default=None,
-        help="The weight format of the exported model.",
+        help=(
+            "The weight format of the exported model. Option 'cb4_f8e4m3' represents a codebook with 16 fixed fp8 values in E4M3 format."
+        ),
     )
     optional_group.add_argument(
         "--quant-mode",
