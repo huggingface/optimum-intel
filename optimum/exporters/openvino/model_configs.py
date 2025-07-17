@@ -53,7 +53,7 @@ from optimum.exporters.onnx.model_configs import (
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
-from optimum.exporters.onnx.model_patcher import ModelPatcher
+from optimum.exporters.onnx.model_patcher import ModelPatcher, Qwen3MoeModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -292,6 +292,22 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+@register_in_tasks_manager(
+    "smollm3",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
+class SmolLM3OpenVINOConfig(Qwen2OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+
+
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
@@ -307,7 +323,6 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
-@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -319,6 +334,14 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return Qwen3MoeModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -653,7 +676,6 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     )
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, QwenDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = QwenDummyPastKeyValuesGenerator
-    no_position_ids = False
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)

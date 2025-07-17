@@ -230,13 +230,12 @@ class MixtralModelPatcher(DecoderModelPatcher):
             layer.block_sparse_moe.forward = types.MethodType(
                 _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
             )
-            if is_transformers_version("<", "4.44.99"):
+            if is_transformers_version("<", "4.45.0"):
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        unpatch_update_causal_mask(self._model, "model")
 
         for layer in self._model.model.layers:
             layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
@@ -4750,7 +4749,11 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.39.0", None, patch_extrnal_model=True)
 
-        if self._model.config._attn_implementation != "sdpa":
+        if is_transformers_version(">=", "4.53.0"):
+            # SDPA attention seems to not match the output of diffusers
+            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
+            self._model.config._attn_implementation = "eager"
+        else:
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
             if is_transformers_version("<", "4.47.0"):
@@ -4764,6 +4767,7 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         unpatch_update_causal_mask(self._model, None, True)
+
         if hasattr(self._model.config, "_orig_attn_implementation"):
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             for layer in self._model.layers:
@@ -4867,7 +4871,7 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
         model.__orig_forward = model.forward
         if is_transformers_version("<", "4.52"):
             model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
-        else:
+        elif is_transformers_version("<", "4.53"):
             model.model._orig_update_causual_mask = model.model._update_causal_mask
             model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, model.model)
 
@@ -4942,6 +4946,8 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
         super().__init__(config, model, model_kwargs)
 
     def __enter__(self):
+        super().__enter__()
+
         # The difference from original code is only in getting patch_position_ids as input and propogation it into embeddings instead of calculation inside based on patch_attention_mask
         # method for calculation position_ids is not pytorch tracing friendly due to cycle over batch size.
         def transformer_forward(
@@ -5108,6 +5114,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         self._model.forward = self._model.__orig_forward
         self._model.vision_model.forward = self._model.vision_model._orig_forward
         self._model.vision_model.embeddings.forward = self._model.vision_model.embeddings._orig_forward
@@ -5585,8 +5592,7 @@ def speecht5_attention_forward(
     if layer_head_mask is not None:
         if layer_head_mask.size() != (self.num_heads,):
             raise ValueError(
-                f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-                f" {layer_head_mask.size()}"
+                f"Head mask for a single layer should be of size {(self.num_heads,)}, but is {layer_head_mask.size()}"
             )
         attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
         attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)

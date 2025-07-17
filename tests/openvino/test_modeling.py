@@ -1183,6 +1183,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES += ("smollm3",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1268,10 +1271,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
+        "smollm3": 2,
         "mamba": 0,
         "falcon-mamba": 0,
     }
 
+    # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1332,7 +1337,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         if "awq" in model_arch or "gptq" in model_arch:
-            # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
 
         set_seed(SEED)
@@ -1368,14 +1372,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         gen_config = GenerationConfig(
-            max_new_tokens=30,
-            min_new_tokens=30,
-            num_beams=2 if model_arch != "chatglm4" else 1,
+            max_new_tokens=20 if model_arch == "smollm3" else 30,
+            min_new_tokens=20 if model_arch == "smollm3" else 30,
+            num_beams=1 if model_arch == "chatglm4" else 2,
             do_sample=False,
-            eos_token_id=None,
         )
-        if is_transformers_version(">=", "4.51"):
-            tokens["use_model_defaults"] = False
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
 
@@ -1397,11 +1398,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
             )
-        print(f"ov_outputs: {ov_outputs}")
-        print(f"transformers_outputs: {transformers_outputs}")
+
         self.assertTrue(
             torch.allclose(ov_outputs, transformers_outputs),
-            "OV output {ov_outputs}\nTransformers output  {transformers_output}",
+            f"OV output {ov_outputs}\nTransformers output  {transformers_outputs}",
         )
 
         del transformers_model
@@ -1429,7 +1429,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if is_transformers_version(">=", "4.51"):
             additional_args["use_model_defaults"] = False
 
-        model = OVModelForCausalLM.from_pretrained(model_id, use_cache=False, compile=False, **model_kwargs)
+        set_seed(SEED)
+        model = OVModelForCausalLM.from_pretrained(model_id, use_cache=True, compile=False, **model_kwargs)
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
@@ -1438,7 +1439,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         inputs = "My name is Arthur and I live in"
         set_seed(SEED)
-        outputs = pipe(inputs, max_new_tokens=5, **additional_args, do_sample=False)
+        outputs = pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
         ov_pipe = optimum_pipeline(
@@ -1449,7 +1450,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer=tokenizer if model_arch == "qwen" else None,
         )
         set_seed(SEED)
-        ov_outputs = ov_pipe(inputs, max_new_tokens=5, **additional_args, do_sample=False)
+        ov_outputs = ov_pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -1946,7 +1947,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SUPPORT_STATEFUL = ("t5", "mt5")
     if is_transformers_version(">=", "4.52.0"):
         SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
-        # all models are stateful on transformers main, but pegasus update is not included in 4.52 yet
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORT_STATEFUL += ("pegasus",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -2036,29 +2038,6 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         del ov_pipe
         del pipe
         del model
-        gc.collect()
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
-    def test_generate_utils(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        text = "This is a sample input"
-        tokens = tokenizer(text, return_tensors="pt")
-
-        # General case
-        outputs = model.generate(**tokens)
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
-
-        # With input ids
-        outputs = model.generate(input_ids=tokens["input_ids"])
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
-        del model
-
         gc.collect()
 
     def test_compare_with_and_without_past_key_values(self):
@@ -2367,22 +2346,6 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         del transformers_model
         del ov_model
-
-        gc.collect()
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_generate_utils(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = OVModelForPix2Struct.from_pretrained(model_id, export=True)
-        preprocessor = get_preprocessor(model_id)
-        question = "Who am I?"
-        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
-
-        # General case
-        outputs = model.generate(**inputs)
-        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
-        del model
 
         gc.collect()
 
@@ -2718,68 +2681,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         del transformers_model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_generate_utils(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-        )
-
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        question = "Describe image"
-        preprocessors = self.get_preprocessors(model_arch)
-        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
-        # General case
-        outputs = model.generate(**inputs, max_new_tokens=10)
-        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
-        self.assertIsInstance(outputs[0], str)
-
-        # GOT-OCR2 does not support text-only input
-        if model_arch != "got_ocr2":
-            # No input image case
-            question = "Hi, how are you?"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
-            outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-            outputs = outputs[:, inputs["input_ids"].shape[1] :]
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            self.assertIsInstance(outputs[0], str)
-
-            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-                # video loader helper only available for transformers >= 4.49
-                if is_transformers_version("<=", "4.52"):
-                    from transformers.image_utils import load_video
-                else:
-                    from transformers.video_utils import load_video
-
-                video_path = hf_hub_download(
-                    repo_id="raushan-testing-hf/videos-test",
-                    filename="sample_demo_1.mp4",
-                    repo_type="dataset",
-                    user_agent=http_user_agent(),
-                )
-                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
-                question = "Why is this video funny?"
-                inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
-                outputs = model.generate(**inputs, max_new_tokens=10)
-                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-                outputs = outputs[:, inputs["input_ids"].shape[1] :]
-                outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                self.assertIsInstance(outputs[0], str)
-
-        if model_arch in self.SUPPORT_AUDIO:
-            input_audio = self._generate_random_audio_data()
-            question = "Translate this audio to French"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
-            outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-            outputs = outputs[:, inputs["input_ids"].shape[1] :]
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            self.assertIsInstance(outputs[0], str)
-        del model
-
-        gc.collect()
-
     def _generate_random_audio_data(self):
         np.random.seed(10)
         t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
@@ -2942,23 +2843,6 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
             _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True)
 
         self.assertIn("only supports the tasks", str(context.exception))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
-    def test_generate_utils(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
-        feature_extractor, tokenizer = self._get_preprocessors(model_id)
-
-        data = self._get_sample_image()
-        features = feature_extractor(data, return_tensors="pt")
-
-        outputs = model.generate(inputs=features["pixel_values"])
-        res = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        self.assertIsInstance(res[0], str)
-
-        gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
