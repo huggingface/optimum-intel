@@ -67,6 +67,7 @@ from optimum.intel import (
     OVModelForVisualCausalLM,
     OVSentenceTransformer,
     OVModelForZeroShotImageClassification,
+    OVSamModel,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -123,6 +124,8 @@ pattern_prefix = (
 
 
 class OVQuantizerTest(unittest.TestCase):
+    maxDiff = None
+
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
@@ -372,6 +375,19 @@ class OVQuantizerTest(unittest.TestCase):
                 if is_transformers_version("<=", "4.36.0")
                 else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
             ),
+        ),
+        (
+            OVSamModel,
+            "sam",
+            OVQuantizationConfig(bits=8, dataset="coco", num_samples=1),
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 61,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 50},
+            },
         ),
     ]
 
@@ -623,6 +639,11 @@ class OVQuantizerTest(unittest.TestCase):
                 image = np.random.rand(224, 224, 3).astype(np.uint8)
                 inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
                 ov_model(**inputs)
+            elif model_cls == OVSamModel:
+                processor = AutoProcessor.from_pretrained(model_id)
+                image = np.random.rand(224, 224, 3).astype(np.uint8)
+                inputs = processor(image, input_points=[[[0, 0]]], return_tensors="pt")
+                ov_model(**inputs)
             else:
                 raise Exception("Unexpected model class.")
 
@@ -635,6 +656,8 @@ class OVQuantizerTest(unittest.TestCase):
 
 
 class OVWeightCompressionTest(unittest.TestCase):
+    maxDiff = None
+
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "bert", 70, 70),
         (OVModelForCausalLM, "gpt2", 44, 44),
@@ -811,6 +834,16 @@ class OVWeightCompressionTest(unittest.TestCase):
             False,
             dict(bits=4, backup_precision="int8_asym", group_size=16, ratio=0.5),
             {"model": {"int8": 26, "int4": 6}},
+        ),
+        (
+            OVSamModel,
+            "sam",
+            False,
+            dict(bits=4, dataset="coco", num_samples=1, group_size=2),
+            {
+                "vision_encoder": {"int8": 56, "int4": 94},
+                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94},
+            },
         ),
     ]
 
@@ -1486,6 +1519,8 @@ class OVWeightCompressionTest(unittest.TestCase):
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
+    maxDiff = None
+
     PIPELINE_QUANTIZATION_SCOPE = [
         (
             OVModelForCausalLM,
@@ -1544,6 +1579,29 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "vae_decoder": {"int8": 42},
                 "vae_encoder": {"int8": 34},
                 "text_encoder": {"int8": 64},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            False,
+            dict(
+                quantization_configs={
+                    "vision_encoder": dict(
+                        bits=8,
+                        dataset="coco",
+                        num_samples=1,
+                        weight_only=False,
+                    ),
+                }
+            ),
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 0,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 0},
             },
         ),
     ]
