@@ -4449,7 +4449,7 @@ class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
             position_ids (`torch.LongTensor` of shape `(3, batch_size, sequence_length)`)
             mrope_position_deltas (`torch.Tensor` of shape `(batch_size)`)
         """
-
+        import itertools
         spatial_merge_size = self.config.vision_config.spatial_merge_size
         image_token_id = self.config.image_token_id
         video_start_token_id = self.config.video_start_token_id
