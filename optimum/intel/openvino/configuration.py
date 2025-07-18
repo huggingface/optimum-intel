@@ -31,6 +31,7 @@ from ..utils.import_utils import is_nncf_available, is_nncf_version
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
+    PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
@@ -361,6 +362,36 @@ _DEFAULT_4BIT_WQ_CONFIG = {
 
 # Default configs for int8 full quantization
 _DEFAULT_INT8_FQ_CONFIGS = {
+    "facebook/sam-vit-base": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-large": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-huge": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
     "google-t5/t5-small": {
         "dtype": "int8",
         "dataset": "wikitext2",
@@ -723,16 +754,19 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
+            sam_datasets = set(PREDEFINED_SAM_DATASETS.keys())
             if (
                 self.dataset
                 not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
                 | language_datasets
                 | visual_lm_datasets
                 | stable_diffusion_datasets
+                | sam_datasets
             ):
                 raise ValueError(
                     "You have entered a string value for dataset. You can only choose between "
                     f"{language_datasets} for text feature extraction models, "
+                    f"{sam_datasets} for SegmentAnything models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
@@ -992,6 +1026,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
+            sam_datasets = set(PREDEFINED_SAM_DATASETS.keys())
             if (
                 self.dataset
                 not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
@@ -999,12 +1034,14 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 | speech_to_text_datasets
                 | stable_diffusion_datasets
                 | visual_lm_datasets
+                | sam_datasets
             ):
                 raise ValueError(
                     "You can only choose between the following datasets:"
                     f"{language_datasets} for text feature extraction models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, "
                     f"{speech_to_text_datasets} for speech-to-text models, "
+                    f"{sam_datasets} for SegmentAnything models, "
                     f"{visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
