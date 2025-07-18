@@ -4542,6 +4542,7 @@ class DummyGlm4vVisionEmbedInputGenerator(DummyVisionInputGenerator):
         grid_h, grid_w = self.height // self.patch_size, self.width // self.patch_size
         grid_t = self.batch_size
         import torch
+
         if input_name == "hidden_states":
             return self.random_float_tensor(
                 [grid_t * grid_h * grid_w, self.embed_dim], framework=framework, dtype=float_dtype
@@ -4549,7 +4550,7 @@ class DummyGlm4vVisionEmbedInputGenerator(DummyVisionInputGenerator):
 
         if input_name == "seqlens":
             return torch.tensor([grid_t * grid_h * grid_w], dtype=torch.int64)
-            
+
         if input_name in ["attention_mask", "window_attention_mask"]:
             return self.random_mask_tensor(
                 [1, grid_t * grid_h * grid_w, grid_t * grid_h * grid_w], framework=framework, dtype=float_dtype
@@ -4563,9 +4564,10 @@ class DummyGlm4vVisionEmbedInputGenerator(DummyVisionInputGenerator):
             return self.random_int_tensor(
                 [grid_t * grid_h * grid_w, 2], max_value=grid_h, framework=framework, dtype=int_dtype
             )
-            
+
         if input_name == "grid_thw":
             return torch.tensor([[grid_t, grid_h, grid_w]], dtype=torch.int64)
+
 
 @register_in_tasks_manager("glm4v", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Glm4vOpenVINOConfig(BaseVLMOpenVINOConfig):

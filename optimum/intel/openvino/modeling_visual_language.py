@@ -4348,6 +4348,7 @@ class _OVLlama4ForCausalLM(OVModelForVisualCausalLM):
         inputs = processor(images=image, text=text_prompt, return_tensors="pt")
         return inputs
 
+
 class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
     additional_parts = ["vision_embeddings_merger"]
 
@@ -4390,7 +4391,7 @@ class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
             raise ValueError(
                 f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
             )
-            
+
     def get_rope_index(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -4450,6 +4451,7 @@ class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
             mrope_position_deltas (`torch.Tensor` of shape `(batch_size)`)
         """
         import itertools
+
         spatial_merge_size = self.config.vision_config.spatial_merge_size
         image_token_id = self.config.image_token_id
         video_start_token_id = self.config.video_start_token_id
@@ -4576,7 +4578,7 @@ class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
                 )
 
             return position_ids, mrope_position_deltas
-            
+
     def rot_pos_emb(self, grid_thw):
         pos_ids = []
         for t, h, w in grid_thw:
@@ -4626,7 +4628,6 @@ class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
 
         return model_kwargs
 
-
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
         hidden_states = self.vision_embeddings(pixel_values)[0]
         rotary_pos_emb, image_type_ids = self.rot_pos_emb(grid_thw)
@@ -4650,9 +4651,15 @@ class _OVGlm4vForCausalLM(_OVQwen2VLForCausalLM):
         seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
 
         res = self.vision_embeddings_merger(
-            pixel_values=hidden_states, image_type_ids=image_type_ids, attention_mask=causal_mask, seqlens=seqlens, grid_thw=grid_thw, rotary_pos_emb=rotary_pos_emb
+            pixel_values=hidden_states,
+            image_type_ids=image_type_ids,
+            attention_mask=causal_mask,
+            seqlens=seqlens,
+            grid_thw=grid_thw,
+            rotary_pos_emb=rotary_pos_emb,
         )[0]
         return res
+
 
 MODEL_TYPE_TO_CLS_MAPPING = {
     "llava": _OVLlavaForCausalLM,

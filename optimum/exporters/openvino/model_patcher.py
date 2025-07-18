@@ -6755,6 +6755,7 @@ class MambaPatcher(ModelPatcher):
         for layer in self._model.backbone.layers:
             layer.mixer.forward = layer.mixer._orig_forward
 
+
 def _glm4v_prepare_4d_causal_attention_mask_with_cache_position(
     attention_mask: torch.Tensor,
     sequence_length: int,
@@ -6792,9 +6793,7 @@ def _glm4v_prepare_4d_causal_attention_mask_with_cache_position(
         causal_mask = attention_mask
     else:
         min_dtype = torch.finfo(dtype).min
-        causal_mask = torch.full(
-            (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
-        )
+        causal_mask = torch.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device)
         if sequence_length != 1:
             causal_mask = torch.triu(causal_mask, diagonal=1)
         causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
@@ -6802,16 +6801,15 @@ def _glm4v_prepare_4d_causal_attention_mask_with_cache_position(
         if attention_mask is not None:
             causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
             mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
-                causal_mask.device
-            )
+            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(causal_mask.device)
             padding_mask = padding_mask == 0
             causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
                 padding_mask, min_dtype
             )
 
-    return causal_mask            
-            
+    return causal_mask
+
+
 def _glm4v_update_causal_mask(
     attention_mask,
     input_tensor,
@@ -6851,6 +6849,7 @@ def _glm4v_update_causal_mask(
     )
 
     return causal_mask
+
 
 class Glm4vLanguageModelPatcher(DecoderModelPatcher):
     def __init__(
@@ -6903,7 +6902,7 @@ class Glm4vLanguageModelPatcher(DecoderModelPatcher):
                 position_ids = cache_position.view(1, 1, -1).expand(3, inputs_embeds.shape[0], -1)
             elif position_ids.dim() == 2:
                 position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
-            
+
             causal_mask = _glm4v_update_causal_mask(
                 attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
             )
@@ -6957,11 +6956,13 @@ class Glm4vLanguageModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.language_model.forward = self._model.language_model.__orig_forward
-        
+
+
 def glm4v_vision_embeddings_forward(self, hidden_states: torch.FloatTensor):
     hidden_states = self.patch_embed(hidden_states)
     hidden_states = self.post_conv_layernorm(hidden_states)
     return hidden_states
+
 
 class Glm4vVisionEmbeddingsPatcher(ModelPatcher):
     def __init__(
@@ -6977,7 +6978,7 @@ class Glm4vVisionEmbeddingsPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-            
+
 
 class Glm4vVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
@@ -7003,8 +7004,9 @@ class Glm4vVisionEmbMergerPatcher(ModelPatcher):
             image_type_ids: torch.Tensor,
             rotary_pos_emb: torch.Tensor,
         ) -> torch.Tensor:
-
-            hidden_states = self.embeddings(hidden_states, seqlens, grid_thw, image_type_ids[:, 0], image_type_ids[:, 1])
+            hidden_states = self.embeddings(
+                hidden_states, seqlens, grid_thw, image_type_ids[:, 0], image_type_ids[:, 1]
+            )
 
             for blk in self.blocks:
                 hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
