@@ -2825,6 +2825,7 @@ class GptNeoxModelPatcher(OVDecoderModelPatcher):
         if (
             is_transformers_version(">=", "4.45")
             and is_transformers_version("<", "4.53")
+            and hasattr(self._model, "transformer")
             and hasattr(self._model.transformer, "_update_causal_mask")
         ):
             self._model.transformer._update_causal_mask_original = self._model.transformer._update_causal_mask
@@ -2838,6 +2839,7 @@ class GptNeoxModelPatcher(OVDecoderModelPatcher):
         if (
             is_transformers_version(">=", "4.45")
             and is_transformers_version("<", "4.53")
+            and hasattr(self._model, "transformer")
             and hasattr(self._model.transformer, "_update_causal_mask_original")
         ):
             self._model.transformer._update_causal_mask = self._model.transformer._update_causal_mask_original
@@ -4745,38 +4747,32 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.53.0"):
-            # SDPA attention seems to not match the output of diffusers
-            self._model.config._orig_attn_implementation = self._model.config._attn_implementation
-            self._model.config._attn_implementation = "eager"
+        if is_transformers_version("<", "4.47.0"):
+            from transformers.models.gemma2.modeling_gemma2 import GEMMA2_ATTENTION_CLASSES
+
+            sdpa_attn = GEMMA2_ATTENTION_CLASSES["sdpa"]
+            for layer in self._model.layers:
+                layer.self_attn._orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
         else:
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
-            if is_transformers_version("<", "4.47.0"):
-                from transformers.models.gemma2.modeling_gemma2 import GEMMA2_ATTENTION_CLASSES
 
-                sdpa_attn = GEMMA2_ATTENTION_CLASSES["sdpa"]
-                for layer in self._model.layers:
-                    layer.self_attn._orig_forward = layer.self_attn.forward
-                    layer.self_attn.forward = types.MethodType(sdpa_attn.forward, layer.self_attn)
+        if is_transformers_version(">=", "4.53"):
+            # starting from 4.53, we get unmatching outputs if we use the boolean mask
+            # TODO: This is an openvino issue (inconsistency between boolean and float masks)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        # TODO: is this necessary for an encoder ?
-        if (
-            is_transformers_version(">=", "4.39")
-            and is_transformers_version("<", "4.53")
-            and hasattr(self._model, "_update_causal_mask")
-        ):
-            self._model._update_causal_mask = self._model._update_causal_mask_original
-            del self._model._update_causal_mask_original
-
-        if hasattr(self._model.config, "_orig_attn_implementation"):
-            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+        if is_transformers_version("<", "4.47.0"):
             for layer in self._model.layers:
-                if hasattr(layer.self_attn, "_orig_forward"):
-                    layer.self_attn.forward = layer.self_attn._orig_forward
+                layer.self_attn.forward = layer.self_attn._orig_forward
+                del layer.self_attn._orig_forward
+        else:
+            self._model.config._attn_implementation = self._model.config._orig_attn_implementation
+            del self._model.config._orig_attn_implementation
 
 
 class MiniCPMModelPatcher(OVDecoderModelPatcher):
