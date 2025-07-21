@@ -76,7 +76,7 @@ if is_transformers_version(">=", "4.45"):
     BETTERTRANSFORMER_IGNORE.append("gpt_neo")
 
 
-# should be removed beceause optimum is removing it in next version
+# TODO: should be removed beceause optimum is removing it in next version
 def patch_model_with_bettertransformer(model):
     COLOR_RED = "\033[1;31m"
     COLOR_RESET = "\033[0m"
@@ -352,16 +352,18 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             self._model._update_causal_mask = types.MethodType(_update_causal_mask_patched, self._model)
 
         if is_transformers_version(">=", "4.53"):
-            # for non-stateful decoder models, we use eager mask without vmap for both eager and sdpa
+            # for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
+            # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+
+            # for non-stateful decoder models, we use eager mask without vmap for sdpa as well
             # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
             if not getattr(self.real_config, "stateful", False):
                 logger.warning(
                     "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
                     "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
                 )
-                # for non-stateful models, we have to use eager mask without vmap for both eager and sdpa
                 ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-                ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
