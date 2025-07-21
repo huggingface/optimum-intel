@@ -14,6 +14,7 @@
 
 import functools
 import inspect
+import logging
 import logging as log
 import math
 import types
@@ -31,19 +32,22 @@ from optimum.exporters.onnx.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     DecoderModelPatcher,
     ModelPatcher,
-    PatchingSpec,
     Seq2SeqModelPatcher,
     override_arguments,
+    sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import (
     _openvino_version,
-    _torch_version,
     _transformers_version,
     is_diffusers_version,
     is_openvino_version,
     is_torch_version,
     is_transformers_version,
 )
+
+
+if is_transformers_version(">=", "4.53"):
+    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS
 
 
 if TYPE_CHECKING:
@@ -55,50 +59,24 @@ if TYPE_CHECKING:
     if is_tf_available():
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
-
-def ov_compatible_repeat_interleave(input_tensor, repeats, dim=None, output_size=None):
-    """
-    Custom implementation of torch.repeat_interleave without using torch.repeat_interleave.
-
-    Args:
-        input_tensor (torch.Tensor): The input tensor.
-        repeats (int or torch.Tensor): The number of repetitions for each element.
-        dim (int, optional): The dimension along which to repeat. Defaults to None.
-
-    Returns:
-        torch.Tensor: The repeated tensor.
-    """
-    result = torch.repeat_interleave(input_tensor, repeats=repeats, dim=dim)
-
-    return result
+logger = logging.getLogger(__name__)
 
 
-def patch_unsupported_ops():
-    spec_idx = -1
-    for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
-        if spec.name == "repeat_interleave":
-            spec_idx = idx
-            break
-    repreate_interlive_spec = PatchingSpec(
-        torch.Tensor, "repeat_interleave", ov_compatible_repeat_interleave, torch.Tensor.repeat_interleave
-    )
-    if spec_idx != -1:
-        UNSUPPORTED_OPS_PATCHING_SPEC[spec_idx] = repreate_interlive_spec
-    else:
-        UNSUPPORTED_OPS_PATCHING_SPEC.append(repreate_interlive_spec)
+spec_idx = None
+for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
+    if spec.name == "repeat_interleave":
+        spec_idx = idx
+        break
+if spec_idx is not None:
+    UNSUPPORTED_OPS_PATCHING_SPEC.pop(spec_idx)
 
 
-BETTERTRANSFORMER_IGNORE = [
-    "codegen",
-]
-
-# in transformers 4.45 gpt_neo has SDPA
-if is_transformers_version(">=", "4.44.99"):
+BETTERTRANSFORMER_IGNORE = ["codegen"]
+if is_transformers_version(">=", "4.45"):
     BETTERTRANSFORMER_IGNORE.append("gpt_neo")
 
-patch_unsupported_ops()
 
-
+# should be removed beceause optimum is removing it in next version
 def patch_model_with_bettertransformer(model):
     COLOR_RED = "\033[1;31m"
     COLOR_RESET = "\033[0m"
@@ -107,25 +85,13 @@ def patch_model_with_bettertransformer(model):
     if hasattr(model, "use_bettertransformer") and model.use_bettertransformer is True:
         return model
 
-    if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
-        log.warning(
-            COLOR_RED
-            + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
-            f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
-            "Consider upgrading PyTorch and Transformers, for example by running "
-            "`pip install --upgrade --upgrade-strategy eager optimum[openvino]`, and export the model again"
-            + COLOR_RESET
-        )
-
     if (
         getattr(model.config, "model_type") in {"gpt_bigcode", "llama", "gemma"}
         and is_transformers_version(">=", "4.38")
         and is_openvino_version("<", "2024.1.0-14612")
     ):
         # display commit-id only when a nightly/prerelease of OpenVINO is installed.
-        display_version = (
-            _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
-        )
+        display_version = _openvino_version.split("-")[0] if "-" in _openvino_version else _openvino_version
         log.warning(
             COLOR_RED
             + f"[WARNING] Stateful models are not supported for Llama, Gemma and GPTBigCode with Transformers "
@@ -161,27 +127,255 @@ def patch_update_causal_mask(
         if inner_model is not None:
             if hasattr(inner_model, "_update_causal_mask"):
                 inner_model._orig_update_causal_mask = inner_model._update_causal_mask
-            patch_fn = patch_fn or _llama_gemma_update_causal_mask
+            patch_fn = patch_fn or _update_causal_mask_patched
             inner_model._update_causal_mask = types.MethodType(patch_fn, inner_model)
 
 
-def unpatch_update_causal_mask(model, inner_model_name="model", patch_extrnal_model=False):
-    inner_model = getattr(model, inner_model_name, None) if not patch_extrnal_model else model
-    if inner_model is not None and hasattr(inner_model, "_orig_update_causal_mask"):
-        inner_model._update_causal_mask = inner_model._orig_update_causal_mask
+# adopted from
+# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/gemma/modeling_gemma.py#L965
+# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/llama/modeling_llama.py#L1058
+def _update_causal_mask_patched_legacy(self, attention_mask, input_tensor, cache_position, past_seen_tokens=None):
+    from transformers.modeling_attn_mask_utils import AttentionMaskConverter
+
+    if self.config._attn_implementation == "sdpa" and past_seen_tokens is not None:
+        # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument,
+        # in order to dispatch on Flash Attention 2.
+        if AttentionMaskConverter._ignore_causal_mask_sdpa(
+            attention_mask, inputs_embeds=input_tensor, past_key_values_length=past_seen_tokens
+        ):
+            return None
+
+    dtype, device = input_tensor.dtype, input_tensor.device
+
+    # difference with original modeling
+    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # during execution on platforms with default lower precision (bfloat16, float16)
+    min_dtype = torch.finfo(torch.float16).min
+    sequence_length = input_tensor.shape[1]
+    # difference with original modeling
+    if hasattr(getattr(self.layers[0], "self_attn", {}), "past_key_value"):  # static cache
+        target_length = self.config.max_position_embeddings
+    else:  # dynamic cache
+        if past_seen_tokens is not None:
+            current_length = past_seen_tokens + sequence_length + 1
+        # TODO : remove after support of transformers >= v4.40.0
+        else:
+            current_length = cache_position[-1] + 1
+
+        target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else current_length
+
+    # difference with original modeling
+    causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
+
+    if sequence_length != 1:
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+    causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+    causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
+    if attention_mask is not None:
+        causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+        if attention_mask.dim() == 2:
+            mask_length = attention_mask.shape[-1]
+            padding_mask = causal_mask[..., :mask_length].eq(0.0) * attention_mask[:, None, None, :].eq(0.0)
+            causal_mask[..., :mask_length] = causal_mask[..., :mask_length].masked_fill(padding_mask, min_dtype)
+        elif attention_mask.dim() == 4:
+            # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
+            # cache. In that case, the 4D attention mask attends to the newest tokens only.
+            if attention_mask.shape[-2] < cache_position[0] + sequence_length:
+                offset = cache_position[0]
+            else:
+                offset = 0
+            mask_shape = attention_mask.shape
+            mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
+            causal_mask[
+                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
+            ] = mask_slice
+
+    if (
+        self.config._attn_implementation == "sdpa"
+        and attention_mask is not None
+        and attention_mask.device.type == "cuda"
+    ):
+        # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
+        # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
+        # Details: https://github.com/pytorch/pytorch/issues/110213
+        causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
+
+    return causal_mask
 
 
+# adopted from https://github.com/huggingface/transformers/blob/f4014e75db0190792b3feeccfc5dc5b5f9f0ce7b/src/transformers/models/llama/modeling_llama.py#L1036
+def _update_causal_mask_patched_latest(
+    self,
+    attention_mask,
+    input_tensor,
+    cache_position,
+    past_key_values,
+    output_attentions,
+):
+    from transformers.cache_utils import StaticCache
+    from transformers.modeling_attn_mask_utils import AttentionMaskConverter
+
+    # TODO: As of torch==2.2.0, the `attention_mask` passed to the model in `generate` is 2D and of dynamic length even when the static
+    # KV cache is used. This is an issue for torch.compile which then recaptures cudagraphs at each decode steps due to the dynamic shapes.
+    # (`recording cudagraph tree for symint key 13`, etc.), which is VERY slow. A workaround is `@torch.compiler.disable`, but this prevents using
+    # `fullgraph=True`. See more context in https://github.com/huggingface/transformers/pull/29114
+
+    if self.config._attn_implementation == "flash_attention_2":
+        if attention_mask is not None and 0.0 in attention_mask:
+            return attention_mask
+        return None
+
+    # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
+    # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
+    # to infer the attention mask.
+    past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+    using_static_cache = isinstance(past_key_values, StaticCache)
+
+    # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
+    if self.config._attn_implementation == "sdpa" and not using_static_cache and not output_attentions:
+        if AttentionMaskConverter._ignore_causal_mask_sdpa(
+            attention_mask,
+            inputs_embeds=input_tensor,
+            past_key_values_length=past_seen_tokens,
+            is_training=self.training,
+        ):
+            return None
+
+    dtype, device = input_tensor.dtype, input_tensor.device
+    # difference with original modeling
+    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # during execution on platforms with default lower precision (bfloat16, float16)
+    min_dtype = torch.finfo(torch.float16).min
+
+    sequence_length = input_tensor.shape[1]
+    if using_static_cache:
+        target_length = past_key_values.get_max_length()
+    else:
+        target_length = (
+            attention_mask.shape[-1]
+            if isinstance(attention_mask, torch.Tensor)
+            else past_seen_tokens + sequence_length + 1
+        )
+
+    if attention_mask is not None and attention_mask.dim() == 4:
+        # in this case we assume that the mask comes already in inverted form and requires no inversion or slicing
+        if attention_mask.max() != 0:
+            raise ValueError("Custom 4D attention mask should be passed in inverted form with max==0`")
+        causal_mask = attention_mask
+    else:
+        # difference with original modeling
+        causal_mask = (
+            torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
+        )
+
+        if sequence_length != 1:
+            causal_mask = torch.triu(causal_mask, diagonal=1)
+        causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+        causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
+        if attention_mask is not None:
+            causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+            mask_length = attention_mask.shape[-1]
+            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
+            padding_mask = padding_mask == 0
+            causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
+                padding_mask, min_dtype
+            )
+    if (
+        self.config._attn_implementation == "sdpa"
+        and attention_mask is not None
+        and attention_mask.device.type == "cuda"
+        and not output_attentions
+    ):
+        # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
+        # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
+        # Details: https://github.com/pytorch/pytorch/issues/110213
+        causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
+
+    return causal_mask
+
+
+# TODO : remove _update_causal_mask_patched_legacy when transformers>=4.41.0
+if is_transformers_version(">=", "4.41"):
+    _update_causal_mask_patched = _update_causal_mask_patched_latest
+else:
+    _update_causal_mask_patched = _update_causal_mask_patched_legacy
+
+
+# TODO: this is a numerical issue in OpenVINO, let's open an issue to track it
 # initialization of sin/cos cached in bf16/fp16 leads to accuracy loss
 # reinitialize them to save in float32 before export
-def _reinitialize_cos_sin_cached_fp32(rotary_emb):
-    if rotary_emb.cos_cached.dtype != torch.float32:
-        rotary_emb._set_cos_sin_cache(
-            seq_len=rotary_emb.max_position_embeddings, device=rotary_emb.inv_freq.device, dtype=torch.float32
-        )
+def patch_cos_sin_cached_fp32(model):
+    if (
+        hasattr(model, "layers")
+        and hasattr(model.layers[0], "self_attn")
+        and hasattr(model.layers[0].self_attn, "rotary_emb")
+        and hasattr(model.layers[0].self_attn.rotary_emb, "dtype")
+        and hasattr(model.layers[0].self_attn.rotary_emb, "inv_freq")
+        and hasattr(model.layers[0].self_attn.rotary_emb, "max_position_embeddings")
+        and hasattr(model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache")
+    ):
+        for layer in model.layers:
+            if layer.self_attn.rotary_emb.dtype != torch.float32:
+                layer.self_attn.rotary_emb._set_cos_sin_cache(
+                    seq_len=layer.self_attn.rotary_emb.max_position_embeddings,
+                    device=layer.self_attn.rotary_emb.inv_freq.device,
+                    dtype=torch.float32,
+                )
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/masking_utils.py#L433
+# Specifically for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
+def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
+    kwargs.pop("allow_is_causal_skip", None)
+    dtype = kwargs.get("dtype", torch.float32)
+    mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
+    # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
+    # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+    mask = torch.where(mask, torch.tensor(0.0, device=mask.device, dtype=dtype), torch.finfo(torch.float16).min)
+    return mask
+
+
+class OVDecoderModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        patch_cos_sin_cached_fp32(self._model)
+        if hasattr(self._model, "model"):
+            patch_cos_sin_cached_fp32(self._model.model)
+
+        if (
+            is_transformers_version(">=", "4.36")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model, "_update_causal_mask")
+        ):
+            self._model._update_causal_mask_original = self._model._update_causal_mask
+            self._model._update_causal_mask = types.MethodType(_update_causal_mask_patched, self._model)
+
+        if is_transformers_version(">=", "4.53"):
+            # for non-stateful decoder models, we use eager mask without vmap for both eager and sdpa
+            # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
+            if not getattr(self.real_config, "stateful", False):
+                logger.warning(
+                    "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
+                    "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
+                )
+                # for non-stateful models, we have to use eager mask without vmap for both eager and sdpa
+                ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+                ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if (
+            is_transformers_version(">=", "4.36")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model, "_update_causal_mask_original")
+        ):
+            self._model._update_causal_mask = self._model._update_causal_mask_original
+            del self._model._update_causal_mask_original
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-    """ """
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     hidden_states = hidden_states.view(-1, hidden_dim)
     # router_logits: (batch * sequence_length, n_experts)
@@ -220,22 +414,18 @@ def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
     return final_hidden_states, router_logits
 
 
-class MixtralModelPatcher(DecoderModelPatcher):
+class MixtralModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        patch_update_causal_mask(self._model, "4.42.0")
 
         for layer in self._model.model.layers:
             layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
             layer.block_sparse_moe.forward = types.MethodType(
                 _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
             )
-            if is_transformers_version("<", "4.45.0"):
-                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "model")
 
         for layer in self._model.model.layers:
             layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
@@ -380,7 +570,7 @@ def _glm4_core_attention_forward(self, query_layer, key_layer, value_layer, atte
     return context_layer
 
 
-class ChatGLMModelPatcher(DecoderModelPatcher):
+class ChatGLMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -409,176 +599,6 @@ class ChatGLMModelPatcher(DecoderModelPatcher):
             self._model.transformer.forward = self._model.transformer._orig_forward
         for block in self._model.transformer.encoder.layers:
             block.self_attention.core_attention.forward = block.self_attention.core_attention._orig_forward
-
-
-# adopted from
-# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/gemma/modeling_gemma.py#L965
-# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/llama/modeling_llama.py#L1058
-def _llama_gemma_update_causal_mask_legacy(self, attention_mask, input_tensor, cache_position, past_seen_tokens=None):
-    from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-
-    if self.config._attn_implementation == "sdpa" and past_seen_tokens is not None:
-        # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument,
-        # in order to dispatch on Flash Attention 2.
-        if AttentionMaskConverter._ignore_causal_mask_sdpa(
-            attention_mask, inputs_embeds=input_tensor, past_key_values_length=past_seen_tokens
-        ):
-            return None
-
-    dtype, device = input_tensor.dtype, input_tensor.device
-
-    # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
-    # during execution on platforms with default lower precision (bfloat16, float16)
-    min_dtype = torch.finfo(torch.float16).min
-    sequence_length = input_tensor.shape[1]
-    # difference with original modeling
-    if hasattr(getattr(self.layers[0], "self_attn", {}), "past_key_value"):  # static cache
-        target_length = self.config.max_position_embeddings
-    else:  # dynamic cache
-        if past_seen_tokens is not None:
-            current_length = past_seen_tokens + sequence_length + 1
-        # TODO : remove after support of transformers >= v4.40.0
-        else:
-            current_length = cache_position[-1] + 1
-
-        target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else current_length
-
-    # difference with original modeling
-    causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
-
-    if sequence_length != 1:
-        causal_mask = torch.triu(causal_mask, diagonal=1)
-    causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-    causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
-    if attention_mask is not None:
-        causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-        if attention_mask.dim() == 2:
-            mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[..., :mask_length].eq(0.0) * attention_mask[:, None, None, :].eq(0.0)
-            causal_mask[..., :mask_length] = causal_mask[..., :mask_length].masked_fill(padding_mask, min_dtype)
-        elif attention_mask.dim() == 4:
-            # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
-            # cache. In that case, the 4D attention mask attends to the newest tokens only.
-            if attention_mask.shape[-2] < cache_position[0] + sequence_length:
-                offset = cache_position[0]
-            else:
-                offset = 0
-            mask_shape = attention_mask.shape
-            mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
-
-    if (
-        self.config._attn_implementation == "sdpa"
-        and attention_mask is not None
-        and attention_mask.device.type == "cuda"
-    ):
-        # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
-        # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
-        # Details: https://github.com/pytorch/pytorch/issues/110213
-        causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
-
-    return causal_mask
-
-
-# adopted from https://github.com/huggingface/transformers/blob/f4014e75db0190792b3feeccfc5dc5b5f9f0ce7b/src/transformers/models/llama/modeling_llama.py#L1036
-def _llama_gemma_update_causal_mask_latest(
-    self,
-    attention_mask,
-    input_tensor,
-    cache_position,
-    past_key_values,
-    output_attentions,
-):
-    from transformers.cache_utils import StaticCache
-    from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-
-    # TODO: As of torch==2.2.0, the `attention_mask` passed to the model in `generate` is 2D and of dynamic length even when the static
-    # KV cache is used. This is an issue for torch.compile which then recaptures cudagraphs at each decode steps due to the dynamic shapes.
-    # (`recording cudagraph tree for symint key 13`, etc.), which is VERY slow. A workaround is `@torch.compiler.disable`, but this prevents using
-    # `fullgraph=True`. See more context in https://github.com/huggingface/transformers/pull/29114
-
-    if self.config._attn_implementation == "flash_attention_2":
-        if attention_mask is not None and 0.0 in attention_mask:
-            return attention_mask
-        return None
-
-    # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
-    # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
-    # to infer the attention mask.
-    past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-    using_static_cache = isinstance(past_key_values, StaticCache)
-
-    # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
-    if self.config._attn_implementation == "sdpa" and not using_static_cache and not output_attentions:
-        if AttentionMaskConverter._ignore_causal_mask_sdpa(
-            attention_mask,
-            inputs_embeds=input_tensor,
-            past_key_values_length=past_seen_tokens,
-            is_training=self.training,
-        ):
-            return None
-
-    dtype, device = input_tensor.dtype, input_tensor.device
-    # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
-    # during execution on platforms with default lower precision (bfloat16, float16)
-    min_dtype = torch.finfo(torch.float16).min
-
-    sequence_length = input_tensor.shape[1]
-    if using_static_cache:
-        target_length = past_key_values.get_max_length()
-    else:
-        target_length = (
-            attention_mask.shape[-1]
-            if isinstance(attention_mask, torch.Tensor)
-            else past_seen_tokens + sequence_length + 1
-        )
-
-    if attention_mask is not None and attention_mask.dim() == 4:
-        # in this case we assume that the mask comes already in inverted form and requires no inversion or slicing
-        if attention_mask.max() != 0:
-            raise ValueError("Custom 4D attention mask should be passed in inverted form with max==0`")
-        causal_mask = attention_mask
-    else:
-        # difference with original modeling
-        causal_mask = (
-            torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
-        )
-
-        if sequence_length != 1:
-            causal_mask = torch.triu(causal_mask, diagonal=1)
-        causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-        causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
-        if attention_mask is not None:
-            causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-            mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
-            padding_mask = padding_mask == 0
-            causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                padding_mask, min_dtype
-            )
-    if (
-        self.config._attn_implementation == "sdpa"
-        and attention_mask is not None
-        and attention_mask.device.type == "cuda"
-        and not output_attentions
-    ):
-        # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
-        # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
-        # Details: https://github.com/pytorch/pytorch/issues/110213
-        causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
-
-    return causal_mask
-
-
-# TODO : deprecate _llama_gemma_update_causal_mask_legacy when transformers>=4.41.0
-if is_transformers_version(">", "4.40.2"):
-    _llama_gemma_update_causal_mask = _llama_gemma_update_causal_mask_latest
-else:
-    _llama_gemma_update_causal_mask = _llama_gemma_update_causal_mask_legacy
 
 
 def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
@@ -625,19 +645,6 @@ def register_sin_cos_buffer(model):
         layer.self_attn.rotary_emb.forward = types.MethodType(
             llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
         )
-
-
-class LlamaModelPatcher(DecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
-        # fill causal mask in slightly different way for avoid overflow on some platforms
-        patch_update_causal_mask(self._model, "4.39.0", "model" if hasattr(self._model, "model") else "transformer")
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "model" if hasattr(self._model, "model") else "transformer")
 
 
 # copied from https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548 to unblock export with transformers 4.42
@@ -751,18 +758,13 @@ def _mistral_update_causal_mask(
     return causal_mask
 
 
-class MistralModelPatcher(DecoderModelPatcher):
+class MistralModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             # apply fix https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
-
-        else:
-            for layer in self._model.model.layers:
-                if hasattr(layer.self_attn, "rotary_emb"):
-                    _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -778,6 +780,7 @@ class MistralModelPatcher(DecoderModelPatcher):
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
 
 
+# TODO: why
 def _qwen_rotate_half(x):
     from einops import rearrange
 
@@ -786,6 +789,7 @@ def _qwen_rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
+# TODO: why
 def _qwen_apply_rotary_pos_emb(t, freqs):
     cos, sin = freqs
     rot_dim = freqs[0].shape[-1]
@@ -797,6 +801,7 @@ def _qwen_apply_rotary_pos_emb(t, freqs):
     return torch.cat((t_, t_pass_), dim=-1).type_as(t)
 
 
+# TODO: why
 def _qwen_quantize_cache_v(fdata, bits, qmax, qmin):
     # b, s, head, h-dim->b, head, s, h-dim
     qtype = torch.uint8
@@ -820,6 +825,7 @@ def _qwen_quantize_cache_v(fdata, bits, qmax, qmin):
     return qdata.contiguous(), scale, zero
 
 
+# TODO: why
 def _qwen_attention_forward(
     self,
     hidden_states: Optional[Tuple[torch.FloatTensor]],
@@ -942,7 +948,7 @@ def _qwen_attention_forward(
     return outputs
 
 
-class QwenModelPatcher(DecoderModelPatcher):
+class QwenModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -1103,7 +1109,7 @@ def _baichuan7b_attn_forward(
     return attn_output, attn_weights, past_key_value
 
 
-class BaichuanModelPatcher(DecoderModelPatcher):
+class BaichuanModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -1267,7 +1273,7 @@ def _mpt_block_forward(
     return outputs
 
 
-class MPTModelPatcher(DecoderModelPatcher):
+class MPTModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -1388,7 +1394,7 @@ def _internlm2_attention_forward(
     return attn_output, attn_weights, past_key_value
 
 
-class InternLM2Patcher(DecoderModelPatcher):
+class InternLM2Patcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -1607,7 +1613,7 @@ def _phi3_self_attn_sdpa_forward(
     return attn_output, None, past_key_value
 
 
-class Phi3ModelPatcher(DecoderModelPatcher):
+class Phi3ModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -1823,7 +1829,7 @@ def _aquila_self_attn_sdpa_forward(
     return attn_output, attn_weights, past_key_value
 
 
-class AquilaModelPatcher(DecoderModelPatcher):
+class AquilaModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for layer in self._model.model.layers:
@@ -1958,7 +1964,7 @@ def _internlm_self_attn_sdpa_forward(
     return attn_output, attn_weights, past_key_value
 
 
-class XverseModelPatcher(DecoderModelPatcher):
+class XverseModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for layer in self._model.model.layers:
@@ -1974,7 +1980,7 @@ class XverseModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-class InternLMModelPatcher(DecoderModelPatcher):
+class InternLMModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for layer in self._model.model.layers:
@@ -2110,9 +2116,11 @@ def _codegen_wrapped_scaled_dot_product_legacy(
     return sdpa_result, None
 
 
-class CodeGenModelPatcher(DecoderModelPatcher):
+class CodeGenModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+
+        # TODO: why is this needed again ? it's too convoluted
         attn_fn = codegen_wrapped_scaled_dot_product
         if is_torch_version(">=", "2.1.0") and is_transformers_version(">=", "4.45"):
             # in transformers 4.45 causal_mask const buffer was removed from the model
@@ -2125,11 +2133,18 @@ class CodeGenModelPatcher(DecoderModelPatcher):
                 orig_self_attn_fwd = layer.attn._attn
                 layer.attn._attn = types.MethodType(attn_fn, layer.attn)
                 layer.attn._orig_attn = orig_self_attn_fwd
-        patch_update_causal_mask(self._model, "4.45.0", "transformer")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "transformer")
+
+        if (
+            is_transformers_version(">=", "4.45")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model.transformer, "_update_causal_mask_original")
+        ):
+            self._model.transformer._update_causal_mask = self._model.transformer._update_causal_mask_original
+            del self._model.transformer._update_causal_mask_original
+
         for layer in self._model.transformer.h:
             if hasattr(layer.attn, "_orig_attn"):
                 layer.attn._attn = layer.attn._orig_attn
@@ -2348,7 +2363,7 @@ else:
     _dbrx_update_causal_mask = _dbrx_update_causal_mask_legacy
 
 
-class DBRXModelPatcher(DecoderModelPatcher):
+class DBRXModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         # dbrx has some accuracy issues with bf16 with transformers >= 4.40
@@ -2509,22 +2524,19 @@ def _persimmon_self_attn_sdpa_forward(
     return attn_output, None, past_key_value
 
 
-class PersimmonModelPatcher(DecoderModelPatcher):
+class PersimmonModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        patch_update_causal_mask(self._model, "4.42.0")
 
         for layer in self._model.model.layers:
             if is_torch_version(">=", "2.1.0"):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
-            if is_transformers_version("<", "4.44.99"):
-                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model)
+
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
@@ -2631,7 +2643,7 @@ def _jais_attn(self, query, key, value, attention_mask=None, head_mask=None, pos
     return attn_output, None
 
 
-class JaisModelPatcher(DecoderModelPatcher):
+class JaisModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -2649,32 +2661,6 @@ class JaisModelPatcher(DecoderModelPatcher):
             if hasattr(layer.attn, "_orig_attn"):
                 layer.attn._attn = layer.attn._orig_attn
                 layer.attn.forward = layer.attn._orig_forward
-
-
-class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-        patch_update_causal_mask(self._model, "4.42.0")
-        if (
-            hasattr(self._model, "model")
-            and hasattr(self._model.model, "layers")
-            and hasattr(self._model.model.layers[0].self_attn, "rotary_emb")
-            and hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache")
-        ):
-            for layer in self._model.model.layers:
-                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model)
-
-
-class RotaryEmbPatcher(DecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-        if is_transformers_version("<", "4.44.99"):
-            for layer in self._model.model.layers:
-                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/31f9a289a6207be6cae746e009d8e0db523be203/src/transformers/models/falcon/modeling_falcon.py#L1138
@@ -2808,29 +2794,54 @@ def _falcon_update_causal_mask(
 class FalconModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version("<", "4.44.99"):
-            for layer in self._model.transformer.h:
-                _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
-        else:
-            patch_update_causal_mask(self._model, "4.45.0", "transformer", _falcon_update_causal_mask)
+        patch_cos_sin_cached_fp32(self._model.transformer)
+
+        if (
+            is_transformers_version(">=", "4.45")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model.transformer, "_update_causal_mask")
+        ):
+            self._model.transformer._update_causal_mask_original = self._model.transformer._update_causal_mask
+            self._model.transformer._update_causal_mask = types.MethodType(
+                _falcon_update_causal_mask, self._model.transformer
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "transformer")
+
+        if (
+            is_transformers_version(">=", "4.45")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model.transformer, "_update_causal_mask_original")
+        ):
+            self._model.transformer._update_causal_mask = self._model.transformer._update_causal_mask_original
+            del self._model.transformer._update_causal_mask_original
 
 
-class GptNeoxModelPatcher(DecoderModelPatcher):
+class GptNeoxModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version("<", "4.44.99"):
-            for layer in self._model.gpt_neox.layers:
-                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
-        else:
-            patch_update_causal_mask(self._model, "4.45.0", "gpt_neox")
+
+        if (
+            is_transformers_version(">=", "4.45")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model.transformer, "_update_causal_mask")
+        ):
+            self._model.transformer._update_causal_mask_original = self._model.transformer._update_causal_mask
+            self._model.transformer._update_causal_mask = types.MethodType(
+                _falcon_update_causal_mask, self._model.transformer
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "gpt_neox")
+
+        if (
+            is_transformers_version(">=", "4.45")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model.transformer, "_update_causal_mask_original")
+        ):
+            self._model.transformer._update_causal_mask = self._model.transformer._update_causal_mask_original
+            del self._model.transformer._update_causal_mask_original
 
 
 # Adopted from https://github.com/huggingface/optimum/blob/v1.24.0/optimum/bettertransformer/models/attention.py#L96
@@ -2919,10 +2930,10 @@ def gptj_attn_forward(
     )
 
 
-class GptJModelPatcher(DecoderModelPatcher):
+class GptJModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        patch_update_causal_mask(self._model, "4.45.0", "transformer")
+
         if is_transformers_version(">=", "4.49"):
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
@@ -2934,26 +2945,12 @@ class GptJModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "transformer")
+
         if is_transformers_version(">=", "4.49"):
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             for block in self._model.transformer.h:
                 block.attn.forward = block.attn._orig_forward
                 block.attn._attn = block.attn._orig_attn
-
-
-class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-        if is_transformers_version("<", "4.44.99"):
-            for layer in self._model.gpt_neox_japanese.layers:
-                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
-        else:
-            patch_update_causal_mask(self._model, "4.45.0", "gpt_neox_japanese")
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, "gpt_neox_japanese")
 
 
 # Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/attention.py#L721
@@ -3031,7 +3028,7 @@ def _bloom_attn_forward(
     return outputs
 
 
-class BloomModelPatcher(DecoderModelPatcher):
+class BloomModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.49.0"):
@@ -3117,7 +3114,7 @@ def _gpt_neo_attn_sdpa(
     return sdpa_result, None
 
 
-class GptNeoModelPatcher(DecoderModelPatcher):
+class GptNeoModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.45.0") and is_torch_version(">=", "2.1.0"):
@@ -3139,7 +3136,7 @@ class GptNeoModelPatcher(DecoderModelPatcher):
                     layer.attn.attention._attn = layer.attn.attention._orig_attn
 
 
-class Gemma2ModelPatcher(LlamaModelPatcher):
+class Gemma2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3311,7 +3308,7 @@ def _decilm_attn_forward(
     return attn_output, attn_weights, past_key_value
 
 
-class DeciLMModelPatcher(DecoderModelPatcher):
+class DeciLMModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -3369,16 +3366,16 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
                 layer.attn.use_flash_attn = layer.attn._orig_use_flash_attn
 
 
-class InternVL2ChatLangModelPatcher(DecoderModelPatcher):
+class InternVL2ChatLangModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self, config: "OnnxConfig", model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Dict[str, Any]
     ):
         model_type = model.config.model_type
         patcher_for_model_type = {
-            "llama": LlamaModelPatcher,
-            "qwen2": UpdateCausalMaskModelPatcher,
-            "phi3": Phi3ModelPatcher,
+            "llama": OVDecoderModelPatcher,
+            "qwen2": OVDecoderModelPatcher,
             "internlm2": InternLM2Patcher,
+            "phi3": Phi3ModelPatcher,
         }
         self._internal_patcher = None
         self._patched_forward = None
@@ -3974,7 +3971,7 @@ def minicpm3_attn_forward(
     return attn_output, None, past_key_value
 
 
-class MiniCPM3Patcher(DecoderModelPatcher):
+class MiniCPM3Patcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for block in self._model.model.layers:
@@ -3987,7 +3984,7 @@ class MiniCPM3Patcher(DecoderModelPatcher):
             block.self_attn.forward = block.self_attn._orig_forward
 
 
-class DeepseekPatcher(DecoderModelPatcher):
+class DeepseekPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         self_attn = {
@@ -4282,7 +4279,7 @@ def deepseek_moe_infer(self, x, topk_ids, topk_weight):
     return final_out
 
 
-class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
+class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4579,7 +4576,7 @@ def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
     return results
 
 
-class GraniteMoEModelPatcher(LlamaModelPatcher):
+class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         for layer in self._model.model.layers:
@@ -4681,7 +4678,7 @@ def gpt_bigcode_attn(self, query, key, value, attention_mask=None, head_mask=Non
     return sdpa_result, None
 
 
-class GptBigCodeModelPatcher(DecoderModelPatcher):
+class GptBigCodeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
@@ -4747,7 +4744,6 @@ class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
 class SanaTextEncoderModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
-        patch_update_causal_mask(self._model, "4.39.0", None, patch_extrnal_model=True)
 
         if is_transformers_version(">=", "4.53.0"):
             # SDPA attention seems to not match the output of diffusers
@@ -4766,7 +4762,15 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        unpatch_update_causal_mask(self._model, None, True)
+
+        # TODO: is this necessary for an encoder ?
+        if (
+            is_transformers_version(">=", "4.39")
+            and is_transformers_version("<", "4.53")
+            and hasattr(self._model, "_update_causal_mask")
+        ):
+            self._model._update_causal_mask = self._model._update_causal_mask_original
+            del self._model._update_causal_mask_original
 
         if hasattr(self._model.config, "_orig_attn_implementation"):
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
@@ -4775,7 +4779,7 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
                     layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-class MiniCPMModelPatcher(DecoderModelPatcher):
+class MiniCPMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4861,23 +4865,18 @@ def _gemma3_mm_update_causal_mask(
     return causal_mask
 
 
-class Gemma3LMModelPatcher(DecoderModelPatcher):
+class Gemma3LMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        model.__orig_forward = model.forward
-        if is_transformers_version("<", "4.52"):
-            model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
-        elif is_transformers_version("<", "4.53"):
-            model.model._orig_update_causual_mask = model.model._update_causal_mask
-            model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, model.model)
-
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
+        model.__orig_forward = model.forward
+
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
         ):
@@ -4915,11 +4914,28 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
         model.forward = types.MethodType(forward, model)
         super().__init__(config, model, model_kwargs)
 
+    def __enter__(self):
+        super().__enter__()
+
+        if hasattr(self._model, "_update_causal_mask_mm"):
+            self._model._orig_update_causual_mask_mm = self._model._update_causal_mask_mm
+            self._model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, self._model)
+        elif hasattr(self._model, "model") and hasattr(self._model.model, "_update_causal_mask_mm"):
+            self._model.model._orig_update_causual_mask_mm = self._model.model._update_causal_mask_mm
+            self._model.model._update_causal_mask_mm = types.MethodType(
+                _gemma3_mm_update_causal_mask, self._model.model
+            )
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-        if hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
+
+        if hasattr(self._model, "_orig_update_causual_mask_mm"):
+            self._model._update_causal_mask_mm = self._model._orig_update_causal_mask_mm
+            del self._model._orig_update_causal_mask_mm
+        elif hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask_mm"):
+            self._model.model._update_causal_mask_mm = self._model.model._orig_update_causual_mask_mm
+            del self._model.model._orig_update_causual_mask_mm
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
@@ -5393,9 +5409,8 @@ class PegasusModelPatcher(Seq2SeqModelPatcher):
 
 
 # Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L596
-# No modifications, transformers>=4.52.0 this method realization breaks tracing
+# In 4.52.0, the loop is only over hitted experts, but we need to loop over all experts for tracing
 def _qwen2moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-    """ """
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     hidden_states = hidden_states.view(-1, hidden_dim)
     # router_logits: (batch * sequence_length, n_experts)
@@ -5440,7 +5455,7 @@ def _qwen2moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.T
     return final_hidden_states, router_logits
 
 
-class Qwen2MoEPatcher(UpdateCausalMaskModelPatcher):
+class Qwen2MoEPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.52.0"):
@@ -5852,7 +5867,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
         self.orig_forward = self.patched_forward
 
 
-class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
+class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
