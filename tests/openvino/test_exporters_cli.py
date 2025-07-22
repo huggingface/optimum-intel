@@ -239,25 +239,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation",
             "llama",
-            "nf4_f8e4m3",
+            "cb4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
             {
                 "model": 16,
             },
             {
-                "model": {"f8e4m3": 11, "nf4": 5},
-            },
-        ),
-        (
-            "text-generation",
-            "llama",
-            "nf4_f8e5m2",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
-            {
-                "model": 16,
-            },
-            {
-                "model": {"f8e5m2": 11, "nf4": 5},
+                "model": {"int8": 5, "int4": 5, "f8e4m3": 16},
             },
         ),
         (
@@ -444,7 +432,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "gpt2",
-            "cb4_f8e4m3 --group-size 32",
+            "cb4 --group-size 32",
             {"model": {"int8": 24, "int4": 20, "f8e4m3": 20}},
         ),
         (

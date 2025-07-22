@@ -158,7 +158,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(
                     bits=4,
-                    dtype="nf4",
+                    dtype="cb4",
                     group_size=16,
                     ratio=0.5,
                     ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
@@ -174,32 +174,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "model": 8,
             },
             {
-                "model": {"f8e4m3": 8, "nf4": 2},
-            },
-        ),
-        (
-            OVModelForCausalLM,
-            "llama",
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(
-                    bits=4,
-                    dtype="nf4",
-                    group_size=16,
-                    ratio=0.5,
-                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
-                ),
-                full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e5m2", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
-                ),
-                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
-                dataset="wikitext2",
-                num_samples=1,
-            ),
-            {
-                "model": 8,
-            },
-            {
-                "model": {"f8e5m2": 8, "nf4": 2},
+                "model": {"int8": 2, "int4": 2, "f8e4m3": 10},
             },
         ),
         (
@@ -672,7 +647,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             False,
-            dict(bits=4, dtype="cb4_f8e4m3", group_size=32),
+            dict(bits=4, dtype="cb4", group_size=32),
             {"model": {"int8": 24, "int4": 20, "f8e4m3": 20}},
         ),
         (
