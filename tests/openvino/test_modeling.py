@@ -2040,6 +2040,29 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        text = "This is a sample input"
+        tokens = tokenizer(text, return_tensors="pt")
+
+        # General case
+        outputs = model.generate(**tokens)
+        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+
+        # With input ids
+        outputs = model.generate(input_ids=tokens["input_ids"])
+        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+        del model
+
+        gc.collect()
+
     def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["bart"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -2346,6 +2369,22 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         del transformers_model
         del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForPix2Struct.from_pretrained(model_id, export=True)
+        preprocessor = get_preprocessor(model_id)
+        question = "Who am I?"
+        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
+
+        # General case
+        outputs = model.generate(**inputs)
+        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+        del model
 
         gc.collect()
 
@@ -2681,6 +2720,68 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         del transformers_model
         gc.collect()
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        question = "Describe image"
+        preprocessors = self.get_preprocessors(model_arch)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
+        # General case
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+
+        # GOT-OCR2 does not support text-only input
+        if model_arch != "got_ocr2":
+            # No input image case
+            question = "Hi, how are you?"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
+
+            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+                # video loader helper only available for transformers >= 4.49
+                if is_transformers_version("<=", "4.52"):
+                    from transformers.image_utils import load_video
+                else:
+                    from transformers.video_utils import load_video
+
+                video_path = hf_hub_download(
+                    repo_id="raushan-testing-hf/videos-test",
+                    filename="sample_demo_1.mp4",
+                    repo_type="dataset",
+                    user_agent=http_user_agent(),
+                )
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                question = "Why is this video funny?"
+                inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+                outputs = model.generate(**inputs, max_new_tokens=10)
+                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                outputs = outputs[:, inputs["input_ids"].shape[1] :]
+                outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                self.assertIsInstance(outputs[0], str)
+
+        if model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Translate this audio to French"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
+        del model
+
+        gc.collect()
+
     def _generate_random_audio_data(self):
         np.random.seed(10)
         t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
@@ -2843,6 +2944,23 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
             _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True)
 
         self.assertIn("only supports the tasks", str(context.exception))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
+    def test_generate_utils(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+
+        data = self._get_sample_image()
+        features = feature_extractor(data, return_tensors="pt")
+
+        outputs = model.generate(inputs=features["pixel_values"])
+        res = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(res[0], str)
+
+        gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
