@@ -36,7 +36,12 @@ from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedMode
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
+from .configuration import (
+    OVConfig,
+    OVDynamicQuantizationConfig,
+    OVWeightQuantizationConfig,
+    _quantization_config_from_dict,
+)
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -80,7 +85,7 @@ class OVBaseModel(OptimizedModel):
         self.name_or_path = getattr(config, "name_or_path", None)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
-        self.is_dynamic = dynamic_shapes
+        self.is_dynamic = dynamic_shapes if dynamic_shapes is not None else True
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self._compile_only = kwargs.get("compile_only", False)
@@ -97,7 +102,7 @@ class OVBaseModel(OptimizedModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
             model_dynamic_shapes = model_has_dynamic_inputs(model)
-            if dynamic_shapes ^ model_dynamic_shapes:
+            if self.is_dynamic ^ model_dynamic_shapes:
                 raise ValueError(
                     f"Provided compiled model with {'dynamic' if model_dynamic_shapes else 'static'} shapes but requested to use {'dynamic' if dynamic_shapes else 'static'}. Please set `compile_only=False` or `dynamic_shapes`={model_dynamic_shapes}"
                 )
@@ -424,6 +429,7 @@ class OVBaseModel(OptimizedModel):
             quantizer = OVQuantizer(model)
             quantization_config_copy = copy.deepcopy(quantization_config)
             quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.processor = quantization_config.processor or model_id
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -517,7 +523,7 @@ class OVBaseModel(OptimizedModel):
         if not quantization_config and load_in_8bit:
             quantization_config = OVWeightQuantizationConfig(bits=8)
         elif isinstance(quantization_config, dict):
-            quantization_config = OVConfig.quantization_config_from_dict(quantization_config)
+            quantization_config = _quantization_config_from_dict(quantization_config)
 
         return quantization_config
 
@@ -569,7 +575,7 @@ class OVBaseModel(OptimizedModel):
         return model_cache_path
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
@@ -742,7 +748,7 @@ class OVBaseModel(OptimizedModel):
                 "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.is_dynamic = batch_size == -1 and sequence_length == -1
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
         return self

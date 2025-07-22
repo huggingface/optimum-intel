@@ -219,23 +219,25 @@ def _get_open_clip_submodels_fn_and_export_configs(
 
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
-    "llava-next",
-    "llava-next-video",
+    "llava_next",
+    "llava_next_video",
     "llava-qwen2",
-    "internvl-chat",
+    "internvl_chat",
     "maira2",
     "minicpmv",
-    "phi3-v",
-    "qwen2-vl",
-    "qwen2-5-vl",
-    "got-ocr2",
+    "phi3_v",
+    "qwen2_vl",
+    "qwen2_5_vl",
+    "got_ocr2",
     "gemma3",
     "idefics3",
     "smolvlm",
     "phi4mm",
-    "phi4-multimodal",
+    "phi4_multimodal",
     "llama4",
 ]
+
+SSM_MODELS = ["mamba", "falcon_mamba"]
 
 
 def save_config(config, save_dir):
@@ -297,17 +299,17 @@ def save_preprocessors(
 ):
     model_name_or_path = config._name_or_path
     if hasattr(config, "export_model_type"):
-        model_type = config.export_model_type.replace("_", "-")
+        model_type = config.export_model_type
     else:
-        model_type = config.model_type.replace("_", "-")
+        model_type = config.model_type
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
-        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
+        if is_transformers_version(">=", "4.45") and model_type == "phi3_v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
         if (
             is_transformers_version(">=", "4.45")
-            and model_type in ["llava", "llava-next", "llava-next-video"]
+            and model_type in ["llava", "llava_next", "llava_next_video"]
             and preprocessors is not None
         ):
             if len(preprocessors) > 1 and getattr(preprocessors[1], "patch_size", None) is None:
@@ -368,16 +370,20 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
 SKIP_CHECK_TRACE_MODELS = (
     "deepseek",
     "deepseek-v2",
-    "deepseek-v3",
+    "deepseek_v3",
+    "esm",
     "levit",
     "llama4",
 )
+
+if is_transformers_version("<", "4.41"):
+    SKIP_CHECK_TRACE_MODELS += ("gemma",)
 
 
 def allow_skip_tracing_check(library_name, model_type):
     if is_openvino_version("<", "2025.0.0"):
         return False
-    if library_name == "diffusers":
+    if library_name in ["diffusers", "sentence_transformers"]:
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
 

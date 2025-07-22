@@ -1134,6 +1134,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
     )
 
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    if is_transformers_version(">=", "4.43"):
+        SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
@@ -1143,7 +1147,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "dbrx",
             "cohere",
             "qwen2",
-            "qwen2-moe",
+            "qwen2_moe",
             "arctic",
         )
 
@@ -1171,10 +1175,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("gemma3-text",)
+        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe")
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -1231,7 +1235,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon": 2,
         "falcon-40b": 2,
         "persimmon": 2,
-        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
+        "biogpt": 5,
         "aquila": 2,
         "aquila2": 2,
         "xverse": 2,
@@ -1246,7 +1250,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "dbrx": 2,
         "cohere": 2,
         "qwen2": 2,
-        "qwen2-moe": 4,
+        "qwen2_moe": 4,
         "arctic": 4,
         "phi3": 2,
         "gemma2": 4,
@@ -1260,10 +1264,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
-        "gemma3-text": 2,
+        "gemma3_text": 2,
         "glm4": 2,
         "qwen3": 2,
-        "qwen3-moe": 2,
+        "qwen3_moe": 2,
+        "mamba": 0,
+        "falcon-mamba": 0,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1296,12 +1302,26 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in ov_outputs)
-        self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        is_stateful = ov_model.config.model_type not in not_stateful
-        self.assertEqual(ov_model.stateful, is_stateful)
-        if is_stateful:
-            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
+            from optimum.intel.openvino.modeling_decoder import OVMambaCache
+
+            self.assertTrue("cache_params" in ov_outputs)
+            self.assertIsInstance(ov_outputs.cache_params, OVMambaCache)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
+                self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
+                self.assertTrue(
+                    len(ov_outputs.cache_params.conv_states) > 0 and len(ov_outputs.cache_params.ssm_states) > 0
+                )
+        else:
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
         expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
         num_sdpa = get_num_sdpa(ov_model.model)
@@ -1326,7 +1346,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        atol = 1e-3 if model_arch == "minicpm" else 1e-4
+        atol = 3e-3 if model_arch in ["minicpm", "qwen2-moe"] else 1e-4
         # quantized models have different logits value range
         if "awq" not in model_arch and "gptq" not in model_arch:
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=atol))
@@ -1366,7 +1386,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3-text"]:
+        if model_arch in ["gemma2", "gemma3_text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
@@ -1405,6 +1425,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
 
+        additional_args = {}
+        if is_transformers_version(">=", "4.51"):
+            additional_args["use_model_defaults"] = False
+
         model = OVModelForCausalLM.from_pretrained(model_id, use_cache=False, compile=False, **model_kwargs)
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
@@ -1414,7 +1438,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         inputs = "My name is Arthur and I live in"
         set_seed(SEED)
-        outputs = pipe(inputs, max_new_tokens=5)
+        outputs = pipe(inputs, max_new_tokens=5, **additional_args, do_sample=False)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
         ov_pipe = optimum_pipeline(
@@ -1425,7 +1449,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer=tokenizer if model_arch == "qwen" else None,
         )
         set_seed(SEED)
-        ov_outputs = ov_pipe(inputs, max_new_tokens=5)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=5, **additional_args, do_sample=False)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -1446,25 +1470,35 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+
         model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
+        del model_with_pkv
+
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
         outputs_model_without_pkv = model_without_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
+        del model_without_pkv
+
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+
         model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
         outputs_model_stateful = model_stateful.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
         self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
-        del model_with_pkv
-        del model_without_pkv
+        logits = model_stateful(**tokens).logits
+        copy_logits = copy.deepcopy(logits)
+        tokens = tokenizer("Input sample", return_tensors="pt")
+        model_stateful(**tokens).logits
+        self.assertTrue(torch.equal(copy_logits, logits))
+        del model_stateful
         gc.collect()
 
     def test_print_model_properties(self):
@@ -1492,7 +1526,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask(self):
         model_id = MODEL_NAMES["gpt2"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, stateful=False, use_cache=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -1515,7 +1549,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, stateful=False, use_cache=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -1625,15 +1659,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
-        if model_arch == "gemma2":
+        if model_arch in ["gemma2", "gemma3_text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
-            from transformers.cache_utils import DynamicCache
+            transformers_model.generation_config.cache_implementation = None
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenization_args = {}
         if is_transformers_version(">=", "4.45") and model_arch == "gpt_neo":
@@ -1645,8 +1678,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             **tokenization_args,
         )
         ov_model_stateful.generation_config.eos_token_id = None
+        ov_model_stateful.generation_config.forced_eos_token_id = None
+        ov_model_stateful.generation_config.encoder_no_repeat_ngram_size = None
+        ov_model_stateful.generation_config.do_sample = False
         ov_model_stateless.generation_config.eos_token_id = None
+        ov_model_stateless.generation_config.forced_eos_token_id = None
+        ov_model_stateless.generation_config.encoder_no_repeat_ngram_size = None
+        ov_model_stateless.generation_config.do_sample = False
         transformers_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.forced_eos_token_id = None
+        transformers_model.generation_config.encoder_no_repeat_ngram_size = None
+        transformers_model.generation_config.do_sample = False
         ov_model_stateful.config.eos_token_id = None
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
@@ -1657,10 +1699,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
+            if gen_config.num_beams > 1 and is_transformers_version(">=", "4.51.0") and model_arch in ["mixtral_awq"]:
+                continue
             set_seed(SEED)
 
-            if model_arch == "gemma2":
-                additional_inputs = {"past_key_values": DynamicCache()}
+            if model_arch in ["gemma2", "gemma3_text"]:
+                from transformers.cache_utils import DynamicCache
+
+                additional_inputs["past_key_values"] = DynamicCache()
             with patch_awq_for_inference("awq" in model_arch):
                 transformers_outputs = transformers_model.generate(
                     **tokens, generation_config=gen_config, **additional_inputs
@@ -1709,11 +1755,12 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "bert",
         "camembert",
         "convbert",
-        "data2vec_text",
+        "data2vec-text",
         "deberta",
-        "deberta_v2",
+        "deberta-v2",
         "distilbert",
         "electra",
+        "esm",
         "flaubert",
         "ibert",
         "mobilebert",
@@ -1723,7 +1770,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "roformer",
         "squeezebert",
         "xlm",
-        "xlm_roberta",
+        "xlm-roberta",
     )
 
     # accuracy issue, need additional investigation
@@ -1781,7 +1828,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "beit",
         "convnext",
         # "convnextv2",
-        "data2vec_vision",
+        "data2vec-vision",
         "deit",
         "levit",
         "mobilenet_v1",
@@ -1897,6 +1944,9 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SPEEDUP_CACHE = 1.1
 
     SUPPORT_STATEFUL = ("t5", "mt5")
+    if is_transformers_version(">=", "4.52.0"):
+        SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
+        # all models are stateful on transformers main, but pegasus update is not included in 4.52 yet
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1976,12 +2026,12 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe(inputs)
+        outputs = pipe(inputs, max_new_tokens=20)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
         ov_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(inputs)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=20)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -2046,13 +2096,13 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "audio_spectrogram_transformer",
-        "data2vec_audio",
+        "audio-spectrogram-transformer",
+        "data2vec-audio",
         "hubert",
         "sew",
         "sew_d",
         "unispeech",
-        "unispeech_sat",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2",
         "wav2vec2-conformer",
@@ -2117,12 +2167,12 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
 
 class OVModelForCTCIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "data2vec_audio",
+        "data2vec-audio",
         "hubert",
         "sew",
         "sew_d",
         "unispeech",
-        "unispeech_sat",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2-hf",
         "wav2vec2-conformer",
@@ -2173,8 +2223,8 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "data2vec_audio",
-        "unispeech_sat",
+        "data2vec-audio",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2-hf",
         "wav2vec2-conformer",
@@ -2227,8 +2277,8 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "data2vec_audio",
-        "unispeech_sat",
+        "data2vec-audio",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2-hf",
         "wav2vec2-conformer",
@@ -2532,7 +2582,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
         if model_arch == "gemma3":
-            patch_update_causal_mask(transformers_model, "4.43.0")
+            patch_update_causal_mask(
+                transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
+                "4.43.0",
+            )
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
@@ -2557,7 +2610,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         # video loader helper only available for transformers >= 4.49
         if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            from transformers.image_utils import load_video
+            if is_transformers_version("<=", "4.52"):
+                from transformers.image_utils import load_video
+            else:
+                from transformers.video_utils import load_video
 
             video_path = hf_hub_download(
                 repo_id="raushan-testing-hf/videos-test",
@@ -2565,7 +2621,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 repo_type="dataset",
                 user_agent=http_user_agent(),
             )
-            input_video, _ = load_video(video_path, num_frames=2)
+            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
             question = "Why is this video funny?"
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             transformers_inputs = copy.deepcopy(inputs)
@@ -2689,24 +2745,27 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
             self.assertIsInstance(outputs[0], str)
 
-        # video loader helper only available for transformers >= 4.49
-        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
-            from transformers.image_utils import load_video
+            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+                # video loader helper only available for transformers >= 4.49
+                if is_transformers_version("<=", "4.52"):
+                    from transformers.image_utils import load_video
+                else:
+                    from transformers.video_utils import load_video
 
-            video_path = hf_hub_download(
-                repo_id="raushan-testing-hf/videos-test",
-                filename="sample_demo_1.mp4",
-                repo_type="dataset",
-                user_agent=http_user_agent(),
-            )
-            input_video, _ = load_video(video_path, num_frames=2)
-            question = "Why is this video funny?"
-            inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
-            outputs = model.generate(**inputs, max_new_tokens=10)
-            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
-            outputs = outputs[:, inputs["input_ids"].shape[1] :]
-            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            self.assertIsInstance(outputs[0], str)
+                video_path = hf_hub_download(
+                    repo_id="raushan-testing-hf/videos-test",
+                    filename="sample_demo_1.mp4",
+                    repo_type="dataset",
+                    user_agent=http_user_agent(),
+                )
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                question = "Why is this video funny?"
+                inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+                outputs = model.generate(**inputs, max_new_tokens=10)
+                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                outputs = outputs[:, inputs["input_ids"].shape[1] :]
+                outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                self.assertIsInstance(outputs[0], str)
 
         if model_arch in self.SUPPORT_AUDIO:
             input_audio = self._generate_random_audio_data()
@@ -2811,6 +2870,10 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
 
+        generate_kwrgs = {}
+        if is_transformers_version(">=", "4.50"):
+            generate_kwrgs = {"use_model_defaults": False}
+
         gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -2820,9 +2883,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         )
 
         set_seed(SEED)
-        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config)
+        generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
         set_seed(SEED)
-        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config)
+        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
 
         self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
 

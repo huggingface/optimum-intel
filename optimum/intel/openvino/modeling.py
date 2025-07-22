@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
 import logging
 import os
 from pathlib import Path
@@ -78,7 +77,7 @@ MODEL_START_DOCSTRING = r"""
         dynamic_shapes (`bool`, defaults to `True`):
             All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
         ov_config (`Optional[Dict]`, defaults to `None`):
-            The dictionnary containing the informations related to the model compilation.
+            The dictionary containing the information related to the model compilation.
         compile (`bool`, defaults to `True`):
             Disable the model compilation during the loading step when set to `False`.
             Can be useful to avoid unnecessary compilation, in the case where the model needs to be statically reshaped, the device modified or if FP16 conversion is enabled.
@@ -394,6 +393,9 @@ class OVModelForFeatureExtraction(OVModel):
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
+
+        if "decoder_input_ids" in self.input_names:
+            inputs["decoder_input_ids"] = input_ids
 
         outputs = self._inference(inputs)
         last_hidden_state = (

@@ -67,7 +67,7 @@ class IPEXPagedCache(Cache):
         self.max_cache_len = max_cache_len
         self.num_kv_heads = config.num_key_value_heads
         self.num_hidden_layers = config.num_hidden_layers
-        if hasattr(config, "head_dim"):
+        if getattr(config, "head_dim", None) is not None:
             head_size = config.head_dim
         else:
             head_size = config.hidden_size // config.num_attention_heads
@@ -104,12 +104,15 @@ class IPEXPagedCache(Cache):
     ):
         # TODO: unify API definition between CPU and XPU in IPEX version > 2.6
         if self.device.type == "xpu" and self._supports_flash_decoding:
+            # make a WA here as slots here is padded but XPU does not support slots with length not equal to key length, will fix it in IPEX 2.8
+            valid_len = key.shape[0]
+            truncated_slots = slots[:valid_len]
             PagedAttention.reshape_and_cache_flash(
                 key,
                 value,
                 key_cache,
                 value_cache,
-                slots,
+                truncated_slots,
             )
         else:
             PagedAttention.reshape_and_cache(
@@ -127,7 +130,7 @@ class IPEXPagedCache(Cache):
         num_blocks = (input_lens + self.block_size - 1) // self.block_size
         for i in range(batch_size):
             nb = num_blocks[i]
-            scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1)
+            scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1, device=self.device)
             block_table = torch.topk(scores, nb).indices
             self.block_tables[i][0:nb] = block_table
             self.free_blocks[block_table] = 0
@@ -154,7 +157,7 @@ class IPEXPagedCache(Cache):
                 b_idx = start_block_idx[i]
                 if self.block_tables[i][b_idx] == -1:
                     # Need a free block. Get indices of free blocks, select the first free block
-                    scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1)
+                    scores = self.free_blocks * torch.arange(self.free_blocks.shape[0], 0, -1, device=self.device)
                     self.block_tables[i][b_idx] = scores.argmax()
                     self.free_blocks[self.block_tables[i][b_idx]] = 0
             self.slots[i] = self.block_tables[i][start_block_idx[i]] * self.block_size + slot_offset_in_block[i]

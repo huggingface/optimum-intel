@@ -688,10 +688,6 @@ def _qwen2_model_forward(
         )
         position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
-    causal_mask = self._update_causal_mask(
-        attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-    )
-
     hidden_states = inputs_embeds
 
     # create position embeddings to be shared across the decoder layers
@@ -708,7 +704,9 @@ def _qwen2_model_forward(
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
-        attention_mask = causal_mask
+        attention_mask = self._update_causal_mask(
+            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        )
 
     # decoder layers
     all_hidden_states = () if output_hidden_states else None
@@ -800,10 +798,6 @@ def _mistral_model_forward(
         )
         position_ids = position_ids.unsqueeze(0).repeat_interleave(input_ids.shape[0], 0)
 
-    causal_mask = self._update_causal_mask(
-        attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-    )
-
     hidden_states = inputs_embeds
 
     # create position embeddings to be shared across the decoder layers
@@ -823,8 +817,9 @@ def _mistral_model_forward(
         sin = sin.reshape(-1, sin.shape[-1])
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     if past_key_values is None:
-        attention_mask = causal_mask
-    # part of the code that was modified above
+        attention_mask = self._update_causal_mask(
+            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        )
 
     # decoder layers
     all_hidden_states = () if output_hidden_states else None
@@ -1061,15 +1056,17 @@ class _IPEXLlamaAttention(_IPEXAttention):
                 self.mha_linear_add = LinearAdd(module.o_proj)
 
     def qkv_gemm(self, hidden_states):
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
         if hasattr(self, "concat_qkv"):
             qkv_out = self.concat_qkv(hidden_states)
-            query = qkv_out[:, : self.q_slice].view(-1, self.num_attention_heads, self.head_dim)
-            key = qkv_out[:, self.q_slice : self.k_slice].view(-1, self.num_key_value_heads, self.head_dim)
-            value = qkv_out[:, self.k_slice :].view(-1, self.num_key_value_heads, self.head_dim)
+            query = qkv_out[:, : self.q_slice].view(hidden_shape)
+            key = qkv_out[:, self.q_slice : self.k_slice].view(hidden_shape)
+            value = qkv_out[:, self.k_slice :].view(hidden_shape)
         else:
-            query = self.q_proj(hidden_states).view(-1, self.num_attention_heads, self.head_dim)
-            key = self.k_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
-            value = self.v_proj(hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
+            query = self.q_proj(hidden_states).view(hidden_shape)
+            key = self.k_proj(hidden_states).view(hidden_shape)
+            value = self.v_proj(hidden_states).view(hidden_shape)
 
         return query, key, value
 

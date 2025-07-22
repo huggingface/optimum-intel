@@ -2714,8 +2714,11 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.42.0")
-        if hasattr(self._model.model.layers[0].self_attn, "rotary_emb") and hasattr(
-            self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"
+        if (
+            hasattr(self._model, "model")
+            and hasattr(self._model.model, "layers")
+            and hasattr(self._model.model.layers[0].self_attn, "rotary_emb")
+            and hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache")
         ):
             for layer in self._model.model.layers:
                 _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
@@ -3538,6 +3541,13 @@ def llava_next_video_vision_embed_forward(self, pixel_values):
     return selected_image_feature
 
 
+# Modified from https://huggingface.co/microsoft/maira-2/blob/main/modeling_maira2.py#L68
+def maira_vision_embed_forward(self, pixel_values):
+    vision_feature_select_strategy = self.config.vision_feature_select_strategy
+    vision_feature_layer = self.config.vision_feature_layer
+    return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
+
+
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -3547,6 +3557,23 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
         model.forward = types.MethodType(llava_vision_embed_forward, model)
+
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class MairaImageEmbeddingModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(maira_vision_embed_forward, model)
 
         super().__init__(config, model, model_kwargs)
 
@@ -4330,6 +4357,7 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
             past_key_values=None,
             inputs_embeds=None,
             input_ids=None,
+            use_cache=True,
         ):
             from transformers.cache_utils import DynamicCache
 
@@ -4340,6 +4368,7 @@ class Qwen2VLLanguageModelPatcher(DecoderModelPatcher):
                 position_ids=position_ids,
                 past_key_values=new_past_key_values,
                 inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
             )
             if past_key_values is not None:
                 result["past_key_values"] = result["past_key_values"].to_legacy_cache()
@@ -4825,7 +4854,10 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
         model.__orig_forward = model.forward
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/got_ocr2/modeling_got_ocr2.py#L835
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-Gemma-3/src/transformers/models/gemma3/modeling_gemma3.py#L1321
-        model.forward = model.get_image_features
+        if hasattr(model, "model") and hasattr(model.model, "get_image_features"):
+            model.forward = model.model.get_image_features
+        else:
+            model.forward = model.get_image_features
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4891,12 +4923,18 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         model.__orig_forward = model.forward
-        model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+        if is_transformers_version("<", "4.52"):
+            model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, model)
+        else:
+            model.model._orig_update_causual_mask = model.model._update_causal_mask
+            model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, model.model)
 
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
-        def forward(self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds):
+        def forward(
+            self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
+        ):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
@@ -4905,18 +4943,24 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
+            forward_kwargs = {}
 
-            causal_mask = self._update_causal_mask_mm(
-                attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
-            )
+            if is_transformers_version("<", "4.52"):
+                attention_mask = self._update_causal_mask_mm(
+                    attention_mask, token_type_ids, past_key_values, cache_position, inputs_embeds
+                )
+            else:
+                forward_kwargs["token_type_ids"] = token_type_ids
 
             result = self.__orig_forward(
                 input_ids=None,
-                attention_mask=causal_mask,
+                attention_mask=attention_mask,
                 position_ids=position_ids,
                 cache_position=cache_position,
                 past_key_values=pkv,
                 inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                **forward_kwargs,
             )
             upd_pkv = result["past_key_values"]
             result["past_key_values"] = upd_pkv.to_legacy_cache()
@@ -4928,6 +4972,8 @@ class Gemma3LMModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        if hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
@@ -5128,7 +5174,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
 
 
 # Adopted from https://github.com/huggingface/optimum/blob/main/optimum/bettertransformer/models/decoder_models.py#L367
-def _blenderbot_attn_forward(
+def _blenderbot_attn_forward_legacy(
     self,
     hidden_states: torch.Tensor,
     key_value_states: Optional[torch.Tensor] = None,
@@ -5214,6 +5260,112 @@ def _blenderbot_attn_forward(
     return attn_output, None, past_key_value
 
 
+# Adopted from https://github.com/huggingface/transformers/blob/v4.52.3/src/transformers/models/blenderbot/modeling_blenderbot.py#L156
+def _blenderbot_attn_forward_new(
+    self,
+    hidden_states: torch.Tensor,
+    key_value_states=None,
+    past_key_value=None,
+    attention_mask: Optional[torch.Tensor] = None,
+    layer_head_mask: Optional[torch.Tensor] = None,
+    output_attentions: bool = False,
+    cache_position: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    from transformers.cache_utils import EncoderDecoderCache
+
+    """Input shape: Batch x Time x Channel"""
+
+    # if key_value_states are provided this layer is used as a cross-attention layer
+    # for the decoder
+    if output_attentions or layer_head_mask is not None:
+        return self._orig_forward(
+            hidden_states,
+            key_value_states,
+            past_key_value,
+            attention_mask,
+            layer_head_mask,
+            output_attentions,
+            cache_position,
+        )
+    is_cross_attention = key_value_states is not None
+    bsz, tgt_len, _ = hidden_states.size()
+
+    # get query proj
+    query_states = self.q_proj(hidden_states).view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+    query_states = query_states
+
+    if past_key_value is not None:
+        if isinstance(past_key_value, EncoderDecoderCache):
+            is_updated = past_key_value.is_updated.get(self.layer_idx)
+            if is_cross_attention:
+                # after the first generated id, we can subsequently re-use all key/value_states from cache
+                curr_past_key_value = past_key_value.cross_attention_cache
+            else:
+                curr_past_key_value = past_key_value.self_attention_cache
+        else:
+            curr_past_key_value = past_key_value
+
+    current_states = key_value_states if is_cross_attention else hidden_states
+    if is_cross_attention and past_key_value is not None and is_updated:
+        # reuse k,v, cross_attentions
+        key_states = curr_past_key_value.key_cache[self.layer_idx]
+        value_states = curr_past_key_value.value_cache[self.layer_idx]
+    else:
+        key_states = self.k_proj(current_states)
+        value_states = self.v_proj(current_states)
+        key_states = key_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+        if past_key_value is not None:
+            # save all key/value_states to cache to be re-used for fast auto-regressive generation
+            cache_position = cache_position if not is_cross_attention else None
+            key_states, value_states = curr_past_key_value.update(
+                key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+            )
+            # set flag that curr layer for cross-attn is already updated so we can re-use in subsequent calls
+            if is_cross_attention:
+                past_key_value.is_updated[self.layer_idx] = True
+
+    proj_shape = (bsz, self.num_heads, -1, self.head_dim)
+    # difference with original, removed query_states = query_states.reshape(*proj_shape) * self.scale as scale is part of SDPA
+    query_states = query_states.reshape(*proj_shape)
+    key_states = key_states.reshape(*proj_shape)
+    value_states = value_states.reshape(*proj_shape)
+
+    # Difference with original, use SDPA instead of eager attention
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask,
+        dropout_p=self.dropout if self.training else 0.0,
+        is_causal=False,
+    )
+
+    if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
+        raise ValueError(
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            f" {attn_output.size()}"
+        )
+
+    attn_output = attn_output.transpose(1, 2)
+
+    # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+    # partitioned aross GPUs when using tensor-parallelism.
+    attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+
+    attn_output = self.out_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+if is_transformers_version(">=", "4.52"):
+    _blenderbot_attn_forward = _blenderbot_attn_forward_new
+else:
+    _blenderbot_attn_forward = _blenderbot_attn_forward_legacy
+
+
 def modulewise_patch(model, module_cls, patch_forward):
     for _, module in model.named_children():
         if isinstance(module, module_cls):
@@ -5267,6 +5419,14 @@ class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, BlenderbotSmallAttention)
 
 
+class BlenderbotStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotModelPatcher):
+    pass
+
+
+class BlenderbotSmallStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotSmallModelPatcher):
+    pass
+
+
 class PegasusModelPatcher(Seq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -5283,6 +5443,74 @@ class PegasusModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, PegasusAttention)
 
 
+# Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L596
+# No modifications, transformers>=4.52.0 this method realization breaks tracing
+def _qwen2moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    """ """
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    # router_logits: (batch * sequence_length, n_experts)
+    router_logits = self.gate(hidden_states)
+
+    routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+    routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+    if self.norm_topk_prob:
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+    # we cast back to the input dtype
+    routing_weights = routing_weights.to(hidden_states.dtype)
+
+    final_hidden_states = torch.zeros(
+        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    )
+
+    # One hot encode the selected experts to create an expert mask
+    # this will be used to easily index which expert is going to be sollicitated
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+    # Loop over all available experts in the model and perform the computation on each expert
+    for expert_idx in range(self.num_experts):
+        expert_layer = self.experts[expert_idx]
+        idx, top_x = torch.where(expert_mask[expert_idx])
+
+        # Index the correct hidden states and compute the expert hidden state for
+        # the current expert. We need to make sure to multiply the output hidden
+        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+        # However `index_add_` only support torch tensors for indexing so we'll use
+        # the `top_x` tensor here.
+        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+
+    final_hidden_states = final_hidden_states + shared_expert_output
+
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states, router_logits
+
+
+class Qwen2MoEPatcher(UpdateCausalMaskModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version(">=", "4.52.0"):
+            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+
+            modulewise_patch(self._model, Qwen2MoeSparseMoeBlock, _qwen2moe_sparse_block_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version(">=", "4.52.0"):
+            from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeSparseMoeBlock
+
+            modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
+
+
+class PegasusStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, PegasusModelPatcher):
+    pass
+
+
 class MarianModelPatcher(Seq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -5297,6 +5525,10 @@ class MarianModelPatcher(Seq2SeqModelPatcher):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_unpatch(self._model, MarianAttention)
+
+
+class MarianStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, MarianModelPatcher):
+    pass
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
@@ -5686,7 +5918,7 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
-        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values):
+        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
             from transformers.cache_utils import DynamicCache
 
             pkv = DynamicCache.from_legacy_cache(past_key_values)
@@ -5694,7 +5926,7 @@ class Phi4MMLanguageModelPatcher(DecoderModelPatcher):
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
-                use_cache=True,
+                use_cache=use_cache,
                 past_key_values=pkv,
             )
             hidden_states = outputs[0]
@@ -6282,3 +6514,301 @@ class Llama4TextModelPatcher(ModelPatcher):
             if layer.is_moe_layer:
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+# Vectorized implementation of ConvSequenceTransform to avoid if-else branching
+class ConvSequenceTransform(torch.nn.Module):
+    def __init__(self, conv_kernel_size, use_conv_bias, conv1, act, conv_bias):
+        super().__init__()
+        self.conv_kernel_size = conv_kernel_size
+        self.use_conv_bias = use_conv_bias
+        self.conv1d = conv1
+        self.act = act
+        self.conv_bias = conv_bias
+
+    def update_conv_state(
+        self, conv_state, new_conv_state: torch.Tensor, cache_position: torch.LongTensor
+    ) -> torch.Tensor:
+        conv_state_1 = conv_state.roll(shifts=-1, dims=-1)
+        conv_state_1[:, :, cache_position] = new_conv_state.to(device=conv_state.device, dtype=conv_state.dtype)
+        return conv_state_1
+
+    def get_positions(self, conv_state, cache_position):
+        cache_position_clamped = cache_position.clamp(0, self.conv_kernel_size - 1)
+        return cache_position_clamped
+
+    def forward(self, hidden_states, cache_position, conv_state):
+        pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (
+            cache_position.shape[0] == self.conv_kernel_size
+        )
+        # Pad the input
+        new_conv_state = torch.nn.functional.pad(hidden_states, (pad_value, 0))
+
+        # Update convolutional state
+        upd_cache_position = self.get_positions(conv_state, cache_position)
+        upd_conv_state = self.update_conv_state(conv_state, new_conv_state, upd_cache_position)
+
+        # compute both versions of hidden_states
+        # 1. cache_position.shape[0] == self.conv_kernel_size, prefill step
+        prefill_kernel_applied = self.conv1d(hidden_states)[:, :, : hidden_states.shape[-1]]
+
+        # the second version
+        # 2. re-compute conv_states for decoding step
+        new_upd_conv_state = upd_conv_state * self.conv1d.weight[:, 0, :]
+        B, C, K = new_upd_conv_state.shape
+        weight = torch.ones(C, 1, K, device=new_upd_conv_state.device, dtype=new_upd_conv_state.dtype)
+        manual_conv_applied = torch.nn.functional.conv1d(new_upd_conv_state, weight, groups=C)
+        manual_conv_applied = manual_conv_applied.squeeze(2)
+        if self.use_conv_bias:
+            manual_conv_applied = manual_conv_applied + self.conv_bias
+        decoder_kernel_applied = manual_conv_applied.unsqueeze(-1)
+
+        # Build a mask for selecting the correct result based on kernel size
+        is_full = cache_position.shape[0] == self.conv_kernel_size
+        is_full = torch.tensor(is_full, dtype=hidden_states.dtype, device=hidden_states.device)
+
+        # Select the correct result
+        hidden_states = is_full * prefill_kernel_applied + (1 - is_full) * decoder_kernel_applied
+
+        # Apply activation
+        hidden_states = self.act(hidden_states)
+        return hidden_states, upd_conv_state
+
+
+# Vectorized implementation of the selective scan to compute SSM states and scan outputs at each time step
+class SelectiveScan(torch.nn.Module):
+    def forward(self, ssm, u, dt, A, B, C, D):
+        # dt - [batch, seq_len, intermediate_size]
+        # A - [intermediate_size, ssm_state_size]
+        # B [batch, seq_len, ssm_state_size]
+        # u, hidden states - [batch, seq_len, intermediate_size]
+        dA = dt.unsqueeze(-1) * A
+        dB_u = dt * u  # shape: (b, l, d)
+        dB_u = dB_u.unsqueeze(-1) * B.unsqueeze(2)  # (b, l, d, 1) * (b, l, 1, n) => (b, l, d, n)
+        dA_cumsum = torch.nn.functional.pad(dA[:, 1:], (0, 0, 0, 0, 0, 1)).flip(1).cumsum(1).exp().flip(1)
+        x = dB_u * dA_cumsum + (ssm.unsqueeze(1) * dA[:, :1].exp())
+        x = x.cumsum(1) / (dA_cumsum + 1e-12)
+        y = (x * C.unsqueeze(2)).sum(dim=-1)
+        return y + u * D, x[:, -1, :, :]
+
+
+# The original implementation of this forward method can be found at:
+# https://github.com/huggingface/transformers/blob/v4.53.2/src/transformers/models/mamba/modeling_mamba.py#L233
+#
+# This patch modifies the method to vectorize the selective scan procedure, enabling correct graph tracing
+def mamba_mixer_forward(
+    self,
+    input_states,
+    cache_params=None,
+    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: Optional[torch.LongTensor] = None,
+):
+    batch_size, seq_len, _ = input_states.shape
+    dtype = input_states.dtype
+    # 1. Gated MLP's linear projection
+    projected_states = self.in_proj(input_states).transpose(1, 2)  # [batch, 2 * intermediate_size, seq_len]
+    hidden_states, gate = projected_states.chunk(2, dim=1)
+
+    if attention_mask is not None:
+        hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
+    # 2. Convolution sequence transformation
+    if cache_params is not None:
+        ssm_state = cache_params.ssm_states[self.layer_idx].clone()
+        ssm_state = ssm_state.to(hidden_states.device)
+        # use `cache_position.shape[0]` to check whether we are in prefill
+        # stage, it's equivalent to check `cache_position[0] == 0`, which
+        # breaks dynamo fullgraph constraints
+        hidden_states, conv_state = self.conv_sequence_transform(
+            hidden_states, cache_position, cache_params.conv_states[self.layer_idx]
+        )
+        cache_params.conv_states[self.layer_idx] = conv_state
+    else:
+        ssm_state = torch.zeros(
+            (batch_size, self.intermediate_size, self.ssm_state_size), device=hidden_states.device, dtype=dtype
+        )
+        hidden_states = self.act(self.conv1d(hidden_states)[..., :seq_len])  # [batch, intermediate_size, seq_len]
+
+    if attention_mask is not None:
+        hidden_states = hidden_states * attention_mask.unsqueeze(1)
+
+    # 3. State Space Model sequence transformation
+    # 3.a. Selection:  [batch, seq_len, self.time_step_rank + self.ssm_state_size * 2]
+    ssm_parameters = self.x_proj(hidden_states.transpose(1, 2))
+    time_step, B, C = torch.split(
+        ssm_parameters, [self.time_step_rank, self.ssm_state_size, self.ssm_state_size], dim=-1
+    )
+
+    if self.ssm_rms_normalization:
+        B = self.ssm_rms_normalization(B, variance_epsilon=self.rms_eps)
+        C = self.ssm_rms_normalization(C, variance_epsilon=self.rms_eps)
+        time_step = self.ssm_rms_normalization(time_step, variance_epsilon=self.rms_eps)
+
+    discrete_time_step = self.dt_proj(time_step)  # [batch, seq_len, intermediate_size]
+    discrete_time_step = torch.nn.functional.softplus(discrete_time_step)  # [batch, intermediate_size, seq_len]
+
+    # 3.b. Discretization: B and C to [batch, seq_len, intermediate_size, ssm_state_size] (SRAM)
+    A = -torch.exp(self.A_log.float())
+    B = B.float()
+    D = self.D.float()
+
+    scan_output, ssm_state = self.selective_scan(
+        ssm_state, hidden_states.float().transpose(1, 2), discrete_time_step, A, B, C, D
+    )
+    scan_output = scan_output.transpose(1, 2)
+    scan_output = scan_output * self.act(gate)
+
+    if cache_params is not None:
+        cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+
+    # 4. Final linear projection
+    contextualized_states = self.out_proj(scan_output.transpose(1, 2))  # [batch, seq_len, hidden_size]
+    return contextualized_states
+
+
+# This patcher class serves the following purposes:
+# 1. Inject a MambaCache structure into the original model to simplify input and output handling related to SSM states
+# 2. Patch ConvSequenceTransform module to avoid if-else branching
+# 3. Vectorize the selective scan operation to ensure correct behavior during JIT tracing
+class MambaPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers import PretrainedConfig
+        from transformers.cache_utils import MambaCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class MambaCacheWrap(MambaCache):
+            # This class serves to create MambaCache object for additional input data format
+            # when lists of tensors representing convolution and SSM states are separated
+            def __init__(
+                self,
+                config: "PretrainedConfig",
+                batch_size: int = None,
+                dtype: torch.dtype = torch.float32,
+                device: Optional[Union[torch.device, str]] = None,
+                max_batch_size: Optional[int] = None,
+                conv_states: Optional[List[torch.Tensor]] = None,
+                ssm_states: Optional[List[torch.Tensor]] = None,
+            ):
+                self.dtype = dtype
+                self.max_batch_size = batch_size or max_batch_size
+                self.intermediate_size = config.intermediate_size
+                self.ssm_state_size = config.state_size
+                self.conv_kernel_size = config.conv_kernel
+                self.device = torch.device(device) if device is not None else torch.device("cpu")
+
+                if conv_states is not None:
+                    self.conv_states = conv_states
+                else:
+                    self.conv_states = []
+                    for _ in range(config.num_hidden_layers):
+                        conv_state: torch.Tensor = torch.zeros(
+                            self.max_batch_size,
+                            self.intermediate_size,
+                            self.conv_kernel_size,
+                            device=self.device,
+                            dtype=dtype,
+                        )
+                        self.conv_states.append(conv_state)
+
+                if ssm_states is not None:
+                    self.ssm_states = ssm_states
+                else:
+                    self.ssm_states: List[torch.Tensor] = []
+                    for _ in range(config.num_hidden_layers):
+                        ssm_state: torch.Tensor = torch.zeros(
+                            self.max_batch_size,
+                            self.intermediate_size,
+                            self.ssm_state_size,
+                            device=self.device,
+                            dtype=dtype,
+                        )
+
+                        self.ssm_states.append(ssm_state)
+
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+            cache_position=None,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                # past_ssm_conv_states is a list of tuples of (ssm_state, conv_state) for each Mamba block
+                ssm_states = [ssm_conv_state[0] for ssm_conv_state in cache_params]
+                conv_states = [ssm_conv_state[1] for ssm_conv_state in cache_params]
+                wrapped_cache_params = MambaCacheWrap(
+                    self.real_config._config,
+                    input_ids.shape[0],
+                    conv_states=conv_states,
+                    ssm_states=ssm_states,
+                )
+
+            result = self.orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                cache_position=cache_position,
+                cache_params=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+
+            if use_cache:
+                present_ssm_conv_states = []
+                for ssm_state, conv_state in zip(result.cache_params.ssm_states, result.cache_params.conv_states):
+                    present_ssm_conv_states.append(
+                        (
+                            ssm_state,
+                            conv_state,
+                        )
+                    )
+                result = {
+                    "logits": result.logits,
+                    "cache_params_present": present_ssm_conv_states,
+                }
+
+            return result
+
+        self.patched_forward = patched_forward
+
+        model_type = getattr(self.real_config._config, "model_type", None)
+        self.ssm_rms_normalization = None
+
+        # falcon-mamba model has only difference from mamba that is RMS normalization for B, C, and time-step coefficients
+        if model_type == "falcon_mamba":
+            from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
+
+            self.ssm_rms_normalization = rms_forward
+
+    def __enter__(self):
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+        selective_scan = SelectiveScan()
+
+        for layer in self._model.backbone.layers:
+            layer.mixer.selective_scan = selective_scan
+            layer.mixer._orig_forward = layer.mixer.forward
+
+            layer.mixer.ssm_rms_normalization = self.ssm_rms_normalization
+
+            layer.mixer.forward = types.MethodType(mamba_mixer_forward, layer.mixer)
+            conv_transform = ConvSequenceTransform(
+                layer.mixer.conv_kernel_size,
+                layer.mixer.use_conv_bias,
+                layer.mixer.conv1d,
+                layer.mixer.act,
+                layer.mixer.conv1d.bias,
+            )
+            layer.mixer.conv_sequence_transform = conv_transform
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.orig_forward)
+        for layer in self._model.backbone.layers:
+            layer.mixer.forward = layer.mixer._orig_forward

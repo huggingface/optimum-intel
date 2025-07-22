@@ -243,8 +243,13 @@ class IPEXModel(OptimizedModel):
         from torch._inductor import config as inductor_config
 
         # System level optimization
-        # Patched model can disable cpp wrapper to get better performance.
-        inductor_config.cpp_wrapper = False if self._add_patch and self.export_feature == "text-generation" else True
+        inductor_config.cpp_wrapper = True
+        if self._add_patch and self.export_feature == "text-generation":
+            # To avoid int value recompile.
+            torch._dynamo.config.allow_unspec_int_on_nn_module = True
+            # Patched model can disable cpp wrapper to get better performance.
+            inductor_config.cpp_wrapper = False
+
         os.environ["TORCHINDUCTOR_FREEZING"] = "1"
         logger.info("Enable torch.compile optimization")
         self.model.forward = torch.compile(self.model.forward)
@@ -300,7 +305,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._supports_cache_class = True
         GenerationMixin.__init__(self)
 
-        model_type = self.config.model_type.replace("_", "-")
+        model_type = self.config.model_type
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
 
         self.config.is_decoder = True
@@ -479,7 +484,7 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         super().__init__(model, config, model_save_dir=model_save_dir, use_cache=use_cache)
         GenerationMixin.__init__(self)
 
-        model_type = self.config.model_type.replace("_", "-")
+        model_type = self.config.model_type
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
 
         self.config.is_decoder = False

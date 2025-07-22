@@ -12,11 +12,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import copy
+import dataclasses
 import inspect
 import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from functools import reduce
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
 
@@ -25,10 +27,11 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_nncf_version
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
+    PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
@@ -47,7 +50,8 @@ class OVQuantizationMethod(str, Enum):
     AWQ = "awq"
 
 
-_DEFAULT_4BIT_CONFIGS = {
+# Default configs for 4-bit weight quantization
+_DEFAULT_4BIT_WQ_CONFIGS = {
     "databricks/dolly-v2-3b": {
         "bits": 4,
         "sym": False,
@@ -116,6 +120,14 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
+    "Qwen/Qwen2.5-Coder-3B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "Qwen/Qwen3-1.7B": {
         "bits": 4,
         "sym": True,
@@ -140,7 +152,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
@@ -310,15 +321,23 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ignored_scope": {
-            "patterns": [
-                "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul",
-                "__module\\.img_processor\\.encoder\\.layers\\.\\d+\\.mlp\\.fc2/ov_ext::linear/MatMul",
-            ],
-            "validate": False,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "contextual",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+                "ignored_scope": {
+                    "patterns": [
+                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul",
+                    ]
+                },
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "audio_encoder_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
 }
@@ -330,9 +349,9 @@ model_id_aliases = [
     ("meta-llama/Meta-Llama-3.1-8B", "meta-llama/Llama-3.1-8B"),
 ]
 for m_id_1, m_id_2 in model_id_aliases:
-    _DEFAULT_4BIT_CONFIGS[m_id_2] = _DEFAULT_4BIT_CONFIGS[m_id_1]
+    _DEFAULT_4BIT_WQ_CONFIGS[m_id_2] = _DEFAULT_4BIT_WQ_CONFIGS[m_id_1]
 
-_DEFAULT_4BIT_CONFIG = {
+_DEFAULT_4BIT_WQ_CONFIG = {
     "bits": 4,
     "ratio": 1.0,
     "sym": False,
@@ -341,25 +360,92 @@ _DEFAULT_4BIT_CONFIG = {
 }
 
 
-def _check_default_4bit_configs(model_id_or_path: str):
-    if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
-        return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
-
-    model_path = Path(model_id_or_path)
-    config_path = model_path / "config.json"
-    if config_path.exists():
-        with config_path.open("r") as config_f:
-            config = json.load(config_f)
-            original_model_name = config.get("_name_or_path", "")
-        if original_model_name in _DEFAULT_4BIT_CONFIGS:
-            return _DEFAULT_4BIT_CONFIGS[original_model_name]
-
-    for model_id, config in _DEFAULT_4BIT_CONFIGS.items():
-        short_id = model_id.split("/")[-1]
-        if model_path.name == short_id:
-            return config
-
-    return None
+# Default configs for int8 full quantization
+_DEFAULT_INT8_FQ_CONFIGS = {
+    "facebook/sam-vit-base": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-large": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-huge": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "google-t5/t5-small": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "google-t5/t5-large": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "google-t5/t5-3b": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "FacebookAI/roberta-large": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 128,
+        "smooth_quant_alpha": 0.5,
+    },
+    "google-bert/bert-base-multilingual-uncased": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+    },
+    "openai/clip-vit-base-patch16": {
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.6,
+    },
+    "openai/clip-vit-base-patch32": {
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.6,
+    },
+    "openai/clip-vit-large-patch14": {
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 300,
+        "smooth_quant_alpha": 0.6,
+    },
+    "hf-tiny-model-private/tiny-random-CLIPModel": {  # For test purposes
+        "dtype": "int8",
+        "dataset": "conceptual_captions",
+        "num_samples": 1,
+        "smooth_quant_alpha": 0.9,
+    },
+}
 
 
 def get_default_int4_config(model_id_or_path: str):
@@ -370,7 +456,60 @@ def get_default_int4_config(model_id_or_path: str):
     Returns:
         Default int4 config for the given model or generic default int4 config.
     """
-    return _check_default_4bit_configs(model_id_or_path) or _DEFAULT_4BIT_CONFIG
+    logger.warning(
+        "The `get_default_int4_config` function is deprecated and will be removed in optimum-intel v1.25.0. "
+        "Please use `get_default_quantization_config` instead."
+    )
+
+    return get_default_quantization_config(model_id_or_path, "int4") or _DEFAULT_4BIT_WQ_CONFIG
+
+
+def get_default_quantization_config(
+    model_id_or_path: str, weight_format: Optional[str] = None, quant_mode: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+        weight_format (`str`, *optional*):
+            The format of the weights. Currently only "int4" value is supported.
+        quant_mode (`str`, *optional*):
+            The quantization mode. Currently only "int8" value is supported.
+    Returns:
+        Default quantization config for the given model if found and `None` otherwise.
+    """
+
+    if weight_format is None and quant_mode is None:
+        raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
+
+    if weight_format == "int4":
+        default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
+    elif quant_mode == "int8":
+        default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
+    else:
+        return None
+
+    # Check if the model_id_or_path is in the default configs
+    if model_id_or_path in default_configs_dict:
+        return default_configs_dict[model_id_or_path]
+
+    # Try to match by config.json
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
+    if config_path.exists():
+        with config_path.open("r") as config_f:
+            config = json.load(config_f)
+            original_model_name = config.get("_name_or_path", "")
+        if original_model_name in default_configs_dict:
+            return default_configs_dict[original_model_name]
+
+    # Try to match by folder name
+    for model_id, config in default_configs_dict.items():
+        short_id = model_id.split("/")[-1]
+        if model_path.name == short_id:
+            return config
+
+    return None
 
 
 @dataclass
@@ -441,7 +580,20 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         # Unpack kwargs dict
         result = super().to_dict()
         result = result | result.pop("kwargs", {})
+        self._dataclasses_to_dict(result)
         return result
+
+    @staticmethod
+    def _dataclasses_to_dict(d: dict):
+        """
+        Search for dataclasses in the dict and convert them to dicts.
+        """
+        for k in d:
+            v = d[k]
+            if isinstance(v, dict):
+                OVQuantizationConfigBase._dataclasses_to_dict(v)
+            elif dataclasses.is_dataclass(v):
+                d[k] = dataclasses.asdict(v)
 
 
 @dataclass
@@ -496,10 +648,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Weight compression method to apply. Possible options:
                 - "default": default weight quantization will be applied.
                 - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
-                  method. AWQ improves generation quality of INT4-compressed LLMs, but requires
-                  additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
-                  required. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
-                  such case it will be skipped.
+                  method. AWQ improves generation quality of INT4-compressed LLMs. If dataset is provided, a data-aware
+                  activation-based version of the algorithm will be executed, which requires additional time. Otherwise,
+                  data-free AWQ will be applied which relies on per-column magnitudes of weights instead of activations.
+                  Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it
+                  will be skipped.
                 - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
                   activations of other layers, facilitating accuracy preservation post-optimization while reducing
                   the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
@@ -601,16 +754,19 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
+            sam_datasets = set(PREDEFINED_SAM_DATASETS.keys())
             if (
                 self.dataset
                 not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
                 | language_datasets
                 | visual_lm_datasets
                 | stable_diffusion_datasets
+                | sam_datasets
             ):
                 raise ValueError(
                     "You have entered a string value for dataset. You can only choose between "
                     f"{language_datasets} for text feature extraction models, "
+                    f"{sam_datasets} for SegmentAnything models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
@@ -626,6 +782,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
+
+        if self.dataset is None and self.quant_method == OVQuantizationMethod.AWQ and is_nncf_version("<", "2.17.0"):
+            raise ValueError("Data-free AWQ is available starting form NNCF 2.17. Please update nncf package.")
 
         if self.dtype in ["int4", "int8"]:
             bits = 4 if self.dtype == "int4" else 8
@@ -769,7 +928,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         bits: int = 8,
         sym: bool = False,
         ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None,
-        num_samples: Optional[int] = 128,
+        num_samples: Optional[int] = None,
         model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
@@ -862,22 +1021,28 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         """
         super().post_init()
 
-        if self.dataset is not None:
+        if self.dataset is not None and isinstance(self.dataset, str):
             speech_to_text_datasets = set(PREDEFINED_SPEECH_TO_TEXT_DATASETS.keys())
+            visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
+            sam_datasets = set(PREDEFINED_SAM_DATASETS.keys())
             if (
                 self.dataset
                 not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
                 | language_datasets
                 | speech_to_text_datasets
                 | stable_diffusion_datasets
+                | visual_lm_datasets
+                | sam_datasets
             ):
                 raise ValueError(
                     "You can only choose between the following datasets:"
                     f"{language_datasets} for text feature extraction models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, "
-                    f"{speech_to_text_datasets} for speech-to-text models or "
+                    f"{speech_to_text_datasets} for speech-to-text models, "
+                    f"{sam_datasets} for SegmentAnything models, "
+                    f"{visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
 
@@ -939,17 +1104,10 @@ class OVConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
         self.optimum_version = kwargs.pop("optimum_version", None)
         if isinstance(quantization_config, dict):
-            quantization_config = self.quantization_config_from_dict(quantization_config)
+            quantization_config = _quantization_config_from_dict(quantization_config)
         self.quantization_config = quantization_config
         if self.quantization_config is not None:
-            if isinstance(self.quantization_config, (OVWeightQuantizationConfig, OVQuantizationConfig)):
-                self.dtype = self.quantization_config.dtype
-            elif isinstance(self.quantization_config, OVMixedQuantizationConfig):
-                wc_dtype = self.quantization_config.weight_quantization_config.dtype
-                q_dtype = self.quantization_config.full_quantization_config.dtype
-                self.dtype = f"{wc_dtype}_{q_dtype}"
-            else:
-                raise ValueError(f"Unsupported type of quantization config: {type(self.quantization_config)}")
+            self.dtype = self._get_dtype(self.quantization_config)
         else:
             self.dtype = dtype
 
@@ -962,29 +1120,6 @@ class OVConfig(BaseConfig):
             }
             for name, value in model_inputs.items()
         ]
-
-    @staticmethod
-    def quantization_config_from_dict(quantization_config: dict) -> OVQuantizationConfigBase:
-        if "weight_quantization_config" in quantization_config and "full_quantization_config" in quantization_config:
-            return OVMixedQuantizationConfig.from_dict(quantization_config)
-        wq_args = inspect.getfullargspec(OVWeightQuantizationConfig.__init__).args
-        q_args = inspect.getfullargspec(OVQuantizationConfig.__init__).args
-        weight_only = quantization_config.pop("weight_only", None)
-        config_keys = quantization_config.keys()
-        matches_wq_config_signature = all(arg_name in wq_args for arg_name in config_keys)
-        matches_q_config_signature = all(arg_name in q_args for arg_name in config_keys)
-        if matches_wq_config_signature == matches_q_config_signature:
-            if weight_only is None:
-                logger.warning(
-                    "Can't determine type of OV quantization config. Please specify explicitly whether you intend to "
-                    "run weight-only quantization or not with `weight_only` parameter. Creating an instance of "
-                    "OVWeightQuantizationConfig."
-                )
-                return OVWeightQuantizationConfig.from_dict(quantization_config)
-            matches_wq_config_signature = weight_only
-
-        config_type = OVWeightQuantizationConfig if matches_wq_config_signature else OVQuantizationConfig
-        return config_type.from_dict(quantization_config)
 
     def _to_dict_safe(self, to_diff_dict: bool = False) -> Dict[str, Any]:
         class ConfigStub:
@@ -1002,6 +1137,21 @@ class OVConfig(BaseConfig):
         else:
             result = super().to_diff_dict() if to_diff_dict else super().to_dict()
         return result
+
+    @staticmethod
+    def _get_dtype(quantization_config):
+        if isinstance(quantization_config, (OVWeightQuantizationConfig, OVQuantizationConfig)):
+            dtype = quantization_config.dtype
+        elif isinstance(quantization_config, OVMixedQuantizationConfig):
+            wc_dtype = quantization_config.weight_quantization_config.dtype
+            q_dtype = quantization_config.full_quantization_config.dtype
+            dtype = f"{wc_dtype}_{q_dtype}"
+        elif isinstance(quantization_config, OVPipelineQuantizationConfig):
+            dtypes = [OVConfig._get_dtype(config) for config in quantization_config.quantization_configs.values()]
+            dtype = "_".join(dtypes)
+        else:
+            raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
+        return dtype
 
     def to_dict(self) -> Dict[str, Any]:
         return self._to_dict_safe(to_diff_dict=False)
@@ -1075,8 +1225,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
             # TODO: remove once there is support for FP8 weight compression in NNCF
             wqc.backup_precision = "none"
 
-        # Pull dataset-related parameters from child configs. This is not the intended use case, but we process it just
-        # in case user sets those parameters inside child configs only.
+        # Pull dataset-related parameters from child configs
         num_samples = max((num_samples or 0, wqc.num_samples or 0, fqc.num_samples or 0)) or None
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
@@ -1114,3 +1263,144 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         result["weight_quantization_config"] = self.weight_quantization_config.to_dict()
         result["full_quantization_config"] = self.full_quantization_config.to_dict()
         return result
+
+
+class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
+    def __init__(
+        self,
+        quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
+        num_samples: Optional[int] = None,
+        dataset: Optional[Union[str, List[str]]] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: Optional[bool] = False,
+        **kwargs,
+    ):
+        """
+        Configuration class for quantization of multimodel pipelines.
+        For each submodel in the pipeline, a separate quantization config can be provided. If the config is not provided for a
+        submodel, it won't be quantized.
+
+        Args:
+            quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
+                A dictionary where keys are submodel names and values are either dictionaries or instances of
+                `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+            num_samples (Optional[int]):
+                The maximum number of samples composing the calibration dataset. Defaults to None.
+            dataset (Optional[Union[str, List[str]]]):
+                The dataset used for data-aware optimization with NNCF. Can be a string or a list of strings. Defaults to None.
+            tokenizer (Optional[str]):
+                The tokenizer used to process the dataset. Can be a model ID or a path to a directory containing
+                tokenizer files. Defaults to None.
+            processor (Optional[str]):
+                A transformers processor used to process the dataset inputs. Can be a model ID or a path to a
+                directory containing processor files. Defaults to None.
+            trust_remote_code (Optional[bool]):
+                If True, allows the use of custom code hosted in the model repository. This should only be set for repositories
+                you trust, as it will execute arbitrary code on your local machine. Defaults to False.
+            **kwargs:
+                Additional parameters for the configuration.
+        """
+
+        def or_op(a, b):
+            return a or b
+
+        if kwargs.pop("ignored_scope", None) is not None:
+            logger.warning(
+                "`ignored_scope` parameter is not supported for pipeline quantization. It will be ignored. "
+                "Please use `ignored_scope` parameter in the submodel configs instead."
+            )
+
+        quantization_configs = copy.deepcopy(quantization_configs)
+        for submodel_name, submodel_config in quantization_configs.items():
+            if isinstance(submodel_config, dict):
+                quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
+
+        # Pull dataset-related parameters from child configs
+        configs = quantization_configs.values()
+        num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
+        dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
+        tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
+        processor = reduce(or_op, (processor, *(config.processor for config in configs)))
+        trust_remote_code = reduce(or_op, (trust_remote_code, *(config.trust_remote_code for config in configs)))
+
+        super().__init__(
+            ignored_scope=None,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
+        self.quantization_configs = quantization_configs
+        self.post_init()
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["quantization_configs"] = {name: config.to_dict() for name, config in self.quantization_configs.items()}
+        return result
+
+    def post_init(self):
+        super().post_init()
+        for submodel_config in self.quantization_configs.values():
+            submodel_config.post_init()
+
+
+def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
+    """
+    Helper function to create a quantization config from a dictionary.
+    """
+
+    # Check for OVMixedQuantizationConfig
+    if "weight_quantization_config" in config_dict and "full_quantization_config" in config_dict:
+        return OVMixedQuantizationConfig.from_dict(config_dict)
+
+    # Check for OVPipelineQuantizationConfig
+    if "quantization_configs" in config_dict:
+        return OVPipelineQuantizationConfig.from_dict(config_dict)
+
+    # Either OVWeightQuantizationConfig or OVQuantizationConfig
+    # Try to detect the type of config based on the keys present in the dictionary
+    wq_args = set(inspect.getfullargspec(OVWeightQuantizationConfig.__init__).args)
+    fq_args = set(inspect.getfullargspec(OVQuantizationConfig.__init__).args)
+    common_args = wq_args & fq_args
+    wq_only_args = wq_args - common_args
+    fq_only_args = fq_args - common_args
+    if any(arg in wq_only_args for arg in config_dict):
+        return OVWeightQuantizationConfig.from_dict(config_dict)
+    if any(arg in fq_only_args for arg in config_dict):
+        return OVQuantizationConfig.from_dict(config_dict)
+
+    # Try to create instances of both configs and check which one is valid
+    try:
+        wq_config = OVWeightQuantizationConfig.from_dict(config_dict)
+    except ValueError as wc_exception:  # noqa: F841
+        wq_config = None
+    try:
+        fq_config = OVQuantizationConfig.from_dict(config_dict)
+    except ValueError as fq_exception:  # noqa: F841
+        fq_config = None
+    if (wq_config is None) != (fq_config is None):
+        return wq_config or fq_config
+    if wq_config is None and fq_config is None:
+        raise ValueError(
+            "The provided configuration dictionary does not match the expected structure for either "
+            "OVWeightQuantizationConfig or OVQuantizationConfig. "
+            f"Exceptions encountered: {wc_exception} \n {fq_exception}"  # noqa: F821
+        )
+
+    # Try to determine the type of config based on the `weight_only` parameter
+    weight_only = config_dict.get("weight_only", None)
+    if weight_only:
+        return wq_config
+    if weight_only is False:
+        return fq_config
+
+    # If everything else fails, default to OVWeightQuantizationConfig
+    logger.warning(
+        "Can't determine type of OV quantization config. Please specify explicitly whether you intend to "
+        "run weight-only quantization or not with `weight_only` parameter. Creating an instance of "
+        "OVWeightQuantizationConfig."
+    )
+    return wq_config

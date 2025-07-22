@@ -186,10 +186,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         default=None,
         help=(
-            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
-            "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
-            "argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such "
-            "case it will be skipped."
+            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs. If dataset is "
+            "provided, a data-aware activation-based version of the algorithm will be executed, which requires "
+            "additional time. Otherwise, data-free AWQ will be applied which relies on per-column magnitudes of "
+            "weights instead of activations. Note: it is possible that there will be no matching patterns in the model "
+            "to apply AWQ, in such case it will be skipped."
         ),
     )
     optional_group.add_argument(
@@ -329,7 +330,7 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
@@ -363,47 +364,72 @@ class OVExportCommand(BaseOptimumCLICommand):
             if not is_nncf_available():
                 raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
 
+            default_quantization_config = get_default_quantization_config(
+                self.args.model, self.args.weight_format, self.args.quant_mode
+            )
             if self.args.weight_format is not None:
                 # For int4 quantization if no parameter is provided, then use the default config if exists
                 if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
-                    quantization_config = get_default_int4_config(self.args.model)
+                    if default_quantization_config is not None:
+                        quantization_config = default_quantization_config
+                        log_message = (
+                            f"Applying the default quantization config for {self.args.model}: {quantization_config}."
+                        )
+                    else:
+                        quantization_config = _DEFAULT_4BIT_WQ_CONFIG
+                        log_message = f"Applying a default quantization config: {quantization_config}."
+                    logger.info(log_message)
                 else:
-                    quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-
-                if quantization_config.get("dataset", None) is not None:
-                    quantization_config["trust_remote_code"] = self.args.trust_remote_code
-                ov_config = OVConfig(quantization_config=quantization_config)
+                    quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
             else:
-                if self.args.dataset is None:
-                    raise ValueError(
-                        "Dataset is required for full quantization. Please provide it with --dataset argument."
+                if no_quantization_parameter_provided(self.args) and default_quantization_config is not None:
+                    quantization_config = default_quantization_config
+                    logger.info(
+                        f"Applying the default quantization config for {self.args.model}: {quantization_config}."
                     )
-
-                if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
-                    if library_name == "diffusers":
-                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                    wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_CONFIG)
-                    wc_dtype, q_dtype = self.args.quant_mode.split("_")
-                    wc_config["dtype"] = wc_dtype
-
-                    q_config = prepare_q_config(self.args)
-                    q_config["dtype"] = q_dtype
-
-                    quantization_config = {
-                        "weight_quantization_config": wc_config,
-                        "full_quantization_config": q_config,
-                        "num_samples": self.args.num_samples,
-                        "dataset": self.args.dataset,
-                        "trust_remote_code": self.args.trust_remote_code,
-                    }
                 else:
-                    quantization_config = prepare_q_config(self.args)
-                ov_config = OVConfig(quantization_config=quantization_config)
+                    if self.args.dataset is None:
+                        raise ValueError(
+                            "Dataset is required for full quantization. Please provide it with --dataset argument."
+                        )
+                    if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
+                        if library_name == "diffusers":
+                            raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
+
+                        wc_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
+                        wc_dtype, q_dtype = self.args.quant_mode.split("_")
+                        wc_config["dtype"] = wc_dtype
+
+                        q_config = prepare_q_config(self.args)
+                        q_config["dtype"] = q_dtype
+
+                        quantization_config = {
+                            "weight_quantization_config": wc_config,
+                            "full_quantization_config": q_config,
+                            "num_samples": self.args.num_samples,
+                            "dataset": self.args.dataset,
+                        }
+                    else:
+                        quantization_config = prepare_q_config(self.args)
+            quantization_config["trust_remote_code"] = self.args.trust_remote_code
+            ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
         task = infer_task(self.args.task, self.args.model, library_name=library_name)
+        # in some cases automatic task detection for multimodal models gives incorrect results
+        if self.args.task == "auto" and library_name == "transformers":
+            from transformers import AutoConfig
+
+            from ...exporters.openvino.utils import MULTI_MODAL_TEXT_GENERATION_MODELS
+
+            config = AutoConfig.from_pretrained(
+                self.args.model,
+                cache_dir=self.args.cache_dir,
+                trust_remote_code=self.args.trust_remote_code,
+            )
+            if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
+                task = "image-text-to-text"
 
         if library_name == "diffusers" and quantize_with_dataset:
             if not is_diffusers_available():
@@ -454,8 +480,9 @@ class OVExportCommand(BaseOptimumCLICommand):
         elif (
             quantize_with_dataset
             and (
-                task == "fill-mask"
+                task in ["fill-mask", "zero-shot-image-classification"]
                 or task.startswith("text-generation")
+                or task.startswith("text2text-generation")
                 or task.startswith("automatic-speech-recognition")
                 or task.startswith("feature-extraction")
             )
@@ -465,6 +492,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForCausalLM
 
                 model_cls = OVModelForCausalLM
+            elif task.startswith("text2text-generation"):
+                from optimum.intel import OVModelForSeq2SeqLM
+
+                model_cls = OVModelForSeq2SeqLM
             elif task == "image-text-to-text":
                 from optimum.intel import OVModelForVisualCausalLM
 
@@ -485,6 +516,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from ...intel import OVModelForMaskedLM
 
                 model_cls = OVModelForMaskedLM
+            elif task == "zero-shot-image-classification":
+                from ...intel import OVModelForZeroShotImageClassification
+
+                model_cls = OVModelForZeroShotImageClassification
             else:
                 raise NotImplementedError(
                     f"Unable to find a matching model class for the task={task} and library_name={library_name}."

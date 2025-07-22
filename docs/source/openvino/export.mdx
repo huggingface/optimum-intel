@@ -116,10 +116,11 @@ Optional arguments:
                         argument will not have an effect on the resulting model.
   --all-layers          Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an
                         weight compression is applied, they are compressed to INT8.
-  --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but
-                        requires additional time for tuning weights on a calibration dataset. To run AWQ, please also
-                        provide a dataset argument. Note: it is possible that there will be no matching patterns in
-                        the model to apply AWQ, in such case it will be skipped.
+  --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs. If
+                        dataset is provided, a data-aware activation-based version of the algorithm will be executed,
+                        which requires additional time. Otherwise, data-free AWQ will be applied which relies on
+                        per-column magnitudes of weights instead of activations. Note: it is possible that there will
+                        be no matching patterns in the model to apply AWQ, in such case it will be skipped.
   --scale-estimation    Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between
                         the original and compressed layers. Providing a dataset is required to run scale estimation.
                         Please note, that applying scale estimation takes additional memory and time.
@@ -161,7 +162,12 @@ Export with INT4 weights compression:
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 ov_model/
 ```
 
-Export with INT4 weights compression and a data-aware AWQ and Scale Estimation algorithms:
+Export with INT4 weights compression and data-free AWQ algorithm:
+```bash
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int4 --awq ov_model/
+```
+
+Export with INT4 weights compression and data-aware AWQ and Scale Estimation algorithms:
 ```bash
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B \
     --weight-format int4 --awq --scale-estimation --dataset wikitext2 ov_model/
@@ -182,6 +188,21 @@ Besides weight-only quantization, you can also apply full model quantization inc
 ```bash
 optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 32 --smooth-quant-alpha 0.9 ./whisper-large-v3-turbo
 ```
+
+#### Default quantization configs
+
+For some models we maintain a set of default quantization configs ([link](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py)). To apply a default 4-bit weight-only quantization one should provide `--weight-format int4` without any additional arguments. For int8 weight & activation quantization it should be `--quant-mode int8`. For example:
+
+```bash
+optimum-cli export openvino -m microsoft/Phi-4-mini-instruct --weight-format int4 ./Phi-4-mini-instruct
+```
+
+or
+
+```bash
+optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode int8 ./clip-vit-base-patch16
+```
+
 
 ### Decoder models
 

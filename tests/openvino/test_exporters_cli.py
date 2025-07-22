@@ -15,10 +15,11 @@ import json
 import subprocess
 import unittest
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
+from unittest.mock import Mock
 
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -55,7 +56,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFAULT_INT8_FQ_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
@@ -70,6 +71,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     """
     Integration tests ensuring supported models are correctly exported.
     """
+
+    maxDiff = None
 
     SUPPORTED_ARCHITECTURES = [
         ("text-generation", "gpt2"),
@@ -90,6 +93,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
     ]
+
+    if is_transformers_version(">=", "4.39"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "mamba"),
+                ("text-generation-with-past", "falcon-mamba"),
+            ]
+        )
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
@@ -122,6 +133,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "mamba": 2,
+        "falcon-mamba": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -200,11 +213,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
+            {"encoder": 8, "decoder": 12, "decoder_with_past": 11}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
             (
-                [{"int8": 8}, {"int8": 11}, {"int8": 9}]
+                {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
                 if is_transformers_version("<=", "4.36.0")
-                else [{"int8": 8}, {"int8": 12}, {"int8": 18}]
+                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -212,11 +227,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [10, 12, 11] if is_transformers_version("<=", "4.36.0") else [8, 12, 25],
+            {"encoder": 9, "decoder": 13, "decoder_with_past": 12}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 9, "decoder": 14, "decoder_with_past": 25},
             (
-                [{"f8e4m3": 8}, {"f8e4m3": 11}, {"f8e4m3": 9}]
+                {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 11}, "decoder_with_past": {"f8e4m3": 9}}
                 if is_transformers_version("<=", "4.36.0")
-                else [{"f8e4m3": 8}, {"f8e4m3": 12}, {"f8e4m3": 18}]
+                else {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 12}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
         (
@@ -224,208 +241,274 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama",
             "f8e4m3",
             "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
-            [
-                13,
-            ],
-            [
-                {"f8e4m3": 16},
-            ],
+            {
+                "model": 15,
+            },
+            {
+                "model": {"f8e4m3": 16},
+            },
         ),
         (
             "text-generation",
             "llama",
             "nf4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
-            [
-                14,
-            ],
-            [
-                {"f8e4m3": 11, "nf4": 5},
-            ],
+            {
+                "model": 16,
+            },
+            {
+                "model": {"f8e4m3": 11, "nf4": 5},
+            },
         ),
         (
             "text-generation",
             "llama",
             "nf4_f8e5m2",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
-            [
-                14,
-            ],
-            [
-                {"f8e5m2": 11, "nf4": 5},
-            ],
+            {
+                "model": 16,
+            },
+            {
+                "model": {"f8e5m2": 11, "nf4": 5},
+            },
         ),
         (
             "text-generation",
             "llama",
             "int4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
-            [
-                14,
-            ],
-            [
-                {"f8e4m3": 11, "int4": 5},
-            ],
+            {
+                "model": 16,
+            },
+            {
+                "model": {"f8e4m3": 11, "int4": 5},
+            },
         ),
         (
             "text-generation",
             "llama",
             "int4_f8e5m2",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
-            [
-                13,
-            ],
-            [
-                {"f8e5m2": 2, "int4": 28},
-            ],
+            {
+                "model": 15,
+            },
+            {
+                "model": {"f8e5m2": 2, "int4": 28},
+            },
         ),
         (
             "stable-diffusion",
             "stable-diffusion",
             "int8",
             "--dataset conceptual_captions --num-samples 1 --trust-remote-code",
-            [
-                112,
-                0,
-                0,
-                0,
-            ],
-            [
-                {"int8": 121},
-                {"int8": 42},
-                {"int8": 34},
-                {"int8": 64},
-            ],
+            {
+                "unet": 112,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+            },
+            {
+                "unet": {"int8": 121},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 64},
+            },
         ),
         (
             "stable-diffusion-xl",
             "stable-diffusion-xl",
             "f8e5m2",
             "--dataset laion/220k-GPT4Vision-captions-from-LIVIS --num-samples 1 --trust-remote-code",
-            [
-                174,
-                0,
-                0,
-                0,
-                0,
-            ],
-            [
-                {"f8e5m2": 183},
-                {"int8": 42},
-                {"int8": 34},
-                {"int8": 64},
-                {"int8": 66},
-            ],
+            {
+                "unet": 198,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+                "text_encoder_2": 0,
+            },
+            {
+                "unet": {"f8e5m2": 183},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 64},
+                "text_encoder_2": {"int8": 66},
+            },
         ),
         (
             "latent-consistency",
             "latent-consistency",
             "f8e4m3",
             "--dataset laion/filtered-wit --num-samples 1 --trust-remote-code",
-            [
-                79,
-                0,
-                0,
-                0,
-            ],
-            [
-                {"f8e4m3": 84},
-                {"int8": 42},
-                {"int8": 34},
-                {"int8": 40},
-            ],
+            {
+                "unet": 87,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+            },
+            {
+                "unet": {"f8e4m3": 84},
+                "vae_decoder": {"int8": 42},
+                "vae_encoder": {"int8": 34},
+                "text_encoder": {"int8": 40},
+            },
         ),
         (
             "feature-extraction",
             "blenderbot",
             "int8",
             "--dataset wikitext2 --num-samples 1",
-            [
-                33,
-            ],
-            [
-                {"int8": 35},
-            ],
+            {
+                "model": 33,
+            },
+            {
+                "model": {"int8": 35},
+            },
         ),
         (
             "feature-extraction",
             "sentence-transformers-bert",
             "int8",
             "--library sentence_transformers --dataset c4 --num-samples 1",
-            [
-                12,
-            ],
-            [
-                {"int8": 15},
-            ],
+            {
+                "model": 12,
+            },
+            {
+                "model": {"int8": 15},
+            },
         ),
         (
             "fill-mask",
             "roberta",
             "int8",
             "--dataset wikitext2 --num-samples 1",
-            [
-                32,
-            ],
-            [
-                {"int8": 34},
-            ],
+            {
+                "model": 32,
+            },
+            {
+                "model": {"int8": 34},
+            },
         ),
         (
             "fill-mask",
-            "xlm_roberta",
+            "xlm-roberta",
             "int8",
             "--library sentence_transformers --dataset c4 --num-samples 1",
-            [
-                14,
-            ],
-            [
-                {"int8": 16},
-            ],
+            {
+                "model": 14,
+            },
+            {
+                "model": {"int8": 16},
+            },
+        ),
+        (
+            "zero-shot-image-classification",
+            "clip",
+            "int8",
+            "--dataset conceptual_captions --num-samples 1",
+            {
+                "model": 65,
+            },
+            {
+                "model": {"int8": 65},
+            },
+        ),
+        (
+            "text2text-generation-with-past",
+            "t5",
+            "int8",
+            "--dataset c4 --num-samples 1",
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 30, "decoder": 62},
+            (
+                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+            ),
+        ),
+        (
+            "feature-extraction",
+            "sam",
+            "int8",
+            "--dataset coco --num-samples 1",
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 61,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 50},
+            },
         ),
     ]
 
     TEST_4BIT_CONFIGURATIONS = [
-        ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", [{"int8": 4, "int4": 72}]),
-        ("text-generation-with-past", "opt125m", "int4 --group-size 64", [{"int8": 4, "int4": 144}]),
-        ("text-generation-with-past", "opt125m", "mxfp4", [{"int8": 4, "f4e2m1": 72, "f8e8m0": 72}]),
-        ("text-generation-with-past", "opt125m", "nf4", [{"int8": 4, "nf4": 72}]),
+        (
+            "text-generation-with-past",
+            "opt125m",
+            "int4 --sym --group-size 128",
+            {"model": {"int8": 4, "int4": 72}},
+        ),
+        (
+            "text-generation-with-past",
+            "opt125m",
+            "int4 --group-size 64",
+            {"model": {"int8": 4, "int4": 144}},
+        ),
+        (
+            "text-generation-with-past",
+            "opt125m",
+            "mxfp4",
+            {"model": {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}},
+        ),
+        (
+            "text-generation-with-past",
+            "opt125m",
+            "nf4",
+            {"model": {"int8": 4, "nf4": 72}},
+        ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
-            [{"int4": 16}],
+            {"model": {"int4": 16}},
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
-            [{"int8": 4, "int4": 14}],
+            {"model": {"int8": 4, "int4": 14}},
+        ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --awq",
+            {"model": {"int8": 4, "int4": 14}},
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
-            [{"int8": 4, "int4": 14}],
+            {"model": {"int8": 4, "int4": 14}},
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2 --num-samples 100 ",
-            [{"int8": 4, "int4": 14}],
+            {"model": {"int8": 4, "int4": 14}},
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --lora-correction --dataset auto --num-samples 16",
-            [{"int8": 60, "int4": 14}],
+            {"model": {"int8": 60, "int4": 14}},
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --group-size 16 --backup-precision none --ratio 0.5",
-            [{"int4": 6}],
+            {"model": {"int4": 6}},
         ),
     ]
 
@@ -436,27 +519,43 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "llava_next",
                     "int4 --group-size 16 --ratio 0.8",
-                    [{"int8": 14, "int4": 16}, {"int8": 1}, {"int8": 9}],
+                    {
+                        "lm_model": {"int8": 14, "int4": 16},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 9},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "llava_next",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
                     "--dataset contextual --num-samples 1",
-                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 9}],
+                    {
+                        "lm_model": {"int8": 6, "int4": 24},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 9},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
+                    {
+                        "lm_model": {"int8": 16, "int4": 14},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 15},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "nanollava",
                     'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 16, "int4": 14}, {"int8": 1}, {"int8": 15}],
+                    {
+                        "lm_model": {"int8": 16, "int4": 14},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 15},
+                    },
                 ),
             ]
         )
@@ -469,7 +568,13 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "llava_next_video",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
                     "--dataset contextual --num-samples 1",
-                    [{"int8": 6, "int4": 24}, {"int8": 1}, {"int8": 7}, {}, {"int8": 2}],
+                    {
+                        "lm_model": {"int8": 6, "int4": 24},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 7},
+                        "vision_resampler_model": {},
+                        "multi_modal_projector_model": {"int8": 2},
+                    },
                 ),
             ]
         )
@@ -481,47 +586,80 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "image-text-to-text",
                     "minicpmv",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 26},
+                        "resampler_model": {"int8": 6},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "minicpmv",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 26}, {"int8": 6}],
+                    {
+                        "lm_model": {"int8": 8, "int4": 22},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 26},
+                        "resampler_model": {"int8": 6},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
+                    {
+                        "lm_model": {"int8": 8, "int4": 22},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 11},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "internvl2",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 8, "int4": 22}, {"int8": 1}, {"int8": 11}],
+                    {
+                        "lm_model": {"int8": 8, "int4": 22},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 11},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    [{"int8": 8, "int4": 10}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
+                    {
+                        "lm_model": {"int8": 8, "int4": 10},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 7},
+                        "vision_projection_model": {"int8": 2},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "phi3_v",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [{"int8": 4, "int4": 14}, {"int8": 1}, {"int8": 7}, {"int8": 2}],
+                    {
+                        "lm_model": {"int8": 4, "int4": 14},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 7},
+                        "vision_projection_model": {"int8": 2},
+                    },
                 ),
                 (
                     "image-text-to-text",
                     "qwen2_vl",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1",
-                    [{"int8": 10, "int4": 20}, {"int8": 1}, {"int8": 1}, {"int8": 10}],
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
                 ),
             ]
         )
@@ -534,17 +672,46 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "phi4mm",
                     'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
-                    [
-                        {"int8": 8, "int4": 42},
-                        {"int8": 1},
-                        {"int8": 8},
-                        {"int8": 2},
-                        {},
-                        {"int8": 6},
-                        {"int8": 25},
-                        {"int8": 2},
-                        {"int8": 2},
-                    ],
+                    {
+                        "lm_model": {"int8": 8, "int4": 42},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 8},
+                        "vision_projection_model": {"int8": 2},
+                        "audio_embeddings_model": {},
+                        "audio_forward_embeddings_model": {"int8": 6},
+                        "audio_encoder_model": {"int8": 25},
+                        "audio_vision_projection_model": {"int8": 2},
+                        "audio_speech_projection_model": {"int8": 2},
+                    },
+                ),
+                (
+                    "image-text-to-text",
+                    "qwen2_5_vl",
+                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {
+                        "lm_model": {"int8": 14, "int4": 16},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.51.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "llama4",
+                    "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
+                    '--sensitivity-metric "mean_activation_magnitude"',
+                    {
+                        "lm_model": {"int8": 22, "int4": 48},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 16},
+                    },
                 ),
             ]
         )
@@ -784,10 +951,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             ).from_pretrained(tmpdir, **model_kwargs)
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-            expected_int8 = [{"int8": it} for it in expected_int8]
+            expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
-                expected_int8 = expected_int8[:2]
-            check_compression_state_per_model(self, model.ov_submodels.values(), expected_int8)
+                del expected_int8["decoder_with_past"]
+            check_compression_state_per_model(self, model.ov_submodels, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -808,7 +975,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
-        self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: List[Dict]
+        self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
@@ -826,9 +993,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_submodels.values(), expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
 
-            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
+            # Starting from NNCF 2.17 there is a support for data-free AWQ
+            awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
+            self.assertTrue("--awq" not in option or awq_str in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
             self.assertTrue(
@@ -842,8 +1011,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_type: str,
         quant_mode: str,
         option: str,
-        expected_fake_nodes_per_model: List[int],
-        expected_num_weight_nodes_per_model: List[Dict[str, int]],
+        expected_fake_nodes_per_model: Dict[str, int],
+        expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
@@ -859,61 +1028,106 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = model_cls.from_pretrained(tmpdir)
 
-            if "automatic-speech-recognition" in task and model.decoder_with_past is None:
-                expected_num_weight_nodes_per_model = expected_num_weight_nodes_per_model[:-1]
-                expected_fake_nodes_per_model = expected_fake_nodes_per_model[:-1]
+            if (
+                "automatic-speech-recognition" in task or "text2text-generation" in task
+            ) and model.decoder_with_past is None:
+                expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
+                expected_fake_nodes_per_model.pop("decoder_with_past", None)
 
-            submodels = model.ov_submodels.values()
             check_compression_state_per_model(
                 self,
-                submodels,
+                model.ov_submodels,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
 
-    def test_exporters_cli_int4_with_local_model_and_default_config(self):
+    @parameterized.expand(
+        [
+            (
+                "falcon-40b",
+                "tiiuae/falcon-7b-instruct",
+                AutoModelForCausalLM,
+                OVModelForCausalLM,
+                "--task text-generation-with-past --weight-format int4",
+                _DEFAULT_4BIT_WQ_CONFIGS,
+            ),
+            (
+                "clip",
+                "hf-tiny-model-private/tiny-random-CLIPModel",
+                AutoModelForZeroShotImageClassification,
+                OVModelForZeroShotImageClassification,
+                "--task zero-shot-image-classification --quant-mode int8",
+                _DEFAULT_INT8_FQ_CONFIGS,
+            ),
+        ]
+    )
+    def test_exporters_cli_with_default_config(
+        self,
+        model_name,
+        model_id,
+        auto_model_cls,
+        ov_model_cls,
+        options,
+        default_configs_collection,
+    ):
         with TemporaryDirectory() as tmpdir:
-            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
+            pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
             pt_model.save_pretrained(tmpdir)
+            try:
+                AutoTokenizer.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
+            except Exception:
+                pass
+            try:
+                AutoProcessor.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
+            except Exception:
+                pass
             with open(Path(tmpdir) / "config.json", "r") as f:
                 config = json.load(f)
-                config["_name_or_path"] = "tiiuae/falcon-7b-instruct"
-
+                config["_name_or_path"] = model_id
             with open(Path(tmpdir) / "config.json", "w") as wf:
                 json.dump(config, wf)
 
             subprocess.run(
-                f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
+                f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}",
                 shell=True,
                 check=True,
             )
 
-            model = OVModelForCausalLM.from_pretrained(tmpdir)
+            model = ov_model_cls.from_pretrained(tmpdir)
             rt_info = model.model.get_rt_info()
-            self.assertTrue("nncf" in rt_info)
-            self.assertTrue("weight_compression" in rt_info["nncf"])
-            model_weight_compression_config = rt_info["nncf"]["weight_compression"]
+            nncf_info = rt_info["nncf"]
+            is_weight_compression = "weight_compression" in nncf_info
+            model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
-            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
-            bits = default_config.pop("bits", None)
-            self.assertEqual(bits, 4)
-
-            sym = default_config.pop("sym", False)
-            default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
-
-            quant_method = default_config.pop("quant_method", None)
-            default_config["awq"] = quant_method == "awq"
-            default_config["gptq"] = quant_method == "gptq"
-
+            default_config = {**default_configs_collection[model_id]}
             default_config.pop("dataset", None)
+            if is_weight_compression:
+                bits = default_config.pop("bits", None)
+                self.assertEqual(bits, 4)
+                sym = default_config.pop("sym", False)
+                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+                quant_method = default_config.pop("quant_method", None)
+                default_config["awq"] = quant_method == "awq"
+                default_config["gptq"] = quant_method == "gptq"
+            else:
+                dtype = default_config.pop("dtype", None)
+                self.assertEqual(dtype, "int8")
+                num_samples = default_config.pop("num_samples", None)
+                if num_samples is not None:
+                    default_config["subset_size"] = num_samples
+                advanced_parameters = eval(model_quantization_config["advanced_parameters"].value)
+                model_quantization_config["smooth_quant_alpha"] = Mock()
+                model_quantization_config["smooth_quant_alpha"].value = str(
+                    advanced_parameters["smooth_quant_alphas"]["matmul"]
+                )
 
             for key, value in default_config.items():
-                self.assertIn(key, model_weight_compression_config)
+                self.assertIn(key, model_quantization_config)
                 self.assertEqual(
-                    model_weight_compression_config[key].value,
+                    model_quantization_config[key].value,
                     str(value),
-                    f"Parameter {key} not matched with expected, {model_weight_compression_config[key].value} != {value}",
+                    f"Parameter {key} not matched with expected, {model_quantization_config[key].value} != {value}",
                 )
 
     def test_exporters_cli_help(self):

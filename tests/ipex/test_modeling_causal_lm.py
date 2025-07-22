@@ -314,6 +314,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
         self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
+    # The autoawq is archived, we will keep the test until transformers take the next step.
     @unittest.skipIf(not is_auto_awq_available(), reason="Test requires autoawq")
     def test_awq(self):
         model_id = "PrunaAI/JackFram-llama-68m-AWQ-4bit-smashed"
