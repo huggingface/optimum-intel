@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
-from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+from ...intel.utils.import_utils import (
+    DIFFUSERS_IMPORT_ERROR,
+    is_diffusers_available,
+    is_nncf_available,
+    is_nncf_version,
+)
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
@@ -365,6 +370,14 @@ class OVExportCommand(BaseOptimumCLICommand):
         else:
             if not is_nncf_available():
                 raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
+
+            if (self.args.weight_format == "cb4" or self.args.quant_mode == "cb4_f8e4m3") and is_nncf_version(
+                "<", "2.18"
+            ):
+                raise ImportError(
+                    "Codebook quantization is currently supported only with NNCF develop. "
+                    "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
+                )
 
             default_quantization_config = get_default_quantization_config(
                 self.args.model, self.args.weight_format, self.args.quant_mode

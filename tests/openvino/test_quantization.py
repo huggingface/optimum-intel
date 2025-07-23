@@ -79,7 +79,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -558,6 +558,13 @@ class OVQuantizerTest(unittest.TestCase):
         expected_fake_nodes_per_model,
         expected_num_weight_nodes_per_model,
     ):
+        q_config = _quantization_config_from_dict(quantization_config)
+        if (
+            isinstance(q_config, OVMixedQuantizationConfig)
+            and q_config.weight_quantization_config.dtype == "cb4"
+            and is_nncf_version("<", "2.18.0")
+        ):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18.0")
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
@@ -1296,6 +1303,10 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
+        q_config = _quantization_config_from_dict(quantization_config)
+        if q_config.dtype == "cb4" and is_nncf_version("<", "2.18.0"):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18.0")
+
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
