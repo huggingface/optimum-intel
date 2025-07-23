@@ -1302,7 +1302,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
-        if isinstance(quantization_config, dict) and quantization_config.get("dtype") == "cb4" and is_nncf_version("<=", "2.17"):
+        if (
+            isinstance(quantization_config, dict)
+            and quantization_config.get("dtype") == "cb4"
+            and is_nncf_version("<=", "2.17")
+        ):
             pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
 
         model_id = MODEL_NAMES[model_name]
