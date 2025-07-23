@@ -19,7 +19,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
-    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForVision2Seq,
     GenerationConfig,
     GenerationMixin,
@@ -346,7 +346,7 @@ MODEL_PARTS_CLS_MAPPING = {
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
-    auto_model_class = AutoModelForCausalLM
+    auto_model_class = AutoModelForImageTextToText
 
     def __init__(
         self,
@@ -412,10 +412,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
-        try:
-            self.auto_model_class.register(AutoConfig, self.__class__)
-        except AttributeError:
-            pass
+        self.auto_model_class.register(AutoConfig, self.__class__)
 
     def clear_requests(self):
         if self._compile_only:
