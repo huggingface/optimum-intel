@@ -155,8 +155,8 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama",
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(
+            dict(
+                weight_quantization_config=dict(
                     bits=4,
                     dtype="cb4",
                     group_size=16,
@@ -558,10 +558,9 @@ class OVQuantizerTest(unittest.TestCase):
         expected_fake_nodes_per_model,
         expected_num_weight_nodes_per_model,
     ):
-        q_config = _quantization_config_from_dict(quantization_config)
         if (
-            isinstance(q_config, OVMixedQuantizationConfig)
-            and q_config.weight_quantization_config.dtype == "cb4"
+            isinstance(quantization_config, dict)
+            and quantization_config.get("weight_quantization_config", {}).get("dtype") == "cb4"
             and is_nncf_version("<=", "2.17")
         ):
             pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
@@ -1303,8 +1302,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
-        q_config = _quantization_config_from_dict(quantization_config)
-        if q_config.dtype == "cb4" and is_nncf_version("<=", "2.17"):
+        if isinstance(quantization_config, dict) and quantization_config.get("dtype") == "cb4" and is_nncf_version("<=", "2.17"):
             pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
 
         model_id = MODEL_NAMES[model_name]
