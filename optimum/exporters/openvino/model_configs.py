@@ -53,7 +53,7 @@ from optimum.exporters.onnx.model_configs import (
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
-from optimum.exporters.onnx.model_patcher import ModelPatcher, Qwen3MoeModelPatcher
+from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -141,6 +141,7 @@ from .model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3MoeModelPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
     StatefulSeq2SeqDecoderPatcher,
