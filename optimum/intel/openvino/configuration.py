@@ -818,16 +818,16 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
         if self.dtype in ["mxfp4", "nf4", "cb4"]:
+            if self.dtype == "cb4" and is_nncf_version("<=", "2.17"):
+                raise ImportError(
+                    "Codebook quantization is currently supported only with NNCF develop. "
+                    "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
+                )
             if self.bits != 4:
                 raise ValueError(
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
                 )
             if self.dtype == "mxfp4":
-                if is_nncf_version("<=", "2.17"):
-                    raise ImportError(
-                        "Codebook quantization is currently supported only with NNCF develop. "
-                        "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
-                    )
                 if self.quant_method == OVQuantizationMethod.AWQ:
                     raise ValueError("The AWQ algorithm is not supported for 'mxpf4' data type")
                 if self.scale_estimation:

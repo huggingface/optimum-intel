@@ -562,9 +562,9 @@ class OVQuantizerTest(unittest.TestCase):
         if (
             isinstance(q_config, OVMixedQuantizationConfig)
             and q_config.weight_quantization_config.dtype == "cb4"
-            and is_nncf_version("<", "2.18.0")
+            and is_nncf_version("<=", "2.17")
         ):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18.0")
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:

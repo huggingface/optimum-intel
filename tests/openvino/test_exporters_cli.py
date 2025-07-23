@@ -947,8 +947,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
-        if option.startswith("cb4") and is_nncf_version("<", "2.18.0"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18.0")
+        if option.startswith("cb4") and is_nncf_version("<=", "2.17"):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
