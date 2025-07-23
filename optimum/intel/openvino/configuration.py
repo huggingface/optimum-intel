@@ -823,7 +823,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
                 )
             if self.dtype == "mxfp4":
-                if is_nncf_version("<", "2.18"):
+                if is_nncf_version("<=", "2.17"):
                     raise ImportError(
                         "Codebook quantization is currently supported only with NNCF develop. "
                         "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."

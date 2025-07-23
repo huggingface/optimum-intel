@@ -986,8 +986,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
-        if quant_mode == "cb4_f8e4m3" and is_nncf_version("<", "2.18.0"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18.0")
+        if quant_mode == "cb4_f8e4m3" and is_nncf_version("<=", "2.17"):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "

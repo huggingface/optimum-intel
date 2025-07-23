@@ -1304,8 +1304,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
         q_config = _quantization_config_from_dict(quantization_config)
-        if q_config.dtype == "cb4" and is_nncf_version("<", "2.18.0"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18.0")
+        if q_config.dtype == "cb4" and is_nncf_version("<=", "2.17"):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
 
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:

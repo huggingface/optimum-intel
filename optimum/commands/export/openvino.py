@@ -372,7 +372,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
 
             if (self.args.weight_format == "cb4" or self.args.quant_mode == "cb4_f8e4m3") and is_nncf_version(
-                "<", "2.18"
+                "<=", "2.17"
             ):
                 raise ImportError(
                     "Codebook quantization is currently supported only with NNCF develop. "
