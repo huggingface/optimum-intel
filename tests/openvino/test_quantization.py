@@ -158,6 +158,31 @@ class OVQuantizerTest(unittest.TestCase):
             dict(
                 weight_quantization_config=dict(
                     bits=4,
+                    dtype="nf4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            {
+                "model": 8,
+            },
+            {
+                "model": {"f8e4m3": 8, "nf4": 2},
+            },
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            dict(
+                weight_quantization_config=dict(
+                    bits=4,
                     dtype="cb4",
                     group_size=16,
                     ratio=0.5,
@@ -175,6 +200,31 @@ class OVQuantizerTest(unittest.TestCase):
             },
             {
                 "model": {"int8": 2, "int4": 2, "f8e4m3": 10},
+            },
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    bits=4,
+                    dtype="nf4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e5m2", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            {
+                "model": 8,
+            },
+            {
+                "model": {"f8e5m2": 8, "nf4": 2},
             },
         ),
         (
