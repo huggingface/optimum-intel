@@ -684,6 +684,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         statistics_path (`str`, *optional*):
             Directory path to dump/load data-aware statistics. This is useful when running data-aware quantization
             multiple times on the same model and dataset to avoid recomputing statistics.
+            Please note that the statistics depend on the dataset, so if you change the dataset, you should also change
+            the statistics path to avoid confusion.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 

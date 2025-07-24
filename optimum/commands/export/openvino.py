@@ -240,7 +240,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "Directory path to dump/load data-aware weight-only quantization statistics. This is useful when running "
             "data-aware quantization multiple times on the same model and dataset to avoid recomputing statistics. "
-            "This option is applicable exclusively for weight-only quantization."
+            "This option is applicable exclusively for weight-only quantization. Please note that the statistics depend "
+            "on the dataset, so if you change the dataset, you should also change the statistics path to avoid confusion."
         ),
     )
     optional_group.add_argument(

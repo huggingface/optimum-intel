@@ -38,6 +38,7 @@ usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,
                                    [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
                                    [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--gptq]
                                    [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
+                                   [--quantization-statistics-path QUANTIZATION_STATISTICS_PATH]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
                                    [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
                                    output
@@ -139,6 +140,8 @@ Optional arguments:
                         Directory path to dump/load data-aware weight-only quantization statistics. This is useful when
                         running data-aware quantization multiple times on the same model and dataset to avoid
                         recomputing statistics. This option is applicable exclusively for weight-only quantization.
+                        Please note that the statistics depend on the dataset, so if you change the dataset, you should
+                        also change the statistics path to avoid confusion.
   --num-samples NUM_SAMPLES
                         The maximum number of samples to take from the dataset for quantization.
   --disable-stateful    Disable stateful converted models, stateless models will be generated instead. Stateful models
