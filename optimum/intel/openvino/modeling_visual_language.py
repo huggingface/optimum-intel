@@ -19,8 +19,6 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
-    AutoModelForImageTextToText,
-    AutoModelForVision2Seq,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -44,15 +42,15 @@ from .utils import (
 )
 
 
-try:
-    from transformers import LlavaForConditionalGeneration
-except ImportError:
-    LlavaForConditionalGeneration = None
+if is_transformers_version(">=", "4.46.0"):
+    from transformers import AutoModelForImageTextToText
 
-try:
-    from transformers import LlavaNextForConditionalGeneration
-except ImportError:
-    LlavaNextForConditionalGeneration = None
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 if TYPE_CHECKING:
@@ -346,7 +344,7 @@ MODEL_PARTS_CLS_MAPPING = {
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
-    auto_model_class = AutoModelForImageTextToText
+    auto_model_class = transformers_auto_class
 
     def __init__(
         self,
@@ -928,7 +926,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
-    auto_model_class = LlavaForConditionalGeneration
 
     def __init__(
         self,
@@ -1134,7 +1131,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
-    auto_model_class = LlavaNextForConditionalGeneration
 
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
@@ -1430,7 +1426,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
 class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
     additional_parts = ["vision_resampler", "multi_modal_projector"]
-    auto_model_class = AutoModelForVision2Seq
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
