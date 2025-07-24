@@ -81,6 +81,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 64,
         "ratio": 0.8,
+        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "stabilityai/stablelm-zephyr-3b": {
@@ -88,7 +89,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 0.9,
-        "quant_method": OVQuantizationMethod.AWQ,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
     },
     "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
@@ -99,7 +101,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 0.9,
+        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
     },
     "Qwen/Qwen2.5-7B-Instruct": {
         "bits": 4,
