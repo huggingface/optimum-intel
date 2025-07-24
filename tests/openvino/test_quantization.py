@@ -2070,6 +2070,25 @@ class OVQuantizationConfigTest(unittest.TestCase):
             },
         ),
         (
+            OVWeightQuantizationConfig,
+            {
+                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path"),
+                "statistics_path": "statistics_path2",
+            },
+            {
+                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path2"),
+            },
+        ),
+        (
+            OVWeightQuantizationConfig,
+            {
+                "statistics_path": "statistics_path",
+            },
+            {
+                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path"),
+            },
+        ),
+        (
             OVQuantizationConfig,
             {
                 "advanced_parameters": nncf.AdvancedQuantizationParameters(disable_channel_alignment=True),

@@ -135,6 +135,10 @@ Optional arguments:
                         The sensitivity metric for assigning quantization precision to layers. It can be one of the
                         following: ['weight_quantization_error', 'hessian_input_activation',
                         'mean_activation_variance', 'max_activation_variance', 'mean_activation_magnitude'].
+  --quantization-statistics-path QUANTIZATION_STATISTICS_PATH
+                        Directory path to dump/load data-aware weight-only quantization statistics. This is useful when
+                        running data-aware quantization multiple times on the same model and dataset to avoid
+                        recomputing statistics. This option is applicable exclusively for weight-only quantization.
   --num-samples NUM_SAMPLES
                         The maximum number of samples to take from the dataset for quantization.
   --disable-stateful    Disable stateful converted models, stateless models will be generated instead. Stateful models

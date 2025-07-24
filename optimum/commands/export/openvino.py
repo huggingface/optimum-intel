@@ -234,6 +234,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--quantization-statistics-path",
+        type=str,
+        default=None,
+        help=(
+            "Directory path to dump/load data-aware weight-only quantization statistics. This is useful when running "
+            "data-aware quantization multiple times on the same model and dataset to avoid recomputing statistics. "
+            "This option is applicable exclusively for weight-only quantization."
+        ),
+    )
+    optional_group.add_argument(
         "--num-samples",
         type=int,
         default=None,
@@ -288,6 +298,7 @@ def no_compression_parameter_provided(args):
                 args.lora_correction,
                 args.sensitivity_metric,
                 args.backup_precision,
+                args.quantization_statistics_path,
             )
         )
     )
@@ -410,6 +421,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                             "dataset": self.args.dataset,
                         }
                     else:
+                        if self.args.quantization_statistics_path is not None:
+                            logger.warning(
+                                "The --quantization-statistics-path argument is only applicable for weight-only "
+                                "quantization. It will be ignored."
+                            )
                         quantization_config = prepare_q_config(self.args)
             quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
@@ -578,6 +594,7 @@ def prepare_wc_config(args, default_configs):
         "lora_correction": args.lora_correction,
         "dtype": args.weight_format,
         "backup_precision": args.backup_precision,
+        "statistics_path": args.quantization_statistics_path,
     }
 
 

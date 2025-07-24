@@ -1004,6 +1004,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
 
+    def test_exporters_cli_4bit_with_statistics_path(self):
+        with TemporaryDirectory() as tmpdir:
+            statistics_path = f"{tmpdir}/statistics"
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --weight-format int4 --awq "
+                f"--dataset wikitext2 --group-size 4 --quantization-statistics-path {statistics_path} {tmpdir}",
+                shell=True,
+                check=True,
+                capture_output=True,
+            )
+            self.assertTrue(
+                b"Statistics were successfully saved to a directory " + bytes(statistics_path, "utf-8")
+                in result.stdout
+            )
+            self.assertTrue(
+                b"Statistics were successfully loaded from a directory " + bytes(statistics_path, "utf-8")
+                in result.stdout
+            )
+
     @parameterized.expand(SUPPORTED_QUANTIZATION_ARCHITECTURES)
     def test_exporters_cli_full_quantization(
         self,

@@ -681,6 +681,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
             - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
+        statistics_path (`str`, *optional*):
+            Directory path to dump/load data-aware statistics. This is useful when running data-aware quantization
+            multiple times on the same model and dataset to avoid recomputing statistics.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -704,6 +707,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
+        statistics_path: Optional[str] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -734,6 +738,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
         self.dtype = dtype
+        self.statistics_path = statistics_path
         self.post_init()
 
     def post_init(self):
@@ -882,6 +887,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
+        kwargs = self.kwargs.copy()
+        if self.statistics_path:
+            advanced_parameters = kwargs.get("advanced_parameters", nncf.AdvancedCompressionParameters())
+            advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            kwargs["advanced_parameters"] = advanced_parameters
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -895,7 +905,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
-            **self.kwargs,
+            **kwargs,
         }
         return result
 
