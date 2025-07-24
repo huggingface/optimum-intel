@@ -280,7 +280,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 "bits": 4,
                 "sym": False,
                 "group_size": 64,
+                "dataset": "contextual",
                 "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
                 "ignored_scope": {
                     "patterns": [
                         "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/ov_ext::linear/MatMul",
