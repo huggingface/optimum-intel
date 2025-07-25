@@ -660,7 +660,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         dtype (`str`, *optional*):
-            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
+            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
+            Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -845,11 +846,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.dtype is None:
             self.dtype = "int4" if self.bits == 4 else "int8"
-        if self.dtype not in ["int4", "int8", "mxfp4", "nf4"]:
+        if self.dtype not in ["int4", "int8", "mxfp4", "nf4", "cb4"]:
             raise ValueError(
-                f"Weights quantization data type must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.dtype}."
+                "Weights quantization data type must be one of the following: "
+                f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
-        if self.dtype in ["mxfp4", "nf4"]:
+        if self.dtype in ["mxfp4", "nf4", "cb4"]:
+            if self.dtype == "cb4" and is_nncf_version("<=", "2.17"):
+                raise ImportError(
+                    "Codebook quantization is currently supported only with NNCF develop. "
+                    "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
+                )
             if self.bits != 4:
                 raise ValueError(
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
@@ -877,6 +884,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             mode += "_sym" if self.sym else "_asym"
         if mode == "mxfp4":
             mode = "e2m1"
+        if mode == "cb4":
+            mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)
 
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
@@ -1242,6 +1251,18 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         )
 
         self.post_init()
+
+    def post_init(self):
+        super().post_init()
+
+        if self.weight_quantization_config.dtype == "nf4" and self.full_quantization_config.dtype in [
+            "f8e4m3",
+            "f8e5m2",
+        ]:
+            logger.warning(
+                "\n`nf4_f8e4m3` and `nf4_f8e5m2` mixed precision quantization modes are deprecated and will be "
+                "removed in optimum-intel v1.26. Please use `cb4_f8e4m3` instead.\n"
+            )
 
     @staticmethod
     def _initialize_quantization_config(
