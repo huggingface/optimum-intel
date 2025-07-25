@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import copy
+import dataclasses
 import inspect
 import logging
 import os
@@ -1673,6 +1674,11 @@ def _weight_only_quantization(
         )
     wc_kwargs.update(kwargs)
     wc_kwargs.pop("weight_only", None)
+
+    advanced_parameters = wc_kwargs.get("advanced_parameters")
+    if advanced_parameters is not None and advanced_parameters.statistics_path is not None and dataset is None:
+        # Graceful handling of unnecessary statistics_path
+        wc_kwargs["advanced_parameters"] = dataclasses.replace(advanced_parameters, statistics_path=None)
 
     compressed_model = nncf.compress_weights(
         model,
