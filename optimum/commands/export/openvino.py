@@ -283,6 +283,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
 
 
 def no_compression_parameter_provided(args):
+    # Except statistics path
     return all(
         (
             it is None
@@ -299,7 +300,6 @@ def no_compression_parameter_provided(args):
                 args.lora_correction,
                 args.sensitivity_metric,
                 args.backup_precision,
-                args.quantization_statistics_path,
             )
         )
     )
@@ -360,7 +360,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         if self.args.weight_format is None and self.args.quant_mode is None:
             ov_config = None
-            if not no_compression_parameter_provided(self.args):
+            if not no_compression_parameter_provided(self.args) or self.args.quantization_statistics_path is not None:
                 raise ValueError(
                     "Some compression parameters are provided, but the weight format is not specified. "
                     "Please provide it with --weight-format argument."
@@ -390,6 +390,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                     else:
                         quantization_config = _DEFAULT_4BIT_WQ_CONFIG
                         log_message = f"Applying a default quantization config: {quantization_config}."
+                    if self.args.quantization_statistics_path is not None:
+                        quantization_config["statistics_path"] = self.args.quantization_statistics_path
                     logger.info(log_message)
                 else:
                     quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
