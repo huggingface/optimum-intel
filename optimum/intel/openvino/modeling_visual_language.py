@@ -47,7 +47,6 @@ if is_transformers_version(">=", "4.46.0"):
 
     transformers_auto_class = AutoModelForImageTextToText
 else:
-
     from transformers import AutoModelForVision2Seq
 
     transformers_auto_class = AutoModelForVision2Seq
@@ -926,7 +925,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
-
     def __init__(
         self,
         language_model: ov.Model,
@@ -1131,7 +1129,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
-
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
         from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
