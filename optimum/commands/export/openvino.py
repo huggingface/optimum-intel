@@ -22,7 +22,11 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
-from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+from ...intel.utils.import_utils import (
+    DIFFUSERS_IMPORT_ERROR,
+    is_diffusers_available,
+    is_nncf_available,
+)
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
@@ -72,14 +76,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4"],
         default=None,
-        help="The weight format of the exported model.",
+        help=(
+            "The weight format of the exported model. Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format."
+        ),
     )
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -186,10 +192,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         default=None,
         help=(
-            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
-            "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
-            "argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such "
-            "case it will be skipped."
+            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs. If dataset is "
+            "provided, a data-aware activation-based version of the algorithm will be executed, which requires "
+            "additional time. Otherwise, data-free AWQ will be applied which relies on per-column magnitudes of "
+            "weights instead of activations. Note: it is possible that there will be no matching patterns in the model "
+            "to apply AWQ, in such case it will be skipped."
         ),
     )
     optional_group.add_argument(
@@ -391,7 +398,13 @@ class OVExportCommand(BaseOptimumCLICommand):
                         raise ValueError(
                             "Dataset is required for full quantization. Please provide it with --dataset argument."
                         )
-                    if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
+                    if self.args.quant_mode in [
+                        "nf4_f8e4m3",
+                        "nf4_f8e5m2",
+                        "cb4_f8e4m3",
+                        "int4_f8e4m3",
+                        "int4_f8e5m2",
+                    ]:
                         if library_name == "diffusers":
                             raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
@@ -427,7 +440,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 cache_dir=self.args.cache_dir,
                 trust_remote_code=self.args.trust_remote_code,
             )
-            if getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS:
+            if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
                 task = "image-text-to-text"
 
         if library_name == "diffusers" and quantize_with_dataset:
@@ -481,6 +494,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             and (
                 task in ["fill-mask", "zero-shot-image-classification"]
                 or task.startswith("text-generation")
+                or task.startswith("text2text-generation")
                 or task.startswith("automatic-speech-recognition")
                 or task.startswith("feature-extraction")
             )
@@ -490,6 +504,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForCausalLM
 
                 model_cls = OVModelForCausalLM
+            elif task.startswith("text2text-generation"):
+                from optimum.intel import OVModelForSeq2SeqLM
+
+                model_cls = OVModelForSeq2SeqLM
             elif task == "image-text-to-text":
                 from optimum.intel import OVModelForVisualCausalLM
 

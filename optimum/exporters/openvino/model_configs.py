@@ -117,6 +117,7 @@ from .model_patcher import (
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
     MairaImageEmbeddingModelPatcher,
+    MambaPatcher,
     MarianModelPatcher,
     MarianStatefulSeq2SeqDecoderPatcher,
     MiniCPM3Patcher,
@@ -158,20 +159,20 @@ def init_model_configs():
         "transformers",
         "LlavaForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "llava-next", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "llava_next", "image-text-to-text")] = (
         "transformers",
         "LlavaNextForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-vl", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_vl", "image-text-to-text")] = (
         "transformers",
         "Qwen2VLForConditionalGeneration",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen2-5-vl", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen2_5_vl", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
     )
 
-    TasksManager._CUSTOM_CLASSES[("pt", "llava-next-video", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
     )
@@ -192,11 +193,11 @@ def init_model_configs():
         "transformers",
         "AutoModelForCausalLM",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "image-text-to-text")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "image-text-to-text")] = (
         "transformers",
         "AutoModelForCausalLM",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "phi4-multimodal", "automatic-speech-recognition")] = (
+    TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForCausalLM",
     )
@@ -292,7 +293,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen2-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -307,7 +308,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
-@register_in_tasks_manager("qwen3-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -935,7 +936,7 @@ class BioGPTOpenVINOConfig(
 
 
 @register_in_tasks_manager(
-    "gpt-neox-japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "gpt_neox_japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     # GPTNeoxJapanese does not require position_ids input.
@@ -949,7 +950,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-neo",
+    "gpt_neo",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -1260,7 +1261,7 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-neox",
+    "gpt_neox",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -1298,7 +1299,7 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
 
 
 @register_in_tasks_manager(
-    "gemma3-text",
+    "gemma3_text",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -1413,7 +1414,7 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="open_clip")
+@register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1448,7 +1449,7 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="open_clip")
+@register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1482,8 +1483,7 @@ class CLIPOpenVINOConfig(CLIPOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="transformers")
-@register_in_tasks_manager("clip-text-model", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     def patch_model_for_export(
@@ -1492,7 +1492,6 @@ class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
 class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
     def patch_model_for_export(
@@ -1501,7 +1500,7 @@ class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
         return ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="transformers")
 class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -1606,7 +1605,7 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
 
 
 def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype):
-    model_type = model_type.replace("_", "-")
+    model_type = model_type
 
     if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
         raise ValueError(
@@ -1803,7 +1802,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
         return super().generate_dummy_inputs(framework, **kwargs)
 
 
-@register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
 
@@ -1859,7 +1858,7 @@ class LlavaNextVideoConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager(
-    "llava-next-video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
+    "llava_next_video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
 )
 class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.42.0")
@@ -1906,7 +1905,7 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
         if behavior == LlavaNextVideoConfigBehavior.MULTI_MODAL_PROJECTOR:
             return (
                 model.multi_modal_projector
-                if hasattr(model, "multi_model_projector")
+                if hasattr(model, "multi_modal_projector")
                 else model.model.multi_modal_projector
             )
 
@@ -1951,7 +1950,7 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
         return super().get_model_for_behavior(model, behavior)
 
 
-@register_in_tasks_manager("internvl-chat", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
     def __init__(
         self,
@@ -2918,7 +2917,7 @@ class DummyPhi3VisionProjectionInputGenerator(DummyVisionInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
-@register_in_tasks_manager("phi3-v", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("phi3_v", *["image-text-to-text"], library_name="transformers")
 class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi3VisionConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3166,7 +3165,7 @@ class Phi4MMConfigBehavior(str, enum.Enum):
     "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 @register_in_tasks_manager(
-    "phi4-multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
@@ -3473,7 +3472,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3606,7 +3605,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2-5-vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
@@ -3689,7 +3688,7 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "gpt-bigcode",
+    "gpt_bigcode",
     *[
         "feature-extraction",
         "feature-extraction-with-past",
@@ -3826,7 +3825,7 @@ class MBartOpenVINOConfig(BartOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "m2m-100",
+    "m2m_100",
     *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
     library_name="transformers",
 )
@@ -3835,10 +3834,10 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "deepseek-v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager(
-    "deepseek-v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "deepseek_v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
@@ -3848,7 +3847,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
         return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("got-ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
@@ -4341,7 +4340,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
 
 
 @register_in_tasks_manager(
-    "llama4-text", *["text-generation", "text-generation-with-past"], library_name="transformers"
+    "llama4_text", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
@@ -4367,6 +4366,131 @@ class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
         return Llama4ImageEmbeddingsModelPatcher(self, model, model_kwargs)
+
+
+class MambaCacheDummyInputGenerator(DummyInputGenerator):
+    """
+    Generates dummy past_ssm_states, past_conv_states and cache_position inputs for Mamba architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params", "cache_position")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.intermediate_size = self.normalized_config.config.intermediate_size
+        self.ssm_state_size = self.normalized_config.config.state_size
+        self.conv_kernel_size = self.normalized_config.config.conv_kernel
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "cache_params":
+            ssm_shape = [self.batch_size, self.intermediate_size, self.ssm_state_size]
+            conv_shape = [self.batch_size, self.intermediate_size, self.conv_kernel_size]
+            return [
+                (
+                    self.random_float_tensor(ssm_shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(conv_shape, framework=framework, dtype=float_dtype),
+                )
+                for _ in range(self.normalized_config.num_layers)
+            ]
+        elif input_name == "cache_position":
+            return self.random_int_tensor(
+                shape=[self.conv_kernel_size],
+                max_value=self.sequence_length,
+                framework=framework,
+                dtype=int_dtype,
+            )
+
+        raise ValueError(f"Unsupported input name {input_name}")
+
+
+@register_in_tasks_manager(
+    "falcon_mamba", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+@register_in_tasks_manager("mamba", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class MambaOpenVINOConfig(TextDecoderOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MambaCacheDummyInputGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MambaCacheDummyInputGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "cache_position": {0: "cache_sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        """
+        Fills `input_or_outputs` mapping with past_key_values dynamic axes considering the direction.
+
+        Args:
+            inputs_or_outputs (`Dict[str, Dict[int, str]]`):
+                The mapping to fill.
+            direction (`str`):
+                either "inputs" or "outputs", it specifies whether `input_or_outputs` is the input mapping or the
+                output mapping, this is important for axes naming.
+        """
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            ssm_conv_states_name = "cache_params.past"
+        else:
+            ssm_conv_states_name = "cache_params.present"
+
+        for i in range(self._normalized_config.num_layers):
+            # [batch_size, d_state, d_model]
+            inputs_or_outputs[f"{ssm_conv_states_name}.ssm.{i}"] = {0: "batch_size"}
+            # [batch_size, conv_kernel_size - 1, d_model]
+            inputs_or_outputs[f"{ssm_conv_states_name}.conv.{i}"] = {0: "batch_size"}
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        return MambaPatcher(self, model, model_kwargs)
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # need to override `generate_dummy_inputs` since mamba model has other states: ssm_states and conv_states
+        # which we separate and call them as past_ssm_states and past_conv_states
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+        if self.use_past_in_inputs:
+            input_names.extend(["cache_params"])
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                        dummy_input_gen,
+                        input_name,
+                        framework,
+                        input_shapes=kwargs,
+                    )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                )
+
+        return dummy_inputs
 
 
 class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):

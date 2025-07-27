@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
+import pytest
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
 from utils_tests import (
@@ -73,6 +74,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     Integration tests ensuring supported models are correctly exported.
     """
 
+    maxDiff = None
+
     SUPPORTED_ARCHITECTURES = [
         ("text-generation", "gpt2"),
         ("text-generation-with-past", "gpt2"),
@@ -92,6 +95,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
     ]
+
+    if is_transformers_version(">=", "4.39"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "mamba"),
+                ("text-generation-with-past", "falcon-mamba"),
+            ]
+        )
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
@@ -124,6 +135,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "mamba": 2,
+        "falcon-mamba": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -247,6 +260,18 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
             {
                 "model": {"f8e4m3": 11, "nf4": 5},
+            },
+        ),
+        (
+            "text-generation",
+            "llama",
+            "cb4_f8e4m3",
+            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
+            {
+                "model": 16,
+            },
+            {
+                "model": {"int8": 5, "int4": 5, "f8e4m3": 16},
             },
         ),
         (
@@ -379,7 +404,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "fill-mask",
-            "xlm_roberta",
+            "xlm-roberta",
             "int8",
             "--library sentence_transformers --dataset c4 --num-samples 1",
             {
@@ -399,6 +424,34 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
             {
                 "model": {"int8": 65},
+            },
+        ),
+        (
+            "text2text-generation-with-past",
+            "t5",
+            "int8",
+            "--dataset c4 --num-samples 1",
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 30, "decoder": 62},
+            (
+                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+            ),
+        ),
+        (
+            "feature-extraction",
+            "sam",
+            "int8",
+            "--dataset coco --num-samples 1",
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 61,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
     ]
@@ -430,6 +483,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "text-generation-with-past",
+            "gpt2",
+            "cb4 --group-size 32",
+            {"model": {"int8": 24, "int4": 20, "f8e4m3": 20}},
+        ),
+        (
+            "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             {"model": {"int4": 16}},
@@ -439,6 +498,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
+            {"model": {"int8": 4, "int4": 14}},
+        ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --awq",
             {"model": {"int8": 4, "int4": 14}},
         ),
         (
@@ -649,6 +714,23 @@ class OVCLIExportTestCase(unittest.TestCase):
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.51.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "llama4",
+                    "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
+                    '--sensitivity-metric "mean_activation_magnitude"',
+                    {
+                        "lm_model": {"int8": 22, "int4": 48},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 16},
                     },
                 ),
             ]
@@ -915,6 +997,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
+        if option.startswith("cb4") and is_nncf_version("<=", "2.17"):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -934,7 +1018,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
-            awq_str = b"Applying data-aware AWQ" if is_nncf_version(">", "2.16") else b"Applying AWQ"
+            awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
             self.assertTrue("--awq" not in option or awq_str in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
             self.assertTrue("--gptq" not in option or b"Applying GPTQ" in result.stdout)
@@ -952,6 +1036,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
+        if quant_mode == "cb4_f8e4m3" and is_nncf_version("<=", "2.17"):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
@@ -966,9 +1052,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = model_cls.from_pretrained(tmpdir)
 
-            if "automatic-speech-recognition" in task and model.decoder_with_past is None:
-                del expected_num_weight_nodes_per_model["decoder_with_past"]
-                del expected_fake_nodes_per_model["decoder_with_past"]
+            if (
+                "automatic-speech-recognition" in task or "text2text-generation" in task
+            ) and model.decoder_with_past is None:
+                expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
+                expected_fake_nodes_per_model.pop("decoder_with_past", None)
 
             check_compression_state_per_model(
                 self,
@@ -1042,7 +1130,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 bits = default_config.pop("bits", None)
                 self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
-                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+                default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
                 quant_method = default_config.pop("quant_method", None)
                 default_config["awq"] = quant_method == "awq"
                 default_config["gptq"] = quant_method == "gptq"

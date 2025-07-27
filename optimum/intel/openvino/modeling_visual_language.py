@@ -19,8 +19,6 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
-    AutoModelForCausalLM,
-    AutoModelForVision2Seq,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -44,15 +42,14 @@ from .utils import (
 )
 
 
-try:
-    from transformers import LlavaForConditionalGeneration
-except ImportError:
-    LlavaForConditionalGeneration = None
+if is_transformers_version(">=", "4.46.0"):
+    from transformers import AutoModelForImageTextToText
 
-try:
-    from transformers import LlavaNextForConditionalGeneration
-except ImportError:
-    LlavaNextForConditionalGeneration = None
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 if TYPE_CHECKING:
@@ -83,7 +80,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         text_embeds_model: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
@@ -99,7 +96,14 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             self.request = self.model.create_infer_request()
 
         super().__init__(
-            model, config, device, dynamic_shapes, ov_config, model_save_dir, quantization_config, **kwargs
+            model=model,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
         )
 
     def compile(self):
@@ -339,7 +343,7 @@ MODEL_PARTS_CLS_MAPPING = {
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
-    auto_model_class = AutoModelForCausalLM
+    auto_model_class = transformers_auto_class
 
     def __init__(
         self,
@@ -348,17 +352,22 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if dynamic_shapes is not None:
+            logger.warning(
+                f"`dynamic_shapes` was set to {dynamic_shapes}, but this value will be ignored as only dynamic shapes are supported."
+            )
+
+        self.is_dynamic = True
         self.config = config
         self.use_cache = kwargs.get("use_cache", True)
         self._model_save_dir = model_save_dir
         self._device = device.upper()
-        self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self.lm_model = language_model
@@ -400,10 +409,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
-        try:
-            self.auto_model_class.register(AutoConfig, self.__class__)
-        except AttributeError:
-            pass
+        self.auto_model_class.register(AutoConfig, self.__class__)
 
     def clear_requests(self):
         if self._compile_only:
@@ -919,8 +925,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
-    auto_model_class = LlavaForConditionalGeneration
-
     def __init__(
         self,
         language_model: ov.Model,
@@ -928,7 +932,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
@@ -1125,8 +1129,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
-    auto_model_class = LlavaNextForConditionalGeneration
-
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
         from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
@@ -1421,7 +1423,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
 class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
     additional_parts = ["vision_resampler", "multi_modal_projector"]
-    auto_model_class = AutoModelForVision2Seq
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -1870,24 +1871,25 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         super().__init__(
-            language_model,
-            text_embeddings,
-            vision_embeddings,
-            config,
-            device,
-            dynamic_shapes,
-            ov_config,
-            model_save_dir,
-            quantization_config,
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
+
         self.embed_dim = self.language_model.config.hidden_size
         max_size = self.config.vision_config.image_size // self.config.vision_config.patch_size
         self._pos_embeds = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
@@ -2326,24 +2328,25 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         super().__init__(
-            language_model,
-            text_embeddings,
-            vision_embeddings,
-            config,
-            device,
-            dynamic_shapes,
-            ov_config,
-            model_save_dir,
-            quantization_config,
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
+
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
         self.image_dim_out = self.config.img_processor["image_dim_out"]
@@ -2495,7 +2498,7 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
@@ -2922,7 +2925,7 @@ class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
@@ -3681,24 +3684,25 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         super().__init__(
-            language_model,
-            text_embeddings,
-            vision_embeddings,
-            config,
-            device,
-            dynamic_shapes,
-            ov_config,
-            model_save_dir,
-            quantization_config,
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
+
         self.sub_GN = torch.tensor(self.config.sub_GN)
         self.glb_GN = torch.tensor(self.config.glb_GN)
         self.audio_config = (

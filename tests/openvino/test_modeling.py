@@ -1134,6 +1134,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
     )
 
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    if is_transformers_version(">=", "4.43"):
+        SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
+
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
@@ -1143,7 +1147,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "dbrx",
             "cohere",
             "qwen2",
-            "qwen2-moe",
+            "qwen2_moe",
             "arctic",
         )
 
@@ -1171,10 +1175,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("gemma3-text",)
+        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3-moe")
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -1246,7 +1250,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "dbrx": 2,
         "cohere": 2,
         "qwen2": 2,
-        "qwen2-moe": 4,
+        "qwen2_moe": 4,
         "arctic": 4,
         "phi3": 2,
         "gemma2": 4,
@@ -1260,10 +1264,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
-        "gemma3-text": 2,
+        "gemma3_text": 2,
         "glm4": 2,
         "qwen3": 2,
-        "qwen3-moe": 2,
+        "qwen3_moe": 2,
+        "mamba": 0,
+        "falcon-mamba": 0,
     }
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1296,12 +1302,26 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in ov_outputs)
-        self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        is_stateful = ov_model.config.model_type not in not_stateful
-        self.assertEqual(ov_model.stateful, is_stateful)
-        if is_stateful:
-            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
+            from optimum.intel.openvino.modeling_decoder import OVMambaCache
+
+            self.assertTrue("cache_params" in ov_outputs)
+            self.assertIsInstance(ov_outputs.cache_params, OVMambaCache)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
+                self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
+                self.assertTrue(
+                    len(ov_outputs.cache_params.conv_states) > 0 and len(ov_outputs.cache_params.ssm_states) > 0
+                )
+        else:
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
         expected_num_sdpa = self.EXPECTED_NUM_SDPA.get(model_arch, 0)
         num_sdpa = get_num_sdpa(ov_model.model)
@@ -1366,7 +1386,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3-text"]:
+        if model_arch in ["gemma2", "gemma3_text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
@@ -1643,7 +1663,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model.to(torch.float32)
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3-text"]:
+        if model_arch in ["gemma2", "gemma3_text"]:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
@@ -1683,7 +1703,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 continue
             set_seed(SEED)
 
-            if model_arch in ["gemma2", "gemma3-text"]:
+            if model_arch in ["gemma2", "gemma3_text"]:
                 from transformers.cache_utils import DynamicCache
 
                 additional_inputs["past_key_values"] = DynamicCache()
@@ -1735,9 +1755,9 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "bert",
         "camembert",
         "convbert",
-        "data2vec_text",
+        "data2vec-text",
         "deberta",
-        "deberta_v2",
+        "deberta-v2",
         "distilbert",
         "electra",
         "esm",
@@ -1750,7 +1770,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "roformer",
         "squeezebert",
         "xlm",
-        "xlm_roberta",
+        "xlm-roberta",
     )
 
     # accuracy issue, need additional investigation
@@ -1808,7 +1828,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "beit",
         "convnext",
         # "convnextv2",
-        "data2vec_vision",
+        "data2vec-vision",
         "deit",
         "levit",
         "mobilenet_v1",
@@ -2076,13 +2096,13 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "audio_spectrogram_transformer",
-        "data2vec_audio",
+        "audio-spectrogram-transformer",
+        "data2vec-audio",
         "hubert",
         "sew",
         "sew_d",
         "unispeech",
-        "unispeech_sat",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2",
         "wav2vec2-conformer",
@@ -2147,12 +2167,12 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
 
 class OVModelForCTCIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "data2vec_audio",
+        "data2vec-audio",
         "hubert",
         "sew",
         "sew_d",
         "unispeech",
-        "unispeech_sat",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2-hf",
         "wav2vec2-conformer",
@@ -2203,8 +2223,8 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "data2vec_audio",
-        "unispeech_sat",
+        "data2vec-audio",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2-hf",
         "wav2vec2-conformer",
@@ -2257,8 +2277,8 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
-        "data2vec_audio",
-        "unispeech_sat",
+        "data2vec-audio",
+        "unispeech-sat",
         "wavlm",
         "wav2vec2-hf",
         "wav2vec2-conformer",

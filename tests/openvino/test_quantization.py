@@ -67,6 +67,7 @@ from optimum.intel import (
     OVModelForVisualCausalLM,
     OVSentenceTransformer,
     OVModelForZeroShotImageClassification,
+    OVSamModel,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -79,7 +80,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -123,11 +124,13 @@ pattern_prefix = (
 
 
 class OVQuantizerTest(unittest.TestCase):
+    maxDiff = None
+
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
     )
-    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq and OVStableDiffusionPipeline
+    # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq, OVStableDiffusionPipeline and OVModelForSeq2SeqLM
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 22),
@@ -155,8 +158,8 @@ class OVQuantizerTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "llama",
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(
+            dict(
+                weight_quantization_config=dict(
                     bits=4,
                     dtype="nf4",
                     group_size=16,
@@ -175,6 +178,31 @@ class OVQuantizerTest(unittest.TestCase):
             },
             {
                 "model": {"f8e4m3": 8, "nf4": 2},
+            },
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            dict(
+                weight_quantization_config=dict(
+                    bits=4,
+                    dtype="cb4",
+                    group_size=16,
+                    ratio=0.5,
+                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
+                ),
+                full_quantization_config=OVQuantizationConfig(
+                    dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
+                ),
+                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            {
+                "model": 8,
+            },
+            {
+                "model": {"int8": 2, "int4": 2, "f8e4m3": 10},
             },
         ),
         (
@@ -328,7 +356,7 @@ class OVQuantizerTest(unittest.TestCase):
         ),
         (
             OVModelForMaskedLM,
-            "xlm_roberta",
+            "xlm-roberta",
             OVQuantizationConfig(
                 dtype="int8",
                 dataset="c4",
@@ -354,6 +382,36 @@ class OVQuantizerTest(unittest.TestCase):
             },
             {
                 "model": {"int8": 65},
+            },
+        ),
+        (
+            OVModelForSeq2SeqLM,
+            "t5",
+            OVQuantizationConfig(
+                dtype="int8",
+                dataset="wikitext2",
+                num_samples=1,
+            ),
+            {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
+            if is_transformers_version("<=", "4.36.0")
+            else {"encoder": 30, "decoder": 62},
+            (
+                {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
+                if is_transformers_version("<=", "4.36.0")
+                else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
+            ),
+        ),
+        (
+            OVSamModel,
+            "sam",
+            OVQuantizationConfig(bits=8, dataset="coco", num_samples=1),
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 61,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
     ]
@@ -402,7 +460,6 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=preprocess_function,
                 num_samples=2,
                 dataset_split="train",
-                trust_remote_code=True,
                 streaming=streaming,
             )
         else:
@@ -414,7 +471,6 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=preprocess_function,
                 num_samples=2,
                 dataset_split="train",
-                trust_remote_code=True,
                 streaming=streaming,
             )
         return calibration_dataset
@@ -566,19 +622,30 @@ class OVQuantizerTest(unittest.TestCase):
         expected_fake_nodes_per_model,
         expected_num_weight_nodes_per_model,
     ):
+        if (
+            isinstance(quantization_config, dict)
+            and quantization_config.get("weight_quantization_config", {}).get("dtype") == "cb4"
+            and is_nncf_version("<=", "2.17")
+        ):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            if model_cls == OVModelForSpeechSeq2Seq:
+            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
                 if ov_model.decoder_with_past is None:
-                    del expected_fake_nodes_per_model["decoder_with_past"]
-                    del expected_num_weight_nodes_per_model["decoder_with_past"]
+                    expected_fake_nodes_per_model.pop("decoder_with_past", None)
+                    expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
 
-                input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
-                ov_model.generate(input_features)
+                if model_cls == OVModelForSpeechSeq2Seq:
+                    input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
+                    ov_model.generate(input_features)
+                else:
+                    tokenizer = AutoTokenizer.from_pretrained(model_id)
+                    inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
+                    ov_model.generate(**inputs)
             elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
                 tokenizer = AutoTokenizer.from_pretrained(model_id)
                 if tokenizer.pad_token is None:
@@ -603,6 +670,11 @@ class OVQuantizerTest(unittest.TestCase):
                 image = np.random.rand(224, 224, 3).astype(np.uint8)
                 inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
                 ov_model(**inputs)
+            elif model_cls == OVSamModel:
+                processor = AutoProcessor.from_pretrained(model_id)
+                image = np.random.rand(224, 224, 3).astype(np.uint8)
+                inputs = processor(image, input_points=[[[0, 0]]], return_tensors="pt")
+                ov_model(**inputs)
             else:
                 raise Exception("Unexpected model class.")
 
@@ -615,6 +687,8 @@ class OVQuantizerTest(unittest.TestCase):
 
 
 class OVWeightCompressionTest(unittest.TestCase):
+    maxDiff = None
+
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "bert", 70, 70),
         (OVModelForCausalLM, "gpt2", 44, 44),
@@ -645,6 +719,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             False,
             dict(bits=4, dtype="nf4", group_size=32),
             {"model": {"int8": 4, "nf4": 20}},
+        ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            False,
+            dict(bits=4, dtype="cb4", group_size=32),
+            {"model": {"int8": 24, "int4": 20, "f8e4m3": 20}},
         ),
         (
             OVModelForCausalLM,
@@ -717,6 +798,18 @@ class OVWeightCompressionTest(unittest.TestCase):
                 bits=4,
                 sym=True,
                 group_size=16,
+                quant_method=QuantizationMethod.AWQ,
+            ),
+            {"model": {"int8": 4, "int4": 14}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
@@ -779,6 +872,16 @@ class OVWeightCompressionTest(unittest.TestCase):
             False,
             dict(bits=4, backup_precision="int8_asym", group_size=16, ratio=0.5),
             {"model": {"int8": 26, "int4": 6}},
+        ),
+        (
+            OVSamModel,
+            "sam",
+            False,
+            dict(bits=4, dataset="coco", num_samples=1, group_size=2),
+            {
+                "vision_encoder": {"int8": 56, "int4": 94},
+                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94},
+            },
         ),
     ]
 
@@ -960,6 +1063,30 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 12},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.51.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "llama4",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 22, "int4": 48},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 16},
                     },
                 ),
             ]
@@ -1256,6 +1383,13 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
+        if (
+            isinstance(quantization_config, dict)
+            and quantization_config.get("dtype") == "cb4"
+            and is_nncf_version("<=", "2.17")
+        ):
+            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
+
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -1430,6 +1564,8 @@ class OVWeightCompressionTest(unittest.TestCase):
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
+    maxDiff = None
+
     PIPELINE_QUANTIZATION_SCOPE = [
         (
             OVModelForCausalLM,
@@ -1488,6 +1624,29 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "vae_decoder": {"int8": 42},
                 "vae_encoder": {"int8": 34},
                 "text_encoder": {"int8": 64},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            False,
+            dict(
+                quantization_configs={
+                    "vision_encoder": dict(
+                        bits=8,
+                        dataset="coco",
+                        num_samples=1,
+                        weight_only=False,
+                    ),
+                }
+            ),
+            {
+                "vision_encoder": 75,
+                "prompt_encoder_mask_decoder": 0,
+            },
+            {
+                "vision_encoder": {"int8": 75},
+                "prompt_encoder_mask_decoder": {"int8": 0},
             },
         ),
     ]
@@ -1722,7 +1881,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="test",
-                trust_remote_code=True,
+                revision="refs/pr/3",
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
@@ -1845,6 +2004,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
                         full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", dataset="wikitext2"),
                     ),
                 }
+            ),
+        ),
+        (
+            OVQuantizationConfig(
+                advanced_parameters=nncf.AdvancedCompressionParameters(),
             ),
         ),
     )

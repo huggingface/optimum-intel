@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import copy
+import dataclasses
 import inspect
 import json
 import logging
@@ -26,10 +27,11 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_nncf_version
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
+    PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
@@ -116,6 +118,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "Qwen/Qwen2.5-Coder-3B-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
         "scale_estimation": True,
     },
     "Qwen/Qwen3-1.7B": {
@@ -352,6 +362,54 @@ _DEFAULT_4BIT_WQ_CONFIG = {
 
 # Default configs for int8 full quantization
 _DEFAULT_INT8_FQ_CONFIGS = {
+    "facebook/sam-vit-base": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-large": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "facebook/sam-vit-huge": {
+        "quantization_configs": {
+            "vision_encoder": {
+                "dtype": "int8",
+                "dataset": "coco",
+                "num_samples": 128,
+                "weight_only": False,
+            },
+        }
+    },
+    "google-t5/t5-small": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "google-t5/t5-large": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
+    "google-t5/t5-3b": {
+        "dtype": "int8",
+        "dataset": "wikitext2",
+        "num_samples": 300,
+        "smooth_quant_alpha": -1,
+    },
     "FacebookAI/roberta-large": {
         "dtype": "int8",
         "dataset": "wikitext2",
@@ -522,7 +580,20 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         # Unpack kwargs dict
         result = super().to_dict()
         result = result | result.pop("kwargs", {})
+        self._dataclasses_to_dict(result)
         return result
+
+    @staticmethod
+    def _dataclasses_to_dict(d: dict):
+        """
+        Search for dataclasses in the dict and convert them to dicts.
+        """
+        for k in d:
+            v = d[k]
+            if isinstance(v, dict):
+                OVQuantizationConfigBase._dataclasses_to_dict(v)
+            elif dataclasses.is_dataclass(v):
+                d[k] = dataclasses.asdict(v)
 
 
 @dataclass
@@ -577,10 +648,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Weight compression method to apply. Possible options:
                 - "default": default weight quantization will be applied.
                 - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
-                  method. AWQ improves generation quality of INT4-compressed LLMs, but requires
-                  additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
-                  required. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
-                  such case it will be skipped.
+                  method. AWQ improves generation quality of INT4-compressed LLMs. If dataset is provided, a data-aware
+                  activation-based version of the algorithm will be executed, which requires additional time. Otherwise,
+                  data-free AWQ will be applied which relies on per-column magnitudes of weights instead of activations.
+                  Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it
+                  will be skipped.
                 - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
                   activations of other layers, facilitating accuracy preservation post-optimization while reducing
                   the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
@@ -588,7 +660,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         dtype (`str`, *optional*):
-            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
+            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
+            Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -682,16 +755,19 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
+            sam_datasets = set(PREDEFINED_SAM_DATASETS.keys())
             if (
                 self.dataset
                 not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
                 | language_datasets
                 | visual_lm_datasets
                 | stable_diffusion_datasets
+                | sam_datasets
             ):
                 raise ValueError(
                     "You have entered a string value for dataset. You can only choose between "
                     f"{language_datasets} for text feature extraction models, "
+                    f"{sam_datasets} for SegmentAnything models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, {visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
@@ -707,6 +783,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
+
+        if self.dataset is None and self.quant_method == OVQuantizationMethod.AWQ and is_nncf_version("<", "2.17.0"):
+            raise ValueError("Data-free AWQ is available starting form NNCF 2.17. Please update nncf package.")
 
         if self.dtype in ["int4", "int8"]:
             bits = 4 if self.dtype == "int4" else 8
@@ -767,11 +846,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.dtype is None:
             self.dtype = "int4" if self.bits == 4 else "int8"
-        if self.dtype not in ["int4", "int8", "mxfp4", "nf4"]:
+        if self.dtype not in ["int4", "int8", "mxfp4", "nf4", "cb4"]:
             raise ValueError(
-                f"Weights quantization data type must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.dtype}."
+                "Weights quantization data type must be one of the following: "
+                f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
-        if self.dtype in ["mxfp4", "nf4"]:
+        if self.dtype in ["mxfp4", "nf4", "cb4"]:
+            if self.dtype == "cb4" and is_nncf_version("<=", "2.17"):
+                raise ImportError(
+                    "Codebook quantization is currently supported only with NNCF develop. "
+                    "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
+                )
             if self.bits != 4:
                 raise ValueError(
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
@@ -799,6 +884,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             mode += "_sym" if self.sym else "_asym"
         if mode == "mxfp4":
             mode = "e2m1"
+        if mode == "cb4":
+            mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)
 
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
@@ -948,6 +1035,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             visual_lm_datasets = set(PREDEFINED_VISUAL_LM_DATASETS.keys())
             stable_diffusion_datasets = set(PREDEFINED_SD_DATASETS.keys())
             language_datasets = set(PREDEFINED_LANGUAGE_DATASETS.keys())
+            sam_datasets = set(PREDEFINED_SAM_DATASETS.keys())
             if (
                 self.dataset
                 not in PREDEFINED_CAUSAL_LANGUAGE_DATASETS
@@ -955,12 +1043,14 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 | speech_to_text_datasets
                 | stable_diffusion_datasets
                 | visual_lm_datasets
+                | sam_datasets
             ):
                 raise ValueError(
                     "You can only choose between the following datasets:"
                     f"{language_datasets} for text feature extraction models, "
                     f"{PREDEFINED_CAUSAL_LANGUAGE_DATASETS} for LLMs, "
                     f"{speech_to_text_datasets} for speech-to-text models, "
+                    f"{sam_datasets} for SegmentAnything models, "
                     f"{visual_lm_datasets} for visual LLMs or "
                     f"{stable_diffusion_datasets} for diffusion models, but we found {self.dataset}."
                 )
@@ -1161,6 +1251,18 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         )
 
         self.post_init()
+
+    def post_init(self):
+        super().post_init()
+
+        if self.weight_quantization_config.dtype == "nf4" and self.full_quantization_config.dtype in [
+            "f8e4m3",
+            "f8e5m2",
+        ]:
+            logger.warning(
+                "\n`nf4_f8e4m3` and `nf4_f8e5m2` mixed precision quantization modes are deprecated and will be "
+                "removed in optimum-intel v1.26. Please use `cb4_f8e4m3` instead.\n"
+            )
 
     @staticmethod
     def _initialize_quantization_config(

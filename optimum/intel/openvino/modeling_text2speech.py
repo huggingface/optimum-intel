@@ -97,6 +97,10 @@ class OVTextToSpeechDecoder(OVModelPart):
         prob = torch.from_numpy(result[2])
         return ModelOutput(output_sequence_out=output_sequence_out, spectrum=spectrum, prob=prob)
 
+    def reset_state(self) -> None:
+        if self.request:
+            self.request.reset_state()
+
 
 class OVTextToSpeechPostNet(OVModelPart):
     _model_name = "postnet"
@@ -170,6 +174,10 @@ class OVModelForTextToSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
             return super()._from_pretrained(model_id, config, **kwargs)
 
+    def reshape(self, *args, **kwargs):
+        logger.warning("Static shapes are not supported for this model.")
+        return self
+
 
 class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
     """
@@ -192,17 +200,22 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         vocoder: openvino.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
+        dynamic_shapes: bool = None,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if dynamic_shapes is not None:
+            logger.warning(
+                f"`dynamic_shapes` was set to {dynamic_shapes}, but this value will be ignored as only dynamic shapes are supported."
+            )
+
         self.config = config
         self.use_cache = model_has_state(decoder)
         self._model_save_dir = model_save_dir
         self._device = device.upper()
-        self.is_dynamic = dynamic_shapes
+        self.is_dynamic = True
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
@@ -305,7 +318,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         **kwargs,
     ):
         device = kwargs.pop("device", "CPU")
-        dynamic_shapes = kwargs.pop("dynamic_shapes", True)
+        dynamic_shapes = kwargs.pop("dynamic_shapes", None)
         ov_config = kwargs.pop("ov_config", None)
         generation_config = kwargs.pop("generation_config", None)
         preprocessors = kwargs.pop("preprocessors", [])
@@ -462,6 +475,9 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         cross_attentions = []
         idx = 0
         result_spectrogram = {}
+
+        # clean-up decoder states for new generation
+        self.decoder.reset_state()
 
         while True:
             idx += 1
