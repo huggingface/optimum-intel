@@ -216,7 +216,7 @@ class INCModel(OptimizedModel):
                         config=config,
                         **kwargs,
                     )
-                    logger.info("Saved low bit model loading successfully. Other input args will be ignored.")
+                    logger.info("Saved low bit model loading successfully. Other input args " "will be ignored.")
                     return model
                 except Exception as e:
                     raise RuntimeError(f"The quantized model cannot be loaded. Detailed error: {e}")

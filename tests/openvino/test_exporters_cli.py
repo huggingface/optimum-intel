@@ -1130,7 +1130,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 bits = default_config.pop("bits", None)
                 self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
-                default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
+                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
                 quant_method = default_config.pop("quant_method", None)
                 default_config["awq"] = quant_method == "awq"
                 default_config["gptq"] = quant_method == "gptq"
