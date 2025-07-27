@@ -14,7 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""Finetuning the library models for sequence classification on Clinc."""
+""" Finetuning the library models for sequence classification on Clinc."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
 import copy
