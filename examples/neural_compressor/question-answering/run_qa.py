@@ -563,8 +563,8 @@ def main():
 
         def get_logits(teacher_model_qa, train_dataset):
             logger.info("***** Getting logits of teacher model *****")
-            logger.info(f"  Num examples = {len(train_dataset)}")
-            logger.info(f"  Batch Size = {training_args.per_device_eval_batch_size}")
+            logger.info(f"  Num examples = {len(train_dataset) }")
+            logger.info(f"  Batch Size = {training_args.per_device_eval_batch_size }")
 
             sampler = None
             if accelerator.num_processes > 1:
