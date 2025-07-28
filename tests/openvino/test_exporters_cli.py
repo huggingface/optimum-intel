@@ -104,6 +104,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.48"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "zamba2"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -137,6 +144,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "mamba": 2,
         "falcon-mamba": 2,
+        "zamba2": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
