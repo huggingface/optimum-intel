@@ -1139,9 +1139,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.48.0"):
-        SUPPORTED_ARCHITECTURES += (
-            "zamba2",
-        )
+        SUPPORTED_ARCHITECTURES += ("zamba2",)
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
