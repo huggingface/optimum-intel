@@ -1718,6 +1718,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.equal(ov_stateful_outputs, transformers_outputs),
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateful output {ov_stateful_outputs}",
             )
+
+            if model_arch in {"smollm3"}:
+                # smollm3 does not support stateless generation
+                continue
+
             set_seed(SEED)
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
             self.assertTrue(

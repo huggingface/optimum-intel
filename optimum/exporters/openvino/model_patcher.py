@@ -344,14 +344,14 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             patch_cos_sin_cached_fp32(self._model.model)
 
         if (
-            is_transformers_version(">=", "4.36")
-            and is_transformers_version("<", "4.53")
+            is_transformers_version(">=", "4.36.0")
+            and is_transformers_version("<", "4.53.0")
             and hasattr(self._model, "_update_causal_mask")
         ):
             self._model._update_causal_mask_original = self._model._update_causal_mask
             self._model._update_causal_mask = types.MethodType(_update_causal_mask_patched, self._model)
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.53.0"):
             # for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
@@ -2793,7 +2793,7 @@ def _falcon_update_causal_mask(
     return causal_mask
 
 
-class FalconModelPatcher(DecoderModelPatcher):
+class FalconModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_cos_sin_cached_fp32(self._model.transformer)
