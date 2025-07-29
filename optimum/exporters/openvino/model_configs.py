@@ -159,7 +159,7 @@ def init_model_configs():
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
     TasksManager._CUSTOM_CLASSES[("pt", "glm4v", "image-text-to-text")] = (
         "transformers",
-        "Glm4vForConditionalGeneration",
+        "AutoModelForImageTextToText",
     )
     TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = (
         "transformers",

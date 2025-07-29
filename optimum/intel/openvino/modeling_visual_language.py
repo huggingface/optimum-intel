@@ -2611,7 +2611,7 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
         return model_kwargs
 
-    # Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L1423
+    # Copied from https://github.com/huggingface/transformers/blob/v4.53.3/src/transformers/models/glm4v/modular_glm4v.py#L1014
     def get_rope_index(
         self,
         input_ids: Optional[torch.LongTensor] = None,
