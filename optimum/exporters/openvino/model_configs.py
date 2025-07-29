@@ -290,22 +290,6 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager(
-    "smollm3",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "text-generation",
-        "text-generation-with-past",
-        "text-classification",
-        "token-classification",
-    ],
-    library_name="transformers",
-)
-class SmolLM3OpenVINOConfig(Qwen2OpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.53.0"
-
-
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14

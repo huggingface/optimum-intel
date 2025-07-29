@@ -1183,9 +1183,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("smollm3",)
-
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -1271,7 +1268,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm4": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
-        "smollm3": 2,
         "mamba": 0,
         "falcon-mamba": 0,
     }
@@ -1372,8 +1368,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         gen_config = GenerationConfig(
-            max_new_tokens=20 if model_arch == "smollm3" else 30,
-            min_new_tokens=20 if model_arch == "smollm3" else 30,
+            max_new_tokens=30,
+            min_new_tokens=30,
             num_beams=1 if model_arch == "chatglm4" else 2,
             do_sample=False,
         )
@@ -1718,10 +1714,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.equal(ov_stateful_outputs, transformers_outputs),
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateful output {ov_stateful_outputs}",
             )
-
-            if model_arch in {"smollm3"}:
-                # smollm3 does not support stateless generation
-                continue
 
             set_seed(SEED)
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
