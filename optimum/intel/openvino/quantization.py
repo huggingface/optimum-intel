@@ -689,7 +689,8 @@ class OVCalibrationDatasetBuilder:
 
         dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
 
-        vision_embedding_submodel_names = ["vision_embeddings", "vision_embeddings_merger"]
+        vision_embedding_submodel_names = ["vision_embeddings"]
+        # vision_embedding_submodel_names = ["vision_embeddings", "vision_embeddings_merger"]
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
         for submodel_name in vision_embedding_submodel_names:
             ov_component: OVVisionEmbedding = getattr(self.model, submodel_name)
@@ -1639,6 +1640,9 @@ def _weight_only_quantization(
         )
     wc_kwargs.update(kwargs)
     wc_kwargs.pop("weight_only", None)
+
+    if wc_kwargs["mode"] in [nncf.CompressWeightsMode.INT8_ASYM, nncf.CompressWeightsMode.INT8_SYM]:
+        dataset = None
 
     compressed_model = nncf.compress_weights(
         model,
