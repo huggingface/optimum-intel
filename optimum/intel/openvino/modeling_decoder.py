@@ -777,7 +777,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         return result
 
     def _get_past_length(self, past_key_values=None):
-        if past_key_values is None or len(past_key_values) == 0:
+        if past_key_values is None:
             return 0
         if self.stateful:
             return self._past_length

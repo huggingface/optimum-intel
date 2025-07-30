@@ -47,7 +47,7 @@ from optimum.intel.utils.import_utils import (
 
 
 if is_transformers_version(">=", "4.53"):
-    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS
+    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
 
 if TYPE_CHECKING:
@@ -371,6 +371,10 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
         ):
             self._model._update_causal_mask = self._model._update_causal_mask_original
             del self._model._update_causal_mask_original
+
+        if is_transformers_version(">=", "4.53.0"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", sdpa_mask)
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -4771,6 +4775,10 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         else:
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             del self._model.config._orig_attn_implementation
+
+        if is_transformers_version(">=", "4.53"):
+            # remove the eager_mask_without_vmap from the ALL_MASK_ATTENTION_FUNCTIONS
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
 
 
 class MiniCPMModelPatcher(OVDecoderModelPatcher):
