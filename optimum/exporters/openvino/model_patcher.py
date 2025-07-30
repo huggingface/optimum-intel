@@ -62,13 +62,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-spec_idx = None
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
-    if spec.name == "repeat_interleave":
-        spec_idx = idx
-        break
-if spec_idx is not None:
-    UNSUPPORTED_OPS_PATCHING_SPEC.pop(spec_idx)
+    if spec.name in {"repeat_interleave", "scaled_dot_product_attention"}:
+        UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
 
 
 BETTERTRANSFORMER_IGNORE = ["codegen"]
