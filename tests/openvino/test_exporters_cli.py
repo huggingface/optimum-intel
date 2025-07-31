@@ -1034,6 +1034,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
 
+    def test_exporters_cli_4bit_with_statistics_path(self):
+        with TemporaryDirectory() as tmpdir:
+            statistics_path = f"{tmpdir}/statistics"
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --weight-format int4 --awq "
+                f"--dataset wikitext2 --group-size 4 --quantization-statistics-path {statistics_path} {tmpdir}",
+                shell=True,
+                check=True,
+                capture_output=True,
+            )
+            self.assertTrue(
+                b"Statistics were successfully saved to a directory " + bytes(statistics_path, "utf-8")
+                in result.stdout
+            )
+            self.assertTrue(
+                b"Statistics were successfully loaded from a directory " + bytes(statistics_path, "utf-8")
+                in result.stdout
+            )
+
     @parameterized.expand(SUPPORTED_QUANTIZATION_ARCHITECTURES)
     def test_exporters_cli_full_quantization(
         self,
@@ -1077,7 +1096,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         [
             (
                 "falcon-40b",
-                "tiiuae/falcon-7b-instruct",
+                "bigscience/bloomz-560m",
                 AutoModelForCausalLM,
                 OVModelForCausalLM,
                 "--task text-generation-with-past --weight-format int4",
@@ -1120,8 +1139,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             with open(Path(tmpdir) / "config.json", "w") as wf:
                 json.dump(config, wf)
 
+            is_weight_compression = "--weight-format" in options
+            run_command = f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}"
+            if is_weight_compression:
+                # Providing quantization statistics path should not interfere with the default configuration matching
+                run_command += f" --quantization-statistics-path {tmpdir}/statistics"
             subprocess.run(
-                f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}",
+                run_command,
                 shell=True,
                 check=True,
             )
@@ -1129,7 +1153,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = ov_model_cls.from_pretrained(tmpdir)
             rt_info = model.model.get_rt_info()
             nncf_info = rt_info["nncf"]
-            is_weight_compression = "weight_compression" in nncf_info
             model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
             default_config = {**default_configs_collection[model_id]}
@@ -1142,6 +1165,10 @@ class OVCLIExportTestCase(unittest.TestCase):
                 quant_method = default_config.pop("quant_method", None)
                 default_config["awq"] = quant_method == "awq"
                 default_config["gptq"] = quant_method == "gptq"
+                advanced_parameters = eval(model_quantization_config["advanced_parameters"].value)
+                model_quantization_config["statistics_path"] = Mock()
+                model_quantization_config["statistics_path"].value = advanced_parameters["statistics_path"]
+                default_config["statistics_path"] = f"{tmpdir}/statistics"
             else:
                 dtype = default_config.pop("dtype", None)
                 self.assertEqual(dtype, "int8")
