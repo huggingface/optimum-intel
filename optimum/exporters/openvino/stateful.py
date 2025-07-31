@@ -272,23 +272,54 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
-def patch_stateful_ssm(ov_model: ov.Model):
-    cache_input_names = [
-        key_name for key in ov_model.inputs for key_name in key.get_names() if "cache_params.past" in key_name
-    ]
-    cache_output_names = [
-        key_name for key in ov_model.outputs for key_name in key.get_names() if "cache_params.present" in key_name
-    ]
+def patch_stateful_ssm(config: PretrainedConfig, ov_model: ov.Model):
+    from openvino._offline_transformations import apply_make_stateful_transformation
 
-    if not cache_input_names or not cache_output_names:
-        return
+    def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
+        # return tensor names of model inputs/outputs tensors with KV and SSM states
+        kv_names = []
+        ssm_names = []
+        other_names = []
+        for ov_tensor in ov_tensors:
+            ov_tensor_names = ov_tensor.get_names()
+            is_kv_or_ssm = False
+            for ov_tensor_name in ov_tensor_names:
+                if any(prefix in ov_tensor_name for prefix in ssm_prefix_names):
+                    ssm_names.append(ov_tensor_name)
+                    is_kv_or_ssm = True
+                    break
+                elif any(prefix in ov_tensor_name for prefix in kv_prefix_names):
+                    kv_names.append(ov_tensor_name)
+                    is_kv_or_ssm = True
+                    break
+            if not is_kv_or_ssm:
+                other_names.append(ov_tensor_name)
+        return kv_names, ssm_names, other_names
+
+    ssm_prefix_input_names = ["cache_params.past", "past_key_values.conv_state", "past_key_values.ssm_state"]
+    kv_prefix_input_names = ["past_key_values.key", "past_key_values.value"]
+    kv_input_names, ssm_input_names, other_input_names = get_kv_ssm_tensor_names(
+        ssm_prefix_input_names, kv_prefix_input_names, ov_model.inputs
+    )
+    not_kv_inputs = ssm_input_names + other_input_names
+
+    ssm_prefix_output_names = ["cache_params.present", "present.conv_state", "present.ssm_state"]
+    kv_prefix_output_names = ["present.key", "present.value"]
+    kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(
+        ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
+    )
 
     batch_dim = 0
 
-    from openvino._offline_transformations import apply_make_stateful_transformation
+    # hybrid models can contain transformer blocks as well
+    # so KV tensors must be handled properly
+    if kv_input_names is not None and len(kv_input_names) > 0:
+        fuse_cache_reorder(ov_model, not_kv_inputs, kv_input_names, batch_dim)
+        num_attention_heads = config.num_attention_heads
+        make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim, num_attention_heads, None)
 
     input_output_map = {}
-    for cache_name_pair in zip(cache_input_names, cache_output_names):
+    for cache_name_pair in zip(ssm_input_names, ssm_output_names):
         input_output_map[cache_name_pair[0]] = cache_name_pair[1]
 
     apply_make_stateful_transformation(ov_model, input_output_map)
@@ -299,7 +330,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
     if config.model_type in SSM_MODELS:
-        return patch_stateful_ssm(ov_model)
+        return patch_stateful_ssm(config, ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 

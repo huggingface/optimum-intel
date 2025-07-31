@@ -148,6 +148,7 @@ from .model_patcher import (
     StatefulSeq2SeqDecoderPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
+    Zamba2ModelPatcher,
 )
 
 
@@ -4490,3 +4491,100 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
                 )
 
         return dummy_inputs
+
+
+class Zamba2DummyInputGenerator(DummyInputGenerator):
+    """
+    Generates dummy past_key_values inputs for Zamba2 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("position_ids", "cache_position", "past_key_values")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        config = normalized_config.config
+        self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
+        self.ssm_state_size = config.mamba_d_state
+        self.conv_kernel_size = config.mamba_d_conv
+        self.n_mamba_heads = config.n_mamba_heads
+        self.num_hidden_layers = config.num_hidden_layers
+        self.mamba_ngroups = config.mamba_ngroups
+        self.mamba_d_state = config.mamba_d_state
+        self.batch_size = batch_size
+        self.mamba_headdim = config.mamba_headdim
+        self.head_dim = config.attention_head_dim
+        self.num_attention_heads = config.num_attention_heads
+        self.sequence_length = sequence_length
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "past_key_values":
+            past_key_values = []
+            # generate tuples of (key, value, conv_state, ssm_state)
+            for i in range(self.num_hidden_layers):
+                kv_shape = (self.batch_size, self.num_attention_heads, 1, self.head_dim)
+                k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+                v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+                past_key_values.append(k)
+                past_key_values.append(v)
+                conv_state_shape = (
+                    self.batch_size,
+                    self.intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                    self.conv_kernel_size,
+                )
+                conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+                past_key_values.append(conv_state)
+                ssm_state_shape = (self.batch_size, self.n_mamba_heads, self.mamba_headdim, self.ssm_state_size)
+                ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+                past_key_values.append(ssm_state)
+            return past_key_values
+
+        raise ValueError(f"Unsupported input name {input_name}")
+
+
+@register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
+    PAD_ATTENTION_MASK_TO_PAST = False
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyInputGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyInputGenerator
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            kv_name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + 1"
+            kv_name = "present"
+
+        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{kv_name}.key.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
+            inputs_or_outputs[f"{kv_name}.value.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
+            # [batch_size, conv_kernel_size - 1, d_model]
+            inputs_or_outputs[f"{kv_name}.conv_state.{i}"] = {0: "batch_size"}
+            # [batch_size, d_state, d_model]
+            inputs_or_outputs[f"{kv_name}.ssm_state.{i}"] = {0: "batch_size"}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        return Zamba2ModelPatcher(self, model, model_kwargs)
