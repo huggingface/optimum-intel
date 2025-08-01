@@ -419,7 +419,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset c4 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 30, "decoder": 62},
+            else {"encoder": 30, "decoder": 62 if is_openvino_version("<", "2025.3") else 52},
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.36.0")
