@@ -4494,7 +4494,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 
 @register_in_tasks_manager("ernie4_5", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    MIN_TRANSFORMERS_VERSION = "4.53.4"
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
