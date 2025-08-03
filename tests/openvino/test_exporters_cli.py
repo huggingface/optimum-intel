@@ -112,6 +112,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-to-video", "ltx-video"),
             ]
         )
+
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "ernie4_5"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
@@ -135,6 +143,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "mamba": 2,
         "falcon-mamba": 2,
+        "ernie4_5": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
