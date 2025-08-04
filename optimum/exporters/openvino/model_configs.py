@@ -4507,4 +4507,4 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
