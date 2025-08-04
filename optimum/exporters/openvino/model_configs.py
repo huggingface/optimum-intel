@@ -617,6 +617,21 @@ class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
     pass
 
 
+@register_in_tasks_manager(
+    "arcee",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class ArceeOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
+
+
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
