@@ -67,7 +67,6 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     GemmaDummyPastKeyValuesGenerator,
-    HunyuanDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
@@ -103,7 +102,6 @@ from .model_patcher import (
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
     GraniteMoEModelPatcher,
-    HunyuanModelPatcher,
     IBertModelPatcher,
     Idefics3ImageEmbeddingsModelPatcher,
     InputEmbeddingPatcher,
