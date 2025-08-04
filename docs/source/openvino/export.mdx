@@ -31,13 +31,14 @@ Check out the help for more options:
 
 ```text
 usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,tf}] [--trust-remote-code]
-                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4}]
-                                   [--quant-mode {int8,f8e4m3,f8e5m2,nf4_f8e4m3,nf4_f8e5m2,int4_f8e4m3,int4_f8e5m2}]
+                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4,cb4}]
+                                   [--quant-mode {int8,f8e4m3,f8e5m2,nf4_f8e4m3,nf4_f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}]
                                    [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
                                    [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
                                    [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
                                    [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--gptq]
                                    [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
+                                   [--quantization-statistics-path QUANTIZATION_STATISTICS_PATH]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
                                    [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
                                    output
@@ -66,9 +67,10 @@ Optional arguments:
   --trust-remote-code   Allows to use custom code for the modeling hosted in the model repository. This option should
                         only be set for repositories you trust and in which you have read the code, as it will execute
                         on your local machine arbitrary code present in the model repository.
-  --weight-format {fp32,fp16,int8,int4,mxfp4,nf4}
-                        The weight format of the exported model.
-  --quant-mode {int8,f8e4m3,f8e5m2,nf4_f8e4m3,nf4_f8e5m2,int4_f8e4m3,int4_f8e5m2}
+  --weight-format {fp32,fp16,int8,int4,mxfp4,nf4,cb4}
+                        The weight format of the exported model. Option 'cb4' represents a codebook with 16
+                        fixed fp8 values in E4M3 format.
+  --quant-mode {int8,f8e4m3,f8e5m2,nf4_f8e4m3,nf4_f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}
                         Quantization precision mode. This is used for applying full model quantization including
                         activations.
   --library {transformers,diffusers,timm,sentence_transformers,open_clip}
@@ -135,6 +137,12 @@ Optional arguments:
                         The sensitivity metric for assigning quantization precision to layers. It can be one of the
                         following: ['weight_quantization_error', 'hessian_input_activation',
                         'mean_activation_variance', 'max_activation_variance', 'mean_activation_magnitude'].
+  --quantization-statistics-path QUANTIZATION_STATISTICS_PATH
+                        Directory path to dump/load data-aware weight-only quantization statistics. This is useful when
+                        running data-aware quantization multiple times on the same model and dataset to avoid
+                        recomputing statistics. This option is applicable exclusively for weight-only quantization.
+                        Please note that the statistics depend on the dataset, so if you change the dataset, you should
+                        also change the statistics path to avoid confusion.
   --num-samples NUM_SAMPLES
                         The maximum number of samples to take from the dataset for quantization.
   --disable-stateful    Disable stateful converted models, stateless models will be generated instead. Stateful models
