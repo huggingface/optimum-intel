@@ -1466,7 +1466,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
         # see for details https://github.com/huggingface/transformers/issues/37172
         if not hasattr(generation_config, "forced_decoder_ids"):
-            # since transformers 4.53.0, forced_decoder_ids is depricated: https://github.com/huggingface/transformers/pull/38232
+            # since transformers 4.53.0, forced_decoder_ids is deprecated: https://github.com/huggingface/transformers/pull/38232
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
         else:
             forced_decoder_ids = generation_config.forced_decoder_ids
