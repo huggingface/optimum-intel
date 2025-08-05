@@ -1183,6 +1183,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES += ("arcee",)
+
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES += ("ernie4_5",)
 
@@ -1273,6 +1276,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen3_moe": 2,
         "mamba": 0,
         "falcon-mamba": 0,
+        "arcee": 2,
         "ernie4_5": 2,
     }
 
