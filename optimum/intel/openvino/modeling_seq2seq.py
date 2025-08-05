@@ -1468,6 +1468,10 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         if not hasattr(generation_config, "forced_decoder_ids"):
             # since transformers 4.53.0, forced_decoder_ids is deprecated: https://github.com/huggingface/transformers/pull/38232
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
+        elif is_transformers_version(">=", "4.53.0"):
+            # in the case where the generation config was saved with a forced_decoder_ids
+            del generation_config.forced_decoder_ids
+            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
         else:
             forced_decoder_ids = generation_config.forced_decoder_ids
 
