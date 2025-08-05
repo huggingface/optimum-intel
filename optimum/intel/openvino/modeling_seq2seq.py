@@ -404,16 +404,12 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
     @property
     def encoder_model(self) -> openvino.Model:
-        logger.warning(
-            "Access to the `encoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `encoder.model` instead"
-        )
+        logger.warning("Access to the `encoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `encoder.model` instead")
         return self.encoder.model
 
     @property
     def decoder_model(self) -> openvino.Model:
-        logger.warning(
-            "Access to the `decoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder.model` instead"
-        )
+        logger.warning("Access to the `decoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder.model` instead")
         return self.decoder.model
 
     @property
@@ -442,9 +438,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             try:
                 self.generation_config.save_pretrained(save_directory)
             except Exception as exception:
-                logger.warning(
-                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
-                )
+                logger.warning(f"The generation config will not be saved, saving failed with following error:\n{exception}")
 
     @classmethod
     def _from_pretrained(
@@ -545,9 +539,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 if getattr(generation_config, "cache_implementation", None) is not None:
                     generation_config.cache_implementation = None
             except OSError:
-                logger.info(
-                    "Generation config file not found, using a generation config created from the model config."
-                )
+                logger.info("Generation config file not found, using a generation config created from the model config.")
 
         quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         model = cls(
@@ -681,9 +673,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         # Decode
         if past_key_values is None or self.decoder_with_past is None:
             decoder_outputs = self.decoder(
-                input_ids=(
-                    decoder_input_ids[:, -1:] if past_key_values is not None and self.use_cache else decoder_input_ids
-                ),
+                input_ids=(decoder_input_ids[:, -1:] if past_key_values is not None and self.use_cache else decoder_input_ids),
                 past_key_values=past_key_values,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
@@ -759,9 +749,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 The sequence length.
         """
         if self._compile_only:
-            raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`reshape()` is not supported with `compile_only` mode, please initialize model without this option")
 
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = batch_size == -1 and sequence_length == -1
@@ -779,9 +767,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         """
 
         if self._compile_only:
-            raise ValueError(
-                "`half()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`half()` is not supported with `compile_only` mode, please initialize model without this option")
         for submodel in self.ov_submodels.values():
             apply_moc_transformations(submodel, cf=False)
             compress_model_transformation(submodel)
@@ -791,9 +777,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
     def clear_requests(self):
         if self._compile_only:
-            raise ValueError(
-                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
-            )
+            raise ValueError("`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option")
         for submodel_name in self._ov_submodel_names:
             getattr(self, submodel_name).request = None
 
@@ -808,8 +792,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         if decoder_start_token_id is None:
             raise ValueError(
-                "self.model.config.decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id. "
-                "See T5 docs for more information."
+                "self.model.config.decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id. " "See T5 docs for more information."
             )
 
         shifted_input_ids = input_ids.new_zeros(input_ids.shape)
@@ -882,9 +865,7 @@ class OVEncoder:
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        last_hidden_state = torch.from_numpy(
-            self.request(inputs, share_inputs=True, share_outputs=True)["last_hidden_state"]
-        ).to(self.device)
+        last_hidden_state = torch.from_numpy(self.request(inputs, share_inputs=True, share_outputs=True)["last_hidden_state"]).to(self.device)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -893,11 +874,7 @@ class OVEncoder:
 
     def _compile(self):
         ov_config = {**self.parent_model.ov_config}
-        if (
-            "CACHE_DIR" not in ov_config.keys()
-            and not str(self.parent_model.model_save_dir).startswith(gettempdir())
-            and "gpu" in self._device.lower()
-        ):
+        if "CACHE_DIR" not in ov_config.keys() and not str(self.parent_model.model_save_dir).startswith(gettempdir()) and "gpu" in self._device.lower():
             cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
 
@@ -988,9 +965,7 @@ class OVDecoder:
 
         if past_key_values is not None and not self.stateful:
             # Flatten the past_key_values
-            past_key_values = tuple(
-                past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
-            )
+            past_key_values = tuple(past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer)
 
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
@@ -1016,9 +991,7 @@ class OVDecoder:
 
         if "beam_idx" in self.input_names:
             batch_size = input_ids.shape[0]
-            inputs["beam_idx"] = (
-                self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
-            )
+            inputs["beam_idx"] = self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -1030,17 +1003,13 @@ class OVDecoder:
         if not self.stateful:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
             # self-attention layer and 2 to the cross-attention layer)
-            out_past_key_values = tuple(
-                np.copy(self.request.get_tensor(key).data) for key in self.key_value_output_names
-            )
+            out_past_key_values = tuple(np.copy(self.request.get_tensor(key).data) for key in self.key_value_output_names)
 
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
             # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
             # * 2 for the decoder with cache (k/v of self-attention as cross-attention cache is constant)
             if self.use_past is False:
-                out_past_key_values = tuple(
-                    out_past_key_values[i : i + self.num_pkv] for i in range(0, len(out_past_key_values), self.num_pkv)
-                )
+                out_past_key_values = tuple(out_past_key_values[i : i + self.num_pkv] for i in range(0, len(out_past_key_values), self.num_pkv))
             else:
                 # grab the cross attention key/values from the inputs
                 out_past_key_values = tuple(
@@ -1062,11 +1031,7 @@ class OVDecoder:
 
     def _compile(self):
         ov_config = {**self.parent_model.ov_config}
-        if (
-            "CACHE_DIR" not in ov_config.keys()
-            and not str(self.parent_model.model_save_dir).startswith(gettempdir())
-            and "gpu" in self._device.lower()
-        ):
+        if "CACHE_DIR" not in ov_config.keys() and not str(self.parent_model.model_save_dir).startswith(gettempdir()) and "gpu" in self._device.lower():
             cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
 
@@ -1078,9 +1043,7 @@ class OVDecoder:
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 _print_compiled_model_properties(compiled_model)
 
-    def _reorder_cache(
-        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
+    def _reorder_cache(self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
         [`~PreTrainedModel.beam_sample`] is called.
@@ -1093,9 +1056,7 @@ class OVDecoder:
             reordered_past = ()
             for layer_past in past_key_values:
                 # Cached cross_attention states don't have to be reordered -> they are always the same
-                reordered_past += (
-                    tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past[:2]) + layer_past[2:],
-                )
+                reordered_past += (tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past[:2]) + layer_past[2:],)
         return reordered_past
 
 
@@ -1189,9 +1150,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
-                    "beam_idx"
-                ):
+                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith("beam_idx"):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
@@ -1274,9 +1233,7 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
-                    "beam_idx"
-                ):
+                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith("beam_idx"):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
@@ -1442,9 +1399,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
                 decoder_position_ids = decoder_position_ids.clone(memory_format=torch.contiguous_format)
 
         if cache_position is None:
-            cache_position = torch.arange(
-                past_length, past_length + decoder_input_ids.shape[1], device=decoder_input_ids.device
-            )
+            cache_position = torch.arange(past_length, past_length + decoder_input_ids.shape[1], device=decoder_input_ids.device)
         elif use_cache:
             cache_position = cache_position[-decoder_input_ids.shape[1] :]
 
@@ -1470,7 +1425,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
         else:
             forced_decoder_ids = generation_config.forced_decoder_ids
-            
+
             if is_transformers_version(">=", "4.50.0"):
                 generation_config.forced_decoder_ids = None
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
