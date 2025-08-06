@@ -2432,7 +2432,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORT_AUDIO = []
 
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
+        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "nanollava"]
 
     if is_transformers_version(">=", "4.42.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next_video"]
@@ -2467,6 +2467,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         if is_transformers_version(">=", "4.46") and model_arch in [
             "llava",
             "llava_next",
+            "llava_next_mistral",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -2486,7 +2487,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration
-        if model_arch == "llava_next":
+        if model_arch.startswith("llava_next"):
             from transformers import LlavaNextForConditionalGeneration
 
             return LlavaNextForConditionalGeneration
@@ -2667,7 +2668,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    @parameterized.expand(["llava", "llava_next", "llava_next_video"])
+    @parameterized.expand(["llava", "llava_next", "llava_next_video", "llava_next_mistral"])
     @unittest.skipIf(
         is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
     )
