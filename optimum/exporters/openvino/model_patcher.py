@@ -758,7 +758,11 @@ class MistralModelPatcher(OVDecoderModelPatcher):
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
 
-        if hasattr(self._model, "model") and hasattr(self._model.model, "layers"):
+        if (
+            hasattr(self._model, "model")
+            and hasattr(self._model.model, "layers")
+            and is_transformers_version(">=", "4.41.0")
+        ):
             for layer in self._model.model.layers:
                 if hasattr(layer.self_attn, "rotary_emb"):
                     embed_positions = create_embed_positions_buffer(
@@ -778,7 +782,11 @@ class MistralModelPatcher(OVDecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
             del self._model.model._orig_update_causal_mask
 
-        if hasattr(self._model.model, "model") and hasattr(self._model.model.model, "layers"):
+        if (
+            hasattr(self._model.model, "model")
+            and hasattr(self._model.model.model, "layers")
+            and is_transformers_version(">=", "4.41.0")
+        ):
             for layer in self._model.model.layers:
                 if hasattr(layer.self_attn, "rotary_emb"):
                     layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
