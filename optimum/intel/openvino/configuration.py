@@ -82,7 +82,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "stabilityai/stablelm-zephyr-3b": {
@@ -285,9 +284,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "bits": 4,
