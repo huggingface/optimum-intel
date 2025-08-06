@@ -689,20 +689,22 @@ class OVCalibrationDatasetBuilder:
 
         dataset_metadata = PREDEFINED_VISUAL_LM_DATASETS[config.dataset]
 
-        vision_embedding_submodel_names = ["vision_embeddings"]
-        # vision_embedding_submodel_names = ["vision_embeddings", "vision_embeddings_merger"]
-        collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
-        for submodel_name in vision_embedding_submodel_names:
-            ov_component: OVVisionEmbedding = getattr(self.model, submodel_name)
-            collected_inputs[submodel_name + "_model"] = []
+        collected_inputs: Dict[str, List[Dict[str, Any]]] = {"lm_model": []}
+        # Collect vision embeddings calibration data by using InferRequestWrapper
+        vision_embedding_components = []
+        for ov_component_name, ov_component in self.model.components.items():
+            if not isinstance(ov_component, OVVisionEmbedding):
+                continue
+            vision_embedding_components.append(ov_component)
+            submodel_name = f"{ov_component_name}_model"
+            collected_inputs[submodel_name] = []
             ov_component._compile()
-            ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name + "_model"])
-        collected_inputs["lm_model"] = []
+            ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name])
 
         try:
             num_samples = config.num_samples or 32
             for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
-                if len(collected_inputs["lm_model"]) > num_samples:
+                if len(collected_inputs["lm_model"]) >= num_samples:
                     break
 
                 instruction = item[dataset_metadata["inputs"]["instruction"]]
@@ -717,7 +719,11 @@ class OVCalibrationDatasetBuilder:
 
                 try:
                     inputs = self.model.preprocess_inputs(
-                        text=instruction, image=image, processor=processor, tokenizer=tokenizer, config=self.model.config
+                        text=instruction,
+                        image=image,
+                        processor=processor,
+                        tokenizer=tokenizer,
+                        config=self.model.config,
                     )
                 except ValueError as value_error:
                     if "Tokenizer is required." in str(value_error) and tokenizer_error is not None:
@@ -735,8 +741,7 @@ class OVCalibrationDatasetBuilder:
 
                 collected_inputs["lm_model"].append(language_model_inputs)
         finally:
-            for submodel_name in vision_embedding_submodel_names:
-                ov_component: OVVisionEmbedding = getattr(self.model, submodel_name)
+            for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
 
         for k in collected_inputs:
@@ -1246,7 +1251,7 @@ class OVQuantizer(OptimumQuantizer):
         **kwargs,
     ):
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
-        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM
+        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
 
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
@@ -1257,12 +1262,7 @@ class OVQuantizer(OptimumQuantizer):
 
         quantization_configs = {}
         if isinstance(quantization_config, OVPipelineQuantizationConfig):
-            quantization_configs = quantization_config.quantization_configs
-            if "other" in quantization_configs:
-                other_quantization_config = quantization_configs.pop("other")
-                for submodel_name in self.model.ov_submodels:
-                    if submodel_name not in quantization_configs:
-                        quantization_configs[submodel_name] = other_quantization_config
+            quantization_configs = quantization_config.quantization_configs.copy()
         elif (
             isinstance(quantization_config, OVWeightQuantizationConfig)
             and quantization_config.quant_method != OVQuantizationMethod.HYBRID
@@ -1271,15 +1271,28 @@ class OVQuantizer(OptimumQuantizer):
             # Regular (non-hybrid) weight-only quantization
             #
             if isinstance(self.model, OVModelForVisualCausalLM):
-                for submodel_name in self.model.ov_submodels:
-                    quantization_configs[submodel_name] = (
-                        quantization_config
-                        if submodel_name == "lm_model"
-                        else OVWeightQuantizationConfig(bits=8, sym=True)
+                quantization_configs["lm_model"] = quantization_config
+                quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = OVWeightQuantizationConfig(
+                    bits=8, sym=True
+                )
+                if quantization_config.dataset is not None:
+                    vision_embedding_submodel_names = [
+                        f"{name}_model"
+                        for name, component in self.model.components.items()
+                        if isinstance(component, OVVisionEmbedding)
+                    ]
+                    logger.info(
+                        f"Applying static quantization to vision embeddings: {vision_embedding_submodel_names}"
                     )
+                    for submodel_name in vision_embedding_submodel_names:
+                        quantization_configs[submodel_name] = OVQuantizationConfig(
+                            bits=8,
+                            dtype="int8" if quantization_config.dtype == "int4" else "f8e4m3",
+                            dataset=quantization_config.dataset,
+                            num_samples=quantization_config.num_samples,
+                        )
             else:
-                for submodel_name in self.model.ov_submodels:
-                    quantization_configs[submodel_name] = quantization_config
+                quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config
         else:
             #
             # Hybrid/Full/Mixed quantization
@@ -1310,9 +1323,7 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config_copy = quantization_config.clone()
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    for submodel_name in self.model.ov_submodels:
-                        if submodel_name != diffusion_model_name:
-                            quantization_configs[submodel_name] = quantization_config_copy
+                    quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config_copy
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     quantization_configs["model"] = quantization_config
@@ -1329,19 +1340,31 @@ class OVQuantizer(OptimumQuantizer):
                 elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     diffusion_model_name = next(iter(calibration_dataset))
                     quantization_configs[diffusion_model_name] = quantization_config
-                    for submodel_name in self.model.ov_submodels:
-                        if submodel_name != diffusion_model_name:
-                            quantization_configs[submodel_name] = OVWeightQuantizationConfig(bits=8)
+                    quantization_configs[
+                        OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY
+                    ] = OVWeightQuantizationConfig(bits=8)
                 elif isinstance(self.model, OVModelForVisualCausalLM):
-                    for submodel_name in self.model.ov_submodels:
-                        quantization_configs[submodel_name] = (
-                            quantization_config
-                            if submodel_name == "lm_model"
-                            else OVWeightQuantizationConfig(bits=8, sym=True)
+                    quantization_configs["lm_model"] = quantization_config
+                    quantization_configs[
+                        OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY
+                    ] = OVWeightQuantizationConfig(bits=8, sym=True)
+                    vision_embedding_submodel_names = [
+                        f"{name}_model"
+                        for name, component in self.model.components.items()
+                        if isinstance(component, OVVisionEmbedding)
+                    ]
+                    logger.info(
+                        f"Applying static quantization to vision embeddings: {vision_embedding_submodel_names}"
+                    )
+                    for submodel_name in vision_embedding_submodel_names:
+                        quantization_configs[submodel_name] = OVQuantizationConfig(
+                            bits=8,
+                            dtype="int8" if quantization_config.dtype == "int4" else "f8e4m3",
+                            dataset=quantization_config.dataset,
+                            num_samples=quantization_config.num_samples,
                         )
                 else:
-                    for submodel_name in self.model.ov_submodels:
-                        quantization_configs[submodel_name] = quantization_config
+                    quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config
             elif isinstance(quantization_config, OVMixedQuantizationConfig):
                 #
                 # Mixed quantization
@@ -1349,10 +1372,16 @@ class OVQuantizer(OptimumQuantizer):
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
-                for submodel_name in self.model.ov_submodels:
-                    quantization_configs[submodel_name] = quantization_config
+                quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
+
+        # If default quantization config is provided, apply it to all other submodels
+        default_quantization_config = quantization_configs.pop(OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY, None)
+        if default_quantization_config is not None:
+            for submodel_name in self.model.ov_submodels:
+                if submodel_name not in quantization_configs:
+                    quantization_configs[submodel_name] = default_quantization_config
 
         for submodel_name, config in quantization_configs.items():
             if submodel_name not in self.model.ov_submodels:
@@ -1367,6 +1396,9 @@ class OVQuantizer(OptimumQuantizer):
                 config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
 
             if isinstance(config, OVWeightQuantizationConfig):
+                if config.bits == 8:
+                    # 8-bit weight only data-aware quantization is not supported
+                    nncf_dataset = None
                 # Weight only quantization is performed in-place
                 _weight_only_quantization(submodel, config, nncf_dataset, **kwargs)
             elif isinstance(config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
@@ -1640,9 +1672,6 @@ def _weight_only_quantization(
         )
     wc_kwargs.update(kwargs)
     wc_kwargs.pop("weight_only", None)
-
-    if wc_kwargs["mode"] in [nncf.CompressWeightsMode.INT8_ASYM, nncf.CompressWeightsMode.INT8_SYM]:
-        dataset = None
 
     compressed_model = nncf.compress_weights(
         model,

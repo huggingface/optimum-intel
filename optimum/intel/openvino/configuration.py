@@ -1229,6 +1229,8 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
 
 
 class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
+    DEFAULT_SUBMODEL_KEY = "default"
+
     def __init__(
         self,
         quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
@@ -1248,6 +1250,8 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
                 A dictionary where keys are submodel names and values are either dictionaries or instances of
                 `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+                A DEFAULT_SUBMODEL_KEY can be used to specify a default configuration for submodels that do not have
+                a specific configuration provided.
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
