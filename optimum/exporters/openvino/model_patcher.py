@@ -4877,7 +4877,6 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
-        model.__orig_forward = model.forward
 
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
@@ -4913,31 +4912,40 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             result["past_key_values"] = upd_pkv.to_legacy_cache()
             return result
 
-        model.forward = types.MethodType(forward, model)
+        if is_transformers_version("<", "4.53.0"):
+            model.__orig_forward = model.forward
+            model.forward = types.MethodType(forward, model)
+
         super().__init__(config, model, model_kwargs)
 
     def __enter__(self):
         super().__enter__()
 
-        if hasattr(self._model, "_update_causal_mask_mm"):
-            self._model._orig_update_causual_mask_mm = self._model._update_causal_mask_mm
+        if is_transformers_version("<", "4.52.0"):
             self._model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, self._model)
-        elif hasattr(self._model, "model") and hasattr(self._model.model, "_update_causal_mask_mm"):
-            self._model.model._orig_update_causual_mask_mm = self._model.model._update_causal_mask_mm
-            self._model.model._update_causal_mask_mm = types.MethodType(
-                _gemma3_mm_update_causal_mask, self._model.model
-            )
+        elif (
+            is_transformers_version("<", "4.53.0")
+            and hasattr(self._model, "model")
+            and hasattr(self._model.model, "_update_causal_mask")
+        ):
+            self._model.model._orig_update_causual_mask = self._model.model._update_causal_mask
+            self._model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, self._model.model)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
 
-        if hasattr(self._model, "_orig_update_causual_mask_mm"):
-            self._model._update_causal_mask_mm = self._model._orig_update_causal_mask_mm
-            del self._model._orig_update_causal_mask_mm
-        elif hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask_mm"):
-            self._model.model._update_causal_mask_mm = self._model.model._orig_update_causual_mask_mm
-            del self._model.model._orig_update_causual_mask_mm
+        if is_transformers_version("<", "4.53.0"):
+            self._model.forward = self._model.__orig_forward
+
+        if is_transformers_version("<", "4.52"):
+            del self._update_causal_mask_mm
+        elif (
+            is_transformers_version("<", "4.53.0")
+            and hasattr(self._model, "model")
+            and hasattr(self._model.model, "_orig_update_causual_mask")
+        ):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
+            del self._model.model._orig_update_causual_mask
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
