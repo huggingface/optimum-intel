@@ -65,7 +65,8 @@ logger = logging.getLogger(__name__)
 class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
-    _supports_cache_class = False
+    _supports_cache_class = False  # No loger defined/used in transformers
+    _is_stateful = False  # for Transformers it's False, but True for SSMs
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
     _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"

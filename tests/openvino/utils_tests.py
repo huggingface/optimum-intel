@@ -20,13 +20,14 @@ import openvino as ov
 import torch
 
 from optimum.intel.openvino.modeling_base import OVBaseModel
-from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version
 
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
     "aquila": "katuni4ka/tiny-random-aquilachat",
     "aquila2": "katuni4ka/tiny-random-aquila2",
+    "arcee": "onnx-internal-testing/tiny-random-ArceeForCausalLM",
     "arctic": "katuni4ka/tiny-random-snowflake",
     "audio-spectrogram-transformer": "Ericwang/tiny-random-ast",
     "bge": "BAAI/bge-small-en-v1.5",
@@ -63,6 +64,7 @@ MODEL_NAMES = {
     "donut": "fxmarty/tiny-doc-qa-vision-encoder-decoder",
     "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
     "detr": "hf-internal-testing/tiny-random-DetrModel",
+    "ernie4_5": "optimum-internal-testing/tiny-random-Ernie4_5ForCausalLM",
     "electra": "hf-internal-testing/tiny-random-electra",
     "esm": "hf-internal-testing/tiny-random-EsmModel",
     "exaone": "katuni4ka/tiny-random-exaone",
@@ -104,8 +106,8 @@ MODEL_NAMES = {
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",
     "opt_gptq": "ybelkada/opt-125m-gptq-4bit",
+    "maira2": "optimum-internal-testing/tiny-random-maira2",
     "mamba": "rkazants/tiny-mamba",
-    "maira2": "katuni4ka/tiny-random-maira2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
@@ -180,7 +182,7 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "wav2vec2-hf": "hf-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
-    "whisper": "katuni4ka/tiny-random-whisper",
+    "whisper": "nikita-savelyev-intel/tiny-random-whisper",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm-roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
@@ -301,7 +303,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 18,
+        "text_encoder": 18 if is_nncf_version("<", "2.18.0") else 16,
     },
     "ltx-video": {
         "transformer": 34,
@@ -310,8 +312,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder_model": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder_model": 100,
+        "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
+        "prompt_encoder_mask_decoder": 100,
     },
     "speecht5": {
         "encoder": 28,

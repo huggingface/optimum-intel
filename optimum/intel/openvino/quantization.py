@@ -13,12 +13,14 @@
 #  limitations under the License.
 
 import copy
+import dataclasses
 import inspect
 import logging
 import os
 from collections import UserDict, deque
 from contextlib import contextmanager
 from io import BytesIO
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -72,6 +74,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     PREDEFINED_LANGUAGE_DATASETS,
+    PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS,
@@ -272,6 +275,7 @@ class OVCalibrationDatasetBuilder:
             OVModelForSeq2SeqLM,
             OVModelForVisualCausalLM,
             OVModelForZeroShotImageClassification,
+            OVSamModel,
             OVSentenceTransformer,
         )
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
@@ -285,7 +289,8 @@ class OVCalibrationDatasetBuilder:
         if isinstance(self.model, OVModelForCausalLM):
             return self._prepare_causal_lm_calibration_data(config)
         elif isinstance(
-            self.model, (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification)
+            self.model,
+            (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification, OVSamModel),
         ):
             if config.processor is None:
                 raise ValueError(
@@ -318,6 +323,14 @@ class OVCalibrationDatasetBuilder:
                     config,
                     dataset_metadata["id"],
                     num_samples=None,
+                    dataset_split=dataset_metadata["split"],
+                    streaming=dataset_metadata["streaming"],
+                )
+            elif isinstance(self.model, OVSamModel):
+                dataset_metadata = PREDEFINED_SAM_DATASETS[config.dataset]
+                return self.build_from_dataset_name(
+                    config,
+                    dataset_metadata["id"],
                     dataset_split=dataset_metadata["split"],
                     streaming=dataset_metadata["streaming"],
                 )
@@ -465,6 +478,7 @@ class OVCalibrationDatasetBuilder:
             OVModelForSeq2SeqLM,
             OVModelForVisualCausalLM,
             OVModelForZeroShotImageClassification,
+            OVSamModel,
             OVSentenceTransformer,
         )
         from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
@@ -489,6 +503,7 @@ class OVCalibrationDatasetBuilder:
                 OVModelForZeroShotImageClassification,
                 OVSentenceTransformer,
                 OVModelForSeq2SeqLM,
+                OVSamModel,
             ),
         ) or (is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)):
             # Prepare from raw dataset avoiding dataloader creation
@@ -509,6 +524,8 @@ class OVCalibrationDatasetBuilder:
                 return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, OVModelForZeroShotImageClassification):
                 return self._prepare_text_image_encoder_model_calibration_data(quantization_config, dataset)
+            elif isinstance(self.model, OVSamModel):
+                return self._prepare_sam_dataset(quantization_config, dataset)
             else:
                 raise RuntimeError("Unsupported model type for calibration dataset collection.")
         else:
@@ -1039,6 +1056,47 @@ class OVCalibrationDatasetBuilder:
             self.model.request = self.model.request.request
 
         return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
+
+    def _prepare_sam_dataset(self, config: OVQuantizationConfigBase, dataset: "Dataset") -> OVCalibrationDataset:
+        from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
+
+        models: Dict[str, Union[OVSamVisionEncoder, OVSamPromptEncoder]] = {}
+        collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
+        for submodel_name in self.model._ov_submodel_names:
+            ov_component: Union[OVSamVisionEncoder, OVSamPromptEncoder] = getattr(self.model, submodel_name)
+            models[submodel_name] = ov_component
+            collected_inputs[submodel_name] = []
+            ov_component._compile()
+            ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name])
+
+        # We can avoid inferring the whole model if dataset is required only for the vision encoder model.
+        collect_only_for_vision_encoder = (
+            isinstance(config, OVPipelineQuantizationConfig)
+            and len(config.quantization_configs) == 1
+            and "vision_encoder" in config.quantization_configs
+        )
+
+        try:
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+
+            num_samples = config.num_samples or 128
+            for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
+                inputs = processor(item["image"], input_points=[[[0, 0]]], return_tensors="pt")
+                if collect_only_for_vision_encoder:
+                    collected_inputs["vision_encoder"].append({"pixel_values": inputs["pixel_values"]})
+                else:
+                    self.model(**inputs)
+        finally:
+            for model in models.values():
+                model.request = model.request.request
+
+        if collect_only_for_vision_encoder:
+            del collected_inputs["prompt_encoder_mask_decoder"]
+
+        for model_name in collected_inputs:
+            collected_inputs[model_name] = nncf.Dataset(collected_inputs[model_name])
+
+        return OVCalibrationDataset(collected_inputs)
 
     @staticmethod
     def _wrap_sample_as_array(
@@ -1672,6 +1730,11 @@ def _weight_only_quantization(
         )
     wc_kwargs.update(kwargs)
     wc_kwargs.pop("weight_only", None)
+
+    advanced_parameters = wc_kwargs.get("advanced_parameters")
+    if advanced_parameters is not None and advanced_parameters.statistics_path is not None and dataset is None:
+        # Graceful handling of unnecessary statistics_path
+        wc_kwargs["advanced_parameters"] = dataclasses.replace(advanced_parameters, statistics_path=None)
 
     compressed_model = nncf.compress_weights(
         model,

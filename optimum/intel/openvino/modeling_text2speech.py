@@ -97,6 +97,10 @@ class OVTextToSpeechDecoder(OVModelPart):
         prob = torch.from_numpy(result[2])
         return ModelOutput(output_sequence_out=output_sequence_out, spectrum=spectrum, prob=prob)
 
+    def reset_state(self) -> None:
+        if self.request:
+            self.request.reset_state()
+
 
 class OVTextToSpeechPostNet(OVModelPart):
     _model_name = "postnet"
@@ -471,6 +475,9 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         cross_attentions = []
         idx = 0
         result_spectrogram = {}
+
+        # clean-up decoder states for new generation
+        self.decoder.reset_state()
 
         while True:
             idx += 1
