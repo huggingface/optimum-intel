@@ -603,6 +603,7 @@ class ChatGLMModelPatcher(OVDecoderModelPatcher):
             block.self_attention.core_attention.forward = block.self_attention.core_attention._orig_forward
 
 
+# what does this patch exactly ?
 def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
     # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma/modeling_gemma.py#L104
     _seq_len = torch.max(position_ids) + 1 if seq_len is None else seq_len
@@ -626,27 +627,16 @@ def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000, inv_f
     return torch.cat((torch.sin(emb), torch.cos(emb)), dim=1)
 
 
-def register_sin_cos_buffer(model):
-    max_positions = model.config.max_position_embeddings
-
-    # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
-    # use precomputed
-
-    rotary_emb = model.model.layers[0].self_attn.rotary_emb
-    dim, base = None, None
+# cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step, use precomputed
+def create_embed_positions_buffer(rotary_emb, max_position_embeddings: int = None):
     inv_freq = getattr(rotary_emb, "inv_freq", None)
+
+    dim, base = None, None
     if inv_freq is None:
         base = rotary_emb.base
         dim = rotary_emb.dim
-    embed_positions = create_sinusoidal_positions(max_positions, dim, base, inv_freq)
 
-    for layer in model.model.layers:
-        layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
-        layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
-
-        layer.self_attn.rotary_emb.forward = types.MethodType(
-            llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
-        )
+    return create_sinusoidal_positions(max_position_embeddings, dim, base, inv_freq)
 
 
 # copied from https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548 to unblock export with transformers 4.42
@@ -768,15 +758,39 @@ class MistralModelPatcher(OVDecoderModelPatcher):
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
 
+        if (
+            hasattr(self._model, "model")
+            and hasattr(self._model.model, "layers")
+            and is_transformers_version(">=", "4.41.0")
+        ):
+            for layer in self._model.model.layers:
+                if hasattr(layer.self_attn, "rotary_emb"):
+                    embed_positions = create_embed_positions_buffer(
+                        rotary_emb=layer.self_attn.rotary_emb,
+                        max_position_embeddings=self._model.config.max_position_embeddings,
+                    )
+                    layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
+                    layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
+                    layer.self_attn.rotary_emb.forward = types.MethodType(
+                        llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
+                    )
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
+        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+            del self._model.model._orig_update_causal_mask
 
-        for layer in self._model.model.layers:
-            if hasattr(layer.self_attn, "rotary_emb") and hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
-                layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
+        if (
+            hasattr(self._model.model, "model")
+            and hasattr(self._model.model.model, "layers")
+            and is_transformers_version(">=", "4.41.0")
+        ):
+            for layer in self._model.model.layers:
+                if hasattr(layer.self_attn, "rotary_emb"):
+                    layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
+                    del layer.self_attn.rotary_emb._orig_forward
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
@@ -4877,7 +4891,6 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
         # Difference from original:
         # uses Dynamic cache from legacy cache instead of HybridCache
         # calculate causal mask from multimodal
-        model.__orig_forward = model.forward
 
         def forward(
             self, attention_mask, position_ids, past_key_values, token_type_ids, inputs_embeds, use_cache=True
@@ -4913,31 +4926,40 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             result["past_key_values"] = upd_pkv.to_legacy_cache()
             return result
 
-        model.forward = types.MethodType(forward, model)
+        if is_transformers_version("<", "4.53.0"):
+            model.__orig_forward = model.forward
+            model.forward = types.MethodType(forward, model)
+
         super().__init__(config, model, model_kwargs)
 
     def __enter__(self):
         super().__enter__()
 
-        if hasattr(self._model, "_update_causal_mask_mm"):
-            self._model._orig_update_causual_mask_mm = self._model._update_causal_mask_mm
+        if is_transformers_version("<", "4.52.0"):
             self._model._update_causal_mask_mm = types.MethodType(_gemma3_mm_update_causal_mask, self._model)
-        elif hasattr(self._model, "model") and hasattr(self._model.model, "_update_causal_mask_mm"):
-            self._model.model._orig_update_causual_mask_mm = self._model.model._update_causal_mask_mm
-            self._model.model._update_causal_mask_mm = types.MethodType(
-                _gemma3_mm_update_causal_mask, self._model.model
-            )
+        elif (
+            is_transformers_version("<", "4.53.0")
+            and hasattr(self._model, "model")
+            and hasattr(self._model.model, "_update_causal_mask")
+        ):
+            self._model.model._orig_update_causual_mask = self._model.model._update_causal_mask
+            self._model.model._update_causal_mask = types.MethodType(_gemma3_mm_update_causal_mask, self._model.model)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.forward = self._model.__orig_forward
 
-        if hasattr(self._model, "_orig_update_causual_mask_mm"):
-            self._model._update_causal_mask_mm = self._model._orig_update_causal_mask_mm
-            del self._model._orig_update_causal_mask_mm
-        elif hasattr(self._model, "model") and hasattr(self._model.model, "_orig_update_causual_mask_mm"):
-            self._model.model._update_causal_mask_mm = self._model.model._orig_update_causual_mask_mm
-            del self._model.model._orig_update_causual_mask_mm
+        if is_transformers_version("<", "4.53.0"):
+            self._model.forward = self._model.__orig_forward
+
+        if is_transformers_version("<", "4.52"):
+            del self._update_causal_mask_mm
+        elif (
+            is_transformers_version("<", "4.53.0")
+            and hasattr(self._model, "model")
+            and hasattr(self._model.model, "_orig_update_causual_mask")
+        ):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causual_mask
+            del self._model.model._orig_update_causual_mask
 
 
 class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
