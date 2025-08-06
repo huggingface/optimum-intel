@@ -101,6 +101,7 @@ MODEL_NAMES = {
     "llama4": "katuni4ka/tiny-random-llama-4-8E",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
+    "llava_next_mistral": "/home/ilyas/optimum-intel/tiny-llava-next-mistral",
     "llava_next_video": "katuni4ka/tiny-random-llava-next-video",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
