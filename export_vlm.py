@@ -1,17 +1,19 @@
 import gc
-import subprocess
 import time
 from collections import defaultdict
 from pathlib import Path
 
 import requests
 from PIL import Image
-from transformers import AutoProcessor, AutoTokenizer, AutoConfig
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
 
-from optimum.exporters.openvino.__main__ import maybe_convert_tokenizers
-from optimum.exporters.openvino.utils import load_preprocessors
-from optimum.intel import OVPipelineQuantizationConfig, OVWeightQuantizationConfig, OVQuantizationConfig, \
-    OVModelForVisualCausalLM
+from optimum.intel import (
+    OVModelForVisualCausalLM,
+    OVPipelineQuantizationConfig,
+    OVQuantizationConfig,
+    OVWeightQuantizationConfig,
+)
+
 
 model_ids = [
     ("OpenGVLab/InternVL2-1B", None),
@@ -43,7 +45,7 @@ quantization_configs = [
                 "other": OVWeightQuantizationConfig(bits=8, sym=True),
             }
         ),
-        "int4_wa-int8-w-int8"
+        "int4_wa-int8-w-int8",
     ),
     # (
     #     OVPipelineQuantizationConfig(
@@ -162,7 +164,7 @@ for model_id, revision in model_ids:
             end_time = time.perf_counter()
             results[(model_id, label)].append(end_time - start_time)
 
-            output_ids = output_ids[0, inputs["input_ids"].shape[1]:]
+            output_ids = output_ids[0, inputs["input_ids"].shape[1] :]
             # print(processor.decode(output_ids, skip_special_tokens=True))
             assert len(output_ids) == generation_kwargs["max_new_tokens"]
         del model

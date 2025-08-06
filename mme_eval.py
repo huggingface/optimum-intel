@@ -1,13 +1,12 @@
+import string
+from argparse import ArgumentParser
 from pathlib import Path
 
-from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
-
 import torch
-import string
 from datasets import load_dataset
-from transformers import AutoProcessor, set_seed, AutoTokenizer, AutoConfig
-from argparse import ArgumentParser
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, recall_score
 from tqdm import tqdm
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer, set_seed
 
 from optimum.intel import OVModelForVisualCausalLM
 
@@ -15,7 +14,7 @@ from optimum.intel import OVModelForVisualCausalLM
 class calculate_metrics:
     def divide_chunks(self, l, n=2):
         for i in range(0, len(l), n):
-            yield l[i:i + n]
+            yield l[i : i + n]
         return
 
     def parse_pred_ans(self, pred_ans):
@@ -53,15 +52,20 @@ class calculate_metrics:
             clean_preds.append(pred)
 
         conf_mat = confusion_matrix(clean_gts, clean_preds, labels=[1, 0])
-        precision = precision_score(clean_gts, clean_preds, average='binary')
-        recall = recall_score(clean_gts, clean_preds, average='binary')
+        precision = precision_score(clean_gts, clean_preds, average="binary")
+        recall = recall_score(clean_gts, clean_preds, average="binary")
         tp, fn = conf_mat[0]
         fp, tn = conf_mat[1]
 
         return {
-            "TP": tp, "FN": fn, "TN": tn, "FP": fp,
-            "precision": precision, "recall": recall,
-            "other_num": other_num, "acc": acc,
+            "TP": tp,
+            "FN": fn,
+            "TN": tn,
+            "FP": fp,
+            "precision": precision,
+            "recall": recall,
+            "other_num": other_num,
+            "acc": acc,
         }
 
 
@@ -106,7 +110,11 @@ def evaluate(model_path: str, model_id: str, category: str, max_new_tokens: int 
             image = example["image"].convert("RGB")
 
             inputs = model.preprocess_inputs(
-                text=prompt, image=image, processor=processor, tokenizer=tokenizer, **preprocess_kwargs,
+                text=prompt,
+                image=image,
+                processor=processor,
+                tokenizer=tokenizer,
+                **preprocess_kwargs,
             )
 
             generate_ids = model.generate(
@@ -114,12 +122,10 @@ def evaluate(model_path: str, model_id: str, category: str, max_new_tokens: int 
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
             )
-            generate_ids = generate_ids[:, inputs['input_ids'].shape[1]:]
+            generate_ids = generate_ids[:, inputs["input_ids"].shape[1] :]
 
             response = processor.batch_decode(
-                generate_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
+                generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )[0]
 
             pred_label = metric_util.parse_pred_ans(response)
@@ -181,7 +187,7 @@ def evaluate_on_many():
             if (model_path / f"mme_eval_{category}.txt").exists():
                 print(f"Skipping {model_path} as it has already been evaluated.")
                 continue
-            print("\n" + '-'*100 + f"\nEvaluating {model_path}...")
+            print("\n" + "-" * 100 + f"\nEvaluating {model_path}...")
             try:
                 acc = evaluate(model_path=str(model_path), model_id=model_id, category=category)
             except Exception as e:
@@ -206,14 +212,24 @@ def evaluate_on_many():
                         print(model_path, line.strip())
                         break
 
+
 if __name__ == "__main__":
     set_seed(42)
 
     # evaluate_on_many()
 
-    eval_type_dict = \
-        ["existence", "count", "position", "color", "posters", "celebrity", "scene", "landmark", "artwork", "OCR"] + \
-        ["commonsense_reasoning", "numerical_calculation", "text_translation", "code_reasoning", "all"]
+    eval_type_dict = [
+        "existence",
+        "count",
+        "position",
+        "color",
+        "posters",
+        "celebrity",
+        "scene",
+        "landmark",
+        "artwork",
+        "OCR",
+    ] + ["commonsense_reasoning", "numerical_calculation", "text_translation", "code_reasoning", "all"]
 
     parser = ArgumentParser()
     parser.add_argument("--model-path", type=str, required=True, help="Path to ov model")
