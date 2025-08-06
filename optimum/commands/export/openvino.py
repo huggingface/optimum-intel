@@ -381,6 +381,10 @@ class OVExportCommand(BaseOptimumCLICommand):
         else:
             if not is_nncf_available():
                 raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
+            if self.args.weight_format is not None and self.args.quant_mode is not None:
+                raise ValueError(
+                    "Both --weight-format and --quant-mode arguments are provided. Please provide only one of them."
+                )
 
             default_quantization_config = get_default_quantization_config(
                 self.args.model, self.args.weight_format, self.args.quant_mode
