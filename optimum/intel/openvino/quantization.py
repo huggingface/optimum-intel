@@ -1309,7 +1309,7 @@ class OVQuantizer(OptimumQuantizer):
         **kwargs,
     ):
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
-        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
+        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM
 
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
@@ -1319,9 +1319,7 @@ class OVQuantizer(OptimumQuantizer):
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
         quantization_configs = {}
-        if isinstance(quantization_config, OVPipelineQuantizationConfig):
-            quantization_configs = quantization_config.quantization_configs.copy()
-        elif (
+        if (
             isinstance(quantization_config, OVWeightQuantizationConfig)
             and quantization_config.quant_method != OVQuantizationMethod.HYBRID
         ):
@@ -1333,22 +1331,6 @@ class OVQuantizer(OptimumQuantizer):
                 quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = OVWeightQuantizationConfig(
                     bits=8, sym=True
                 )
-                if quantization_config.dataset is not None:
-                    vision_embedding_submodel_names = [
-                        f"{name}_model"
-                        for name, component in self.model.components.items()
-                        if isinstance(component, OVVisionEmbedding)
-                    ]
-                    logger.info(
-                        f"Applying static quantization to vision embeddings: {vision_embedding_submodel_names}"
-                    )
-                    for submodel_name in vision_embedding_submodel_names:
-                        quantization_configs[submodel_name] = OVQuantizationConfig(
-                            bits=8,
-                            dtype="int8" if quantization_config.dtype == "int4" else "f8e4m3",
-                            dataset=quantization_config.dataset,
-                            num_samples=quantization_config.num_samples,
-                        )
             else:
                 quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config
         else:
@@ -1406,21 +1388,6 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_configs[
                         OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY
                     ] = OVWeightQuantizationConfig(bits=8, sym=True)
-                    vision_embedding_submodel_names = [
-                        f"{name}_model"
-                        for name, component in self.model.components.items()
-                        if isinstance(component, OVVisionEmbedding)
-                    ]
-                    logger.info(
-                        f"Applying static quantization to vision embeddings: {vision_embedding_submodel_names}"
-                    )
-                    for submodel_name in vision_embedding_submodel_names:
-                        quantization_configs[submodel_name] = OVQuantizationConfig(
-                            bits=8,
-                            dtype="int8" if quantization_config.dtype == "int4" else "f8e4m3",
-                            dataset=quantization_config.dataset,
-                            num_samples=quantization_config.num_samples,
-                        )
                 else:
                     quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config
             elif isinstance(quantization_config, OVMixedQuantizationConfig):
@@ -1431,17 +1398,17 @@ class OVQuantizer(OptimumQuantizer):
                     raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
                 quantization_configs[OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY] = quantization_config
-            else:
+            elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
-        # If default quantization config is provided, apply it to all other submodels
-        default_quantization_config = quantization_configs.pop(OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY, None)
-        if default_quantization_config is not None:
-            for submodel_name in self.model.ov_submodels:
-                if submodel_name not in quantization_configs:
-                    quantization_configs[submodel_name] = default_quantization_config
+        pipeline_quantization_config = (
+            quantization_config
+            if isinstance(quantization_config, OVPipelineQuantizationConfig)
+            else OVPipelineQuantizationConfig(**quantization_configs)
+        )
+        pipeline_quantization_config = pipeline_quantization_config.expand_default_config(self.model.ov_submodels)
 
-        for submodel_name, config in quantization_configs.items():
+        for submodel_name, config in pipeline_quantization_config.quantization_configs.items():
             if submodel_name not in self.model.ov_submodels:
                 raise RuntimeError(
                     f"Unexpected submodel name encountered during applying quantization: {submodel_name}. "
