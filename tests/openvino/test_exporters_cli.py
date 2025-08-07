@@ -463,23 +463,29 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
-        (
-            "image-text-to-text",
-            "internvl2",
-            "f8e4m3",
-            "--dataset contextual --num-samples 1 --trust-remote-code",
-            {
-                "lm_model": 15,
-                "text_embeddings_model": 0,
-                "vision_embeddings_model": 17,
-            },
-            {
-                "lm_model": {"f8e4m3": 15},
-                "text_embeddings_model": {"int8": 1},
-                "vision_embeddings_model": {"f8e4m3": 11},
-            },
-        ),
     ]
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_QUANTIZATION_ARCHITECTURES.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    "f8e4m3",
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {
+                        "lm_model": 15,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 17,
+                    },
+                    {
+                        "lm_model": {"f8e4m3": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"f8e4m3": 11},
+                    },
+                ),
+            ]
+        )
 
     TEST_4BIT_CONFIGURATIONS = [
         (
