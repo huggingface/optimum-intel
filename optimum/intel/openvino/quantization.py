@@ -1404,7 +1404,7 @@ class OVQuantizer(OptimumQuantizer):
         pipeline_quantization_config = (
             quantization_config
             if isinstance(quantization_config, OVPipelineQuantizationConfig)
-            else OVPipelineQuantizationConfig(**quantization_configs)
+            else OVPipelineQuantizationConfig(quantization_configs)
         )
         pipeline_quantization_config = pipeline_quantization_config.expand_default_config(self.model.ov_submodels)
 
