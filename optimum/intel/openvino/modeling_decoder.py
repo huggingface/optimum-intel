@@ -823,7 +823,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
-
     # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
     def _prepare_cache_for_generation(self, *args, **kwargs):
         """

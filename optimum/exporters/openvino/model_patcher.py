@@ -4685,14 +4685,18 @@ def gpt_bigcode_attn(self, query, key, value, attention_mask=None, head_mask=Non
 class GptBigCodeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa" and is_transformers_version(
+            "<", "4.54"
+        ):
             for layer in self._model.transformer.h:
                 layer.attn._orig_attn = layer.attn._attn
                 layer.attn._attn = types.MethodType(gpt_bigcode_attn, layer.attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa" and is_transformers_version(
+            "<", "4.54"
+        ):
             for layer in self._model.transformer.h:
                 layer.attn._attn = layer.attn._orig_attn
 
