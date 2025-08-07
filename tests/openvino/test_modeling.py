@@ -104,6 +104,7 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
+from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
@@ -863,6 +864,17 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         del pipe
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["bert"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForSequenceClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -946,6 +958,17 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["bert"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForQuestionAnswering.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -1018,6 +1041,17 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["bert"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForTokenClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -1089,6 +1123,17 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
             with self.assertRaises(Exception) as context:
                 OVModelForFeatureExtraction.from_pretrained(save_dir)
             self.assertIn("Please use `OVSentenceTransformer`", str(context.exception))
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["bert"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForFeatureExtraction.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
@@ -1754,6 +1799,22 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["gpt2"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForCausalLM.from_pretrained(
+                    model_id,
+                    export=True,
+                    ov_config=F32_CONFIG,
+                    compile=False,
+                    ov_export_config=ov_config,
+                    use_cache=False,
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -1827,6 +1888,17 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         del pipe
         del model
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["bert"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForMaskedLM.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
@@ -1929,6 +2001,17 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             model = OVModelForImageClassification.from_pretrained(model_save_path)
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["beit"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForImageClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
@@ -2100,6 +2183,17 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         del model_without_pkv
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["bart"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForSeq2SeqLM.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -2171,6 +2265,17 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["data2vec_audio"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForAudioClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForCTCIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
@@ -2227,6 +2332,17 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["data2vec_audio"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForCTC.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
@@ -2281,6 +2397,17 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["data2vec_audio"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForAudioXVector.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
@@ -2331,6 +2458,17 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
         del transformers_model
         del ov_model
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["data2vec_audio"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForAudioFrameClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForPix2StructIntegrationTest(unittest.TestCase):
@@ -2424,6 +2562,17 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         del model_with_pkv
         del model_without_pkv
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["pix2struct"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForPix2Struct.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
@@ -2833,6 +2982,20 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["llava"]
+        ov_config = OVConfig(dtype="fp16")
+        with (
+            unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save,
+            unittest.mock.patch("openvino.Core.read_model"),
+            unittest.mock.patch("optimum.intel.openvino.modeling_visual_language.OVModelWithEmbedForCausalLM"),
+        ):
+            OVModelForVisualCausalLM.from_pretrained(
+                model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+            )
+            for call in mock_save.calls:
+                self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("whisper",)
@@ -2926,6 +3089,17 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         del pipe
         del model
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["whisper"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForSpeechSeq2Seq.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
@@ -3035,6 +3209,17 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
 
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["vision-encoder-decoder"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForVision2Seq.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
@@ -3258,6 +3443,17 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["open-clip"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("st-bert", "st-mpnet")
@@ -3305,6 +3501,17 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
         )
         output = embedding.embed_query("foo bar")
         self.assertTrue(len(output) > 0)
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["st-bert"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVSentenceTransformer.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
 
 
 class OVLangchainTest(unittest.TestCase):
@@ -3428,6 +3635,17 @@ class OVSamIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["sam"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVSamModel.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("speecht5",)
@@ -3493,6 +3711,25 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         del processor
         gc.collect()
 
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["speecht5"]
+        ov_config = OVConfig(dtype="fp16")
+        with (
+            unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save,
+            unittest.mock.patch("openvino.Core.read_model"),
+            unittest.mock.patch("optimum.intel.openvino.modeling_text2speech.OVTextToSpeechEncoder"),
+        ):
+            OVModelForTextToSpeechSeq2Seq.from_pretrained(
+                model_id,
+                vocoder="fxmarty/speecht5-hifigan-tiny",
+                export=True,
+                ov_config=F32_CONFIG,
+                compile=False,
+                ov_export_config=ov_config,
+            )
+            for call in mock_save.calls:
+                self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
+
 
 class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["clip"]
@@ -3544,3 +3781,14 @@ class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
         del transformers_model
         del ov_model
         gc.collect()
+
+    def test_model_loading_with_ov_export_config(self):
+        model_id = MODEL_NAMES["clip"]
+        ov_config = OVConfig(dtype="fp16")
+        with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as mock_save:
+            with unittest.mock.patch("openvino.Core.read_model"):
+                OVModelForZeroShotImageClassification.from_pretrained(
+                    model_id, export=True, ov_config=F32_CONFIG, compile=False, ov_export_config=ov_config
+                )
+                for call in mock_save.calls:
+                    self.assertEqual(call.call_args.kwargs["ov_config"], ov_config)
