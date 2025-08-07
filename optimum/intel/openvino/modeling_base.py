@@ -429,8 +429,8 @@ class OVBaseModel(OptimizedModel):
 
             quantizer = OVQuantizer(model)
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer) or model_id
-            quantization_config_copy.processor = str(quantization_config.processor) or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
+            quantization_config_copy.processor = str(quantization_config.processor or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
