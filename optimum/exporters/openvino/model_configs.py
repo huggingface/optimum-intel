@@ -304,7 +304,11 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -318,7 +322,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3_moe",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
