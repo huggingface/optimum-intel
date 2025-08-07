@@ -430,8 +430,8 @@ class OVQuantizerTest(unittest.TestCase):
                     {
                         "lm_model": 13,
                         "text_embeddings_model": 0,
-                        "vision_embeddings_model": 0,
-                        "vision_embeddings_merger_model": 0,
+                        "vision_embeddings_model": 1,
+                        "vision_embeddings_merger_model": 14,
                     },
                     {
                         "lm_model": {"int8": 15},

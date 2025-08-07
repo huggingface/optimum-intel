@@ -1309,7 +1309,7 @@ class OVQuantizer(OptimumQuantizer):
         **kwargs,
     ):
         from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
-        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM
+        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
 
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
@@ -1385,6 +1385,13 @@ class OVQuantizer(OptimumQuantizer):
                     ] = OVWeightQuantizationConfig(bits=8)
                 elif isinstance(self.model, OVModelForVisualCausalLM):
                     quantization_configs["lm_model"] = quantization_config
+                    vision_embedding_submodel_names = [
+                        f"{name}_model"
+                        for name, component in self.model.components.items()
+                        if isinstance(component, OVVisionEmbedding)
+                    ]
+                    for submodel_name in vision_embedding_submodel_names:
+                        quantization_configs[submodel_name] = quantization_config
                     quantization_configs[
                         OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY
                     ] = OVWeightQuantizationConfig(bits=8, sym=True)
