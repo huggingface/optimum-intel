@@ -394,7 +394,10 @@ class OVQuantizerTest(unittest.TestCase):
             ),
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 30, "decoder": 62},
+            else {
+                "encoder": 30,
+                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+            },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.36.0")

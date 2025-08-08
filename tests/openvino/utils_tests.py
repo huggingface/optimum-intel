@@ -304,7 +304,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 18 if is_nncf_version("<", "2.18.0") else 16,
+        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
     },
     "ltx-video": {
         "transformer": 34,
