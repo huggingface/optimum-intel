@@ -34,7 +34,6 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
-    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -67,10 +66,15 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     GemmaDummyPastKeyValuesGenerator,
-    MistralDummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
+    MistralDummyPastKeyValuesGenerator,
 )
-from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig, NormalizedConfigManager
+from optimum.utils.normalized_config import (
+    NormalizedConfig,
+    NormalizedConfigManager,
+    NormalizedTextConfig,
+    NormalizedVisionConfig,
+)
 
 from ...intel.utils.import_utils import (
     _transformers_version,
@@ -3771,6 +3775,7 @@ class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             return super().flatten_past_key_values(flattened_output, name, idx, t)
 
         flattened_output[f"{name}.{idx}.key_value"] = t
+
     #####
 
     def patch_model_for_export(
