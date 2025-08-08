@@ -168,7 +168,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
@@ -3580,9 +3579,16 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = (
-                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
-            )
+            if hasattr(model, "model"):
+                text_embedding = (
+                    model.model.embed_tokens
+                    if hasattr(model.model, "embed_tokens")
+                    else model.language_model.embed_tokens
+                )
+            else:
+                text_embedding = (
+                    model.embed_tokens if hasattr(model, "embed_tokens") else model.language_model.embed_tokens
+                )
             text_embedding.config = model.config
             return text_embedding
 
@@ -3603,15 +3609,26 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Qwen2VLConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config(
-                "qwen2",
-                self._orig_config,
-                self.int_dtype,
-                self.float_dtype,
-                model_patcher=Qwen2VLLanguageModelPatcher,
-                dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-            )
+            if self.task in ["feature-extraction"]:
+                export_config_class = TasksManager._SUPPORTED_MODEL_TYPE["qwen2"]["openvino"]["feature-extraction"]
+                export_config = export_config_class(
+                    self._orig_config,
+                    use_past=True,
+                    use_past_in_inputs=True,
+                    int_dtype=self.int_dtype,
+                    float_dtype=self.float_dtype,
+                )
+                return export_config
+            else:
+                return get_vlm_text_generation_config(
+                    "qwen2",
+                    self._orig_config,
+                    self.int_dtype,
+                    self.float_dtype,
+                    model_patcher=Qwen2VLLanguageModelPatcher,
+                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                )
 
         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
