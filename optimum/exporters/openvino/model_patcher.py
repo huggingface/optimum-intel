@@ -1173,7 +1173,6 @@ class BaichuanModelPatcher(OVDecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-
 # Modified from https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/mpt/modeling_mpt.py#L90
 def _mpt_sdpa_attention_forward(
     self,
@@ -1197,7 +1196,7 @@ def _mpt_sdpa_attention_forward(
             cache_kwargs = {"cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
             pkv_seq_length = past_key_value.get_seq_length()
-            
+
         else:
             if len(past_key_value) != 0:
                 key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -1249,7 +1248,6 @@ def _mpt_block_forward(
     output_attentions: bool = False,
     cache_position: Optional[torch.Tensor] = None,
 ):
-    
     # hidden_states: [batch_size, seq_length, hidden_size]
     # Layer norm at the beginning of the transformer layer.
     layernorm_output = self.norm_1(hidden_states)
