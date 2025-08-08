@@ -202,6 +202,14 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3", "text-classification")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_moe", "text-classification")] = (
+        "transformers",
+        "AutoModelForCausalLM",
+    )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
@@ -306,7 +314,13 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager(
     "qwen3",
-    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    *[
+        "text-generation",
+        "text-generation-with-past",
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-classification",
+    ],
     library_name="transformers",
 )
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
