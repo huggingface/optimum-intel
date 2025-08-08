@@ -5335,6 +5335,7 @@ def _blenderbot_attn_forward_new(
 
     return outputs
 
+
 if is_transformers_version(">=", "4.52"):
     _blenderbot_attn_forward = _blenderbot_attn_forward_new
 else:
