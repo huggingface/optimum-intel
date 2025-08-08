@@ -3498,7 +3498,11 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_vl",
+    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3631,7 +3635,11 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_5_vl",
+    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
