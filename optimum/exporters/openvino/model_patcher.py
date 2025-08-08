@@ -5328,8 +5328,12 @@ def _blenderbot_attn_forward_new(
 
     attn_output = self.out_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    outputs = (attn_output, None)
 
+    if is_transformers_version("<", "4.54"):
+        outputs += (past_key_value,)
+
+    return outputs
 
 if is_transformers_version(">=", "4.52"):
     _blenderbot_attn_forward = _blenderbot_attn_forward_new
