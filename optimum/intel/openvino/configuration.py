@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import reduce
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Type, Union
 
 import torch
 from transformers.utils.quantization_config import QuantizationConfigMixin
@@ -1274,6 +1274,8 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
 
 
 class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
+    DEFAULT_SUBMODEL_KEY = "default"
+
     def __init__(
         self,
         quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
@@ -1293,6 +1295,8 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
                 A dictionary where keys are submodel names and values are either dictionaries or instances of
                 `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+                A DEFAULT_SUBMODEL_KEY can be used to specify a default configuration for submodels that do not have
+                a specific configuration provided.
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
@@ -1353,6 +1357,21 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         super().post_init()
         for submodel_config in self.quantization_configs.values():
             submodel_config.post_init()
+
+    def expand_default_config(self, submodel_names: Iterable[str]) -> "OVPipelineQuantizationConfig":
+        """
+        Returns a new OVPipelineQuantizationConfig instance with the default quantization config applied to all
+        submodels that do not have a specific quantization config provided.
+        """
+        if self.DEFAULT_SUBMODEL_KEY not in self.quantization_configs:
+            return self.clone()
+        expanded_configs = {}
+        for name in submodel_names:
+            if name not in self.quantization_configs:
+                expanded_configs[name] = self.quantization_configs.get(self.DEFAULT_SUBMODEL_KEY, None)
+            else:
+                expanded_configs[name] = self.quantization_configs[name]
+        return OVPipelineQuantizationConfig.from_dict({**self.to_dict(), "quantization_configs": expanded_configs})
 
 
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
