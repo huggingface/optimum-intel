@@ -2540,7 +2540,12 @@ def _persimmon_self_attn_sdpa_forward(
 
     attn_output = self.dense(attn_output)
 
-    return attn_output, None, past_key_value
+    outputs = (attn_output, None)
+
+    if is_transformers_version("<", "4.54"):
+        outputs += (past_key_value,)
+
+    return outputs
 
 
 class PersimmonModelPatcher(OVDecoderModelPatcher):
