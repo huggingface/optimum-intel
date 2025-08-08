@@ -1173,12 +1173,15 @@ class BaichuanModelPatcher(OVDecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+
+# Modified from https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/mpt/modeling_mpt.py#L90
 def _mpt_sdpa_attention_forward(
     self,
     hidden_states: torch.Tensor,
     position_bias: torch.Tensor,
     past_key_value: Optional[Tuple[torch.Tensor]] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    cache_position: Optional[torch.Tensor] = None,
 ):
     batch_size, seq_length = hidden_states.shape[:2]
 
@@ -1189,15 +1192,21 @@ def _mpt_sdpa_attention_forward(
     value_states = value_states.reshape(batch_size, seq_length, self.n_heads, self.head_dim).transpose(1, 2)
 
     if past_key_value is not None:
-        if len(past_key_value) != 0:
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
-        past_key_value = (key_states, value_states)
-    else:
-        past_key_value = (key_states, value_states)
+        # starting from v4.54 https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/mpt/modeling_mpt.py#L362
+        if is_transformers_version(">=", "4.54"):
+            cache_kwargs = {"cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            pkv_seq_length = past_key_value.get_seq_length()
+            
+        else:
+            if len(past_key_value) != 0:
+                key_states = torch.cat([past_key_value[0], key_states], dim=2)
+                value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            past_key_value = (key_states, value_states)
+            pkv_seq_length = past_key_value[0].shape[2]
 
     key_length = key_states.shape[-2]
-    query_length = seq_length if past_key_value is None else seq_length + past_key_value[0].shape[2]
+    query_length = seq_length if past_key_value is None else seq_length + pkv_seq_length
     attention_mask_sdpa = torch.ones(
         (query_states.shape[0], query_states.shape[1], query_states.shape[2], key_states.shape[2]),
         dtype=query_states.dtype,
@@ -1221,9 +1230,15 @@ def _mpt_sdpa_attention_forward(
     context_states = context_states.permute(0, 2, 1, 3).contiguous().view(batch_size, seq_length, -1)
     attn_output = self.out_proj(context_states)
 
-    return attn_output, None, past_key_value
+    outputs = (attn_output, None)
+
+    if is_transformers_version("<", "4.54"):
+        outputs += (past_key_value,)
+
+    return outputs
 
 
+# Mofied from https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/mpt/modeling_mpt.py#L188
 def _mpt_block_forward(
     self,
     hidden_states: torch.Tensor,
@@ -1232,7 +1247,9 @@ def _mpt_block_forward(
     layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     use_cache: bool = False,
     output_attentions: bool = False,
+    cache_position: Optional[torch.Tensor] = None,
 ):
+    
     # hidden_states: [batch_size, seq_length, hidden_size]
     # Layer norm at the beginning of the transformer layer.
     layernorm_output = self.norm_1(hidden_states)
@@ -1241,21 +1258,23 @@ def _mpt_block_forward(
 
     if not output_attentions:
         # Self attention.
-        attn_outputs, attn_weights, past_key_value = self.attn(
+        attn_out = self.attn(
             layernorm_output,
             position_bias=position_bias,
             attention_mask=attention_mask,
             past_key_value=layer_past,
+            cache_position=cache_position,
         )
     else:
-        attn_outputs, attn_weights, past_key_value = self.attn._orig_forward(
+        attn_out = self.attn._orig_forward(
             layernorm_output,
             position_bias=position_bias,
             attention_mask=attention_mask,
             past_key_value=layer_past,
+            cache_position=cache_position,
         )
 
-    hidden_states = self.resid_attn_dropout(attn_outputs) + residual
+    hidden_states = self.resid_attn_dropout(attn_out[0]) + residual
 
     layernorm_output = self.norm_2(hidden_states)
 
@@ -1266,11 +1285,11 @@ def _mpt_block_forward(
     output = self.ffn(layernorm_output, residual)
     outputs = (output,)
 
-    if use_cache:
-        outputs += (past_key_value,)
+    if use_cache and is_transformers_version("<", "4.54"):
+        outputs += (attn_out[2],)
 
     if output_attentions:
-        outputs += (attn_weights,)
+        outputs += (attn_out[1],)
 
     return outputs
 
