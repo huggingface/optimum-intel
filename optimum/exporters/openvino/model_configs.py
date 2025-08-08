@@ -168,7 +168,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
@@ -304,7 +303,17 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -312,13 +321,28 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.task in ["feature-extraction"]:
+            common_inputs = {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            }
+        else:
+            common_inputs = super().inputs
+        return common_inputs
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3_moe",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -3490,7 +3514,11 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_vl",
+    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3543,9 +3571,16 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = (
-                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
-            )
+            if hasattr(model, "model"):
+                text_embedding = (
+                    model.model.embed_tokens
+                    if hasattr(model.model, "embed_tokens")
+                    else model.language_model.embed_tokens
+                )
+            else:
+                text_embedding = (
+                    model.embed_tokens if hasattr(model, "embed_tokens") else model.language_model.embed_tokens
+                )
             text_embedding.config = model.config
             return text_embedding
 
@@ -3566,15 +3601,26 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Qwen2VLConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config(
-                "qwen2",
-                self._orig_config,
-                self.int_dtype,
-                self.float_dtype,
-                model_patcher=Qwen2VLLanguageModelPatcher,
-                dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-            )
+            if self.task in ["feature-extraction"]:
+                export_config_class = TasksManager._SUPPORTED_MODEL_TYPE["qwen2"]["openvino"]["feature-extraction"]
+                export_config = export_config_class(
+                    self._orig_config,
+                    use_past=True,
+                    use_past_in_inputs=True,
+                    int_dtype=self.int_dtype,
+                    float_dtype=self.float_dtype,
+                )
+                return export_config
+            else:
+                return get_vlm_text_generation_config(
+                    "qwen2",
+                    self._orig_config,
+                    self.int_dtype,
+                    self.float_dtype,
+                    model_patcher=Qwen2VLLanguageModelPatcher,
+                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                )
 
         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -3623,7 +3669,11 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_5_vl",
+    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
