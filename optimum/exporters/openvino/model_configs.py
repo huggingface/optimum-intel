@@ -201,14 +201,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3", "text-classification")] = (
-        "transformers",
-        "AutoModelForCausalLM",
-    )
-    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_moe", "text-classification")] = (
-        "transformers",
-        "AutoModelForCausalLM",
-    )
 
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
         "image-text-to-text"
