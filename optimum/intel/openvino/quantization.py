@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
 import nncf
@@ -29,7 +29,6 @@ import numpy as np
 import openvino
 import requests
 import torch
-import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -38,7 +37,7 @@ from openvino._offline_transformations import compress_quantize_weights_transfor
 from PIL import Image
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
+from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
@@ -73,6 +72,10 @@ from .utils import (
 
 if is_datasets_available():
     from datasets import Dataset
+
+if TYPE_CHECKING:
+    from optimum.intel.openvino.modeling import OVModel
+
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -230,11 +233,11 @@ class OVCalibrationDatasetBuilder:
     will contain two keys: `encoder_model` and `decoder_model`.
     """
 
-    def __init__(self, model: transformers.PreTrainedModel, seed: int = 42):
+    def __init__(self, model: "OVModel", seed: int = 42):
         """
 
         Args:
-            model (`transformers.PreTrainedModel`):
+            model (`OVModel`):
                 The model to build calibration dataset for.
             seed (`int`, defaults to 42):
                 Random seed to use for reproducibility.
@@ -1084,11 +1087,11 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: transformers.PreTrainedModel, task: Optional[str] = None, seed: int = 42, **kwargs):
+    def __init__(self, model: "OVModel", task: Optional[str] = None, seed: int = 42, **kwargs):
         """
         Args:
-            model (`transformers.PreTrainedModel`):
-                The [PreTrainedModel](https://huggingface.co/docs/transformers/main_classes/model#transformers.PreTrainedModel) to quantize.
+            model (`OVModel`):
+                The [OVModel](https://huggingface.co/docs/optimum-intel/en/openvino/reference) to quantize.
             task (`str`, defaults to None):
                 The task defining the model topology used for the ONNX export.
             seed (`int`, defaults to 42):
@@ -1100,7 +1103,7 @@ class OVQuantizer(OptimumQuantizer):
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
 
     @classmethod
-    def from_pretrained(cls, model: PreTrainedModel, **kwargs):
+    def from_pretrained(cls, model: "OVModel", **kwargs):
         # TODO : Create model
         return cls(model, **kwargs)
 
