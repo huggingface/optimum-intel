@@ -1023,6 +1023,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bert",
         "distilbert",
+        "qwen3",
+        "qwen2_vl",
         "roberta",
         "sentence-transformers-bert",
     )

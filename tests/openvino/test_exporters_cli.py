@@ -94,6 +94,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("zero-shot-image-classification", "clip"),
+        ("feature-extraction", "qwen3"),
+        ("feature-extraction", "qwen2_vl"),
+
     ]
 
     if is_transformers_version(">=", "4.39"):

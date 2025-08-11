@@ -80,6 +80,8 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
+        "qwen3": OVModelForFeatureExtraction,
+        "qwen2_vl": OVModelForFeatureExtraction,
     }
 
     if is_transformers_version(">=", "4.39"):
