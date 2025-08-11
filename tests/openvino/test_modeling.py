@@ -1398,7 +1398,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
-        elif model_arch in {"aquila", "aquila2", "baichuan2", "baichuan2-13b", "decilm", "internlm", "orion", "xverse", "jais"}:
+        elif model_arch in {"aquila", "aquila2", "baichuan2", "baichuan2-13b", "internlm", "orion", "xverse", "jais"}:
             additional_inputs = {"use_cache": False}
 
         with patch_awq_for_inference("awq" in model_arch):
