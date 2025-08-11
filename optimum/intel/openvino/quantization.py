@@ -16,7 +16,6 @@ import copy
 import dataclasses
 import inspect
 import logging
-import os
 from collections import UserDict, deque
 from contextlib import contextmanager
 from io import BytesIO
@@ -32,13 +31,11 @@ import requests
 import torch
 import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from PIL import Image
-from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
@@ -48,9 +45,6 @@ from transformers.utils import is_accelerate_available
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
-from ...exporters.openvino import export, export_pytorch_via_onnx
-from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
-from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
@@ -58,7 +52,6 @@ from ..utils.import_utils import (
     is_datasets_available,
     is_diffusers_available,
 )
-from ..utils.modeling_utils import get_model_device
 from .configuration import (
     OVConfig,
     OVMixedQuantizationConfig,
@@ -69,10 +62,6 @@ from .configuration import (
     OVWeightQuantizationConfig,
 )
 from .utils import (
-    MAX_ONNX_OPSET,
-    MIN_ONNX_QDQ_OPSET,
-    ONNX_WEIGHTS_NAME,
-    OV_XML_FILE_NAME,
     PREDEFINED_LANGUAGE_DATASETS,
     PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
