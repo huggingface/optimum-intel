@@ -1006,7 +1006,7 @@ ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
         num_samples=10,
         dataset="librispeech",
         processor=model_id,
-        matmul_sq_alpha=0.95,
+        smooth_quant_alpha=0.95,
     )
 )
 ```

@@ -68,7 +68,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-2-7b-hf": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
@@ -77,9 +76,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "meta-llama/Llama-2-13b-chat-hf": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {
@@ -87,7 +84,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "stabilityai/stablelm-zephyr-3b": {
@@ -116,9 +112,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "Qwen/Qwen2.5-Coder-3B-Instruct": {
         "bits": 4,
@@ -142,9 +136,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "Qwen/Qwen3-8B": {
         "bits": 4,
@@ -202,9 +194,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "lmsys/longchat-7b-16k": {
         "bits": 4,
@@ -222,9 +212,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "microsoft/phi-2": {
         "bits": 4,
@@ -248,25 +236,21 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-3.2-1B-Instruct": {
         "bits": 4,
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "meta-llama/Meta-Llama-3.1-8B": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-3-mini-4k-instruct": {
         "bits": 4,
@@ -281,43 +265,34 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "microsoft/Phi-4-mini-instruct": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
         "bits": 4,
         "sym": False,
         "group_size": 32,
         "ratio": 0.7,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
         "bits": 4,
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
@@ -660,7 +635,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         dtype (`str`, *optional*):
-            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4'].
+            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
+            Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -681,6 +657,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
             - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
+        statistics_path (`str`, *optional*):
+            Directory path to dump/load data-aware statistics. This is useful when running data-aware quantization
+            multiple times on the same model and dataset to avoid recomputing statistics.
+            Please note that the statistics depend on the dataset, so if you change the dataset, you should also change
+            the statistics path to avoid confusion.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -704,6 +685,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
+        statistics_path: Optional[str] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -734,6 +716,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
         self.dtype = dtype
+        self.statistics_path = statistics_path
         self.post_init()
 
     def post_init(self):
@@ -845,11 +828,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.dtype is None:
             self.dtype = "int4" if self.bits == 4 else "int8"
-        if self.dtype not in ["int4", "int8", "mxfp4", "nf4"]:
+        if self.dtype not in ["int4", "int8", "mxfp4", "nf4", "cb4"]:
             raise ValueError(
-                f"Weights quantization data type must be one of the following: ['int4', 'int8', 'mxfp4', 'nf4'], but found: {self.dtype}."
+                "Weights quantization data type must be one of the following: "
+                f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
-        if self.dtype in ["mxfp4", "nf4"]:
+        if self.dtype in ["mxfp4", "nf4", "cb4"]:
+            if self.dtype == "cb4" and is_nncf_version("<=", "2.17"):
+                raise ImportError(
+                    "Codebook quantization is currently supported only with NNCF develop. "
+                    "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
+                )
             if self.bits != 4:
                 raise ValueError(
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
@@ -877,11 +866,18 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             mode += "_sym" if self.sym else "_asym"
         if mode == "mxfp4":
             mode = "e2m1"
+        if mode == "cb4":
+            mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)
 
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
+        kwargs = self.kwargs.copy()
+        if self.statistics_path:
+            advanced_parameters = kwargs.get("advanced_parameters", nncf.AdvancedCompressionParameters())
+            advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            kwargs["advanced_parameters"] = advanced_parameters
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -895,7 +891,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
-            **self.kwargs,
+            **kwargs,
         }
         return result
 
@@ -1242,6 +1238,18 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         )
 
         self.post_init()
+
+    def post_init(self):
+        super().post_init()
+
+        if self.weight_quantization_config.dtype == "nf4" and self.full_quantization_config.dtype in [
+            "f8e4m3",
+            "f8e5m2",
+        ]:
+            logger.warning(
+                "\n`nf4_f8e4m3` and `nf4_f8e5m2` mixed precision quantization modes are deprecated and will be "
+                "removed in optimum-intel v1.26. Please use `cb4_f8e4m3` instead.\n"
+            )
 
     @staticmethod
     def _initialize_quantization_config(

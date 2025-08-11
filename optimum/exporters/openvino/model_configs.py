@@ -102,7 +102,6 @@ from .model_patcher import (
     GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
-    GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
@@ -115,7 +114,6 @@ from .model_patcher import (
     JaisModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
-    LlamaModelPatcher,
     LlavaImageEmbeddingModelPatcher,
     LlavaNextVideoImageEmbeddingModelPatcher,
     LlavaQwen2ImageEmbeddingsModelPatcher,
@@ -130,6 +128,7 @@ from .model_patcher import (
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
+    OVDecoderModelPatcher,
     OVSpeechT5ModelPatcher,
     PegasusModelPatcher,
     PegasusStatefulSeq2SeqDecoderPatcher,
@@ -145,11 +144,10 @@ from .model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3MoeModelPatcher,
     QwenModelPatcher,
-    RotaryEmbPatcher,
     SanaTextEncoderModelPatcher,
     StatefulSeq2SeqDecoderPatcher,
-    UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
 )
 
@@ -296,7 +294,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -314,7 +312,6 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
-@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -325,7 +322,15 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return Qwen3MoeModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -407,7 +412,7 @@ class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -583,7 +588,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -601,7 +606,7 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -617,6 +622,21 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
 )
 class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "arcee",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class ArceeOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.53.0"
 
 
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -660,7 +680,6 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     )
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, QwenDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = QwenDummyPastKeyValuesGenerator
-    no_position_ids = False
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -723,7 +742,7 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             decoder_sequence_name = "past_sequence_length"
             name = "past_key_values"
         else:
-            decoder_sequence_name = "past_sequence_length + 1"
+            decoder_sequence_name = "past_sequence_length + sequence_length"
             name = "present"
 
         for i in range(self._normalized_config.num_layers):
@@ -749,13 +768,7 @@ class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
-
-
-def patch_model_for_export(
-    self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-) -> "ModelPatcher":
-    return RotaryEmbPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -856,7 +869,7 @@ class PhiOpenVINOConfig(PhiOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 class OVFalconDummyPastKeyValuesGenerator(FalconDummyPastKeyValuesGenerator):
@@ -939,20 +952,6 @@ class BioGPTOpenVINOConfig(
     # BioGPT does not require position_ids input.
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-
-@register_in_tasks_manager(
-    "gpt_neox_japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
-)
-class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
-    # GPTNeoxJapanese does not require position_ids input.
-    DEFAULT_ONNX_OPSET = 13
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return GptNeoxJapaneseModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -1285,6 +1284,20 @@ class GPTNeoxOpenVINOConfig(GPTNeoXOnnxConfig):
 
 
 @register_in_tasks_manager(
+    "gpt_neox_japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
+    # GPTNeoxJapanese does not require position_ids input.
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
     "gemma2",
     *[
         "feature-extraction",
@@ -1533,6 +1546,7 @@ class IBertOpenVINOConfig(IBertOnnxConfig):
         return IBertModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+# TODO: this is a very confusing class TBH, why not simply decompose the VLM into components, like diffusion models ?
 class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
     def __init__(self, export_config, patcher_cls=None, dummy_input_generator=None, inputs_update=None):
         self.orig_export_config = export_config
@@ -1575,15 +1589,20 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs = self.orig_export_config.generate_dummy_inputs(framework, **kwargs)
         input_ids = dummy_inputs.pop("input_ids")
+        pask_key_values = dummy_inputs.get("past_key_values")
         inputs_embed_shape = (input_ids.shape[0], input_ids.shape[1], self._normalized_config.hidden_size)
         inputs_embeds = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[0].random_float_tensor(
             inputs_embed_shape
         )
         dummy_inputs["inputs_embeds"] = inputs_embeds
         if "token_type_ids" in self.inputs:
+            if is_transformers_version(">=", "4.53"):
+                token_type_ids_shape = (input_ids.shape[0], input_ids.shape[1] + pask_key_values[0][0].shape[-2])
+            else:
+                token_type_ids_shape = (input_ids.shape[0], input_ids.shape[1])
             dummy_inputs["token_type_ids"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
                 0
-            ].random_int_tensor(input_ids.shape, min_value=0, max_value=2)
+            ].random_int_tensor(token_type_ids_shape, min_value=0, max_value=2)
         return dummy_inputs
 
 
@@ -4704,3 +4723,15 @@ class Glm4vOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior in [Qwen2VLConfigBehavior.VISION_EMBEDDINGS, Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER]:
             return {"last_hidden_state": {0: "seq_len"}}
         return {}
+@register_in_tasks_manager("ernie4_5", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)

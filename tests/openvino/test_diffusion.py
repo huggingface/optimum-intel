@@ -151,6 +151,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             if "sana" in model_arch:
                 # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
                 inputs["use_resolution_binning"] = False
+
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
