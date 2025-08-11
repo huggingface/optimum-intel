@@ -2850,6 +2850,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ov_model_stateless = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, stateful=False
+        )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         # whisper cache class support implemented in 4.43
         expected_stateful = is_transformers_version(">", "4.43")
@@ -2874,9 +2877,13 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
                 decoder_inputs = {"decoder_input_ids": np.ones((1, 1), dtype=np.int64) * decoder_start_token_id}
 
             ov_outputs = ov_model(**features, **decoder_inputs)
+            ov_stateless_outputs = ov_model_stateless(**features, **decoder_inputs)
             self.assertIn("logits", ov_outputs)
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=1e-3)
+            )
 
         generate_kwrgs = {}
         if is_transformers_version(">=", "4.50"):
@@ -2894,8 +2901,13 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
         set_seed(SEED)
         ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
+        set_seed(SEED)
+        ov_stateless_generated_tokens = ov_model_stateless.generate(
+            **pt_features, generation_config=gen_config, **generate_kwrgs
+        )
 
         self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+        self.assertTrue(torch.equal(generated_tokens, ov_stateless_generated_tokens))
 
         del transformers_model
         del ov_model
