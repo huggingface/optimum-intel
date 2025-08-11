@@ -126,10 +126,6 @@ pattern_prefix = (
 class OVQuantizerTest(unittest.TestCase):
     maxDiff = None
 
-    SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 31, 22),
-    )
     # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq, OVStableDiffusionPipeline and OVModelForSeq2SeqLM
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -474,55 +470,6 @@ class OVQuantizerTest(unittest.TestCase):
                 streaming=streaming,
             )
         return calibration_dataset
-
-    @parameterized.expand(
-        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_TORCH_MODEL, [False, True])]
-    )
-    def test_automodel_static_quantization(
-        self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
-    ):
-        model_id = MODEL_NAMES[model_name]
-        task = model_cls.export_feature
-        dataset_kwargs = {**_TASK_TO_DATASET[task]}
-        column_name = dataset_kwargs.pop("column_name")
-        file_name = "openvino_quantized_model.xml"
-
-        def preprocess_function(examples, tokenizer):
-            return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
-
-        with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.auto_model_class.from_pretrained(model_id)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-
-            ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-            calibration_dataset = self.get_calibration_dataset(
-                quantizer,
-                ov_config.quantization_config,
-                partial(preprocess_function, tokenizer=tokenizer),
-                from_dataset_instance,
-                **dataset_kwargs,
-            )
-            quantizer.quantize(
-                save_directory=tmp_dir,
-                calibration_dataset=calibration_dataset,
-                file_name=file_name,
-                ov_config=ov_config,
-            )
-            model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
-            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_fake_nodes, num_fake_nodes)
-            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
-
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(
         [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_OV_MODEL, [False, True])]
@@ -1136,38 +1083,6 @@ class OVWeightCompressionTest(unittest.TestCase):
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
-    def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
-        task = model_cls.export_feature
-        model_id = MODEL_NAMES[model_name]
-
-        with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.auto_model_class.from_pretrained(model_id)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.quantize(save_directory=tmp_dir)
-            model = model_cls.from_pretrained(tmp_dir)
-
-            _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_pt_int8, num_weight_nodes["int8"])
-
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            original_config_as_dict = OVWeightQuantizationConfig().to_dict()
-            for k in original_config_as_dict.keys():
-                v = original_config_as_dict[k]
-                if isinstance(v, Enum):
-                    original_config_as_dict[k] = v.value
-            self.assertEqual(original_config_as_dict, loaded_config.quantization_config.to_dict())
-            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -1861,47 +1776,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
 
 class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("hf-internal-testing/tiny-random-BertForQuestionAnswering",)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
-    def test_automodel_static_quantization(self, model_name):
-        def preprocess_function(examples, tokenizer):
-            return tokenizer(
-                examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
-            )
-
-        with TemporaryDirectory() as tmp_dir:
-            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            quantizer = OVQuantizer.from_pretrained(transformers_model)
-            calibration_dataset = quantizer.get_calibration_dataset(
-                "squadshifts",
-                dataset_config_name="new_wiki",
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
-                dataset_split="test",
-                revision="refs/pr/3",
-            )
-            ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
-
-            # Test that inference on quantized model works
-            model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
-            tokens = tokenizer.encode_plus(
-                "This is a sample question", "This is a sample context", add_special_tokens=True, return_tensors="pt"
-            )
-            model(**tokens, return_dict=True)
-
-            # Test loading model a second time to catch issues with caching
-            try:
-                model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
-            except RuntimeError:
-                self.fail("Loading BERT QA model a second time failed")
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
