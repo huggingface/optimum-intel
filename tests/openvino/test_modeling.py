@@ -1960,6 +1960,9 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG
+        )
         expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
         self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
@@ -1977,6 +1980,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         decoder_start_token_id = transformers_model.config.decoder_start_token_id if model_arch != "mbart" else 2
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
         ov_outputs = ov_model(**tokens, **decoder_inputs)
+        ov_stateless_outputs = ov_stateless_model(**tokens, **decoder_inputs)
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
@@ -1985,6 +1989,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens, **decoder_inputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=5e-3))
+        self.assertTrue(torch.allclose(ov_stateless_outputs.logits, transformers_outputs.logits, atol=5e-3))
         gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -1997,8 +2002,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         generated_tokens = transformers_model.generate(**tokens, generation_config=gen_config)
         set_seed(SEED)
         ov_generated_tokens = ov_model.generate(**tokens, generation_config=gen_config)
+        set_seed(SEED)
+        ov_stateless_generated_tokens = ov_stateless_model.generate(**tokens, generation_config=gen_config)
 
         self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+        self.assertTrue(torch.equal(generated_tokens, ov_stateless_generated_tokens))
 
         del transformers_model
         del ov_model
