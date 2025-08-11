@@ -94,10 +94,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
-        ("zero-shot-image-classification", "clip"),
-        ("feature-extraction", "qwen3"),
-        ("feature-extraction", "qwen2_vl"),
-
     ]
 
     if is_transformers_version(">=", "4.39"):
@@ -116,6 +112,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("inpainting", "flux-fill"),
                 ("text-to-image", "sana"),
                 ("text-to-video", "ltx-video"),
+                ("feature-extraction", "qwen2_vl"),
+            ]
+        )
+        
+    if is_transformers_version(">=", "4.51"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "qwen3"),
             ]
         )
 

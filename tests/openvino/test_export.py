@@ -80,8 +80,6 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
-        "qwen3": OVModelForFeatureExtraction,
-        "qwen2_vl": OVModelForFeatureExtraction,
     }
 
     if is_transformers_version(">=", "4.39"):
@@ -97,7 +95,12 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.update(
-            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline}
+            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline, "qwen2_vl": OVModelForFeatureExtraction}
+        )
+        
+    if is_transformers_version(">=", "4.51"):
+        SUPPORTED_ARCHITECTURES.update(
+            {"qwen3": OVModelForFeatureExtraction}
         )
 
     if is_transformers_version(">=", "4.54"):
