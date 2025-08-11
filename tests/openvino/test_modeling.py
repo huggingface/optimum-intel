@@ -1391,13 +1391,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"]:
+        if model_arch in {"gemma2", "gemma3_text"}:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
+        elif model_arch in {"aquila", "aquila2", "baichuan2", "baichuan2-13b", "decilm", "internlm", "orion", "xverse", "jais"}:
+            additional_inputs = {"use_cache": False}
+
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
