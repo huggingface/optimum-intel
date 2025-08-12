@@ -984,6 +984,27 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ),
                 (
                     OVModelForVisualCausalLM,
+                    "minicpmv4",
+                    True,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                        processor=MODEL_NAMES["minicpmv4"],
+                        trust_remote_code=True,
+                    ),
+                    {
+                        "lm_model": {"int8": 8, "int4": 22},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 26},
+                        "resampler_model": {"int8": 6},
+                    },
+                ),
+                (
+                    OVModelForVisualCausalLM,
                     "internvl2",
                     True,
                     dict(
@@ -1116,6 +1137,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv4", True))
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen2_vl", False))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [

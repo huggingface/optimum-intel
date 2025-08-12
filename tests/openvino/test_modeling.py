@@ -2439,7 +2439,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORT_VIDEO.append("llava_next_video")
 
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl", "minicpmv4"]
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
@@ -2454,7 +2454,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm", "minicpmv4"]
 
     IMAGE = Image.open(
         requests.get(
@@ -2558,8 +2558,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.clear_requests()
         self._check_device_and_request(ov_model, test_device, False)
 
-        # pytorch minicpmv and internvl2 are not designed to be used via forward
-        if model_arch not in ["minicpmv", "internvl2"]:
+        # pytorch minicpmv/minicpmv4 and internvl2 are not designed to be used via forward
+        if model_arch not in ["minicpmv", "minicpmv4", "internvl2"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -2608,8 +2608,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 **transformers_inputs, generation_config=gen_config, **additional_inputs
             )
 
-        # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "internvl2"]:
+        # original minicpmv/minicpmv4, internvl always skip input tokens in generation results, while transformers based approach provide them
+        if model_arch in ["minicpmv", "minicpmv4", "internvl2"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -2634,8 +2634,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl2"]:
+            # original minicpmv/minicpmv4, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "minicpmv4", "internvl2"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -2652,8 +2652,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl2"]:
+            # original minicpmv/minicpmv4, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "minicpmv4", "internvl2"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(

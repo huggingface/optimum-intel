@@ -624,6 +624,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ),
                 (
                     "image-text-to-text",
+                    "minicpmv4",
+                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 26},
+                        "resampler_model": {"int8": 6},
+                    },
+                ),
+                (
+                    "image-text-to-text",
                     "minicpmv",
                     'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",

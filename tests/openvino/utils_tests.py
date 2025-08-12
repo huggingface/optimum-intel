@@ -114,6 +114,7 @@ MODEL_NAMES = {
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "minicpm3": "katuni4ka/tiny-random-minicpm3",
     "minicpmv": "katuni4ka/tiny-random-minicpmv-2_6",
+    "minicpmv4": "snake7gun/minicpm-v-4-tiny",
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
@@ -277,6 +278,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 9,
     },
     "minicpmv": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 26,
+        "resampler_model": 6,
+    },
+    "minicpmv4": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 26,
