@@ -120,6 +120,11 @@ if is_diffusers_version(">=", "0.33.0"):
     from diffusers import SanaSprintPipeline
 else:
     SanaSprintPipeline = object
+    
+if is_diffusers_version(">=", "0.35.0"):
+    from diffusers import QwenImagePipeline
+else:
+    QwenImagePipeline = object
 
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
@@ -1682,6 +1687,11 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     main_input_name = "prompt"
     export_feature = "text-to-video"
     auto_model_class = LTXPipeline
+    
+class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
+    main_input_name = "prompt"
+    export_feature = "text-to-image"
+    auto_model_class = QwenImagePipeline
 
 
 SUPPORTED_OV_PIPELINES = [
@@ -1768,6 +1778,11 @@ if is_diffusers_version(">=", "0.32.0"):
 if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
+    
+    
+if is_diffusers_version(">=", "0.35.0"):
+    SUPPORTED_OV_PIPELINES.extend([OVQwenImagePipeline])
+    OV_TEXT2IMAGE_PIPELINES_MAPPING["qwen-image"] = OVQwenImagePipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
     OV_TEXT2IMAGE_PIPELINES_MAPPING,

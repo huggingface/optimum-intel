@@ -1020,6 +1020,7 @@ def get_diffusion_models_for_export_ext(
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
+    is_qwen_image = pipeline.__class__.__name__.startswith("Qwen-Image")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
@@ -1045,6 +1046,8 @@ def get_diffusion_models_for_export_ext(
         models_for_export = get_sana_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     elif is_ltx_video:
         models_for_export = get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
+    elif is_qwen_image:
+        models_for_export = get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     else:
         raise ValueError(f"Unsupported pipeline type `{pipeline.__class__.__name__}` provided")
     return None, models_for_export
