@@ -360,20 +360,16 @@ def main_export(
 
                 GPTQQuantizer.post_init_model = post_init_model
             if do_bitnet_patching:
-                import functools
-
-                from transformers.integrations.bitnet import AutoBitLinear, unpack_weights
+                from transformers.integrations.bitnet import AutoBitLinear
 
                 orig_load_hook = AutoBitLinear.load_hook
 
                 # rewrite load hook to save original weight
-                @functools.wraps(orig_load_hook)
                 def bitnet_load_hook(self, state_dict, prefix, *args, **kwargs):
                     if (prefix + "weight") in state_dict and state_dict[prefix + "weight"].dtype != self.weight.dtype:
                         self.original_weight = state_dict[prefix + "weight"]
-                        state_dict[prefix + "weight"] = unpack_weights(
-                            state_dict[prefix + "weight"], dtype=self.weight.dtype
-                        ).to(torch.device("meta"))
+                        w_shape = self.original_weight.shape
+                        state_dict[prefix + "weight"] = torch.empty((w_shape[0] * 4, w_shape[1]), dtype=self.weight.dtype, device="meta")
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
