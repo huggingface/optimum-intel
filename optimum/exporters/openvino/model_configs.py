@@ -2418,14 +2418,10 @@ class DcaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
-class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
+class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
-        "pixel_values",
-        "pixel_mask",
-        "sample",
-        "latent_sample",
         "hidden_states",
-        "img_ids",
+        "img_shapes",
     )
 
     def __init__(
@@ -2444,23 +2440,11 @@ class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
             self.num_channels = normalized_config.in_channels // 4
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ["hidden_states", "sample"]:
+        if input_name in ["hidden_states"]:
             shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-        if input_name == "img_ids":
-            img_ids_height = self.height // 2
-            img_ids_width = self.width // 2
-            return self.random_int_tensor(
-                (
-                    [self.batch_size, img_ids_height * img_ids_width, 3]
-                    if is_diffusers_version("<", "0.31.0")
-                    else [img_ids_height * img_ids_width, 3]
-                ),
-                min_value=0,
-                max_value=min(img_ids_height, img_ids_width),
-                framework=framework,
-                dtype=float_dtype,
-            )
+        if input_name == "img_shapes":
+            return [(1, self.height // 2, self.width // 2)] * self.batch_size
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
@@ -2485,6 +2469,35 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
             )
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+    
+class DummyQwenTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+        "encoder_hidden_states_mask",
+        "txt_seq_lens",
+    )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "txt_seq_lens":
+            import torch
+
+            shape = (
+                [self.batch_size]
+            )
+            dtype = DTYPE_MAPPER.pt(int_dtype)
+            return torch.full(shape, 1, dtype=dtype)
+        if input_name == "encoder_hidden_states_mask":
+            import torch
+
+            shape = (
+                [self.batch_size, self.sequence_length]
+            )
+            dtype = DTYPE_MAPPER.pt(float_dtype)
+            return torch.full(shape, 1, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
@@ -4523,3 +4536,38 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("qwen-image-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
+class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTransformerTimestpsInputGenerator,
+        DummyQwenTransformerInputGenerator,
+        DummyQwenTextInputGenerator,
+    )
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        common_inputs.pop("sample", None)
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "image_sequence_length"}
+        common_inputs["encoder_hidden_states_mask"] =  {0: "batch_size", 1: "text_sequence_length"}
+        common_inputs["img_shapes"] = {0: "batch_size"}
+        common_inputs["txt_seq_lens"] = {0: "batch_size"}
+        if getattr(self._normalized_config, "guidance_embeds", False):
+            common_inputs["guidance"] = {0: "batch_size"}
+        return common_inputs
+    
+@register_in_tasks_manager("qwen-image-decoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
