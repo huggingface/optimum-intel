@@ -362,8 +362,15 @@ def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=Non
     if processor_chat_template is not None:
         tokenizer_chat_template = processor_chat_template
         ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
-    if tokenizer_chat_template is not None and tokenizer_chat_template in tuple(COMPLEX_CHAT_TEMPLATES):
-        ov_tokenizer_model.set_rt_info(COMPLEX_CHAT_TEMPLATES[tokenizer_chat_template], "simplified_chat_template")
+    if tokenizer_chat_template is not None:
+        tokenizer_chat_template_v = tokenizer_chat_template.value
+        if not isinstance(tokenizer_chat_template_v, dict):
+            tokenizer_chat_template_v = {"default": tokenizer_chat_template_v}
+        for _, chat_template in tokenizer_chat_template_v.items():
+            simplified_chat_template = COMPLEX_CHAT_TEMPLATES.get(chat_template)
+            if simplified_chat_template is not None:
+                ov_tokenizer_model.set_rt_info(simplified_chat_template, "simplified_chat_template")
+                break
     return ov_tokenizer_model
 
 
