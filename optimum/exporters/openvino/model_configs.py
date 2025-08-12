@@ -83,8 +83,6 @@ from .model_patcher import (
     BaichuanModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
-    BlenderbotSmallStatefulSeq2SeqDecoderPatcher,
-    BlenderbotStatefulSeq2SeqDecoderPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -117,7 +115,6 @@ from .model_patcher import (
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MarianModelPatcher,
-    MarianStatefulSeq2SeqDecoderPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -126,9 +123,9 @@ from .model_patcher import (
     MixtralModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
+    OVSeq2SeqModelPatcher,
     OVSpeechT5ModelPatcher,
     PegasusModelPatcher,
-    PegasusStatefulSeq2SeqDecoderPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
@@ -144,7 +141,6 @@ from .model_patcher import (
     Qwen3MoeModelPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
-    StatefulSeq2SeqDecoderPatcher,
     XverseModelPatcher,
 )
 
@@ -3723,9 +3719,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
     def inputs(self):
@@ -3749,9 +3743,7 @@ class T5OpenVINOConfig(T5OnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self):
@@ -3797,9 +3789,7 @@ class BartOpenVINOConfig(BartOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self):
@@ -4041,8 +4031,6 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return BlenderbotStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4069,8 +4057,6 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return BlenderbotSmallStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4097,8 +4083,6 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return PegasusStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4125,8 +4109,6 @@ class MarianOpenVINOConfig(MarianOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return MarianStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
