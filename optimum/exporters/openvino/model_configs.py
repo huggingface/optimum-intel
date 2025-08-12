@@ -2418,10 +2418,14 @@ class DcaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         }
 
 
-class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
+class DummyFluxTransformerInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "pixel_mask",
+        "sample",
+        "latent_sample",
         "hidden_states",
-        "img_shapes",
+        "img_ids",
     )
 
     def __init__(
@@ -2440,11 +2444,23 @@ class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
             self.num_channels = normalized_config.in_channels // 4
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ["hidden_states"]:
+        if input_name in ["hidden_states", "sample"]:
             shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
-        if input_name == "img_shapes":
-            return [(1, self.height // 2, self.width // 2)] * self.batch_size
+        if input_name == "img_ids":
+            img_ids_height = self.height // 2
+            img_ids_width = self.width // 2
+            return self.random_int_tensor(
+                (
+                    [self.batch_size, img_ids_height * img_ids_width, 3]
+                    if is_diffusers_version("<", "0.31.0")
+                    else [img_ids_height * img_ids_width, 3]
+                ),
+                min_value=0,
+                max_value=min(img_ids_height, img_ids_width),
+                framework=framework,
+                dtype=float_dtype,
+            )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
@@ -3503,7 +3519,11 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_vl",
+    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3556,10 +3576,16 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = (
-                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
-            )
-            text_embedding.config = model.config
+            if hasattr(model, "model"):
+                text_embedding = (
+                    model.model.embed_tokens
+                    if hasattr(model.model, "embed_tokens")
+                    else model.language_model.embed_tokens
+                )
+            else:
+                text_embedding = (
+                    model.embed_tokens if hasattr(model, "embed_tokens") else model.language_model.embed_tokens
+                )
             return text_embedding
 
     def with_behavior(
@@ -3579,15 +3605,26 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Qwen2VLConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config(
-                "qwen2",
-                self._orig_config,
-                self.int_dtype,
-                self.float_dtype,
-                model_patcher=Qwen2VLLanguageModelPatcher,
-                dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-            )
+            if self.task in ["feature-extraction"]:
+                export_config_class = TasksManager._SUPPORTED_MODEL_TYPE["qwen2"]["openvino"]["feature-extraction"]
+                export_config = export_config_class(
+                    self._orig_config,
+                    use_past=True,
+                    use_past_in_inputs=True,
+                    int_dtype=self.int_dtype,
+                    float_dtype=self.float_dtype,
+                )
+                return export_config
+            else:
+                return get_vlm_text_generation_config(
+                    "qwen2",
+                    self._orig_config,
+                    self.int_dtype,
+                    self.float_dtype,
+                    model_patcher=Qwen2VLLanguageModelPatcher,
+                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                )
 
         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -3636,7 +3673,11 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_5_vl",
+    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
@@ -4537,6 +4578,36 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
+
+class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "img_shapes",
+    )
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"] // 4,
+        height: int = DEFAULT_DUMMY_SHAPES["height"] // 4,
+        # Reduce img shape by 4 for FLUX to reduce memory usage on conversion
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        if getattr(normalized_config, "in_channels", None):
+            self.num_channels = normalized_config.in_channels // 4
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["hidden_states"]:
+            shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "img_shapes":
+            return [(1, self.height // 2, self.width // 2)] * self.batch_size
+
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 @register_in_tasks_manager("qwen-image-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
 class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
