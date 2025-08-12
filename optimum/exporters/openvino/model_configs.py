@@ -601,11 +601,8 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
 @register_in_tasks_manager(
     "bitnet",
     *[
-        "feature-extraction",
-        "feature-extraction-with-past",
         "text-generation",
         "text-generation-with-past",
-        "text-classification",
     ],
     library_name="transformers",
 )
