@@ -357,11 +357,10 @@ COMPLEX_CHAT_TEMPLATES = {
 
 def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=None):
     tokenizer_chat_template = None
+    if processor_chat_template is not None:
+        ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
     if ov_tokenizer_model.has_rt_info("chat_template"):
         tokenizer_chat_template = ov_tokenizer_model.get_rt_info("chat_template")
-    if processor_chat_template is not None:
-        tokenizer_chat_template = processor_chat_template
-        ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
     if tokenizer_chat_template is not None:
         tokenizer_chat_template_v = tokenizer_chat_template.value
         if not isinstance(tokenizer_chat_template_v, dict):
