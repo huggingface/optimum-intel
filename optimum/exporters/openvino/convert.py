@@ -397,15 +397,14 @@ def export_pytorch(
         if hasattr(model, "config"):
             model.config.torchscript = False
             model.config.return_dict = True
-        model.eval()
 
         # Check if we need to override certain configuration item
-        if config.values_override is not None:
-            logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
-            for override_config_key, override_config_value in config.values_override.items():
-                logger.info(f"\t- {override_config_key} -> {override_config_value}")
-                setattr(model.config, override_config_key, override_config_value)
-
+            if config.values_override is not None:
+                logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
+                for override_config_key, override_config_value in config.values_override.items():
+                    logger.info(f"\t- {override_config_key} -> {override_config_value}")
+                    setattr(model.config, override_config_key, override_config_value)
+        model.eval()
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
 
@@ -1020,7 +1019,7 @@ def get_diffusion_models_for_export_ext(
     is_flux = pipeline.__class__.__name__.startswith("Flux")
     is_sana = pipeline.__class__.__name__.startswith("Sana")
     is_ltx_video = pipeline.__class__.__name__.startswith("LTX")
-    is_qwen_image = pipeline.__class__.__name__.startswith("Qwen-Image")
+    is_qwen_image = pipeline.__class__.__name__.startswith("QwenImage")
     is_sd = pipeline.__class__.__name__.startswith("StableDiffusion") and not is_sd3
     is_lcm = pipeline.__class__.__name__.startswith("LatentConsistencyModel")
 
@@ -1469,18 +1468,18 @@ def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
-        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
-            model=text_encoder,
-            exporter=exporter,
-            library_name="diffusers",
-            task="feature-extraction",
-            model_type="qwen2_vl",
-        )
-        text_encoder_export_config = text_encoder_config_constructor(
-            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
-        )
-        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
-
+        # text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+        #     model=text_encoder,
+        #     exporter=exporter,
+        #     library_name="diffusers",
+        #     task="feature-extraction",
+        #     model_type="qwen2_5_vl",
+        # )
+        # text_encoder_export_config = text_encoder_config_constructor(
+        #     pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        # )
+        # models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
+        _, models_for_export, _  = _get_multi_modal_submodels_and_export_configs(model=text_encoder, task="feature-extraction", library_name="transformers", int_dtype=int_dtype, float_dtype=float_dtype)
     transformer = pipeline.transformer
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)

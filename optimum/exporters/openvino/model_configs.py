@@ -2486,35 +2486,6 @@ class DummyFluxTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
             dtype = DTYPE_MAPPER.pt(float_dtype)
             return torch.full(shape, 0, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
-    
-class DummyQwenTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
-    SUPPORTED_INPUT_NAMES = (
-        "decoder_input_ids",
-        "decoder_attention_mask",
-        "encoder_outputs",
-        "encoder_hidden_states",
-        "encoder_hidden_states_mask",
-        "txt_seq_lens",
-    )
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "txt_seq_lens":
-            import torch
-
-            shape = (
-                [self.batch_size]
-            )
-            dtype = DTYPE_MAPPER.pt(int_dtype)
-            return torch.full(shape, 1, dtype=dtype)
-        if input_name == "encoder_hidden_states_mask":
-            import torch
-
-            shape = (
-                [self.batch_size, self.sequence_length]
-            )
-            dtype = DTYPE_MAPPER.pt(float_dtype)
-            return torch.full(shape, 1, dtype=dtype)
-        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 @register_in_tasks_manager("flux-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -3528,7 +3499,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator, )
     MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
 
     def __init__(
@@ -4607,8 +4578,38 @@ class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
             shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "img_shapes":
-            return [(1, self.height // 2, self.width // 2)] * self.batch_size
+            import torch
+            return [torch.tensor((1, self.height // 2, self.width // 2))] * self.batch_size
 
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+class DummyQwenTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
+    SUPPORTED_INPUT_NAMES = (
+        "decoder_input_ids",
+        "decoder_attention_mask",
+        "encoder_outputs",
+        "encoder_hidden_states",
+        "encoder_hidden_states_mask",
+        "txt_seq_lens",
+    )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "txt_seq_lens":
+            import torch
+
+            shape = (
+                [self.batch_size]
+            )
+            dtype = DTYPE_MAPPER.pt(int_dtype)
+            return torch.full(shape, 1, dtype=dtype)
+        if input_name == "encoder_hidden_states_mask":
+            import torch
+
+            shape = (
+                [self.batch_size, self.sequence_length]
+            )
+            dtype = DTYPE_MAPPER.pt(float_dtype)
+            return torch.full(shape, 1, dtype=dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 @register_in_tasks_manager("qwen-image-transformer-2d", *["semantic-segmentation"], library_name="diffusers")
@@ -4617,12 +4618,14 @@ class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         DummyTransformerTimestpsInputGenerator,
         DummyQwenTransformerInputGenerator,
         DummyQwenTextInputGenerator,
+        # PooledProjectionsDummyInputGenerator,
     )
 
     @property
     def inputs(self):
         common_inputs = super().inputs
         common_inputs.pop("sample", None)
+        common_inputs.pop("pooled_projections", None)
         common_inputs["hidden_states"] = {0: "batch_size", 1: "image_sequence_length"}
         common_inputs["encoder_hidden_states_mask"] =  {0: "batch_size", 1: "text_sequence_length"}
         common_inputs["img_shapes"] = {0: "batch_size"}
