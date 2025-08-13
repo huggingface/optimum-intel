@@ -1403,11 +1403,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "aquila2",
             "baichuan2",
             "baichuan2-13b",
+            "decilm",
             "internlm",
             "internlm2",
+            "jais",
             "orion",
             "xverse",
-            "jais",
         }:
             additional_inputs = {"use_cache": False}
 
