@@ -916,6 +916,7 @@ def _get_multi_modal_submodels_and_export_configs(
     preprocessors: Optional[List[Any]] = None,
     model_kwargs: Optional[Dict] = None,
     stateful: bool = True,
+    custom_path: str = "",
 ):
     models_for_export = {}
     stateful_parts = []
@@ -953,7 +954,7 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
     )
     for behavior in main_config.SUPPORTED_BEHAVIORS:
-        model_id = f"{behavior}_model"
+        model_id = f"{custom_path}{behavior}_model"
         model_part_config = main_config.with_behavior(behavior)
         model_part = main_config.get_model_for_behavior(model, behavior)
         models_for_export[model_id] = (model_part, model_part_config)
@@ -1468,18 +1469,7 @@ def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
-        # text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
-        #     model=text_encoder,
-        #     exporter=exporter,
-        #     library_name="diffusers",
-        #     task="feature-extraction",
-        #     model_type="qwen2_5_vl",
-        # )
-        # text_encoder_export_config = text_encoder_config_constructor(
-        #     pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
-        # )
-        # models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
-        _, models_for_export, _  = _get_multi_modal_submodels_and_export_configs(model=text_encoder, task="feature-extraction", library_name="transformers", int_dtype=int_dtype, float_dtype=float_dtype)
+        _, models_for_export, _  = _get_multi_modal_submodels_and_export_configs(model=text_encoder, task="feature-extraction", library_name="transformers", int_dtype=int_dtype, float_dtype=float_dtype, custom_path="text_encoder/")
     transformer = pipeline.transformer
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
