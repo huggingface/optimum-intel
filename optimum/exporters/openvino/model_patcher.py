@@ -356,14 +356,10 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for non-stateful decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
-            if not getattr(self.real_config, "stateful", False):
-                logger.warning(
-                    "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
-                    "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
-                )
-                ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+            # for decoder models, we use eager mask without vmap for sdpa as well
+            # to avoid a nan output issue in OpenVINO that only happens in case of:
+            # non-stateful models on cpu and stateful models on npu
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -4771,14 +4767,10 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for non-stateful decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
-            if not getattr(self.real_config, "stateful", False):
-                logger.warning(
-                    "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
-                    "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
-                )
-                ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+            # for decoder models, we use eager mask without vmap for sdpa as well
+            # to avoid a nan output issue in OpenVINO that only happens in case of:
+            # non-stateful models on cpu and stateful models on npu
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
