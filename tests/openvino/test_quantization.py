@@ -445,6 +445,32 @@ class OVQuantizerTest(unittest.TestCase):
                 ),
             ]
         )
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
+                    "glm4v",
+                    OVQuantizationConfig(
+                        bits=8,
+                        dataset="contextual",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": 13,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 0,
+                        "vision_embeddings_merger_model": 0,
+                    },
+                    {
+                        "lm_model": {"int8": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
+                ),
+            ]
+        )
 
     @staticmethod
     def get_calibration_dataset(
@@ -1027,6 +1053,25 @@ class OVWeightCompressionTest(unittest.TestCase):
                 (
                     OVModelForVisualCausalLM,
                     "qwen2_vl",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
+                ),
+                (
+                    OVModelForVisualCausalLM,
+                    "glm4v",
                     False,
                     dict(
                         bits=4,

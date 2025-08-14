@@ -2461,6 +2461,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
+    if is_transformers_version(">=", "4.53"):
+        SUPPORTED_ARCHITECTURES += ["glm4v"]
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
 
@@ -2483,6 +2485,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             "idefics3",
             "smolvlm",
             "llama4",
+            "glm4v"
         ]:
             from transformers import AutoModelForImageTextToText
 

@@ -189,6 +189,7 @@ MODEL_NAMES = {
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
     "glm4": "snake7gun/tiny-random-glm4",
+    "glm4v": "snake7gun/glm4v-tiny-random",
     "glm": "katuni4ka/tiny-random-glm-edge",
     "open-clip": "hf-internal-testing/tiny-open-clip-model",
     "open-clip-ov": "zofinka/tiny-open-clip-model",
