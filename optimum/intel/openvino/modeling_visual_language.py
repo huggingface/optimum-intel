@@ -225,12 +225,16 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        logits = self.request.get_tensor("logits").data
-        logits = torch.from_numpy(logits).clone().to(self.device)
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
-
-        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        try:
+            logits = self.request.get_tensor("logits").data
+            logits = torch.from_numpy(logits).clone().to(self.device)
+            return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        except:
+            last_hidden_state = self.request.get_tensor("last_hidden_state").data
+            last_hidden_state = torch.from_numpy(last_hidden_state).clone().to(self.device)
+            return CausalLMOutputWithPast(hidden_state=last_hidden_state, past_key_values=past_key_values)
 
 
 class OVVisionEmbedding(OVModelPart):

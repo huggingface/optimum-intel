@@ -916,7 +916,6 @@ def _get_multi_modal_submodels_and_export_configs(
     preprocessors: Optional[List[Any]] = None,
     model_kwargs: Optional[Dict] = None,
     stateful: bool = True,
-    custom_path: str = "",
 ):
     models_for_export = {}
     stateful_parts = []
@@ -1469,7 +1468,7 @@ def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
-        _, models_for_export, _  = _get_multi_modal_submodels_and_export_configs(model=text_encoder, task="feature-extraction", library_name="transformers", int_dtype=int_dtype, float_dtype=float_dtype, custom_path="text_encoder/")
+        _, models_for_export, _  = _get_multi_modal_submodels_and_export_configs(model=text_encoder, task="image-text-to-text", library_name="diffusers", int_dtype=int_dtype, float_dtype=float_dtype)
     transformer = pipeline.transformer
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)

@@ -1687,7 +1687,7 @@ class OVLTXPipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, LTXPipel
     main_input_name = "prompt"
     export_feature = "text-to-video"
     auto_model_class = LTXPipeline
-    
+
 class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
     main_input_name = "prompt"
     export_feature = "text-to-image"
@@ -1779,9 +1779,8 @@ if is_diffusers_version(">=", "0.33.0"):
     SUPPORTED_OV_PIPELINES.append(OVSanaSprintPipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
     
-    
 if is_diffusers_version(">=", "0.35.0"):
-    SUPPORTED_OV_PIPELINES.extend([OVQwenImagePipeline])
+    SUPPORTED_OV_PIPELINES.append(OVQwenImagePipeline)
     OV_TEXT2IMAGE_PIPELINES_MAPPING["qwen-image"] = OVQwenImagePipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
