@@ -115,6 +115,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.51"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "qwen3"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -146,6 +153,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mamba": 2,
         "falcon-mamba": 2,
         "ernie4_5": 2,
+        "qwen3": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
