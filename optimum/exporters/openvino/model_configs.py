@@ -3516,10 +3516,9 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
 
 @register_in_tasks_manager(
     "qwen2_vl",
-    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    *["image-text-to-text", "video-text-to-text"],
     library_name="transformers",
 )
-@register_in_tasks_manager("qwen2_vl", *["feature-extraction"], library_name="diffusers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3572,16 +3571,9 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            if hasattr(model, "model"):
-                text_embedding = (
-                    model.model.embed_tokens
-                    if hasattr(model.model, "embed_tokens")
-                    else model.language_model.embed_tokens
-                )
-            else:
-                text_embedding = (
-                    model.embed_tokens if hasattr(model, "embed_tokens") else model.language_model.embed_tokens
-                )
+            text_embedding = (
+                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
+            )
             text_embedding.config = model.config
             return text_embedding
 
@@ -3602,26 +3594,15 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
         if behavior == Qwen2VLConfigBehavior.LANGUAGE:
-            if self.task in ["feature-extraction"]:
-                export_config_class = TasksManager._SUPPORTED_MODEL_TYPE["qwen2"]["openvino"]["feature-extraction"]
-                export_config = export_config_class(
-                    self._orig_config,
-                    use_past=True,
-                    use_past_in_inputs=True,
-                    int_dtype=self.int_dtype,
-                    float_dtype=self.float_dtype,
-                )
-                return export_config
-            else:
-                return get_vlm_text_generation_config(
-                    "qwen2",
-                    self._orig_config,
-                    self.int_dtype,
-                    self.float_dtype,
-                    model_patcher=Qwen2VLLanguageModelPatcher,
-                    dummy_input_generator=DummyQwen2VLLMInputGenerator,
-                    inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
-                )
+            return get_vlm_text_generation_config(
+                "qwen2",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen2VLLanguageModelPatcher,
+                dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
 
         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(
@@ -3672,10 +3653,9 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager(
     "qwen2_5_vl",
-    *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    *["image-text-to-text", "video-text-to-text"],
     library_name="transformers",
 )
-@register_in_tasks_manager("qwen2_5_vl", *["feature-extraction"], library_name="diffusers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 

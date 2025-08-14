@@ -112,10 +112,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("inpainting", "flux-fill"),
                 ("text-to-image", "sana"),
                 ("text-to-video", "ltx-video"),
-                ("feature-extraction", "qwen2_vl"),
             ]
         )
-        
+
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES.extend(
             [

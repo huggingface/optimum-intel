@@ -1026,10 +1026,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "roberta",
         "sentence-transformers-bert",
     )
-    
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen2_vl",)
-        
+
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("qwen3",)
 

@@ -95,13 +95,11 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.45"):
         SUPPORTED_ARCHITECTURES.update(
-            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline, "qwen2_vl": OVModelForFeatureExtraction}
+            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline}
         )
-        
+
     if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES.update(
-            {"qwen3": OVModelForFeatureExtraction}
-        )
+        SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.update({"ernie4_5": OVModelForCausalLM})
