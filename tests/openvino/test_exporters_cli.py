@@ -468,6 +468,28 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
     ]
 
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_QUANTIZATION_ARCHITECTURES.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    "f8e4m3",
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {
+                        "lm_model": 15,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 17,
+                    },
+                    {
+                        "lm_model": {"f8e4m3": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"f8e4m3": 11},
+                    },
+                ),
+            ]
+        )
+
     TEST_4BIT_CONFIGURATIONS = [
         (
             "text-generation-with-past",
@@ -1081,7 +1103,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if "--library sentence_transformers" in option
                 else eval(_HEAD_TO_AUTOMODELS[task])
             )
-            model = model_cls.from_pretrained(tmpdir)
+            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task

@@ -622,9 +622,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             from optimum.intel.openvino.quantization import OVQuantizer
 
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
-            quantization_config_copy.processor = quantization_config.processor or potential_processor_id
+            quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
             OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
