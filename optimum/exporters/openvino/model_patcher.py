@@ -5555,7 +5555,7 @@ def speecht5_decoder_prenet_forward(
     return inputs_embeds
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L993
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L889
 # this is a patch to avoid CPU plugin issue that is happened on 16-th iteration of token generation
 # values computed by self-attention attn_output = torch.bmm(attn_probs, value_states) in a decoder gets incorrect
 def speecht5_attention_forward(
@@ -5681,7 +5681,7 @@ def speecht5_attention_forward(
     return attn_output, attn_weights_reshaped, past_key_value
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1175
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1121
 # this is a patch for a model to avoid incorrect tracing
 # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple are computed using encoder_hidden_states
 def speecht5_decoder_layer_forward(
@@ -5768,11 +5768,12 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
                 speecht5_decoder_prenet_forward, self._model.speecht5.decoder.prenet
             )
-            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
-                layer.__orig_forward = layer.forward
-                layer.forward = types.MethodType(speecht5_decoder_layer_forward, layer)
-                layer.self_attn.__orig_forward = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
+            if is_transformers_version("<", "4.54"):
+                for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                    layer.__orig_forward = layer.forward
+                    layer.forward = types.MethodType(speecht5_decoder_layer_forward, layer)
+                    layer.self_attn.__orig_forward = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.real_config._behavior != "vocoder":
@@ -5781,9 +5782,10 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
                 self._model.speecht5.decoder.prenet.__orig_forward, self._model.speecht5.decoder.prenet
             )
-            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
-                layer.forward = types.MethodType(layer.__orig_forward, layer)
-                layer.self_attn.forward = types.MethodType(layer.self_attn.__orig_forward, layer.self_attn)
+            if is_transformers_version("<", "4.54"):
+                for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                    layer.forward = types.MethodType(layer.__orig_forward, layer)
+                    layer.self_attn.forward = types.MethodType(layer.self_attn.__orig_forward, layer.self_attn)
 
     def __init__(
         self,
