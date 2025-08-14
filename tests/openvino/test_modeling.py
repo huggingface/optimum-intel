@@ -1219,24 +1219,24 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
-        "bloom": 5,
+        "bloom": 5 if is_transformers_version(">=", "4.44") else 0,
         "chatglm": 2,
         "codegen": 5,
         "codegen2": 2,
-        "gpt2": 5,
-        "gptj": 5,
-        "gpt_neo": 4,
-        "gpt_neox": 5,
+        "gpt2": 5 if is_transformers_version(">=", "4.42") else 0,
+        "gptj": 5 if is_transformers_version(">=", "4.42") else 0,
+        "gpt_neo": 4 if is_transformers_version(">=", "4.42") else 0,
+        "gpt_neox": 5 if is_transformers_version(">=", "4.42") else 0,
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
-        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
-        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mistral": 2 if is_transformers_version(">=", "4.40") else 0,
+        "mixtral": 2 if is_transformers_version(">=", "4.40") else 0,
         "mpt": 5,
-        "opt": 5,
+        "opt": 5 if is_transformers_version(">=", "4.46") else 0,
         "pegasus": 2,
         "qwen": 2,
-        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "phi": 2 if is_transformers_version(">=", "4.40") else 0,
         "internlm2": 4,
         "falcon": 2,
         "falcon-40b": 2,
@@ -1277,7 +1277,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
-        "ernie4_5": 2,
+        "ernie4_5": 4,
     }
 
     # TODO: remove gptq/awq from here
@@ -1391,13 +1391,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"]:
+        if model_arch in {"gemma2", "gemma3_text"}:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
+        elif model_arch in {
+            "aquila",
+            "aquila2",
+            "baichuan2",
+            "baichuan2-13b",
+            "decilm",
+            "internlm",
+            "internlm2",
+            "jais",
+            "orion",
+            "xverse",
+        }:
+            additional_inputs = {"use_cache": False}
+
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs

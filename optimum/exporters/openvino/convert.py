@@ -633,7 +633,11 @@ def export_from_model(
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
 
-    if stateful and is_encoder_decoder and not getattr(model, "_supports_cache_class", False):
+    if (
+        stateful
+        and is_encoder_decoder
+        and not getattr(model, "_supports_cache_class", is_transformers_version(">=", "4.54"))
+    ):
         stateful = False
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
