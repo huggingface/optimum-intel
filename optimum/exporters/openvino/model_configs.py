@@ -35,6 +35,7 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     GPT2OnnxConfig,
+    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -67,12 +68,10 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     GemmaDummyPastKeyValuesGenerator,
-    GPTBigCodeDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import (
     NormalizedConfig,
-    NormalizedConfigManager,
     NormalizedTextConfig,
     NormalizedVisionConfig,
 )
@@ -3743,42 +3742,7 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    # TODO (echarlaix): move once added in optimum
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeDummyPastKeyValuesGenerator)
-    DEFAULT_ONNX_OPSET = 14  # GPT BigCode now uses F.scaled_dot_product_attention by default for torch>=2.1.1.
-    DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeDummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedConfigManager.get_normalized_config_class("gpt_bigcode")
-
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        if is_transformers_version(">=", "4.54.0"):
-            return super().add_past_key_values(inputs_or_outputs, direction)
-
-        if direction not in ["inputs", "outputs"]:
-            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-        if direction == "inputs":
-            decoder_sequence_name = "past_sequence_length"
-            name = "past_key_values"
-        else:
-            decoder_sequence_name = "past_sequence_length + sequence_length"
-            name = "present"
-
-        for i in range(self._normalized_config.num_layers):
-            if self._normalized_config.multi_query:
-                # No dim for `n_head` when using multi-query attention
-                inputs_or_outputs[f"{name}.{i}.key_value"] = {0: "batch_size", 1: decoder_sequence_name}
-            else:
-                inputs_or_outputs[f"{name}.{i}.key_value"] = {0: "batch_size", 2: decoder_sequence_name}
-
-    def flatten_past_key_values(self, flattened_output, name, idx, t):
-        if is_transformers_version(">=", "4.54.0"):
-            return super().flatten_past_key_values(flattened_output, name, idx, t)
-
-        flattened_output[f"{name}.{idx}.key_value"] = t
-
-    #####
-
+class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
