@@ -115,13 +115,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("feature-extraction", "qwen3"),
-            ]
-        )
-
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.extend(
             [
