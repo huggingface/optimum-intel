@@ -823,6 +823,13 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         return shifted_input_ids
 
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
+
 
 class OVEncoder:
     """
