@@ -15,9 +15,7 @@ RUN apt-get update && apt-get install -y \
     libxext6
 
 # Need node to build doc HTML. Taken from https://stackoverflow.com/a/67491580
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    npm
+RUN apt-get update && apt-get install -y npm
 RUN npm install npm@9.8.1 -g && \
     npm install n -g && \
     n latest
@@ -25,4 +23,4 @@ RUN npm install npm@9.8.1 -g && \
 RUN python3 -m pip install --no-cache-dir --upgrade pip
 RUN python3 -m pip install --no-cache-dir git+https://github.com/huggingface/doc-builder.git
 RUN git clone $clone_url && cd optimum-intel && git checkout $commit_sha
-RUN python3 -m pip install --no-cache-dir ./optimum-intel[openvino,diffusers,quality] neural-compressor[pt]>3.0 accelerate
+RUN python3 -m pip install --no-cache-dir ./optimum-intel[quality] openvino nncf neural-compressor[pt] diffusers accelerate
