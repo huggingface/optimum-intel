@@ -12,7 +12,6 @@ concurrency:
 jobs:
   build_documentation:
     runs-on: ubuntu-22.04
-
     env:
       COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.number }}
@@ -21,42 +20,35 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          repository: "huggingface/doc-builder"
-          path: doc-builder
+          node-version: "18"
+          cache-dependency-path: "kit/package-lock.json"
 
-      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          repository: "huggingface/optimum-intel"
-          path: optimum-intel
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.9
+          python-version: "3.11"
 
       - name: Setup environment
         run: |
-          pip install --upgrade pip
-          pip uninstall -y doc-builder
-          cd doc-builder
-          git pull origin main
-          pip install .
-          pip install black
-          cd ..
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade setuptools
+          python -m pip install git+https://github.com/huggingface/doc-builder
+          python -m pip install .[quality] openvino nncf neural-compressor[pt] diffusers accelerate
 
       - name: Make documentation
+        shell: bash
         run: |
-          cd optimum-intel
-          make doc BUILD_DIR=intel-doc-build VERSION=pr_$PR_NUMBER COMMIT_SHA_SUBPACKAGE=$COMMIT_SHA CLONE_URL=$PR_CLONE_URL
-          cd ..
-
-      - name: Save commit_sha & pr_number
-        run: |
-          cd optimum-intel
-          sudo chmod -R ugo+rwx intel-doc-build
+          doc-builder build optimum docs/source/ \
+            --repo_name optimum-intel \
+            --build_dir intel-doc-build/ \
+            --version pr_${{ env.PR_NUMBER }} \
+            --version_tag_suffix "" \
+            --html \
+            --clean
           cd intel-doc-build
-          sudo mv optimum.intel optimum-intel
+          mv optimum.intel optimum-intel
           echo ${{ env.COMMIT_SHA }} > ./commit_sha
           echo ${{ env.PR_NUMBER }} > ./pr_number
 
