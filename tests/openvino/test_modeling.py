@@ -1107,7 +1107,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gptj",
         "gpt_neo",
         "gpt_neox",
-        "gpt_oss",
         "llama",
         "marian",
         "minicpm",
@@ -1188,7 +1187,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+        SUPPORTED_ARCHITECTURES += ("ernie4_5", "gpt_oss")
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
