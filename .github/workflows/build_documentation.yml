@@ -45,8 +45,7 @@ jobs:
 
       - name: Setup environment
         run: |
-          uv pip install --upgrade pip uv
-          uv pip install --upgrade setuptools
+          pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
           uv pip install .[quality,nncf,openvino,neural-compressor] diffusers
 
