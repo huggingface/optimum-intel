@@ -8,6 +8,10 @@ on:
       - doc-builder*
       - v*-release
 
+env:
+  UV_SYSTEM_PYTHON: 1
+  UV_TORCH_BACKEND: auto
+
 jobs:
   build_documentation:
     runs-on: ubuntu-22.04
