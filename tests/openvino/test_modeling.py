@@ -1107,6 +1107,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gptj",
         "gpt_neo",
         "gpt_neox",
+        "gpt_oss",
         "llama",
         "marian",
         "minicpm",
