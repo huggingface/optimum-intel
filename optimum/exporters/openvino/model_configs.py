@@ -612,11 +612,7 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
 class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    MIN_TRANSFORMERS_VERSION = "4.55"
 
 
 @register_in_tasks_manager(
