@@ -137,6 +137,7 @@ from optimum.utils import (
 )
 from optimum.utils.testing_utils import require_diffusers
 
+torch.compile = lambda func: func  # Mock torch.compile to avoid compilation errors in tests
 
 TENSOR_ALIAS_TO_TYPE = {
     "pt": torch.Tensor,
@@ -1185,6 +1186,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
+        if is_openvino_version(">=", "2025.3.0"):
+            SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES += ("ernie4_5",)
@@ -1278,6 +1281,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon-mamba": 0,
         "arcee": 2,
         "ernie4_5": 2,
+        "bitnet": 6,
     }
 
     # TODO: remove gptq/awq from here
