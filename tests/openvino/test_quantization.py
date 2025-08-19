@@ -1829,7 +1829,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             check_compression_state_per_model(
                 self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
             )
-            quantization_config = quantization_config.expand_default_config(model.ov_submodels)
+            quantization_config = quantization_config._expand_default_config(model.ov_submodels)
             # Compare the quantization config with the model runtime info
             for submodel_name, submodel in model.ov_submodels.items():
                 rt_info = submodel.get_rt_info()

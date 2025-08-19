@@ -1358,7 +1358,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         for submodel_config in self.quantization_configs.values():
             submodel_config.post_init()
 
-    def expand_default_config(self, submodel_names: Iterable[str]) -> "OVPipelineQuantizationConfig":
+    def _expand_default_config(self, submodel_names: Iterable[str]) -> "OVPipelineQuantizationConfig":
         """
         Returns a new OVPipelineQuantizationConfig instance with the default quantization config applied to all
         submodels that do not have a specific quantization config provided.
