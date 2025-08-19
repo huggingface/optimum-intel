@@ -6522,7 +6522,7 @@ class Llama4TextModelPatcher(ModelPatcher):
         self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
         self._model.model.rotary_emb.forward = types.MethodType(llama4_rope_forward, self._model.model.rotary_emb)
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
-            if layer.is_moe_layer:
+            if layer.is_moe_layer and is_transformers_version("<","4.54"):
                 layer.feed_forward._orig_forward = layer.feed_forward.forward
                 layer.feed_forward.forward = types.MethodType(llama4_moe_forward, layer.feed_forward)
             layer.self_attn._orig_forward = layer.self_attn.forward
@@ -6532,7 +6532,7 @@ class Llama4TextModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
-            if layer.is_moe_layer:
+            if layer.is_moe_layer and is_transformers_version("<","4.54"):
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
 
