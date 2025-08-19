@@ -38,12 +38,12 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality,nncf,openvino,neural-compressor] diffusers
+          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate
 
       - name: Make documentation
         shell: bash
         run: |
-          doc-builder build optimum docs/source/ \
+          doc-builder build optimum.intel docs/source/ \
             --repo_name optimum-intel \
             --build_dir intel-doc-build/ \
             --version pr_${{ env.PR_NUMBER }} \
