@@ -33,6 +33,7 @@ from optimum.exporters.onnx.model_patcher import (
     DecoderModelPatcher,
     ModelPatcher,
     Seq2SeqModelPatcher,
+    VisionEncoderDecoderPatcher,
     override_arguments,
     sdpa_mask_without_vmap,
 )
@@ -373,6 +374,22 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             del self._model._update_causal_mask_original
 
         if is_transformers_version(">=", "4.53.0"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+
+
+class OVVisionEncoderDecoderPatcher(VisionEncoderDecoderPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if is_transformers_version(">=", "4.54"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if is_transformers_version(">=", "4.54"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 

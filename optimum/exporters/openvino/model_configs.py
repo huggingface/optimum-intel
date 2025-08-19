@@ -51,6 +51,7 @@ from optimum.exporters.onnx.model_configs import (
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
+    VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
@@ -132,6 +133,7 @@ from .model_patcher import (
     MPTModelPatcher,
     OVDecoderModelPatcher,
     OVSpeechT5ModelPatcher,
+    OVVisionEncoderDecoderPatcher,
     PegasusModelPatcher,
     PegasusStatefulSeq2SeqDecoderPatcher,
     PersimmonModelPatcher,
@@ -3594,7 +3596,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if behavior == Qwen2VLConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "qwen2",
-                self._orig_config,
+                self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Qwen2VLLanguageModelPatcher,
@@ -4568,3 +4570,16 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "vision-encoder-decoder",
+    *[
+        "image-to-text",
+        "image-to-text-with-past",
+        "document-question-answering",
+        "document-question-answering-with-past",
+    ],
+)
+class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
+    _MODEL_PATCHER = OVVisionEncoderDecoderPatcher
