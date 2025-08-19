@@ -21,13 +21,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: "18"
           cache-dependency-path: "kit/package-lock.json"
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Set environment variables
         run: |
@@ -45,11 +45,10 @@ jobs:
 
       - name: Setup environment
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade setuptools
-          python -m pip install git+https://github.com/huggingface/doc-builder
-          python -m pip install .[quality]
-          python -m pip install openvino nncf neural-compressor[pt]>=3.4.1 diffusers accelerate
+          uv pip install --upgrade pip uv
+          uv pip install --upgrade setuptools
+          uv pip install git+https://github.com/huggingface/doc-builder
+          uv pip install .[quality,nncf,openvino,neural-compressor] diffusers
 
       - name: Make documentation
         shell: bash
