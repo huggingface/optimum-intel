@@ -1189,6 +1189,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES += ("ernie4_5",)
 
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -2467,6 +2470,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
+
+    if is_transformers_version(">=", "4.54.0"):
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"nanollava", "phi3_v", "phi4mm"}
+
     TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
 
