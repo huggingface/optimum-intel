@@ -52,4 +52,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: doc-build-artifact
-          path: optimum-intel/intel-doc-build/
+          path: ./intel-doc-build/
