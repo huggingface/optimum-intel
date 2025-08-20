@@ -24,6 +24,9 @@ from transformers import AutoTokenizer, pipeline, set_seed
 from transformers.utils import SAFE_WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
+
+# to trigger register creation
+from optimum.exporters.onnx.model_configs import BertOnnxConfig  # noqa # type: ignore
 from optimum.intel import (  # noqa
     INCConfig,
     INCModel,
@@ -75,7 +78,7 @@ class INCModelingTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_id, task):
         model_class = eval(_HEAD_TO_AUTOMODELS[task])
         inc_model = model_class.from_pretrained(model_id)
-        model_type = inc_model.config.model_type.replace("_", "-")
+        model_type = inc_model.config.model_type
         config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=inc_model,

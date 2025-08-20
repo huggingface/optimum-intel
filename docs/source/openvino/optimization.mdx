@@ -624,6 +624,59 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
         </tr>
         <tr>
+            <td style="text-align: center; vertical-align: middle;">text2text-generation<br>(OVModelForSeq2SeqLM)</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m google-t5/t5-small --weight-format int8 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVWeightQuantizationConfig(bits=8)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m google-t5/t5-small --weight-format int4 --dataset wikitext2 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'wikitext2\')).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m google-t5/t5-small --quant-mode int8 --dataset wikitext2 --smooth-quant-alpha -1 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'wikitext2\', smooth_quant_alpha=-1)).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m google-t5/t5-small --quant-mode nf4_f8e4m3 --dataset wikitext2 --smooth-quant-alpha -1 ./save_dir')">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button
+                    onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\', smooth_quant_alpha=-1))).save_pretrained(\'save_dir\')')">
+                    ✅
+                </button>
+            </td>
+        </tr>
+        <tr>
             <td style="text-align: center; vertical-align: middle;">zero-shot-image-classification<br>(OVModelForZeroShotImageClassification)</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
@@ -715,6 +768,59 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
                     ✅
                 </button>
             </td>
+        </tr>
+        <tr>
+            <td style="text-align: center; vertical-align: middle;">feature-extraction<br>(OVSamModel)</td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVWeightQuantizationConfig(bits=8)))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVWeightQuantizationConfig(bits=4, dataset=\'coco\')))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">-</td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('optimum-cli export openvino -m facebook/sam-vit-base --quant-mode int8 --dataset coco ./save_dir');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <button onclick="
+                    navigator.clipboard.writeText('OVSamModel.from_pretrained(\'facebook/sam-vit-base\', quantization_config=OVPipelineQuantizationConfig(quantization_configs=dict(vision_encoder=OVQuantizationConfig(bits=8, dataset=\'coco\')))).save_pretrained(\'save_dir\')');
+                    let m=document.getElementById('copyMsg');
+                    m.style.display='block';
+                    clearTimeout(window._copyTimeout);
+                    window._copyTimeout=setTimeout(()=>m.style.display='none', 2000);
+                ">
+                    ✅
+                </button>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
+            <td style="text-align: center; vertical-align: middle;">–</td>
         </tr>
         <tr>
             <td style="text-align: center; vertical-align: middle;">text-to-audio<br>(OVModelForTextToSpeechSeq2Seq)</td>
@@ -900,7 +1006,7 @@ ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
         num_samples=10,
         dataset="librispeech",
         processor=model_id,
-        matmul_sq_alpha=0.95,
+        smooth_quant_alpha=0.95,
     )
 )
 ```

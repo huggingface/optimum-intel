@@ -124,7 +124,7 @@ def _generate_dataset(quantizer, tokenizer, num_samples=10):
         num_samples=num_samples,
         dataset_split="train",
     )
-    model_type = quantizer._original_model.config.model_type.replace("_", "-")
+    model_type = quantizer._original_model.config.model_type
     if model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
         dataset = dataset.map(
             lambda x: {
