@@ -48,7 +48,7 @@ pypi_upload: build_dist
 doc:
 	@test -n "$(BUILD_DIR)" || (echo "BUILD_DIR is empty." ; exit 1)
 	@test -n "$(VERSION)" || (echo "VERSION is empty." ; exit 1)
-	doc-builder build optimum.intel docs/source/ \
+	doc-builder build optimum-intel docs/source/ \
 		--repo_name optimum-intel \
 		--build_dir $(BUILD_DIR) \
 		--version $(VERSION) \
