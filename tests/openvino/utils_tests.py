@@ -101,6 +101,7 @@ MODEL_NAMES = {
     "llama4": "katuni4ka/tiny-random-llama-4-8E",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
+    "llava_next_mistral": "optimum-internal-testing/tiny-random-llava-next-mistral",
     "llava_next_video": "katuni4ka/tiny-random-llava-next-video",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
@@ -303,7 +304,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 18 if is_nncf_version("<", "2.18.0") else 16,
+        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
     },
     "ltx-video": {
         "transformer": 34,
