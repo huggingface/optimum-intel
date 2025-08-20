@@ -1187,7 +1187,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+        SUPPORTED_ARCHITECTURES += ("ernie4_5", "deepseek_v3")
 
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
@@ -1271,6 +1271,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3": 6,
         "phi3-moe": 2,
         "deepseek": 2,
+        "deepseek_v3": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
