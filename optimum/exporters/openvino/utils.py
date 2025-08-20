@@ -285,23 +285,25 @@ def _get_open_clip_submodels_fn_and_export_configs(
 
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
-    "llava-next",
-    "llava-next-video",
+    "llava_next",
+    "llava_next_video",
     "llava-qwen2",
-    "internvl-chat",
+    "internvl_chat",
     "maira2",
     "minicpmv",
-    "phi3-v",
-    "qwen2-vl",
-    "qwen2-5-vl",
-    "got-ocr2",
+    "phi3_v",
+    "qwen2_vl",
+    "qwen2_5_vl",
+    "got_ocr2",
     "gemma3",
     "idefics3",
     "smolvlm",
     "phi4mm",
-    "phi4-multimodal",
+    "phi4_multimodal",
     "llama4",
 ]
+
+SSM_MODELS = ["mamba", "falcon_mamba"]
 
 
 def save_config(config, save_dir):
@@ -363,17 +365,17 @@ def save_preprocessors(
 ):
     model_name_or_path = config._name_or_path
     if hasattr(config, "export_model_type"):
-        model_type = config.export_model_type.replace("_", "-")
+        model_type = config.export_model_type
     else:
-        model_type = config.model_type.replace("_", "-")
+        model_type = config.model_type
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
-        if is_transformers_version(">=", "4.45") and model_type == "phi3-v" and len(preprocessors) > 1:
+        if is_transformers_version(">=", "4.45") and model_type == "phi3_v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
         if (
             is_transformers_version(">=", "4.45")
-            and model_type in ["llava", "llava-next", "llava-next-video"]
+            and model_type in ["llava", "llava_next", "llava_next_video"]
             and preprocessors is not None
         ):
             if len(preprocessors) > 1 and getattr(preprocessors[1], "patch_size", None) is None:
@@ -421,20 +423,26 @@ COMPLEX_CHAT_TEMPLATES = {
 
 def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=None):
     tokenizer_chat_template = None
+    if processor_chat_template is not None:
+        ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
     if ov_tokenizer_model.has_rt_info("chat_template"):
         tokenizer_chat_template = ov_tokenizer_model.get_rt_info("chat_template")
-    if processor_chat_template is not None:
-        tokenizer_chat_template = processor_chat_template
-        ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
-    if tokenizer_chat_template is not None and tokenizer_chat_template in COMPLEX_CHAT_TEMPLATES:
-        ov_tokenizer_model.set_rt_info(COMPLEX_CHAT_TEMPLATES[tokenizer_chat_template], "simplified_chat_template")
+    if tokenizer_chat_template is not None:
+        tokenizer_chat_template_v = tokenizer_chat_template.value
+        if not isinstance(tokenizer_chat_template_v, dict):
+            tokenizer_chat_template_v = {"default": tokenizer_chat_template_v}
+        for chat_template in tokenizer_chat_template_v.values():
+            simplified_chat_template = COMPLEX_CHAT_TEMPLATES.get(chat_template)
+            if simplified_chat_template is not None:
+                ov_tokenizer_model.set_rt_info(simplified_chat_template, "simplified_chat_template")
+                break
     return ov_tokenizer_model
 
 
 SKIP_CHECK_TRACE_MODELS = (
     "deepseek",
     "deepseek-v2",
-    "deepseek-v3",
+    "deepseek_v3",
     "esm",
     "levit",
     "llama4",

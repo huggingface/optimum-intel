@@ -124,6 +124,7 @@ _HEAD_TO_AUTOMODELS = {
     "fill-mask": "OVModelForMaskedLM",
     "text-generation": "OVModelForCausalLM",
     "text2text-generation": "OVModelForSeq2SeqLM",
+    "text2text-generation-with-past": "OVModelForSeq2SeqLM",
     "text-classification": "OVModelForSequenceClassification",
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",
@@ -188,8 +189,17 @@ PREDEFINED_VISUAL_LM_DATASETS = {
 PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
     "librispeech": {
         "id": "openslr/librispeech_asr",
-        "name": "clean",
+        "data_dir": "clean",
         "split": "validation",
+        "streaming": True,
+        "revision": "refs/convert/parquet",
+    }
+}
+
+PREDEFINED_SAM_DATASETS = {
+    "coco": {
+        "id": "detection-datasets/coco",
+        "split": "train",
         "streaming": True,
     }
 }

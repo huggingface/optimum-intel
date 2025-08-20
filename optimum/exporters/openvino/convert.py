@@ -384,6 +384,9 @@ def export_pytorch(
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
 
+    # TODO: temporary solution but statefulness should be added to the export config earlier
+    config.stateful = stateful
+
     if stateful:
         # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
         # both of them are applied to demonstrate the best performance.
@@ -527,7 +530,7 @@ def export_pytorch(
 
         ts_decoder_kwargs = {}
         model_config = getattr(model, "config", {})
-        model_type = getattr(model_config, "model_type", "").replace("_", "-")
+        model_type = getattr(model_config, "model_type", "")
         if allow_skip_tracing_check(library_name, model_type):
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
@@ -698,9 +701,9 @@ def export_from_model(
         TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
-        model_type = model.config.export_model_type.replace("_", "-")
+        model_type = model.config.export_model_type
     else:
-        model_type = (getattr(model.config, "model_type", None) or "").replace("_", "-")
+        model_type = getattr(model.config, "model_type", None) or ""
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
@@ -936,8 +939,6 @@ def export_tokenizer(
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
-        set_simplified_chat_template(converted[0], processor_chat_template)
-
     except NotImplementedError:
         logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
@@ -949,6 +950,11 @@ def export_tokenizer(
             f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
         )
         return
+
+    try:
+        set_simplified_chat_template(converted[0], processor_chat_template)
+    except Exception as exception:
+        logger.debug(f"Error during chat template simplification. Exception: {exception}")
 
     if not isinstance(converted, tuple):
         converted = (converted,)
@@ -1018,12 +1024,12 @@ def _get_multi_modal_submodels_and_export_configs(
     models_for_export = {}
     stateful_parts = []
 
-    model_type = model.config.model_type.replace("_", "-")
+    model_type = model.config.model_type
 
-    if model_type == "internvl-chat" and preprocessors is not None:
+    if model_type == "internvl_chat" and preprocessors is not None:
         model.config.img_context_token_id = preprocessors[0].convert_tokens_to_ids("<IMG_CONTEXT>")
 
-    if model_type == "phi3-v":
+    if model_type == "phi3_v":
         model.config.glb_GN = model.model.vision_embed_tokens.glb_GN.tolist()
         model.config.sub_GN = model.model.vision_embed_tokens.sub_GN.tolist()
 
@@ -1034,7 +1040,7 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.hd_transform_order = model.model.embed_tokens_extend.image_embed.hd_transform_order
         if model.config.img_processor is None:
             model.config.img_processor = model.model.embed_tokens_extend.image_embed.img_processor.config.to_dict()
-    if model_type == "phi4-multimodal":
+    if model_type == "phi4_multimodal":
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
@@ -1079,7 +1085,7 @@ def _get_submodels_and_export_configs(
     if (
         not custom_architecture
         and library_name == "transformers"
-        and model.config.model_type.replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+        and model.config.model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
     ):
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
@@ -1397,7 +1403,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
             exporter=exporter,
             library_name="diffusers",
             task="feature-extraction",
-            model_type="clip-text-model",
+            model_type="clip-text",
         )
         text_encoder_export_config = text_encoder_config_constructor(
             pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype

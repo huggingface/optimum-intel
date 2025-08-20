@@ -28,8 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum==1.26.*",
-    "transformers>=4.36,<4.53",
+    "optimum==1.27.*",
+    "transformers>=4.36,<4.54",
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
@@ -55,7 +55,7 @@ TESTS_REQUIRE = [
     "sentence-transformers",
     "open_clip_torch>=2.26.1",
     "peft",
-    "datasets[audio]>=1.4.0",
+    "datasets[audio]>=1.4.0,<4.0.0",
     "tbb",
     "langchain-huggingface",
     "hf_xet",

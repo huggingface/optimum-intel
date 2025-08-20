@@ -65,7 +65,8 @@ logger = logging.getLogger(__name__)
 class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
-    _supports_cache_class = False
+    _supports_cache_class = False  # No loger defined/used in transformers
+    _is_stateful = False  # for Transformers it's False, but True for SSMs
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
     _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
@@ -85,7 +86,7 @@ class OVBaseModel(OptimizedModel):
         self.name_or_path = getattr(config, "name_or_path", None)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
-        self.is_dynamic = dynamic_shapes
+        self.is_dynamic = dynamic_shapes if dynamic_shapes is not None else True
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         self._compile_only = kwargs.get("compile_only", False)
@@ -102,7 +103,7 @@ class OVBaseModel(OptimizedModel):
                 raise ValueError("`compile_only` expect that already compiled model will be provided")
 
             model_dynamic_shapes = model_has_dynamic_inputs(model)
-            if dynamic_shapes ^ model_dynamic_shapes:
+            if self.is_dynamic ^ model_dynamic_shapes:
                 raise ValueError(
                     f"Provided compiled model with {'dynamic' if model_dynamic_shapes else 'static'} shapes but requested to use {'dynamic' if dynamic_shapes else 'static'}. Please set `compile_only=False` or `dynamic_shapes`={model_dynamic_shapes}"
                 )
@@ -748,7 +749,7 @@ class OVBaseModel(OptimizedModel):
                 "`reshape()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.is_dynamic = batch_size == -1 and sequence_length == -1
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
         return self

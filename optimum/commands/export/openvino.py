@@ -22,7 +22,11 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
-from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+from ...intel.utils.import_utils import (
+    DIFFUSERS_IMPORT_ERROR,
+    is_diffusers_available,
+    is_nncf_available,
+)
 from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
@@ -72,14 +76,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4"],
         default=None,
-        help="The weight format of the exported model.",
+        help=(
+            "The weight format of the exported model. Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format."
+        ),
     )
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -170,6 +176,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "For visual language models the dataset must be set to 'contextual'. "
             "Note: if none of the data-aware compression algorithms are selected and ratio parameter is omitted or "
             "equals 1.0, the dataset argument will not have an effect on the resulting model."
+            "Note: for text generation task, datasets with English texts such as 'wikitext2','c4' or 'c4-new' usually "
+            "work fine even for non-English models."
         ),
     )
     optional_group.add_argument(
@@ -234,6 +242,17 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--quantization-statistics-path",
+        type=str,
+        default=None,
+        help=(
+            "Directory path to dump/load data-aware weight-only quantization statistics. This is useful when running "
+            "data-aware quantization multiple times on the same model and dataset to avoid recomputing statistics. "
+            "This option is applicable exclusively for weight-only quantization. Please note that the statistics depend "
+            "on the dataset, so if you change the dataset, you should also change the statistics path to avoid confusion."
+        ),
+    )
+    optional_group.add_argument(
         "--num-samples",
         type=int,
         default=None,
@@ -272,6 +291,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
 
 
 def no_compression_parameter_provided(args):
+    # Except statistics path
     return all(
         (
             it is None
@@ -348,7 +368,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         if self.args.weight_format is None and self.args.quant_mode is None:
             ov_config = None
-            if not no_compression_parameter_provided(self.args):
+            if not no_compression_parameter_provided(self.args) or self.args.quantization_statistics_path is not None:
                 raise ValueError(
                     "Some compression parameters are provided, but the weight format is not specified. "
                     "Please provide it with --weight-format argument."
@@ -363,6 +383,10 @@ class OVExportCommand(BaseOptimumCLICommand):
         else:
             if not is_nncf_available():
                 raise ImportError("Applying quantization requires nncf, please install it with `pip install nncf`")
+            if self.args.weight_format is not None and self.args.quant_mode is not None:
+                raise ValueError(
+                    "Both --weight-format and --quant-mode arguments are provided. Please provide only one of them."
+                )
 
             default_quantization_config = get_default_quantization_config(
                 self.args.model, self.args.weight_format, self.args.quant_mode
@@ -378,6 +402,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                     else:
                         quantization_config = _DEFAULT_4BIT_WQ_CONFIG
                         log_message = f"Applying a default quantization config: {quantization_config}."
+                    if self.args.quantization_statistics_path is not None:
+                        quantization_config["statistics_path"] = self.args.quantization_statistics_path
                     logger.info(log_message)
                 else:
                     quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
@@ -392,7 +418,13 @@ class OVExportCommand(BaseOptimumCLICommand):
                         raise ValueError(
                             "Dataset is required for full quantization. Please provide it with --dataset argument."
                         )
-                    if self.args.quant_mode in ["nf4_f8e4m3", "nf4_f8e5m2", "int4_f8e4m3", "int4_f8e5m2"]:
+                    if self.args.quant_mode in [
+                        "nf4_f8e4m3",
+                        "nf4_f8e5m2",
+                        "cb4_f8e4m3",
+                        "int4_f8e4m3",
+                        "int4_f8e5m2",
+                    ]:
                         if library_name == "diffusers":
                             raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
@@ -410,6 +442,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                             "dataset": self.args.dataset,
                         }
                     else:
+                        if self.args.quantization_statistics_path is not None:
+                            logger.warning(
+                                "The --quantization-statistics-path argument is only applicable for weight-only "
+                                "quantization. It will be ignored."
+                            )
                         quantization_config = prepare_q_config(self.args)
             quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
@@ -428,7 +465,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 cache_dir=self.args.cache_dir,
                 trust_remote_code=self.args.trust_remote_code,
             )
-            if getattr(config, "model_type", "").replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS:
+            if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
                 task = "image-text-to-text"
 
         if library_name == "diffusers" and quantize_with_dataset:
@@ -482,6 +519,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             and (
                 task in ["fill-mask", "zero-shot-image-classification"]
                 or task.startswith("text-generation")
+                or task.startswith("text2text-generation")
                 or task.startswith("automatic-speech-recognition")
                 or task.startswith("feature-extraction")
             )
@@ -491,6 +529,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from optimum.intel import OVModelForCausalLM
 
                 model_cls = OVModelForCausalLM
+            elif task.startswith("text2text-generation"):
+                from optimum.intel import OVModelForSeq2SeqLM
+
+                model_cls = OVModelForSeq2SeqLM
             elif task == "image-text-to-text":
                 from optimum.intel import OVModelForVisualCausalLM
 
@@ -573,6 +615,7 @@ def prepare_wc_config(args, default_configs):
         "lora_correction": args.lora_correction,
         "dtype": args.weight_format,
         "backup_precision": args.backup_precision,
+        "statistics_path": args.quantization_statistics_path,
     }
 
 
