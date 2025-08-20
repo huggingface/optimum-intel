@@ -96,7 +96,6 @@ from .model_patcher import (
     Gemma3LMModelPatcher,
     Glm4vVisionEmbMergerPatcher,
     Glm4vVisionEmbeddingsPatcher,
-    Glm4vLanguageModelPatcher,
     GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
@@ -4684,7 +4683,7 @@ class Glm4vOpenVINOConfig(BaseVLMOpenVINOConfig):
                 self._orig_config,
                 self.int_dtype,
                 self.float_dtype,
-                model_patcher=Glm4vLanguageModelPatcher,
+                model_patcher=OVDecoderModelPatcher,
                 dummy_input_generator=DummyQwen2VLLMInputGenerator,
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
