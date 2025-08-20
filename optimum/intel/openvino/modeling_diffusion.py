@@ -121,7 +121,7 @@ if is_diffusers_version(">=", "0.33.0"):
 else:
     SanaSprintPipeline = object
 
-if is_diffusers_version(">", "0.34.0"):
+if is_diffusers_version(">=", "0.35.0"):
     from diffusers import FluxKontextPipeline
 else:
     FluxKontextPipeline = object
