@@ -1720,13 +1720,11 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                             quantization_configs={
                                 "lm_model": dict(bits=8, weight_only=True),
                                 "vision_embeddings_model": dict(bits=8, weight_only=False),
-                                OVPipelineQuantizationConfig.DEFAULT_SUBMODEL_KEY: dict(
-                                    bits=8, sym=True, weight_only=True
-                                ),
                             },
                             dataset="contextual",
                             num_samples=1,
                             trust_remote_code=True,
+                            default_config=dict(bits=8, sym=True, weight_only=True),
                         ),
                         {
                             "lm_model": 0,
@@ -1832,11 +1830,12 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             check_compression_state_per_model(
                 self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
             )
-            quantization_config = quantization_config._expand_default_config(model.ov_submodels)
             # Compare the quantization config with the model runtime info
             for submodel_name, submodel in model.ov_submodels.items():
                 rt_info = submodel.get_rt_info()
-                config = quantization_config.quantization_configs.get(submodel_name)
+                config = quantization_config.quantization_configs.get(
+                    submodel_name, quantization_config.default_config
+                )
                 if config is None:
                     self.assertTrue("nncf" not in rt_info)
                     continue
