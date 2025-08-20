@@ -59,3 +59,12 @@ doc: build_doc_docker_image
 		--version_tag_suffix "" \
 		--html \
 		--clean
+
+clean:
+	rm -rf build
+	rm -rf dist
+	rm -rf .pytest_cache
+	rm -rf .ruff_cache
+	rm -rf .mypy_cache
+	rm -rf optimum_intel.egg-info
+	rm -rf *__pycache__

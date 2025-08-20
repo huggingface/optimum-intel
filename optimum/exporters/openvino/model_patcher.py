@@ -27,7 +27,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutp
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.onnx.base import ConfigBehavior, OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     DecoderModelPatcher,
@@ -327,7 +327,11 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     mask = sdpa_mask_without_vmap(*args, allow_is_causal_skip=False, **kwargs)
     # we use torch.finfo(torch.float16).min instead torch.finfo(dtype).min to avoid an overflow but not
     # sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
-    mask = torch.where(mask, torch.tensor(0.0, device=mask.device, dtype=dtype), torch.finfo(torch.float16).min)
+    mask = torch.where(
+        mask,
+        torch.tensor(0.0, device=mask.device, dtype=dtype),
+        torch.tensor(torch.finfo(torch.float16).min, device=mask.device, dtype=dtype),
+    )
     return mask
 
 
@@ -352,14 +356,10 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for non-stateful decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
-            if not getattr(self.real_config, "stateful", False):
-                logger.warning(
-                    "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
-                    "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
-                )
-                ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+            # for decoder models, we use eager mask without vmap for sdpa as well
+            # to avoid a nan output issue in OpenVINO that only happens in case of:
+            # non-stateful models on cpu and stateful models on npu
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -4711,52 +4711,73 @@ class GptBigCodeModelPatcher(OVDecoderModelPatcher):
                 layer.attn._attn = layer.attn._orig_attn
 
 
-class StatefulSeq2SeqDecoderPatcher(Seq2SeqModelPatcher):
+class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
         model: Union["PreTrainedModel", "TFPreTrainedModel"],
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        model.__orig_forward = model.forward
+        if getattr(config, "stateful", False) and config._behavior == ConfigBehavior.DECODER:
+            model.__orig_forward = model.forward
 
-        @functools.wraps(model.__orig_forward)
-        def patched_forward(*args, **kwargs):
-            from transformers.cache_utils import EncoderDecoderCache
+            @functools.wraps(model.__orig_forward)
+            def patched_forward(*args, **kwargs):
+                from transformers.cache_utils import EncoderDecoderCache
 
-            signature = inspect.signature(self.orig_forward)
-            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+                signature = inspect.signature(self.orig_forward)
+                args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
 
-            return_legacy_cache = False
-            pkv_in_args = False
-            legacy_pkv = None
-            if "past_key_values" in kwargs:
-                legacy_pkv = kwargs.pop("past_key_values", None)
-            sign_names = list(signature.parameters.keys())
-            pkv_argument_index = sign_names.index("past_key_values")
-            if legacy_pkv is None and len(args) > pkv_argument_index:
-                legacy_pkv = args[pkv_argument_index]
-                pkv_in_args = True
-            if legacy_pkv is not None:
-                if isinstance(legacy_pkv, EncoderDecoderCache):
-                    legacy_pkv = legacy_pkv.to_legacy_cache()
-                only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
-                pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
-                return_legacy_cache = True
-                if not pkv_in_args:
-                    kwargs["past_key_values"] = pkv
-                else:
-                    args[pkv_argument_index] = pkv
+                return_legacy_cache = False
+                pkv_in_args = False
+                legacy_pkv = None
+                if "past_key_values" in kwargs:
+                    legacy_pkv = kwargs.pop("past_key_values", None)
+                sign_names = list(signature.parameters.keys())
+                pkv_argument_index = sign_names.index("past_key_values")
+                if legacy_pkv is None and len(args) > pkv_argument_index:
+                    legacy_pkv = args[pkv_argument_index]
+                    pkv_in_args = True
+                if legacy_pkv is not None:
+                    if isinstance(legacy_pkv, EncoderDecoderCache):
+                        legacy_pkv = legacy_pkv.to_legacy_cache()
+                    only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
+                    pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
+                    return_legacy_cache = True
+                    if not pkv_in_args:
+                        kwargs["past_key_values"] = pkv
+                    else:
+                        args[pkv_argument_index] = pkv
 
-            outputs = model.__orig_forward(*args, **kwargs)
-            if return_legacy_cache:
-                outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+                outputs = model.__orig_forward(*args, **kwargs)
+                if return_legacy_cache:
+                    outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
 
-            return outputs
+                return outputs
 
-        model.forward = patched_forward
+            model.forward = patched_forward
 
         super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+
+        if is_transformers_version(">=", "4.53.0"):
+            # for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
+            # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+
+            # for decoder models, we use eager mask without vmap for sdpa as well
+            # to avoid a nan output issue in OpenVINO that only happens in case of:
+            # non-stateful models on cpu and stateful models on npu
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if is_transformers_version(">=", "4.53.0"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
 
 class SanaTextEncoderModelPatcher(ModelPatcher):
@@ -5376,7 +5397,7 @@ def modulewise_unpatch(model, module_cls):
                 modulewise_unpatch(module, module_cls)
 
 
-class BlenderbotModelPatcher(Seq2SeqModelPatcher):
+class BlenderbotModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.49.0"):
@@ -5392,7 +5413,7 @@ class BlenderbotModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, BlenderbotAttention)
 
 
-class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
+class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.49.0"):
@@ -5408,15 +5429,7 @@ class BlenderbotSmallModelPatcher(Seq2SeqModelPatcher):
             modulewise_unpatch(self._model, BlenderbotSmallAttention)
 
 
-class BlenderbotStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotModelPatcher):
-    pass
-
-
-class BlenderbotSmallStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, BlenderbotSmallModelPatcher):
-    pass
-
-
-class PegasusModelPatcher(Seq2SeqModelPatcher):
+class PegasusModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.49.0"):
@@ -5495,11 +5508,7 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
             modulewise_unpatch(self._model, Qwen2MoeSparseMoeBlock)
 
 
-class PegasusStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, PegasusModelPatcher):
-    pass
-
-
-class MarianModelPatcher(Seq2SeqModelPatcher):
+class MarianModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_transformers_version(">=", "4.49.0"):
@@ -5513,10 +5522,6 @@ class MarianModelPatcher(Seq2SeqModelPatcher):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_unpatch(self._model, MarianAttention)
-
-
-class MarianStatefulSeq2SeqDecoderPatcher(StatefulSeq2SeqDecoderPatcher, MarianModelPatcher):
-    pass
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
