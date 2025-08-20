@@ -137,6 +137,7 @@ from optimum.utils import (
 )
 from optimum.utils.testing_utils import require_diffusers
 
+
 torch.compile = lambda func: func  # Mock torch.compile to avoid compilation errors in tests
 
 TENSOR_ALIAS_TO_TYPE = {
