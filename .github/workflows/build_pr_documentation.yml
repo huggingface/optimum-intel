@@ -43,13 +43,7 @@ jobs:
       - name: Make documentation
         shell: bash
         run: |
-          doc-builder build optimum.intel docs/source/ \
-            --repo_name optimum-intel \
-            --build_dir intel-doc-build/ \
-            --version pr_${{ env.PR_NUMBER }} \
-            --version_tag_suffix "" \
-            --html \
-            --clean
+          make doc BUILD_DIR=./intel-doc-build VERSION=pr_${{ env.PR_NUMBER }}
           cd intel-doc-build
           mv optimum.intel optimum-intel
           echo ${{ env.COMMIT_SHA }} > ./commit_sha
