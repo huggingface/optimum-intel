@@ -44,6 +44,7 @@ jobs:
         shell: bash
         run: |
           make doc BUILD_DIR=./doc-build VERSION=pr_${{ env.PR_NUMBER }}
+          mv ./doc-build/optimum.intel ./doc-build/optimum-intel
           echo ${{ env.COMMIT_SHA }} > ./commit_sha
           echo ${{ env.PR_NUMBER }} > ./pr_number
 
