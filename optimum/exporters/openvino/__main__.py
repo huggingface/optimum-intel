@@ -369,7 +369,9 @@ def main_export(
                     if (prefix + "weight") in state_dict and state_dict[prefix + "weight"].dtype != self.weight.dtype:
                         self.original_weight = state_dict[prefix + "weight"]
                         w_shape = self.original_weight.shape
-                        state_dict[prefix + "weight"] = torch.empty((w_shape[0] * 4, w_shape[1]), dtype=self.weight.dtype, device="meta")
+                        state_dict[prefix + "weight"] = torch.empty(
+                            (w_shape[0] * 4, w_shape[1]), dtype=self.weight.dtype, device="meta"
+                        )
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
