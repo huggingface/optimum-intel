@@ -43,19 +43,12 @@ jobs:
       - name: Make documentation
         shell: bash
         run: |
-          doc-builder build optimum.intel docs/source/ \
-            --repo_name optimum-intel \
-            --build_dir intel-doc-build/ \
-            --version pr_${{ env.PR_NUMBER }} \
-            --version_tag_suffix "" \
-            --html \
-            --clean
-          cd intel-doc-build
-          mv optimum.intel optimum-intel
+          make doc BUILD_DIR=./doc-build VERSION=pr_${{ env.PR_NUMBER }}
+          mv ./doc-build/optimum.intel ./doc-build/optimum-intel
           echo ${{ env.COMMIT_SHA }} > ./commit_sha
           echo ${{ env.PR_NUMBER }} > ./pr_number
 
       - uses: actions/upload-artifact@v4
         with:
           name: doc-build-artifact
-          path: optimum-intel/intel-doc-build/
+          path: ./doc-build/optimum-intel
