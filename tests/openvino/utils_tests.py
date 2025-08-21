@@ -38,6 +38,7 @@ MODEL_NAMES = {
     "baichuan2-13b": "katuni4ka/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "biogpt": "hf-tiny-model-private/tiny-random-BioGptForCausalLM",
+    "bitnet": "mvafin/tiny-bitnet",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
