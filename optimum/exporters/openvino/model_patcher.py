@@ -6806,6 +6806,84 @@ class MambaPatcher(ModelPatcher):
             layer.mixer.forward = layer.mixer._orig_forward
 
 
+
+def glm4v_vision_embeddings_forward(self, hidden_states: torch.FloatTensor):
+    hidden_states = self.patch_embed(hidden_states)
+    hidden_states = self.post_conv_layernorm(hidden_states)
+    return hidden_states
+
+
+class Glm4vVisionEmbeddingsPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(glm4v_vision_embeddings_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Glm4vVisionEmbMergerPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        model.__orig_forward = model.forward
+
+        # Modified from https://github.com/huggingface/transformers/blob/v4.49.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L405
+        # added attention_mask and window_attention_mask inputs instead cu_lens and window_cu_lens processing for its internal calculation model
+        # (unsupported by tracing due to cycle with dynamic len)
+        # separated patch_embed and rot_pos_emb calls for performing as part of another model
+        def image_embed_forward(
+            self,
+            hidden_states: torch.Tensor,
+            seqlens: torch.Tensor,
+            grid_thw: torch.Tensor,
+            attention_mask: torch.Tensor,
+            image_type_ids: torch.Tensor,
+            rotary_pos_emb: torch.Tensor,
+        ) -> torch.Tensor:
+            hidden_states = self.embeddings(
+                hidden_states, seqlens, grid_thw, image_type_ids[:, 0], image_type_ids[:, 1]
+            )
+
+            for blk in self.blocks:
+                hidden_states = blk(hidden_states, attention_mask=attention_mask, rotary_pos_emb=rotary_pos_emb)
+
+            hidden_states = self.post_layernorm(hidden_states)
+
+            hidden_states = hidden_states.view(
+                -1, self.spatial_merge_size, self.spatial_merge_size, hidden_states.shape[-1]
+            )
+            hidden_states = hidden_states.permute(0, 3, 1, 2)
+            hidden_states = self.downsample(hidden_states).view(-1, self.config.out_hidden_size)
+
+            hidden_states = self.merger(hidden_states)
+            return hidden_states
+
+        model.forward = types.MethodType(image_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        patch_qwen2vl_vision_blocks(self._model, force_new_behaviour=True)
+        super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        for block in self._model.blocks:
+            block.forward = block._orig_forward
+            block.attn.forward = block.attn._orig_forward
 # https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py#L228
 def qwen3_moe_forward_patched(self, hidden_states: torch.Tensor) -> torch.Tensor:
     batch_size, sequence_length, hidden_dim = hidden_states.shape
