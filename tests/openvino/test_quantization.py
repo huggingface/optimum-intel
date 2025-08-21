@@ -433,8 +433,8 @@ class OVQuantizerTest(unittest.TestCase):
                     {
                         "lm_model": 13,
                         "text_embeddings_model": 0,
-                        "vision_embeddings_model": 0,
-                        "vision_embeddings_merger_model": 0,
+                        "vision_embeddings_model": 1,
+                        "vision_embeddings_merger_model": 14,
                     },
                     {
                         "lm_model": {"int8": 15},
@@ -1709,6 +1709,36 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 ),
             ]
         )
+        if is_transformers_version(">=", "4.45.0"):
+            PIPELINE_QUANTIZATION_SCOPE.extend(
+                [
+                    (
+                        OVModelForVisualCausalLM,
+                        "internvl2",
+                        True,
+                        dict(
+                            quantization_configs={
+                                "lm_model": dict(bits=8, weight_only=True),
+                                "vision_embeddings_model": dict(bits=8, weight_only=False),
+                            },
+                            dataset="contextual",
+                            num_samples=1,
+                            trust_remote_code=True,
+                            default_config=dict(bits=8, sym=True, weight_only=True),
+                        ),
+                        {
+                            "lm_model": 0,
+                            "text_embeddings_model": 0,
+                            "vision_embeddings_model": 15,
+                        },
+                        {
+                            "lm_model": {"int8": 30},
+                            "text_embeddings_model": {"int8": 1},
+                            "vision_embeddings_model": {"int8": 11},
+                        },
+                    ),
+                ]
+            )
 
     if is_transformers_version(">=", "4.49.0"):
         PIPELINE_QUANTIZATION_SCOPE.extend(
@@ -1796,14 +1826,16 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             )
             model.save_pretrained(tmp_dir)
 
-            model = model_cls.from_pretrained(tmp_dir)
+            model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
             check_compression_state_per_model(
                 self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
             )
             # Compare the quantization config with the model runtime info
             for submodel_name, submodel in model.ov_submodels.items():
                 rt_info = submodel.get_rt_info()
-                config = quantization_config.quantization_configs.get(submodel_name)
+                config = quantization_config.quantization_configs.get(
+                    submodel_name, quantization_config.default_config
+                )
                 if config is None:
                     self.assertTrue("nncf" not in rt_info)
                     continue

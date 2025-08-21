@@ -1277,6 +1277,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
+        default_config: Optional[Union[Dict, OVQuantizationConfigBase]] = None,
         num_samples: Optional[int] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
@@ -1293,6 +1294,9 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
                 A dictionary where keys are submodel names and values are either dictionaries or instances of
                 `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+            default_config (Optional[Union[Dict, OVQuantizationConfigBase]]):
+                A default quantization configuration that will be applied to all submodels that do not have a
+                specific configuration provided in `quantization_configs`.
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
@@ -1323,6 +1327,8 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         for submodel_name, submodel_config in quantization_configs.items():
             if isinstance(submodel_config, dict):
                 quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
+        if default_config is not None and isinstance(default_config, dict):
+            default_config = _quantization_config_from_dict(default_config)
 
         # Pull dataset-related parameters from child configs
         configs = quantization_configs.values()
@@ -1342,6 +1348,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             **kwargs,
         )
         self.quantization_configs = quantization_configs
+        self.default_config = default_config
         self.post_init()
 
     def to_dict(self) -> Dict[str, Any]:
