@@ -1192,10 +1192,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
 
-    if is_transformers_version(">=", "4.56.0"):
-        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
-
-
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
