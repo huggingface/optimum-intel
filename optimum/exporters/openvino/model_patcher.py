@@ -48,8 +48,11 @@ from optimum.intel.utils.import_utils import (
 
 
 if is_transformers_version(">=", "4.53"):
+    from transformers import AttentionInterface
+    from transformers.integrations.sdpa_attention import sdpa_attention_forward
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+
 
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
@@ -6402,8 +6405,6 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
         model.__orig_forward = model.forward
 
         if is_transformers_version(">=", "4.54"):
-            from transformers import AttentionInterface
-
             AttentionInterface.register("sdpa", sdpa_attention_forward_fixed)
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
@@ -6424,9 +6425,6 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
 
         if is_transformers_version(">=", "4.54"):
-            from transformers import AttentionInterface
-            from transformers.integrations.sdpa_attention import sdpa_attention_forward
-
             AttentionInterface.register("sdpa", sdpa_attention_forward)
 
         self._model.forward = self._model.__orig_forward
