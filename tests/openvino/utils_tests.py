@@ -99,7 +99,7 @@ MODEL_NAMES = {
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
-    "llama4": "katuni4ka/tiny-random-llama-4-8E",
+    "llama4": "hf-internal-testing/tiny-random-llama4",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
     "llava_next_video": "katuni4ka/tiny-random-llava-next-video",
