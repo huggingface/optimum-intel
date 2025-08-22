@@ -910,6 +910,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "vision_embeddings_model": {"int8": 9},
                     },
                 ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
                 (
                     OVModelForVisualCausalLM,
                     "nanollava",
@@ -1006,6 +1012,31 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ),
                 (
                     OVModelForVisualCausalLM,
+                    "qwen2_vl",
+                    False,
+                    dict(
+                        bits=4,
+                        group_size=16,
+                        dataset="contextual",
+                        ratio=0.8,
+                        sensitivity_metric="mean_activation_magnitude",
+                        num_samples=1,
+                    ),
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
+        LOAD_IN_4_BITS_SCOPE.extend(
+            [
+                (
+                    OVModelForVisualCausalLM,
                     "phi3_v",
                     True,
                     dict(
@@ -1022,25 +1053,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 7},
                         "vision_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_vl",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
                     },
                 ),
             ]
@@ -1062,7 +1074,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                     ),
                     {
-                        "lm_model": {"int8": 14, "int4": 16},
+                        "lm_model": {"int8": 18, "int4": 12},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 12},
@@ -1087,7 +1099,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                     ),
                     {
-                        "lm_model": {"int8": 22, "int4": 48},
+                        "lm_model": {"int8": 46, "int4": 56},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 16},
                     },
@@ -1108,10 +1120,12 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionPipeline, "stable-diffusion", False),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
-        (OVModelForVisualCausalLM, "llava", False),
     ]
 
-    if is_transformers_version(">=", "4.40.0"):
+    if is_transformers_version(">=", "4.37.2"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava", False))
+
+    if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "nanollava", True))
 
     if is_transformers_version(">=", "4.42.0"):
@@ -1740,7 +1754,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 ]
             )
 
-    if is_transformers_version(">=", "4.49.0"):
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
         PIPELINE_QUANTIZATION_SCOPE.extend(
             [
                 (

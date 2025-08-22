@@ -28,8 +28,9 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum==1.27.*",
-    "transformers>=4.36,<4.54",
+    # "optimum==1.27.*",
+    "optimum-onnx @ git+https://github.com/huggingface/optimum-onnx.git@transformers454",
+    "transformers>=4.36,<4.56",
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
