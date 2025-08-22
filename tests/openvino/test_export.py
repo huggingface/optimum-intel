@@ -82,6 +82,9 @@ class ExportModelTest(unittest.TestCase):
         "clip": OVModelForZeroShotImageClassification,
     }
 
+    if is_transformers_version(">=", "4.37.2"):
+        SUPPORTED_ARCHITECTURES.update({"llava": OVModelForVisualCausalLM})
+
     if is_transformers_version(">=", "4.39"):
         SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
 

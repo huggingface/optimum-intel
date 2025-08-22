@@ -181,22 +181,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
-        "minicpm3": {  # transformers, no processor, simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "text-generation-with-past",
-            "expected_chat_template": True,
-            "simplified_chat_template": True,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
-        "phi3_v": {  # transformers, no processor chat template, no simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "image-text-to-text",
-            "expected_chat_template": True,
-            "simplified_chat_template": False,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
         "glm": {  # transformers, no processor, no simplified chat template
             "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
             "task": "text-generation-with-past",
@@ -206,6 +190,32 @@ class OVCLIExportTestCase(unittest.TestCase):
             "remote_code": True,
         },
     }
+
+    if is_transformers_version("<", "4.54"):
+        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
+            {
+                "minicpm3": {  # transformers, no processor, simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "text-generation-with-past",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": True,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+                "phi3_v": {  # transformers, no processor chat template, no simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "image-text-to-text",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": False,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+            }
+        )
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
         ("stable-diffusion", 72, 195),
@@ -565,6 +575,12 @@ class OVCLIExportTestCase(unittest.TestCase):
                         "vision_embeddings_model": {"int8": 9},
                     },
                 ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
                 (
                     "image-text-to-text",
                     "nanollava",
@@ -657,6 +673,24 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ),
                 (
                     "image-text-to-text",
+                    "qwen2_vl",
+                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+                    "--dataset contextual --num-samples 1",
+                    {
+                        "lm_model": {"int8": 10, "int4": 20},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"int8": 1},
+                        "vision_embeddings_merger_model": {"int8": 10},
+                    },
+                ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.45.0") and is_transformers_version("<", "4.54.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
+                (
+                    "image-text-to-text",
                     "phi3_v",
                     "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
                     {
@@ -678,22 +712,28 @@ class OVCLIExportTestCase(unittest.TestCase):
                         "vision_projection_model": {"int8": 2},
                     },
                 ),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.49.0"):
+        TEST_4BIT_CONFIGURATIONS.extend(
+            [
                 (
                     "image-text-to-text",
-                    "qwen2_vl",
+                    "qwen2_5_vl",
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1",
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
                     {
-                        "lm_model": {"int8": 10, "int4": 20},
+                        "lm_model": {"int8": 14, "int4": 16},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
+                        "vision_embeddings_merger_model": {"int8": 12},
                     },
                 ),
             ]
         )
 
-    if is_transformers_version(">=", "4.49.0"):
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
         TEST_4BIT_CONFIGURATIONS.extend(
             [
                 (
@@ -711,18 +751,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                         "audio_encoder_model": {"int8": 25},
                         "audio_vision_projection_model": {"int8": 2},
                         "audio_speech_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "qwen2_5_vl",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 14, "int4": 16},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 12},
                     },
                 ),
             ]

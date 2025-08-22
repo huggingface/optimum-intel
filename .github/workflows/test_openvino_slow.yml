@@ -30,8 +30,6 @@ jobs:
         os: ["ubuntu-22.04", "windows-2022"]
         transformers-version: ["4.36.0", "latest"]
         include:
-          - transformers-version: "4.40.0"
-            os: "ubuntu-22.04"
           - transformers-version: "4.45.0"
             os: "ubuntu-22.04"
           - transformers-version: "4.54.0"

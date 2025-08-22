@@ -2445,9 +2445,12 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["llava"]
+    SUPPORTED_ARCHITECTURES = []
     SUPPORT_VIDEO = []
     SUPPORT_AUDIO = []
+
+    if is_transformers_version(">=", "4.37.2"):
+        SUPPORTED_ARCHITECTURES += ["llava"]
 
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next", "nanollava"]
