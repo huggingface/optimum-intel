@@ -6401,7 +6401,7 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
     ):
         model.__orig_forward = model.forward
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.54"):
             from transformers import AttentionInterface
 
             AttentionInterface.register("sdpa", sdpa_attention_forward_fixed)
@@ -6423,7 +6423,7 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53"):
+        if is_transformers_version(">=", "4.54"):
             from transformers import AttentionInterface
             from transformers.integrations.sdpa_attention import sdpa_attention_forward
 
