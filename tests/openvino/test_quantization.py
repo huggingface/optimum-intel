@@ -1071,7 +1071,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                     ),
                     {
-                        "lm_model": {"int8": 14, "int4": 16},
+                        "lm_model": {"int8": 18, "int4": 12},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 12},
@@ -1096,7 +1096,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                     ),
                     {
-                        "lm_model": {"int8": 22, "int4": 48},
+                        "lm_model": {"int8": 46, "int4": 56},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 16},
                     },
