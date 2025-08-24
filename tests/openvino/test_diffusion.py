@@ -24,6 +24,7 @@ from diffusers import (
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
     DiffusionPipeline,
+    FluxKontextPipeline,
 )
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
@@ -484,6 +485,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
         SUPPORTED_ARCHITECTURES.append("flux")
+        SUPPORTED_ARCHITECTURES.append("flux-kontext")
 
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
@@ -497,7 +499,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
             height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
         )
 
-        if model_type in ["flux", "stable-diffusion-3"]:
+        if model_type in ["flux", "stable-diffusion-3", "flux-kontext"]:
             inputs["height"] = height
             inputs["width"] = width
 
@@ -584,7 +586,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
-                    if model_arch != "flux":
+                    if model_arch != "flux" and model_arch != "flux-kontext":
                         out_channels = (
                             pipeline.unet.config.out_channels
                             if pipeline.unet is not None
@@ -611,7 +613,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
-        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        auto_cls = self.AUTOMODEL_CLASS if "flux-kontext" not in model_arch else FluxKontextPipeline
+        diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for output_type in ["latent", "np", "pt"]:
