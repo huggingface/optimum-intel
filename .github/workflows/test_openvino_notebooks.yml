@@ -43,7 +43,7 @@ jobs:
           pip install -r notebooks/openvino/requirements.txt
           pip install .[tests,openvino] nbval
           pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
-          pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2160
+          pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2180
 
       - name: Test with Pytest
         run: |
