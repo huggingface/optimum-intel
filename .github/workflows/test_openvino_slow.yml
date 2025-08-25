@@ -18,13 +18,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  TRANSFORMERS_IS_CI: true
+
 jobs:
   build:
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04", "windows-2019"]
+        os: ["ubuntu-22.04", "windows-2022"]
         transformers-version: ["4.36.0", "latest"]
         include:
           - transformers-version: "4.40.0"
@@ -37,6 +40,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Free Disk Space (Ubuntu)
+        if: matrix.runs-on == 'ubuntu-22.04'
+        uses: jlumbroso/free-disk-space@main
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -49,19 +56,19 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,tests] transformers[testing]
+          pip install .[openvino,tests,diffusers] transformers[testing]
           pip install --pre -U openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release
           pip uninstall -y nncf
 
-      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }} 
+      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers
         run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
 
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2019' ||  matrix.transformers-version == 'main' }}
+      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2022' ||  matrix.transformers-version == 'main' }}
         name: Install auto-gptq, autoawq
         run: |
           pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
-  
+
       - if: ${{ matrix.transformers-version == 'main' }}
         name: Install transformers from repository
         run: pip install git+https://github.com/huggingface/transformers.git

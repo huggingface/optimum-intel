@@ -1,13 +1,12 @@
-name: Build PR documentation
+name: Build documentation
 
 on:
-  pull_request:
+  workflow_dispatch:
+  push:
     branches:
       - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+      - doc-builder*
+      - v*-release
 
 env:
   UV_SYSTEM_PYTHON: 1
@@ -34,6 +33,20 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set environment variables
+        run: |
+          cd optimum
+          version=`echo "$(grep '^__version__ =' intel/version.py | cut -d '=' -f 2 | xargs)"`
+
+          if [[ $version == *.dev0 ]]
+          then
+            echo "VERSION=main" >> $GITHUB_ENV
+          else
+            echo "VERSION=v$version" >> $GITHUB_ENV
+          fi
+
+          cd ..
+
       - name: Setup environment
         run: |
           pip install --upgrade pip uv
@@ -43,12 +56,10 @@ jobs:
       - name: Make documentation
         shell: bash
         run: |
-          make doc BUILD_DIR=./doc-build VERSION=pr_${{ env.PR_NUMBER }}
+          make doc BUILD_DIR=./doc-build VERSION=${{ env.VERSION }}
           mv ./doc-build/optimum.intel optimum-intel
-          echo ${{ env.COMMIT_SHA }} > ./commit_sha
-          echo ${{ env.PR_NUMBER }} > ./pr_number
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: doc-build-artifact
-          path: optimum-intel
+          doc-builder push optimum-intel \
+            --doc_build_repo_id "hf-doc-build/doc-build" \
+            --commit_msg "Updated with commit $COMMIT_SHA See: https://github.com/huggingface/optimum-intel/commit/$COMMIT_SHA" \
+            --token "${{ secrets.HF_DOC_BUILD_PUSH }}" \
+            --n_retries 5

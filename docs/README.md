@@ -29,7 +29,7 @@ This command will generate the HTML files that will be rendered as the
 documentation on the [Hugging Face
 website](https://huggingface.co/docs/optimum/index). You can inspect them in
 your favorite browser. You can also adapt the `BUILD_DIR` argument to any
-temporary folder that you prefer. By default, the comamnd builds a Docker container
+temporary folder that you prefer. By default, the command builds a Docker container
 with the latest files from the main branch. To build documentation for a different
 commit or a fork, use the `DEFAULT_CLONE_URL` and `COMMIT_SHA_SUBPACKAGE`
 environment variables.
@@ -262,7 +262,7 @@ includes an example of how to transcribe speech to text in the [docstring of its
 forward
 function](https://huggingface.co/docs/transformers/model_doc/wav2vec2#transformers.Wav2Vec2ForCTC.forward).
 
-## Writing documenation examples
+## Writing documentation examples
 
 The syntax for Example docstrings can look as follows:
 

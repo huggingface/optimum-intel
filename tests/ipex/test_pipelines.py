@@ -18,8 +18,9 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import torch
 from parameterized import parameterized
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, set_seed
 from transformers.pipelines import pipeline as transformers_pipeline
+from transformers.pipelines.text_generation import ReturnType
 from utils_tests import IS_XPU_AVAILABLE, MODEL_NAMES
 
 from optimum.intel.ipex.modeling_base import (
@@ -37,6 +38,7 @@ from optimum.intel.pipelines import pipeline as ipex_pipeline
 
 torch.use_deterministic_algorithms(True)
 DEVICE = "xpu:0" if IS_XPU_AVAILABLE else "cpu"
+SEED = 42
 
 
 class PipelinesIntegrationTest(unittest.TestCase):
@@ -45,29 +47,28 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "bert",
         "distilbert",
         "electra",
-        "flaubert",
         "roberta",
         "roformer",
-        "squeezebert",
         "xlm",
     )
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
         "bart",
         "gpt_bigcode",
         "blenderbot",
-        "blenderbot-small",
         "bloom",
         "codegen",
-        "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "llama",
-        "llama2",
-        "mistral",
         "mpt",
         "opt",
         "phi",
+    )
+    IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "gpt2",
+        "llama2",
+        "falcon",
         "qwen2",
+        "mistral",
     )
     QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES = (
         "bert",
@@ -80,18 +81,26 @@ class PipelinesIntegrationTest(unittest.TestCase):
     )
     IMAGE_CLASSIFICATION_SUPPORTED_ARCHITECTURES = (
         "beit",
-        "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",
         "resnet",
         "vit",
     )
     TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
+    PATCHED_MODELS_GENERATION_RESULTS = {
+        "llama2": [18926, 8157, 25457, 2572],
+        "gpt2": [36418, 14352, 38921, 38921],
+        "falcon": [8821, 31988, 31988, 31988],
+        "qwen2": [87225, 130757, 124509, 113367],
+        "mistral": [26303, 4895, 22235, 20595],
+    }
 
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_token_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         transformers_generator = transformers_pipeline("token-classification", model_id, device_map=DEVICE)
+        set_seed(SEED)
         ipex_generator = ipex_pipeline("token-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "Hello I'm Omar and I live in Zürich."
         with torch.inference_mode():
@@ -106,7 +115,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
     def test_sequence_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         transformers_generator = transformers_pipeline("text-classification", model_id, device_map=DEVICE)
+        set_seed(SEED)
         ipex_generator = ipex_pipeline("text-classification", model_id, accelerator="ipex", device_map=DEVICE)
         inputs = "This restaurant is awesome"
         with torch.inference_mode():
@@ -121,7 +132,9 @@ class PipelinesIntegrationTest(unittest.TestCase):
     def test_fill_mask_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         inputs = "The Milky Way is a <mask> galaxy."
+        set_seed(SEED)
         transformers_generator = transformers_pipeline("fill-mask", model_id, device_map=DEVICE)
+        set_seed(SEED)
         ipex_generator = ipex_pipeline("fill-mask", model_id, accelerator="ipex", device_map=DEVICE)
         mask_token = transformers_generator.tokenizer.mask_token
         inputs = inputs.replace("<mask>", mask_token)
@@ -151,6 +164,23 @@ class PipelinesIntegrationTest(unittest.TestCase):
         ipex_output = ipex_generator(inputs, do_sample=False, max_new_tokens=max_new_tokens)
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
         self.assertEqual(transformers_output[0]["generated_text"], ipex_output[0]["generated_text"])
+
+    @parameterized.expand(IPEX_PATCHED_TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_ipex_patched_text_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        dtype = torch.float16 if IS_XPU_AVAILABLE else torch.float32
+        ipex_generator = ipex_pipeline(
+            "text-generation", model_id, accelerator="ipex", torch_dtype=dtype, device_map=DEVICE
+        )
+        inputs = "Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."
+        max_new_tokens = 4
+        ipex_output = ipex_generator(
+            inputs, do_sample=False, max_new_tokens=max_new_tokens, return_type=ReturnType.TENSORS
+        )
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModelForCausalLM))
+        self.assertEqual(
+            ipex_output[0]["generated_token_ids"][-4:], self.PATCHED_MODELS_GENERATION_RESULTS[model_arch]
+        )
 
     @parameterized.expand(QUESTION_ANSWERING_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):

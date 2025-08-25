@@ -19,14 +19,14 @@ import numpy as np
 from transformers import PretrainedConfig
 
 import openvino as ov
-from openvino.runtime import opset13
+from openvino import opset13
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
-from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS
+from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS, SSM_MODELS
 
 
 def model_has_state(ov_model: ov.Model):
-    if isinstance(ov_model, ov.runtime.CompiledModel):
+    if isinstance(ov_model, ov.CompiledModel):
         return len(ov_model.query_state()) > 0
     # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
     return len(ov_model.get_sinks()) > 0
@@ -211,7 +211,7 @@ def ensure_export_task_support_stateful(task: str):
 
 
 def ensure_model_type_support_stateful(model_type: str):
-    return model_type.replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+    return model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
 
 
 def remove_parameters_by_names(model: ov.Model, names: list):
@@ -265,16 +265,41 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         consumers = output.get_target_inputs()
         # FIXME: get_any_name is not reliable as tensor may not have any names
         variable_id = output.get_any_name()
-        read_value = ov.runtime.opset13.read_value(output, variable_id)
+        read_value = ov.opset13.read_value(output, variable_id)
         for consumer in consumers:
             consumer.replace_source_output(read_value.output(0))
-        assign = ov.runtime.opset13.assign(read_value, variable_id)
+        assign = ov.opset13.assign(read_value, variable_id)
         model.add_sinks([assign])
+
+
+def patch_stateful_ssm(ov_model: ov.Model):
+    cache_input_names = [
+        key_name for key in ov_model.inputs for key_name in key.get_names() if "cache_params.past" in key_name
+    ]
+    cache_output_names = [
+        key_name for key in ov_model.outputs for key_name in key.get_names() if "cache_params.present" in key_name
+    ]
+
+    if not cache_input_names or not cache_output_names:
+        return
+
+    batch_dim = 0
+
+    from openvino._offline_transformations import apply_make_stateful_transformation
+
+    input_output_map = {}
+    for cache_name_pair in zip(cache_input_names, cache_output_names):
+        input_output_map[cache_name_pair[0]] = cache_name_pair[1]
+
+    apply_make_stateful_transformation(ov_model, input_output_map)
+    build_state_initializer(ov_model, batch_dim)
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
+    if config.model_type in SSM_MODELS:
+        return patch_stateful_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 

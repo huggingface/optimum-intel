@@ -45,17 +45,22 @@ build_dist:
 pypi_upload: build_dist
 	python -m twine upload dist/*
 
-build_doc_docker_image:
-	docker build -t doc_maker --build-arg commit_sha=$(COMMIT_SHA_SUBPACKAGE) --build-arg clone_url=$(REAL_CLONE_URL) ./docs
-
-doc: build_doc_docker_image
+doc:
 	@test -n "$(BUILD_DIR)" || (echo "BUILD_DIR is empty." ; exit 1)
 	@test -n "$(VERSION)" || (echo "VERSION is empty." ; exit 1)
-	docker run -v $(CURRENT_DIR):/doc_folder --workdir=/doc_folder --env CI=$(CI) doc_maker \
-	doc-builder build optimum.intel /optimum-intel/docs/source/ \
+	doc-builder build optimum.intel docs/source/ \
 		--repo_name optimum-intel \
 		--build_dir $(BUILD_DIR) \
 		--version $(VERSION) \
 		--version_tag_suffix "" \
 		--html \
 		--clean
+
+clean:
+	rm -rf build
+	rm -rf dist
+	rm -rf .pytest_cache
+	rm -rf .ruff_cache
+	rm -rf .mypy_cache
+	rm -rf optimum_intel.egg-info
+	rm -rf *__pycache__
