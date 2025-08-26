@@ -43,7 +43,7 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,diffusers,tests]
 
-      - if: ${{ matrix.transformers-version != 'latest' }}
+      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != '4.54.0' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
           pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
