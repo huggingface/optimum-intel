@@ -724,7 +724,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
                     {
-                        "lm_model": {"int8": 14, "int4": 16},
+                        "lm_model": {"int8": 18, "int4": 12},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 162},
@@ -765,7 +765,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
                     '--sensitivity-metric "mean_activation_magnitude"',
                     {
-                        "lm_model": {"int8": 22, "int4": 48},
+                        "lm_model": {"int8": 46, "int4": 56},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 16},
                     },
