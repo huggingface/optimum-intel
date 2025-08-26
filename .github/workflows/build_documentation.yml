@@ -8,6 +8,10 @@ on:
       - doc-builder*
       - v*-release
 
+env:
+  UV_SYSTEM_PYTHON: 1
+  UV_TORCH_BACKEND: auto
+
 jobs:
   build_documentation:
     runs-on: ubuntu-22.04
@@ -21,13 +25,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: "18"
           cache-dependency-path: "kit/package-lock.json"
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Set environment variables
         run: |
@@ -45,22 +49,17 @@ jobs:
 
       - name: Setup environment
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade setuptools
-          python -m pip install git+https://github.com/huggingface/doc-builder
-          python -m pip install .[quality]
-          python -m pip install openvino nncf neural-compressor[pt] diffusers accelerate
+          pip install --upgrade pip uv
+          uv pip install git+https://github.com/huggingface/doc-builder
+          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate
 
       - name: Make documentation
         shell: bash
         run: |
-          doc-builder build optimum.intel docs/source/ \
-            --repo_name optimum-intel \
-            --build_dir intel-doc-build/ \
-            --version ${{ env.VERSION }} \
-            --version_tag_suffix "" \
-            --html \
-            --clean
-          cd intel-doc-build
-          mv optimum.intel optimum-intel
-          doc-builder push optimum-intel --doc_build_repo_id "hf-doc-build/doc-build" --token "${{ secrets.HF_DOC_BUILD_PUSH }}" --commit_msg "Updated with commit $COMMIT_SHA See: https://github.com/huggingface/optimum-intel/commit/$COMMIT_SHA" --n_retries 5
+          make doc BUILD_DIR=./doc-build VERSION=${{ env.VERSION }}
+          mv ./doc-build/optimum.intel optimum-intel
+          doc-builder push optimum-intel \
+            --doc_build_repo_id "hf-doc-build/doc-build" \
+            --commit_msg "Updated with commit $COMMIT_SHA See: https://github.com/huggingface/optimum-intel/commit/$COMMIT_SHA" \
+            --token "${{ secrets.HF_DOC_BUILD_PUSH }}" \
+            --n_retries 5

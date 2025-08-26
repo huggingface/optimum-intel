@@ -100,6 +100,9 @@ class ExportModelTest(unittest.TestCase):
             {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline}
         )
 
+    if is_transformers_version(">=", "4.51"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
+
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 
     def _openvino_export(

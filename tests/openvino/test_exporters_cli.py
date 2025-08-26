@@ -146,6 +146,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mamba": 2,
         "falcon-mamba": 2,
         "ernie4_5": 2,
+        "qwen3": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -452,7 +453,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset c4 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 30, "decoder": 62 if is_openvino_version("<", "2025.3") else 52},
+            else {
+                "encoder": 30,
+                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+            },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.36.0")
@@ -474,6 +478,28 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_QUANTIZATION_ARCHITECTURES.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    "f8e4m3",
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {
+                        "lm_model": 15,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 17,
+                    },
+                    {
+                        "lm_model": {"f8e4m3": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"f8e4m3": 11},
+                    },
+                ),
+            ]
+        )
 
     TEST_4BIT_CONFIGURATIONS = [
         (
@@ -1106,7 +1132,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if "--library sentence_transformers" in option
                 else eval(_HEAD_TO_AUTOMODELS[task])
             )
-            model = model_cls.from_pretrained(tmpdir)
+            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task

@@ -865,8 +865,6 @@ def export_tokenizer(
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
-        set_simplified_chat_template(converted[0], processor_chat_template)
-
     except NotImplementedError:
         logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
@@ -878,6 +876,11 @@ def export_tokenizer(
             f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
         )
         return
+
+    try:
+        set_simplified_chat_template(converted[0], processor_chat_template)
+    except Exception as exception:
+        logger.debug(f"Error during chat template simplification. Exception: {exception}")
 
     if not isinstance(converted, tuple):
         converted = (converted,)
