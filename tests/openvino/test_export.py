@@ -81,8 +81,11 @@ class ExportModelTest(unittest.TestCase):
         "clip": OVModelForZeroShotImageClassification,
     }
 
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "speecht5")
+
     if is_transformers_version(">=", "4.37.2"):
         SUPPORTED_ARCHITECTURES.update({"llava": OVModelForVisualCausalLM})
+        GENERATIVE_MODELS += ("llava",)
 
     if is_transformers_version(">=", "4.39"):
         SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
