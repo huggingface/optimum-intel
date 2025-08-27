@@ -742,7 +742,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                     'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
                     "--dataset contextual --num-samples 1 --trust-remote-code",
                     {
-                        "lm_model": {"int8": 18, "int4": 12} if is_transformers_version(">=", "4.55") else {"int8": 6, "int4": 24},
+                        "lm_model": {"int8": 18, "int4": 12}
+                        if is_transformers_version(">=", "4.55")
+                        else {"int8": 6, "int4": 24},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
                         "vision_embeddings_merger_model": {"int8": 162},
