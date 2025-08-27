@@ -30,7 +30,7 @@ INSTALL_REQUIRE = [
     "torch>=1.11",
     # "optimum==1.27.*",
     "optimum-onnx @ git+https://github.com/huggingface/optimum-onnx.git@transformers454",
-    "transformers>=4.37,<4.56",
+    "transformers>=4.45,<4.56",
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
