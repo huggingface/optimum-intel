@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04", "windows-2022"]
-        transformers-version: ["4.36.0", "latest"]
+        transformers-version: ["4.37.0", "latest"]
         include:
           - transformers-version: "4.40.0"
             os: "ubuntu-22.04"

@@ -24,7 +24,7 @@ jobs:
       matrix:
         test-pattern:
           ["*modeling*", "*diffusion*", "*quantization*", "*export*"]
-        transformers-version: ["4.36.0", "4.54.0", "latest"]
+        transformers-version: ["4.37.0", "4.54.0", "latest"]
 
     runs-on: ubuntu-22.04
 
