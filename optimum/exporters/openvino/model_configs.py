@@ -2820,10 +2820,10 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
         """
         if isinstance(behavior, str) and not isinstance(behavior, MiniCPMVConfigBehavior):
             behavior = MiniCPMVConfigBehavior(behavior)
-
+        model_mapping = {2.6: "llama", 4.0: "qwen2", 4.5: "qwen3"}
         if behavior == MiniCPMVConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config(
-                "qwen2" if self._orig_config.version == 2.6 else "llama",
+                model_mapping[self._orig_config.version],
                 self._orig_config,
                 self.int_dtype,
                 self.float_dtype,
@@ -2831,7 +2831,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == MiniCPMVConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
-                "qwen2" if self._orig_config.version == 2.6 else "llama",
+                model_mapping[self._orig_config.version],
                 self._orig_config,
                 self.int_dtype,
                 self.float_dtype,

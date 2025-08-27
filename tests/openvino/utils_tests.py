@@ -115,6 +115,7 @@ MODEL_NAMES = {
     "minicpm3": "katuni4ka/tiny-random-minicpm3",
     "minicpmv": "katuni4ka/tiny-random-minicpmv-2_6",
     "minicpmv4": "snake7gun/minicpm-v-4-tiny",
+    "minicpmv4_5": "snake7gun/tiny-minicpmv-4_5",
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
