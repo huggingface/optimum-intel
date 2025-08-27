@@ -1002,6 +1002,7 @@ The speech-to-text Whisper model can be quantized without the need for preparing
 model_id = "openai/whisper-tiny"
 ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
     model_id,
+    stateful=False,
     quantization_config=OVQuantizationConfig(
         num_samples=10,
         dataset="librispeech",
