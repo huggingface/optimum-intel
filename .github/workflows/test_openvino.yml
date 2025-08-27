@@ -43,12 +43,12 @@ jobs:
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install .[openvino,diffusers,tests]
 
-      - if: ${{ matrix.transformers-version == '4.45.0' }}
+      - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
-          pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
+          pip install transformers==${{ matrix.transformers-version }}
 
-      - if: ${{ matrix.transformers-version != '4.45.0' && matrix.test-pattern == '*modeling*'}}
+      - if: ${{ matrix.test-pattern == '*modeling*'}}
         name: Install auto-gptq, autoawq
         run: |
           pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu

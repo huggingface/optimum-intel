@@ -57,10 +57,9 @@ jobs:
           pip install .[openvino,tests,diffusers] transformers[testing]
           pip uninstall -y nncf
 
-      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != '4.54.0' && matrix.transformers-version != 'main' }}
+      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers
-        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
-
+        run: pip install transformers==${{ matrix.transformers-version }}
       - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2022' ||  matrix.transformers-version == 'main' }}
         name: Install auto-gptq, autoawq
         run: |
