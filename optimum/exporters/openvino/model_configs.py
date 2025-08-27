@@ -3897,7 +3897,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class DeepseekVOpenVINOConfig(LlamaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.54.0"
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
 
