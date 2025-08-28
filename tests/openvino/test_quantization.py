@@ -1718,7 +1718,9 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         processor=MODEL_NAMES["whisper"],
                         trust_remote_code=True,
                     ),
-                    {"encoder": 14, "decoder": 26} if is_transformers_version("<", "4.53") else {"encoder": 14, "decoder": 22},
+                    {"encoder": 14, "decoder": 26}
+                    if is_transformers_version("<", "4.53")
+                    else {"encoder": 14, "decoder": 22},
                     {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
                 ),
             ]
