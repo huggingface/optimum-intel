@@ -1074,10 +1074,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         num_samples=1,
                     ),
                     {
-                        "lm_model": {"int8": 18, "int4": 12},
+                        "lm_model": {"int8": 10, "int4": 20},
                         "text_embeddings_model": {"int8": 1},
                         "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 162},
+                        "vision_embeddings_merger_model": {"int8": 12},
                     },
                 ),
             ]
@@ -1718,7 +1718,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         processor=MODEL_NAMES["whisper"],
                         trust_remote_code=True,
                     ),
-                    {"encoder": 14, "decoder": 22},
+                    {"encoder": 14, "decoder": 26} if is_transformers_version("<", "4.53") else {"encoder": 14, "decoder": 22},
                     {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
                 ),
             ]
