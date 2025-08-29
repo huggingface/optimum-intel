@@ -145,7 +145,7 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32", "KV_CACHE_PRECISION": "f32"}
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 
 class Timer(object):
@@ -1304,7 +1304,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
             model_kwargs["attn_implementation"] = "sdpa"
-
+        if model_arch == "ernie4_5":
+            F32_CONFIG["KV_CACHE_PRECISION"] = "f32"
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
