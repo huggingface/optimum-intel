@@ -411,6 +411,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
+    @property
+    def vision_embedding_crop_size(self) -> Optional[int]:
+        return None
+
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
@@ -1671,6 +1675,10 @@ class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
 
 
 class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
+    @property
+    def vision_embedding_crop_size(self) -> Optional[int]:
+        return getattr(self.config, "force_image_size", None)
+
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
