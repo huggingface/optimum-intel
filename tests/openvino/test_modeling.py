@@ -1682,6 +1682,20 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
 
+        if model_arch in {
+            "aquila",
+            "aquila2",
+            "baichuan2",
+            "baichuan2-13b",
+            "decilm",
+            "internlm",
+            "internlm2",
+            "jais",
+            "orion",
+            "xverse",
+        }:
+            model_kwargs["use_cache"] = False
+
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
