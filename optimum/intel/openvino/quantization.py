@@ -718,8 +718,10 @@ class OVCalibrationDatasetBuilder:
             ov_component._compile()
             ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name])
 
-        target_image_size = self.model.vision_embedding_crop_size or target_image_size
         try:
+            # If possible, resize images to the size expected by the vision encoder
+            target_image_size = self.model.vision_embedding_crop_size or target_image_size
+
             num_samples = config.num_samples or 32
             for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
                 if len(collected_inputs["lm_model"]) >= num_samples:
@@ -758,23 +760,6 @@ class OVCalibrationDatasetBuilder:
         finally:
             for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
-
-        # for submodel_name in collected_inputs:
-        #     if submodel_name != "lm_model":
-        # #         # collected_inputs[submodel_name] is a list of input dicts. If a dict contains `pixel_values` key, and
-        # #         # its value is a tensor with first dimension greater than 1 (i.e. batch dimension), we split the dict
-        # #         # into multiple single-batch dicts below. This lowers peak RAM consumption during calibration.
-        # #         # if len(collected_inputs[submodel_name]) > 0 and "pixel_values" in collected_inputs[submodel_name][0] and collected_inputs[submodel_name][0]["pixel_values"].dim == 4 and collected_inputs[submodel_name][0]["pixel_values"].shape[0] > 1:
-        # #         #     split_collected_inputs = []
-        # #         #     for input_dict in collected_inputs[submodel_name]:
-        # #         #         pixel_values = input_dict["pixel_values"]
-        # #         #         for i in range(1, pixel_values.shape[0]):
-        # #         #             new_input_dict = input_dict.copy()
-        # #         #             new_input_dict["pixel_values"] = pixel_values[i : i + 1]
-        # #         #             split_collected_inputs.append(new_input_dict)
-        # #         #     collected_inputs[submodel_name] = split_collected_inputs
-        #         print([{k: v.shape for k, v in it.items()} for it in collected_inputs[submodel_name]])
-        # raise Exception("Done")
 
         for k in collected_inputs:
             collected_inputs[k] = nncf.Dataset(collected_inputs[k])

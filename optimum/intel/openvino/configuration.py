@@ -1332,7 +1332,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
 
         # Pull dataset-related parameters from child configs
         configs = quantization_configs.values()
-        num_samples = max(config.num_samples or 0 for config in configs) or None if num_samples is None else num_samples
+        num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
         processor = reduce(or_op, (processor, *(config.processor for config in configs)))
