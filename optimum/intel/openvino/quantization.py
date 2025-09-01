@@ -722,7 +722,7 @@ class OVCalibrationDatasetBuilder:
             # If possible, resize images to the size expected by the vision encoder
             target_image_size = self.model.vision_embedding_crop_size or target_image_size
 
-            num_samples = config.num_samples or 32
+            num_samples = config.num_samples or 128
             for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
                 if len(collected_inputs["lm_model"]) >= num_samples:
                     break
