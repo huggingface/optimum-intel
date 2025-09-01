@@ -50,7 +50,7 @@ jobs:
 
       - if: ${{ matrix.transformers-version == '4.45.0' }}
         run: |
-          pip install accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
+          pip install accelerate==0.* peft==0.13.* diffusers==0.33.* transformers_stream_generator
 
       - if: ${{ matrix.test-pattern == '*modeling*'}}
         name: Install auto-gptq, autoawq
