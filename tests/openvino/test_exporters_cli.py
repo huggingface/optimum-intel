@@ -174,15 +174,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
-        "glm": {  # transformers, no processor, no simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "text-generation-with-past",
-            "expected_chat_template": True,
-            "simplified_chat_template": False,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
     }
+
+    if is_transformers_version("<", "4.45"):
+        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
+            {
+                "glm": {  # transformers, no processor, no simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "text-generation-with-past",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": False,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+            }
+        )
 
     if is_transformers_version("<", "4.54"):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
@@ -227,12 +235,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 14, "decoder": 22, "decoder_with_past": 21}
-            if is_transformers_version("<=", "4.36.0")
+            {"encoder": 14, "decoder": 26, "decoder_with_past": 21}
+            if is_transformers_version("<=", "4.45")
             else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
             (
                 {"encoder": {"int8": 14}, "decoder": {"int8": 21}, "decoder_with_past": {"int8": 17}}
-                if is_transformers_version("<=", "4.36.0")
+                if is_transformers_version("<=", "4.45")
                 else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
             ),
         ),
@@ -241,12 +249,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
-            if is_transformers_version("<=", "4.36.0")
+            {"encoder": 16, "decoder": 28, "decoder_with_past": 23}
+            if is_transformers_version("<=", "4.45")
             else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
             (
                 {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 21}, "decoder_with_past": {"f8e4m3": 17}}
-                if is_transformers_version("<=", "4.36.0")
+                if is_transformers_version("<=", "4.45")
                 else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
@@ -444,14 +452,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset c4 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.36.0")
+            if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
                 "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
-                if is_transformers_version("<=", "4.36.0")
+                if is_transformers_version("<=", "4.45")
                 else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
             ),
         ),
