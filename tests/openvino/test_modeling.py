@@ -1998,7 +1998,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
             model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG
         )
-        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
         self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
