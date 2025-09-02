@@ -12,21 +12,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import gc
 import time
 import unittest
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pytest
 import requests
 import torch
+from huggingface_hub import hf_hub_download, http_user_agent
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
+    AutoConfig,
     AutoImageProcessor,
+    AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     AutoModelForVision2Seq,
+    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     PretrainedConfig,
@@ -45,8 +51,14 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForVision2Seq,
+    OVModelForVisualCausalLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
+from optimum.intel.openvino.modeling_utils import (
+    MODEL_PARTS_CLS_MAPPING,
+    MODEL_TYPE_TO_CLS_MAPPING,
+    patch_update_causal_mask,
+)
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
@@ -459,3 +471,411 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
 
         gc.collect()
+
+
+class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["llava"]
+    SUPPORT_VIDEO = []
+    SUPPORT_AUDIO = []
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "nanollava"]
+
+    if is_transformers_version(">=", "4.42.0"):
+        SUPPORTED_ARCHITECTURES += ["llava_next_video"]
+        SUPPORT_VIDEO.append("llava_next_video")
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORT_VIDEO.append("qwen2_vl")
+
+    if is_transformers_version(">=", "4.46.0"):
+        SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
+
+    if is_transformers_version(">=", "4.49.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen2_5_vl", "got_ocr2", "phi4mm"]
+        SUPPORT_VIDEO.append("qwen2_5_vl")
+        SUPPORT_AUDIO.append("phi4mm")
+    if is_transformers_version(">", "4.49"):
+        SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
+    if is_transformers_version(">=", "4.51"):
+        SUPPORTED_ARCHITECTURES += ["llama4"]
+    TASK = "image-text-to-text"
+    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
+
+    IMAGE = Image.open(
+        requests.get(
+            TEST_IMAGE_URL,
+            stream=True,
+        ).raw
+    )
+
+    def get_transformer_model_class(self, model_arch):
+        if is_transformers_version(">=", "4.46") and model_arch in [
+            "llava",
+            "llava_next",
+            "llava_next_mistral",
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "got_ocr2",
+            "gemma3",
+            "idefics3",
+            "smolvlm",
+            "llama4",
+        ]:
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
+        if model_arch == "llava_next_video":
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+        if model_arch == "llava":
+            from transformers import LlavaForConditionalGeneration
+
+            return LlavaForConditionalGeneration
+        if model_arch.startswith("llava_next"):
+            from transformers import LlavaNextForConditionalGeneration
+
+            return LlavaNextForConditionalGeneration
+        if model_arch == "qwen2_vl":
+            from transformers import Qwen2VLForConditionalGeneration
+
+            return Qwen2VLForConditionalGeneration
+        return AutoModelForCausalLM
+
+    def _check_device_and_request(self, ov_model, expected_device, has_request):
+        request_check_fn = self.assertFalse if has_request else self.assertTrue
+        self.assertEqual(ov_model._device, expected_device)
+        for component_name, component in ov_model.components.items():
+            if component_name == "language_model":
+                request_check_fn(component.text_emb_request is None)
+            self.assertEqual(component._device, expected_device)
+            request_check_fn(component.request is None)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        prompt = "What is shown in this image?"
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        loading_kwargs = {}
+
+        if "llama4" in model_arch:
+            loading_kwargs = {"_attn_implementation": "sdpa"}
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
+            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, **loading_kwargs
+        )
+        transformers_model.eval()
+        if "internvl2" in model_arch:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+            transformers_model.img_context_token_id = img_context_token_id
+        if "nanollava" in model_arch:
+            transformers_model.get_vision_tower().load_model()
+        preprocessors = self.get_preprocessors(model_arch)
+        set_seed(SEED)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
+        )
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
+        for component_name, component in ov_model.components.items():
+            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        transformers_inputs = copy.deepcopy(inputs)
+        # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
+        # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
+        if model_arch == "llama4":
+            transformers_inputs["pixel_values"] = transformers_inputs["pixel_values"].to(torch.float32)
+            transformers_model.generation_config.cache_implementation = None
+            from transformers.cache_utils import DynamicCache
+
+            transformers_inputs["past_key_values"] = DynamicCache()
+
+        test_device = "AUTO"
+        ov_model.to(test_device)
+        self._check_device_and_request(ov_model, test_device, False)
+        test_device = "CPU"
+        ov_model.to(test_device)
+        ov_model.compile()
+        self._check_device_and_request(ov_model, test_device, True)
+        ov_model.clear_requests()
+        self._check_device_and_request(ov_model, test_device, False)
+
+        # pytorch minicpmv and internvl2 are not designed to be used via forward
+        if model_arch not in ["minicpmv", "internvl2"]:
+            set_seed(SEED)
+            ov_outputs = ov_model(**inputs)
+            set_seed(SEED)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**transformers_inputs)
+            self.assertTrue(
+                torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=4e-3),
+                f"Max abs diff {(torch.abs(ov_outputs.logits - transformers_outputs.logits).max())}",
+            )
+
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.do_sample = False
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        ov_model.generation_config.do_sample = False
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+        set_seed(SEED)
+
+        additional_inputs = {}
+        # gemma3 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
+        # align cache representation in torch model
+        if model_arch == "gemma3":
+            patch_update_causal_mask(
+                transformers_model if is_transformers_version("<", "4.52.0") else transformers_model.language_model,
+                "4.43.0",
+            )
+            transformers_model._supports_cache_class = True
+            transformers_model.generation_config.cache_implementation = None
+            from transformers.cache_utils import DynamicCache
+
+            additional_inputs = {"past_key_values": DynamicCache()}
+
+        if model_arch == "llama4":
+            transformers_inputs["past_key_values"] = DynamicCache()
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(
+                **transformers_inputs, generation_config=gen_config, **additional_inputs
+            )
+
+        # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+        if model_arch in ["minicpmv", "internvl2"]:
+            ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+        )
+
+        # video loader helper only available for transformers >= 4.49
+        if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+            if is_transformers_version("<=", "4.52"):
+                from transformers.image_utils import load_video
+            else:
+                from transformers.video_utils import load_video
+
+            video_path = hf_hub_download(
+                repo_id="raushan-testing-hf/videos-test",
+                filename="sample_demo_1.mp4",
+                repo_type="dataset",
+                user_agent=http_user_agent(),
+            )
+            input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+            question = "Why is this video funny?"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+            transformers_inputs = copy.deepcopy(inputs)
+            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "internvl2"]:
+                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **transformers_inputs, generation_config=gen_config, **additional_inputs
+                )
+            self.assertTrue(
+                torch.equal(ov_outputs, transformers_outputs),
+                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+            )
+
+        if model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Translate this audio to French"
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            transformers_inputs = copy.deepcopy(inputs)
+            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+            # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
+            if model_arch in ["minicpmv", "internvl2"]:
+                ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **transformers_inputs, generation_config=gen_config, **additional_inputs
+                )
+            self.assertTrue(
+                torch.equal(ov_outputs, transformers_outputs),
+                f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+            )
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(["llava", "llava_next", "llava_next_video", "llava_next_mistral"])
+    @unittest.skipIf(
+        is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
+    )
+    def test_llava_with_new_preprocessing(self, model_arch):
+        prompt = "<image>\n What is shown in this image?"
+        model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            patch_size=config.vision_config.patch_size,
+            vision_feature_select_strategy=config.vision_feature_select_strategy,
+            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            num_additional_image_tokens=1,
+        )
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
+        ov_model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+        self.assertTrue(ov_model._support_new_processing)
+        self.assertTrue(processor.patch_size is not None)
+        self.assertTrue(processor.vision_feature_select_strategy is not None)
+        inputs = processor(images=self.IMAGE, text=prompt, return_tensors="pt")
+        self.assertGreaterEqual(
+            (inputs.input_ids == ov_model.config.image_token_index).sum().max().item(),
+            ov_model.config.image_seq_length,
+        )
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        set_seed(SEED)
+        ov_outputs = ov_model(**inputs)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            num_beams=3,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
+        self.assertTrue(
+            torch.equal(ov_outputs, transformers_outputs),
+            f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model output {ov_outputs}",
+        )
+
+        del ov_model
+        del transformers_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVisualCausalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+        )
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        question = "Describe image"
+        preprocessors = self.get_preprocessors(model_arch)
+        inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
+        # General case
+        outputs = model.generate(**inputs, max_new_tokens=10)
+        outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+
+        # GOT-OCR2 does not support text-only input
+        if model_arch != "got_ocr2":
+            # No input image case
+            question = "Hi, how are you?"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, image=None)
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
+
+            if model_arch in self.SUPPORT_VIDEO and is_transformers_version(">=", "4.49"):
+                # video loader helper only available for transformers >= 4.49
+                if is_transformers_version("<=", "4.52"):
+                    from transformers.image_utils import load_video
+                else:
+                    from transformers.video_utils import load_video
+
+                video_path = hf_hub_download(
+                    repo_id="raushan-testing-hf/videos-test",
+                    filename="sample_demo_1.mp4",
+                    repo_type="dataset",
+                    user_agent=http_user_agent(),
+                )
+                input_video, _ = load_video(video_path, num_frames=2, backend="opencv")
+                question = "Why is this video funny?"
+                inputs = model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+                outputs = model.generate(**inputs, max_new_tokens=10)
+                # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+                outputs = outputs[:, inputs["input_ids"].shape[1] :]
+                outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                self.assertIsInstance(outputs[0], str)
+
+        if model_arch in self.SUPPORT_AUDIO:
+            input_audio = self._generate_random_audio_data()
+            question = "Translate this audio to French"
+            inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            outputs = model.generate(**inputs, max_new_tokens=10)
+            # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
+            outputs = outputs[:, inputs["input_ids"].shape[1] :]
+            outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            self.assertIsInstance(outputs[0], str)
+        del model
+
+        gc.collect()
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return (audio_data, 16000)
+
+    def get_preprocessors(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
+        if model_arch == "nanollava":
+            processor = AutoProcessor.from_pretrained(
+                config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
+        elif model_arch == "internvl2":
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": None, "tokenizer": tokenizer, "config": config}
+        else:
+            processor = AutoProcessor.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            preprocessors = {"processor": processor, "tokenizer": None, "config": config}
+
+        return preprocessors
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_model_can_be_loaded_after_saving(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        with TemporaryDirectory() as save_dir:
+            ov_model = OVModelForVisualCausalLM.from_pretrained(
+                model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            ov_model.save_pretrained(save_dir)
+            ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
+                save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            self.assertIsInstance(ov_restored_model, type(ov_model))
