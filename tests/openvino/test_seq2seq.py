@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 import requests
 import torch
-from huggingface_hub import hf_hub_download, http_user_agent
+from huggingface_hub import hf_hub_download
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -41,6 +41,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
+from transformers.utils import http_user_agent
 from utils_tests import (
     MODEL_NAMES,
     TEST_IMAGE_URL,
