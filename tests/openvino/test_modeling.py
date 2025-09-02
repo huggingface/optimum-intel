@@ -1603,10 +1603,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs["trust_remote_code"] = True
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
