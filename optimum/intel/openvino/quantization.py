@@ -689,7 +689,7 @@ class OVCalibrationDatasetBuilder:
         self,
         config: OVQuantizationConfigBase,
         dataset: "Dataset",
-        target_image_size: Optional[int] = 448,
+        max_image_size: Optional[int] = 600,
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for VLM pipelines.
@@ -719,10 +719,7 @@ class OVCalibrationDatasetBuilder:
             ov_component.request = InferRequestWrapper(ov_component.request, collected_inputs[submodel_name])
 
         try:
-            # If possible, resize images to the size expected by the vision encoder
-            target_image_size = self.model.vision_embedding_crop_size or target_image_size
-
-            num_samples = config.num_samples or 128
+            num_samples = config.num_samples or 32
             for item in tqdm(dataset, desc="Collecting calibration dataset", total=num_samples):
                 if len(collected_inputs["lm_model"]) >= num_samples:
                     break
@@ -730,9 +727,12 @@ class OVCalibrationDatasetBuilder:
                 instruction = item[dataset_metadata["inputs"]["instruction"]]
                 image_url = item[dataset_metadata["inputs"]["image_url"]]
                 image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
-                new_size = (target_image_size, target_image_size)
-                if new_size != image.size[:2]:
-                    image = image.resize(new_size)
+                if max_image_size is not None:
+                    # To avoid large images, resize them keeping the aspect ratio
+                    scale_factor = max(image.size[0] / max_image_size, image.size[1] / max_image_size)
+                    if scale_factor > 1:
+                        new_size = (int(image.size[0] / scale_factor), int(image.size[1] / scale_factor))
+                        image = image.resize(new_size)
 
                 try:
                     inputs = self.model.preprocess_inputs(
@@ -757,6 +757,27 @@ class OVCalibrationDatasetBuilder:
                 )
 
                 collected_inputs["lm_model"].append(language_model_inputs)
+
+            # If an input dict contains `pixel_values` key, and its batch size is greater than 1, we split the data
+            # into multiple single-batch dicts below. This lowers peak RAM consumption during calibration.
+            for submodel_name in collected_inputs:
+                if (
+                    len(collected_inputs[submodel_name]) > 0
+                    and "pixel_values" in collected_inputs[submodel_name][0]
+                    and collected_inputs[submodel_name][0]["pixel_values"].dim() == 4
+                    and collected_inputs[submodel_name][0]["pixel_values"].shape[0] > 1
+                ):
+                    single_batch_collected_inputs = []
+                    for input_dict in collected_inputs[submodel_name]:
+                        batch_size = input_dict["pixel_values"].shape[0]
+                        for i in range(batch_size):
+                            single_batch_input_dict = {}
+                            for k, v in input_dict.items():
+                                single_batch_input_dict[k] = v[i : i + 1] if v.shape[0] == batch_size else v
+                            single_batch_collected_inputs.append(single_batch_input_dict)
+                    collected_inputs[submodel_name] = single_batch_collected_inputs
+        #         print([{k: v.shape for k, v in it.items()} for it in collected_inputs[submodel_name]])
+            # raise Exception("Done")
         finally:
             for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
@@ -1743,6 +1764,7 @@ def _full_quantization(
     q_kwargs.update(kwargs)
     q_kwargs.pop("weight_only", None)
 
+    q_kwargs["subset_size"] = len(calibration_dataset._data_source)
     quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
 
     _remove_f16_kv_cache_precision_flag(quantized_model)
