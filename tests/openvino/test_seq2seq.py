@@ -48,9 +48,7 @@ from optimum.intel import (
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import (
-    is_transformers_version,
-)
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
 
 SEED = 42
@@ -75,12 +73,15 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         # "longt5",
         "m2m_100",
-        "marian",
         "mbart",
         "mt5",
         "pegasus",
         "t5",
     )
+
+    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.4.0")):
+        # There are known issues with marian model on OpenVINO 2025.3.x
+        SUPPORTED_ARCHITECTURES += ("marian",)
 
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
