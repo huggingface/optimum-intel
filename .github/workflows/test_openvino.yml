@@ -23,7 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         test-pattern:
-          ["*modeling*", "*diffusion*", "*quantization*", "*export*"]
+          [
+            "*export*",
+            "*decoder*",
+            "*seq2seq*",
+            "*modeling*",
+            "*diffusion*",
+            "*quantization*",
+          ]
         transformers-version: ["4.36.0", "latest"]
 
     runs-on: ubuntu-22.04
@@ -48,15 +55,10 @@ jobs:
         run: |
           pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
 
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*modeling*'}}
+      - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
           pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
-
-      - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Uninstall NNCF
-        run: |
-          pip uninstall -y nncf
 
       - name: Test with Pytest
         run: |
