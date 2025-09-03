@@ -759,7 +759,7 @@ class OVCalibrationDatasetBuilder:
                 collected_inputs["lm_model"].append(language_model_inputs)
 
             # If an input dict contains `pixel_values` key, and its batch size is greater than 1, we split the data
-            # into multiple single-batch dicts below. This lowers peak RAM consumption during calibration.
+            # into multiple single-batch dicts below. This lowers peak RAM consumption during quantization calibration.
             for submodel_name in collected_inputs:
                 if (
                     len(collected_inputs[submodel_name]) > 0
@@ -773,7 +773,7 @@ class OVCalibrationDatasetBuilder:
                         for i in range(batch_size):
                             single_batch_input_dict = {}
                             for k, v in input_dict.items():
-                                single_batch_input_dict[k] = v[i : i + 1] if v.shape[0] == batch_size else v
+                                single_batch_input_dict[k] = v[i: i + 1] if v.shape[0] == batch_size else v
                             single_batch_collected_inputs.append(single_batch_input_dict)
                     collected_inputs[submodel_name] = single_batch_collected_inputs
         #         print([{k: v.shape for k, v in it.items()} for it in collected_inputs[submodel_name]])
@@ -1329,14 +1329,15 @@ class OVQuantizer(OptimumQuantizer):
         calibration_dataset: Optional[OVCalibrationDataset] = None,
         **kwargs,
     ):
-        from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
         from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
 
         if is_diffusers_available():
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         quantization_config = ov_config.quantization_config
+        dataset_was_built = False
         if calibration_dataset is None and quantization_config.dataset is not None:
+            dataset_was_built = True
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
         quantization_configs = {}
@@ -1391,13 +1392,7 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 # Full quantization
                 #
-                if isinstance(self.model, _OVModelForWhisper):
-                    for submodel_name in self.model.ov_submodels:
-                        # quantization_config.num_samples of audio samples result in more actual model inputs
-                        config = quantization_config.clone()
-                        config.num_samples = calibration_dataset[submodel_name].get_length()
-                        quantization_configs[submodel_name] = config
-                elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     diffusion_model_name = next(iter(calibration_dataset))
                     quantization_configs[diffusion_model_name] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8)
@@ -1441,6 +1436,11 @@ class OVQuantizer(OptimumQuantizer):
 
             if isinstance(config, OVWeightQuantizationConfig) and config.quant_method == OVQuantizationMethod.HYBRID:
                 config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
+
+            if dataset_was_built and nncf_dataset is not None and nncf_dataset.get_length() is not None:
+                # For datasets built from the quantization config, override num_samples per submodel
+                config = config.clone()
+                config.num_samples = nncf_dataset.get_length()
 
             if isinstance(config, OVWeightQuantizationConfig):
                 if config.bits == 8:
@@ -1764,7 +1764,6 @@ def _full_quantization(
     q_kwargs.update(kwargs)
     q_kwargs.pop("weight_only", None)
 
-    q_kwargs["subset_size"] = len(calibration_dataset._data_source)
     quantized_model = nncf.quantize(model, calibration_dataset=calibration_dataset, **q_kwargs)
 
     _remove_f16_kv_cache_precision_flag(quantized_model)
