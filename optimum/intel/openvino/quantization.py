@@ -777,16 +777,14 @@ class OVCalibrationDatasetBuilder:
                         and input_dict["pixel_values"].dim() == 4
                         and input_dict["pixel_values"].shape[0] > 1
                     ):
+                        log_update_nncf_warning_message()
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
                             for k, v in input_dict.items():
-                                # Only split if v is a tensor and has the expected batch size
-                                if hasattr(v, "shape") and v.shape[0] == batch_size:
-                                    log_update_nncf_warning_message()
-                                    single_batch_input_dict[k] = v[i : i + 1]
-                                else:
-                                    single_batch_input_dict[k] = v
+                                if not hasattr(v, "shape") or v.shape[0] != batch_size:
+                                    raise ValueError(f"Expected a tensor with batch size {batch_size} for key '{k}'.")
+                                single_batch_input_dict[k] = v[i : i + 1]
                             single_batch_collected_inputs.append(single_batch_input_dict)
                     else:
                         single_batch_collected_inputs.append(input_dict)
