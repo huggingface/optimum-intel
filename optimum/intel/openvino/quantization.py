@@ -19,6 +19,7 @@ import logging
 import os
 from collections import UserDict, deque
 from contextlib import contextmanager
+from functools import lru_cache
 from io import BytesIO
 from itertools import islice
 from pathlib import Path
@@ -57,6 +58,7 @@ from ..utils.import_utils import (
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
+    is_nncf_version,
 )
 from ..utils.modeling_utils import get_model_device
 from .configuration import (
@@ -697,6 +699,12 @@ class OVCalibrationDatasetBuilder:
         """
         from optimum.intel.openvino.modeling_visual_language import OVVisionEmbedding
 
+        @lru_cache(maxsize=1)
+        def log_update_nncf_warning_message():
+            if is_nncf_version("<=", "2.18"):
+                # TODO (Nikita): Remove once NNCF 2.19 is released.
+                logger.warning("If you are facing RAM OOM issues, please update to the latest NNCF develop version.")
+
         processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
         try:
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
@@ -775,6 +783,7 @@ class OVCalibrationDatasetBuilder:
                             for k, v in input_dict.items():
                                 # Only split if v is a tensor and has the expected batch size
                                 if hasattr(v, "shape") and v.shape[0] == batch_size:
+                                    log_update_nncf_warning_message()
                                     single_batch_input_dict[k] = v[i : i + 1]
                                 else:
                                     single_batch_input_dict[k] = v
