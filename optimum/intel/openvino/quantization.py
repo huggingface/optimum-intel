@@ -758,7 +758,7 @@ class OVCalibrationDatasetBuilder:
 
                 collected_inputs["lm_model"].append(language_model_inputs)
 
-            # If an input dict contains `pixel_values` key, and its batch size is greater than 1, we split the data
+            # If an input dict contains `pixel_values` key and its batch size is greater than 1, we split the data
             # into multiple single-batch dicts below. This lowers peak RAM consumption during quantization calibration.
             for submodel_name in collected_inputs:
                 if (
@@ -776,8 +776,6 @@ class OVCalibrationDatasetBuilder:
                                 single_batch_input_dict[k] = v[i: i + 1] if v.shape[0] == batch_size else v
                             single_batch_collected_inputs.append(single_batch_input_dict)
                     collected_inputs[submodel_name] = single_batch_collected_inputs
-        #         print([{k: v.shape for k, v in it.items()} for it in collected_inputs[submodel_name]])
-            # raise Exception("Done")
         finally:
             for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
