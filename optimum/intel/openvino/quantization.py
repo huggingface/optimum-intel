@@ -761,21 +761,27 @@ class OVCalibrationDatasetBuilder:
             # If an input dict contains `pixel_values` key and its batch size is greater than 1, we split the data
             # into multiple single-batch dicts below. This lowers peak RAM consumption during quantization calibration.
             for submodel_name in collected_inputs:
-                if (
-                    len(collected_inputs[submodel_name]) > 0
-                    and "pixel_values" in collected_inputs[submodel_name][0]
-                    and collected_inputs[submodel_name][0]["pixel_values"].dim() == 4
-                    and collected_inputs[submodel_name][0]["pixel_values"].shape[0] > 1
-                ):
-                    single_batch_collected_inputs = []
-                    for input_dict in collected_inputs[submodel_name]:
+                single_batch_collected_inputs = []
+                for input_dict in collected_inputs[submodel_name]:
+                    if (
+                        "pixel_values" in input_dict
+                        and hasattr(input_dict["pixel_values"], "dim")
+                        and input_dict["pixel_values"].dim() == 4
+                        and input_dict["pixel_values"].shape[0] > 1
+                    ):
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
                             for k, v in input_dict.items():
-                                single_batch_input_dict[k] = v[i : i + 1] if v.shape[0] == batch_size else v
+                                # Only split if v is a tensor and has the expected batch size
+                                if hasattr(v, "shape") and v.shape[0] == batch_size:
+                                    single_batch_input_dict[k] = v[i : i + 1]
+                                else:
+                                    single_batch_input_dict[k] = v
                             single_batch_collected_inputs.append(single_batch_input_dict)
-                    collected_inputs[submodel_name] = single_batch_collected_inputs
+                    else:
+                        single_batch_collected_inputs.append(input_dict)
+                collected_inputs[submodel_name] = single_batch_collected_inputs
         finally:
             for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
