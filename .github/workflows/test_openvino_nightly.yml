@@ -37,12 +37,15 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
+        nncf-version: ["stable"]
         openvino-version: ["nightly"]
         # main nncf tests
         include:
           - test-pattern: "*quantization*"
+            openvino-version: "stable"
             nncf-version: "main"
           - test-pattern: "*export*"
+            openvino-version: "stable"
             nncf-version: "main"
 
     runs-on: ubuntu-22.04
