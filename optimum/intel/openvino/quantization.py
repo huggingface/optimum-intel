@@ -47,6 +47,8 @@ from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
 from optimum.exporters.tasks import TasksManager
+from optimum.exporters.utils import check_dummy_inputs_are_allowed
+from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 from optimum.quantization_base import OptimumQuantizer
 
 from ...exporters.openvino import export, export_pytorch_via_onnx
@@ -59,6 +61,7 @@ from ..utils.import_utils import (
     is_datasets_available,
     is_diffusers_available,
     is_nncf_version,
+    is_sentence_transformers_available,
 )
 from ..utils.modeling_utils import get_model_device
 from .configuration import (
@@ -70,6 +73,12 @@ from .configuration import (
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
 )
+from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
+from .modeling_base import OVBaseModel
+from .modeling_decoder import OVBaseDecoderModel, OVModelForCausalLM
+from .modeling_sam import OVSamModel
+from .modeling_seq2seq import OVDecoder, OVEncoder, OVModelForSeq2SeqLM, _OVModelForWhisper
+from .modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -84,8 +93,14 @@ from .utils import (
 )
 
 
+if is_diffusers_available():
+    from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
+
 if is_datasets_available():
     from datasets import Dataset
+
+if is_sentence_transformers_available():
+    from .modeling_sentence_transformers import OVSentenceTransformer
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -270,20 +285,6 @@ class OVCalibrationDatasetBuilder:
         Returns:
             A calibration dataset as an instance of `OVCalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import (
-            OVModelForCausalLM,
-            OVModelForFeatureExtraction,
-            OVModelForMaskedLM,
-            OVModelForSeq2SeqLM,
-            OVModelForVisualCausalLM,
-            OVModelForZeroShotImageClassification,
-            OVSamModel,
-            OVSentenceTransformer,
-        )
-        from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
-
-        if is_diffusers_available():
-            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         if config.dataset is None:
             raise ValueError("Please provide a dataset for calibration.")
@@ -357,8 +358,10 @@ class OVCalibrationDatasetBuilder:
                 )
 
             return self.build_from_dataset(config, dataset)
-        elif isinstance(
-            self.model, (OVModelForFeatureExtraction, OVSentenceTransformer, OVModelForMaskedLM, OVModelForSeq2SeqLM)
+        elif (
+            isinstance(self.model, (OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForSeq2SeqLM))
+            or is_sentence_transformers_available()
+            and isinstance(self.model, OVSentenceTransformer)
         ):
             if isinstance(config.dataset, str):
                 dataset_metadata = PREDEFINED_LANGUAGE_DATASETS[config.dataset]
@@ -474,20 +477,6 @@ class OVCalibrationDatasetBuilder:
         Returns:
             A calibration dataset as an instance of `OVCalibrationDataset` containing an `nncf.Dataset` for each model component.
         """
-        from optimum.intel import (
-            OVModelForFeatureExtraction,
-            OVModelForMaskedLM,
-            OVModelForSeq2SeqLM,
-            OVModelForVisualCausalLM,
-            OVModelForZeroShotImageClassification,
-            OVSamModel,
-            OVSentenceTransformer,
-        )
-        from optimum.intel.openvino.modeling_decoder import OVBaseDecoderModel
-        from optimum.intel.openvino.modeling_seq2seq import _OVModelForWhisper
-
-        if is_diffusers_available():
-            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         if isinstance(dataset, list):
             logger.warning(
@@ -495,19 +484,24 @@ class OVCalibrationDatasetBuilder:
                 "Please provide it as `datasets.Dataset`."
             )
 
-        if isinstance(
-            self.model,
-            (
-                OVModelForVisualCausalLM,
-                _OVModelForWhisper,
-                OVModelForFeatureExtraction,
-                OVModelForMaskedLM,
-                OVModelForZeroShotImageClassification,
-                OVSentenceTransformer,
-                OVModelForSeq2SeqLM,
-                OVSamModel,
-            ),
-        ) or (is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline)):
+        if (
+            isinstance(
+                self.model,
+                (
+                    OVModelForVisualCausalLM,
+                    _OVModelForWhisper,
+                    OVModelForFeatureExtraction,
+                    OVModelForMaskedLM,
+                    OVModelForZeroShotImageClassification,
+                    OVModelForSeq2SeqLM,
+                    OVSamModel,
+                ),
+            )
+            or is_diffusers_available()
+            and isinstance(self.model, OVDiffusionPipeline)
+            or is_sentence_transformers_available()
+            and isinstance(self.model, OVSentenceTransformer)
+        ):
             # Prepare from raw dataset avoiding dataloader creation
             if batch_size != 1 or data_collator is not None or remove_unused_columns:
                 logger.warning(
@@ -522,7 +516,11 @@ class OVCalibrationDatasetBuilder:
                 return self._prepare_text_to_text_calibration_data(quantization_config, dataset)
             elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 return self._prepare_diffusion_calibration_data(quantization_config, dataset)
-            elif isinstance(self.model, (OVModelForFeatureExtraction, OVSentenceTransformer, OVModelForMaskedLM)):
+            elif (
+                isinstance(self.model, (OVModelForFeatureExtraction, OVModelForMaskedLM))
+                or is_sentence_transformers_available()
+                and isinstance(self.model, OVSentenceTransformer)
+            ):
                 return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, OVModelForZeroShotImageClassification):
                 return self._prepare_text_image_encoder_model_calibration_data(quantization_config, dataset)
@@ -697,7 +695,6 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
-        from optimum.intel.openvino.modeling_visual_language import OVVisionEmbedding
 
         @lru_cache(maxsize=1)
         def log_update_nncf_warning_message():
@@ -804,7 +801,6 @@ class OVCalibrationDatasetBuilder:
         """
         Prepares calibration data for speech-to-text pipelines by inferring it on a dataset and collecting incurred inputs.
         """
-        from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 
         models: Dict[str, Union[OVEncoder, OVDecoder]] = {}
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
@@ -846,7 +842,6 @@ class OVCalibrationDatasetBuilder:
         """
         Prepares calibration data for text-to-text pipelines by inferring it on a dataset and collecting incurred inputs.
         """
-        from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 
         models: Dict[str, Union[OVEncoder, OVDecoder]] = {}
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
@@ -948,10 +943,9 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for text-encoder-like models.
         Supports OVModelForFeatureExtraction, OVModelForMaskedLM and OVSentenceTransformer.
         """
-        from optimum.intel import OVModelForFeatureExtraction, OVModelForMaskedLM, OVSentenceTransformer
 
         def get_tokenizer():
-            if isinstance(self.model, OVSentenceTransformer):
+            if is_sentence_transformers_available() and isinstance(self.model, OVSentenceTransformer):
                 return self.model.tokenizer
             else:
                 if quantization_config.tokenizer is None:
@@ -971,7 +965,7 @@ class OVCalibrationDatasetBuilder:
                 inference_result_mock["last_hidden_state"] = np.empty((1,), np.float32)
             elif isinstance(self.model, OVModelForMaskedLM):
                 inference_result_mock["logits"] = np.empty((1,), np.float32)
-            elif isinstance(self.model, OVSentenceTransformer):
+            elif is_sentence_transformers_available() and isinstance(self.model, OVSentenceTransformer):
                 inference_result_mock["token_embeddings"] = np.empty((1,), np.float32)
                 inference_result_mock["sentence_embedding"] = np.empty((1,), np.float32)
             else:
@@ -1011,7 +1005,9 @@ class OVCalibrationDatasetBuilder:
                         # Replace a random token with a mask token
                         inputs["input_ids"][0, random_positions[len(calibration_data)]] = tokenizer.mask_token_id
 
-                self.model(inputs) if isinstance(self.model, OVSentenceTransformer) else self.model(**inputs)
+                self.model(inputs) if is_sentence_transformers_available() and isinstance(
+                    self.model, OVSentenceTransformer
+                ) else self.model(**inputs)
 
                 pbar.update(min(num_samples, len(calibration_data)) - pbar.n)
                 if len(calibration_data) >= num_samples:
@@ -1090,8 +1086,6 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset({"model": nncf.Dataset(calibration_data)})
 
     def _prepare_sam_dataset(self, config: OVQuantizationConfigBase, dataset: "Dataset") -> OVCalibrationDataset:
-        from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
-
         models: Dict[str, Union[OVSamVisionEncoder, OVSamPromptEncoder]] = {}
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
         for submodel_name in self.model._ov_submodel_names:
@@ -1262,9 +1256,6 @@ class OVQuantizer(OptimumQuantizer):
                 "quantization. Will rely on `calibration_dataset`."
             )
 
-        if is_diffusers_available():
-            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
-
         if calibration_dataset is not None and not isinstance(calibration_dataset, OVCalibrationDataset):
             # Process custom calibration dataset
             if (
@@ -1304,8 +1295,6 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config, calibration_dataset, batch_size, data_collator, remove_unused_columns
                 )
 
-        from .modeling_base import OVBaseModel
-
         if isinstance(self.model, OVBaseModel):
             if self.model._compile_only:
                 raise ValueError(
@@ -1340,11 +1329,6 @@ class OVQuantizer(OptimumQuantizer):
         calibration_dataset: Optional[OVCalibrationDataset] = None,
         **kwargs,
     ):
-        from optimum.intel.openvino.modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
-
-        if is_diffusers_available():
-            from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
-
         quantization_config = ov_config.quantization_config
         dataset_was_built_from_config = False
         if calibration_dataset is None and quantization_config.dataset is not None:
@@ -1535,8 +1519,6 @@ class OVQuantizer(OptimumQuantizer):
 
         quantization_config = ov_config.quantization_config
         if isinstance(quantization_config, OVWeightQuantizationConfig):
-            from optimum.exporters.utils import check_dummy_inputs_are_allowed
-
             if stateful:
                 # patch model before weight compression
                 model = patch_model_with_bettertransformer(model)
