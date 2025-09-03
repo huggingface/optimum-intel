@@ -67,12 +67,12 @@ jobs:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Install dependencies (nightly)
+        name: Install Nightly OpenVINO
         run: |
           pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Test with Pytest (nightly)
+        name: Test with Pytest - Nightly OpenVINO
         run: |
           pytest tests/openvino/test_modeling_basic.py --durations=0
         env:
