@@ -773,7 +773,7 @@ class OVCalibrationDatasetBuilder:
                         for i in range(batch_size):
                             single_batch_input_dict = {}
                             for k, v in input_dict.items():
-                                single_batch_input_dict[k] = v[i: i + 1] if v.shape[0] == batch_size else v
+                                single_batch_input_dict[k] = v[i : i + 1] if v.shape[0] == batch_size else v
                             single_batch_collected_inputs.append(single_batch_input_dict)
                     collected_inputs[submodel_name] = single_batch_collected_inputs
         finally:
@@ -1333,9 +1333,9 @@ class OVQuantizer(OptimumQuantizer):
             from optimum.intel.openvino.modeling_diffusion import OVDiffusionPipeline
 
         quantization_config = ov_config.quantization_config
-        dataset_was_built = False
+        dataset_was_built_from_config = False
         if calibration_dataset is None and quantization_config.dataset is not None:
-            dataset_was_built = True
+            dataset_was_built_from_config = True
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
         quantization_configs = {}
@@ -1435,7 +1435,7 @@ class OVQuantizer(OptimumQuantizer):
             if isinstance(config, OVWeightQuantizationConfig) and config.quant_method == OVQuantizationMethod.HYBRID:
                 config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
 
-            if dataset_was_built and nncf_dataset is not None and nncf_dataset.get_length() is not None:
+            if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
                 # For datasets built from the quantization config, override num_samples per submodel
                 config = config.clone()
                 config.num_samples = nncf_dataset.get_length()
