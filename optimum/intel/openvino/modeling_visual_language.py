@@ -411,16 +411,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
-    @property
-    def vision_embedding_crop_size(self) -> Optional[int]:
-        """
-        Returns the crop size of the vision embedding model if it exists in the config, None otherwise.
-        """
-        try:
-            return self.config.vision_config.image_size
-        except AttributeError:
-            return None
-
     def clear_requests(self):
         if self._compile_only:
             raise ValueError(
@@ -2361,11 +2351,6 @@ class _OVPhi3VisionForCausalLM(OVModelForVisualCausalLM):
         self.glb_GN = torch.tensor(self.config.glb_GN)
         self.image_dim_out = self.config.img_processor["image_dim_out"]
 
-    @property
-    def vision_embedding_crop_size(self) -> Optional[int]:
-        img_processor_config = AutoConfig.from_pretrained(self.config.img_processor["model_name"])
-        return img_processor_config.vision_config.image_size
-
     def get_vision_embeddings(self, pixel_values, image_sizes, **kwargs):
         num_images, num_crops, c, h, w = pixel_values.shape
         img_features = self.vision_embeddings(pixel_values.flatten(0, 1)).last_hidden_state.reshape(
@@ -3741,10 +3726,6 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
         self._COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE = [-9999, -1]  # For backward compatibility
         self._COMPATIBLE_AUDIO_SPECIAL_TOKEN_ID_RANGE = [float("-inf"), -10000]  # For backward compatibility
         self.image_dim_out = self.image_config.get("image_dim_out", self.image_config["hidden_size"])
-
-    @property
-    def vision_embedding_crop_size(self) -> Optional[int]:
-        return self.config.embd_layer["image_embd_layer"]["crop_size"]
 
     # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L669
     def image_embed(
