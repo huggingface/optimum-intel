@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
 
       - name: Checkout code
         uses: actions/checkout@v4
