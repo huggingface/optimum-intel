@@ -31,6 +31,8 @@ jobs:
       fail-fast: false
       matrix:
         # nightly openvino tests
+        openvino-version: ["openvino-nightly"]
+        nncf-version: ["nncf-stable"]
         test-pattern:
           [
             "*export*",
@@ -40,16 +42,15 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        nncf-version: ["stable"]
-        openvino-version: ["nightly"]
+
         # main nncf tests
         include:
-          - test-pattern: "*quantization*"
-            openvino-version: "stable"
-            nncf-version: "main"
-          - test-pattern: "*export*"
-            openvino-version: "stable"
-            nncf-version: "main"
+          - openvino-version: "openvino-stable"
+            nncf-version: "nncf-develop"
+            test-pattern: "*quantization*"
+          - openvino-version: "openvino-stable"
+            nncf-version: "nncf-develop"
+            test-pattern: "*export*"
 
     runs-on: ubuntu-22.04
 
@@ -67,15 +68,15 @@ jobs:
           pip install --upgrade pip uv
           uv pip install .[openvino,diffusers,tests]
 
-      - if: ${{ matrix.openvino-version == 'nightly' }}
+      - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
         run: |
           uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
-      - if: ${{ matrix.nncf-version == 'main' }}
+      - if: ${{ matrix.nncf-version == 'nncf-develop' }}
         name: Install NNCF from main
         run: |
-          pip install git+https://github.com/openvinotoolkit/nncf.git@main
+          pip install git+https://github.com/openvinotoolkit/nncf.git
 
       - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
