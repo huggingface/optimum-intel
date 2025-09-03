@@ -1,4 +1,4 @@
-name: OpenVINO - Nightly Tests
+name: OpenVINO - Nightly Test
 
 on:
   workflow_dispatch:

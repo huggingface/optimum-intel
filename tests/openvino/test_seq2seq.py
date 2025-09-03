@@ -88,8 +88,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "t5",
     )
 
-    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.4.0")):
-        # There are known issues with marian model on OpenVINO 2025.3.x
+    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0")):
+        # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
         SUPPORTED_ARCHITECTURES += ("marian",)
 
     GENERATION_LENGTH = 100

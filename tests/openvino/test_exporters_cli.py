@@ -239,7 +239,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
+            {"decoder": 22, "decoder_with_past": 21, "encoder": 14}
             if is_transformers_version("<=", "4.36.0")
             else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
             (

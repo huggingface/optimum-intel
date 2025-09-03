@@ -182,7 +182,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon": 2,
         "falcon-40b": 2,
         "persimmon": 2,
-        "biogpt": 5,
+        "biogpt": 5 if is_transformers_version(">=", "4.40.0") else 0,
         "aquila": 2,
         "aquila2": 2,
         "xverse": 2,
