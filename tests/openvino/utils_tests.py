@@ -19,10 +19,9 @@ import numpy as np
 import openvino as ov
 import torch
 
+from optimum.exporters import TasksManager
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
-
-from optimum.exporters import TasksManager
 
 
 MODEL_NAMES = {
@@ -452,8 +451,6 @@ def get_num_sdpa(model):
     return num_sdpa
 
 
-
-
 VALID_MODEL_TYPE = set()
 supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["transformers"]
 for model_type in supported_model_type:
@@ -465,5 +462,3 @@ for model_type in supported_model_type:
 
         if is_transformers_version(">=", min_transformers) and is_transformers_version("<", max_transformers):
             VALID_MODEL_TYPE.add(model_type)
-
-

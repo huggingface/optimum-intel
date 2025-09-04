@@ -24,9 +24,9 @@ from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassifi
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    VALID_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
-    VALID_MODEL_TYPE,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -68,7 +68,6 @@ from optimum.intel.utils.import_utils import (
     is_tokenizers_version,
     is_transformers_version,
 )
-from optimum.exporters import TasksManager
 
 
 class OVCLIExportTestCase(unittest.TestCase):
