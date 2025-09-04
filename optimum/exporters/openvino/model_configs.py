@@ -2088,6 +2088,7 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
 class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTS_PAST = True
     MIN_TRANSFORMERS_VERSION = "4.40.0"
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
 
     def __init__(
         self,
