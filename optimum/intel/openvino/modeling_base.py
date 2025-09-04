@@ -479,7 +479,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else ".*\.onnx$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,
