@@ -768,6 +768,8 @@ class OVCalibrationDatasetBuilder:
             for submodel_name in collected_inputs:
                 single_batch_collected_inputs = []
                 for input_dict in collected_inputs[submodel_name]:
+                    # We expect 'pixel_values' to be a 4D tensor: [batch, channel, height, width].
+                    # This is standard for batches of images in vision models.
                     if (
                         "pixel_values" in input_dict
                         and hasattr(input_dict["pixel_values"], "dim")
@@ -780,7 +782,10 @@ class OVCalibrationDatasetBuilder:
                             single_batch_input_dict = {}
                             for k, v in input_dict.items():
                                 if not hasattr(v, "shape") or v.shape[0] != batch_size:
-                                    raise ValueError(f"Expected a tensor with batch size {batch_size} for key '{k}'.")
+                                    raise ValueError(
+                                        f"Expected a tensor with batch size {batch_size} for key '{k}', "
+                                        f"but got shape {getattr(v, 'shape', None)}."
+                                    )
                                 single_batch_input_dict[k] = v[i : i + 1]
                             single_batch_collected_inputs.append(single_batch_input_dict)
                     else:
