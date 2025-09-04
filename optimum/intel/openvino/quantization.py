@@ -19,7 +19,6 @@ import logging
 import os
 from collections import UserDict, deque
 from contextlib import contextmanager
-from functools import lru_cache
 from io import BytesIO
 from itertools import islice
 from pathlib import Path
@@ -50,6 +49,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import check_dummy_inputs_are_allowed
 from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 from optimum.quantization_base import OptimumQuantizer
+from optimum.utils.logging import warn_once
 
 from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
@@ -695,13 +695,6 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
-
-        @lru_cache(maxsize=1)
-        def log_update_nncf_warning_message():
-            if is_nncf_version("<=", "2.18"):
-                # TODO (Nikita): Remove once NNCF 2.19 is released.
-                logger.warning("If you are facing RAM OOM issues, please update to the latest NNCF develop version.")
-
         processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
         try:
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
@@ -772,21 +765,31 @@ class OVCalibrationDatasetBuilder:
                     # This is standard for batches of images in vision models.
                     if (
                         "pixel_values" in input_dict
-                        and hasattr(input_dict["pixel_values"], "dim")
+                        and isinstance(input_dict["pixel_values"], torch.Tensor)
                         and input_dict["pixel_values"].dim() == 4
                         and input_dict["pixel_values"].shape[0] > 1
                     ):
-                        log_update_nncf_warning_message()
+                        if is_nncf_version("<=", "2.18"):
+                            # TODO (Nikita): Remove once NNCF 2.19 is released.
+                            warn_once(
+                                logger,
+                                "If you are facing RAM OOM issues, please update to the latest NNCF develop version.",
+                            )
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
-                            for k, v in input_dict.items():
-                                if not hasattr(v, "shape") or v.shape[0] != batch_size:
-                                    raise ValueError(
-                                        f"Expected a tensor with batch size {batch_size} for key '{k}', "
-                                        f"but got shape {getattr(v, 'shape', None)}."
+                            for input_name, input_value in input_dict.items():
+                                if not isinstance(input_value, torch.Tensor):
+                                    raise TypeError(
+                                        f"Expected a torch.Tensor instance for input '{input_name}', "
+                                        f"but got {type(input_value)}."
                                     )
-                                single_batch_input_dict[k] = v[i : i + 1]
+                                if input_value.shape[0] != batch_size:
+                                    raise ValueError(
+                                        f"Expected a tensor with batch size {batch_size} for input '{input_name}', "
+                                        f"but got shape {input_value.shape}."
+                                    )
+                                single_batch_input_dict[input_name] = input_value[i : i + 1]
                             single_batch_collected_inputs.append(single_batch_input_dict)
                     else:
                         single_batch_collected_inputs.append(input_dict)
@@ -795,8 +798,8 @@ class OVCalibrationDatasetBuilder:
             for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
 
-        for k in collected_inputs:
-            collected_inputs[k] = nncf.Dataset(collected_inputs[k])
+        for submodel_name in collected_inputs:
+            collected_inputs[submodel_name] = nncf.Dataset(collected_inputs[submodel_name])
 
         return OVCalibrationDataset(collected_inputs)
 
