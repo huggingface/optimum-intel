@@ -24,6 +24,7 @@ from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassifi
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    TEST_NAME_TO_MODEL_TYPE,
     VALID_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
@@ -755,7 +756,11 @@ class OVCLIExportTestCase(unittest.TestCase):
     ]
 
     # filter models type depending on min max transformers version
-    SUPPORTED_4BIT_CONFIGURATIONS = [config for config in TEST_4BIT_CONFIGURATIONS if config[1] in VALID_MODEL_TYPE]
+    SUPPORTED_4BIT_CONFIGURATIONS = [
+        config
+        for config in TEST_4BIT_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in VALID_MODEL_TYPE
+    ]
 
     def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:

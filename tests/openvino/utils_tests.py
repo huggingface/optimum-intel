@@ -451,6 +451,17 @@ def get_num_sdpa(model):
     return num_sdpa
 
 
+# TODO : complete
+TEST_NAME_TO_MODEL_TYPE = {
+    "aquila2": "aquila",
+    "baichuan2": "baichuan",
+    "baichuan2-13b": "baichuan",
+    "falcon": "falcon-40b",
+    "llama_awq": "llama",
+    "opt125m": "opt",
+}
+
+
 VALID_MODEL_TYPE = set()
 supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["transformers"]
 for model_type in supported_model_type:

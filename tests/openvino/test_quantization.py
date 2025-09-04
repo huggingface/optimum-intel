@@ -87,6 +87,7 @@ from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     check_compression_state_per_model,
     VALID_MODEL_TYPE,
+    TEST_NAME_TO_MODEL_TYPE,
 )
 
 _TASK_TO_DATASET = {
@@ -1067,7 +1068,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     ]
 
     # filter models type depending on min max transformers version
-    LOAD_IN_4_BITS_SCOPE = [config for config in LOAD_IN_4_BITS_SCOPE if config[1] in VALID_MODEL_TYPE]
+    LOAD_IN_4_BITS_SCOPE = [
+        config
+        for config in LOAD_IN_4_BITS_SCOPE
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in VALID_MODEL_TYPE
+    ]
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         (OVModelForCausalLM, "gpt2", False),
