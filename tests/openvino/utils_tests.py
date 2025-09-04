@@ -20,7 +20,9 @@ import openvino as ov
 import torch
 
 from optimum.intel.openvino.modeling_base import OVBaseModel
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version
+from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
+
+from optimum.exporters import TasksManager
 
 
 MODEL_NAMES = {
@@ -93,7 +95,7 @@ MODEL_NAMES = {
     "idefics3": "hf-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
-    "internvl2": "katuni4ka/tiny-random-internvl2",
+    "internvl_chat": "katuni4ka/tiny-random-internvl2",
     "jais": "katuni4ka/tiny-random-jais",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
@@ -126,7 +128,7 @@ MODEL_NAMES = {
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "hf-internal-testing/tiny-random-MPNetModel",
     "mt5": "stas/mt5-tiny-random",
-    "nanollava": "katuni4ka/tiny-random-nanollava",
+    "llava-qwen2": "katuni4ka/tiny-random-nanollava",
     "nanollava_vision_tower": "katuni4ka/tiny-random-siglip",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "olmo": "katuni4ka/tiny-random-olmo-hf",
@@ -448,3 +450,20 @@ def get_num_sdpa(model):
         if op.type_info.name == "ScaledDotProductAttention":
             num_sdpa += 1
     return num_sdpa
+
+
+
+
+VALID_MODEL_TYPE = set()
+supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["transformers"]
+for model_type in supported_model_type:
+    if supported_model_type[model_type].get("openvino"):
+        export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+
+        min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
+        max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+
+        if is_transformers_version(">=", min_transformers) and is_transformers_version("<", max_transformers):
+            VALID_MODEL_TYPE.add(model_type)
+
+

@@ -26,6 +26,7 @@ from utils_tests import (
     MODEL_NAMES,
     check_compression_state_per_model,
     get_num_quantized_nodes,
+    VALID_MODEL_TYPE,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -67,6 +68,7 @@ from optimum.intel.utils.import_utils import (
     is_tokenizers_version,
     is_transformers_version,
 )
+from optimum.exporters import TasksManager
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -484,7 +486,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             [
                 (
                     "image-text-to-text",
-                    "internvl2",
+                    "internvl_chat",
                     "f8e4m3",
                     "--dataset contextual --num-samples 1 --trust-remote-code",
                     {
@@ -575,231 +577,186 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --group-size 16 --backup-precision none --ratio 0.5",
             {"model": {"int4": 6}},
         ),
+        (
+            "image-text-to-text",
+            "llava_next",
+            "int4 --group-size 16 --ratio 0.8",
+            {
+                "lm_model": {"int8": 14, "int4": 16},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava_next",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava-qwen2",
+            "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 15},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava-qwen2",
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 15},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava_next_video",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_resampler_model": {},
+                "multi_modal_projector_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "qwen2_vl",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "phi3_v",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "phi3_v",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 4, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "qwen2_5_vl",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 10, "int4": 20}
+                if is_transformers_version(">=", "4.54")
+                else {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 12},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "phi4mm",
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 42},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "vision_projection_model": {"int8": 2},
+                "audio_embeddings_model": {},
+                "audio_forward_embeddings_model": {"int8": 6},
+                "audio_encoder_model": {"int8": 25},
+                "audio_vision_projection_model": {"int8": 2},
+                "audio_speech_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llama4",
+            "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
+            '--sensitivity-metric "mean_activation_magnitude"',
+            {
+                "lm_model": {"int8": 46, "int4": 56},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 16},
+            },
+        ),
     ]
 
-    if is_transformers_version(">=", "4.40.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "llava_next",
-                    "int4 --group-size 16 --ratio 0.8",
-                    {
-                        "lm_model": {"int8": 14, "int4": 16},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 9},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "llava_next",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
-                    "--dataset contextual --num-samples 1",
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 9},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "nanollava",
-                    "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 16, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 15},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "nanollava",
-                    'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 16, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 15},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.42.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "llava_next_video",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
-                    "--dataset contextual --num-samples 1",
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_resampler_model": {},
-                        "multi_modal_projector_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "minicpmv",
-                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 26},
-                        "resampler_model": {"int8": 6},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "minicpmv",
-                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 26},
-                        "resampler_model": {"int8": 6},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "internvl2",
-                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 11},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "internvl2",
-                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 11},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "qwen2_vl",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1",
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45.0") and is_transformers_version("<", "4.54.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "phi3_v",
-                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 10},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "phi3_v",
-                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 4, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_projection_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "qwen2_5_vl",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 10, "int4": 20}
-                        if is_transformers_version(">=", "4.54")
-                        else {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 12},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "phi4mm",
-                    'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 42},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 8},
-                        "vision_projection_model": {"int8": 2},
-                        "audio_embeddings_model": {},
-                        "audio_forward_embeddings_model": {"int8": 6},
-                        "audio_encoder_model": {"int8": 25},
-                        "audio_vision_projection_model": {"int8": 2},
-                        "audio_speech_projection_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.51.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "llama4",
-                    "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
-                    '--sensitivity-metric "mean_activation_magnitude"',
-                    {
-                        "lm_model": {"int8": 46, "int4": 56},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 16},
-                    },
-                ),
-            ]
-        )
+    # filter models type depending on min max transformers version
+    SUPPORTED_4BIT_CONFIGURATIONS = [config for config in TEST_4BIT_CONFIGURATIONS if config[1] in VALID_MODEL_TYPE]
 
     def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
@@ -1058,7 +1015,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
-    @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
+    @parameterized.expand(SUPPORTED_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):

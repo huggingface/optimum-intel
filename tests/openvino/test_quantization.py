@@ -918,7 +918,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             [
                 (
                     OVModelForVisualCausalLM,
-                    "nanollava",
+                    "llava-qwen2",
                     True,
                     dict(
                         bits=4,
@@ -928,7 +928,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         sensitivity_metric="mean_activation_variance",
                         num_samples=1,
                         processor=MODEL_NAMES["nanollava_vision_tower"],
-                        tokenizer=MODEL_NAMES["nanollava"],
+                        tokenizer=MODEL_NAMES["llava-qwen2"],
                         trust_remote_code=True,
                     ),
                     {
@@ -993,7 +993,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ),
                 (
                     OVModelForVisualCausalLM,
-                    "internvl2",
+                    "internvl_chat",
                     True,
                     dict(
                         bits=4,
@@ -1126,7 +1126,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava", False))
 
     if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "nanollava", True))
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
 
     if is_transformers_version(">=", "4.42.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava_next_video", False))
@@ -1730,7 +1730,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 [
                     (
                         OVModelForVisualCausalLM,
-                        "internvl2",
+                        "internvl_chat",
                         True,
                         dict(
                             quantization_configs={
