@@ -49,6 +49,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import check_dummy_inputs_are_allowed
 from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 from optimum.quantization_base import OptimumQuantizer
+from optimum.utils.logging import warn_once
 
 from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
@@ -59,6 +60,7 @@ from ..utils.import_utils import (
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
+    is_nncf_version,
     is_sentence_transformers_available,
 )
 from ..utils.modeling_utils import get_model_device
@@ -693,7 +695,6 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
-
         processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
         try:
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
@@ -754,12 +755,51 @@ class OVCalibrationDatasetBuilder:
                 )
 
                 collected_inputs["lm_model"].append(language_model_inputs)
+
+            # If an input dict contains `pixel_values` key and its batch size is greater than 1, we split the data
+            # into multiple single-batch dicts below. This lowers peak RAM consumption during quantization calibration.
+            for submodel_name in collected_inputs:
+                single_batch_collected_inputs = []
+                for input_dict in collected_inputs[submodel_name]:
+                    # We expect 'pixel_values' to be a 4D tensor: [batch, channel, height, width].
+                    # This is standard for batches of images in vision models.
+                    if (
+                        "pixel_values" in input_dict
+                        and isinstance(input_dict["pixel_values"], torch.Tensor)
+                        and input_dict["pixel_values"].dim() == 4
+                        and input_dict["pixel_values"].shape[0] > 1
+                    ):
+                        if is_nncf_version("<=", "2.18"):
+                            # TODO (Nikita): Remove once NNCF 2.19 is released.
+                            warn_once(
+                                logger,
+                                "If you are facing RAM OOM issues, please update to the latest NNCF develop version.",
+                            )
+                        batch_size = input_dict["pixel_values"].shape[0]
+                        for i in range(batch_size):
+                            single_batch_input_dict = {}
+                            for input_name, input_value in input_dict.items():
+                                if not isinstance(input_value, torch.Tensor):
+                                    raise TypeError(
+                                        f"Expected a torch.Tensor instance for input '{input_name}', "
+                                        f"but got {type(input_value)}."
+                                    )
+                                if input_value.shape[0] != batch_size:
+                                    raise ValueError(
+                                        f"Expected a tensor with batch size {batch_size} for input '{input_name}', "
+                                        f"but got shape {input_value.shape}."
+                                    )
+                                single_batch_input_dict[input_name] = input_value[i : i + 1]
+                            single_batch_collected_inputs.append(single_batch_input_dict)
+                    else:
+                        single_batch_collected_inputs.append(input_dict)
+                collected_inputs[submodel_name] = single_batch_collected_inputs
         finally:
             for ov_component in vision_embedding_components:
                 ov_component.request = ov_component.request.request
 
-        for k in collected_inputs:
-            collected_inputs[k] = nncf.Dataset(collected_inputs[k])
+        for submodel_name in collected_inputs:
+            collected_inputs[submodel_name] = nncf.Dataset(collected_inputs[submodel_name])
 
         return OVCalibrationDataset(collected_inputs)
 
@@ -1298,7 +1338,9 @@ class OVQuantizer(OptimumQuantizer):
         **kwargs,
     ):
         quantization_config = ov_config.quantization_config
+        dataset_was_built_from_config = False
         if calibration_dataset is None and quantization_config.dataset is not None:
+            dataset_was_built_from_config = True
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
         quantization_configs = {}
@@ -1353,13 +1395,7 @@ class OVQuantizer(OptimumQuantizer):
                 #
                 # Full quantization
                 #
-                if isinstance(self.model, _OVModelForWhisper):
-                    for submodel_name in self.model.ov_submodels:
-                        # quantization_config.num_samples of audio samples result in more actual model inputs
-                        config = quantization_config.clone()
-                        config.num_samples = calibration_dataset[submodel_name].get_length()
-                        quantization_configs[submodel_name] = config
-                elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                     diffusion_model_name = next(iter(calibration_dataset))
                     quantization_configs[diffusion_model_name] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8)
@@ -1403,6 +1439,11 @@ class OVQuantizer(OptimumQuantizer):
 
             if isinstance(config, OVWeightQuantizationConfig) and config.quant_method == OVQuantizationMethod.HYBRID:
                 config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
+
+            if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
+                # For datasets built from the quantization config, override num_samples per submodel
+                config = config.clone()
+                config.num_samples = nncf_dataset.get_length()
 
             if isinstance(config, OVWeightQuantizationConfig):
                 if config.bits == 8:
