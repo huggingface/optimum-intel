@@ -86,6 +86,7 @@ from utils_tests import (
     get_num_quantized_nodes,
     _ARCHITECTURES_TO_EXPECTED_INT8,
     check_compression_state_per_model,
+    VALID_MODEL_TYPE,
 )
 
 _TASK_TO_DATASET = {
@@ -886,226 +887,187 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "llava_next",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="hessian_input_activation",
+                num_samples=1,
+                processor=MODEL_NAMES["llava_next"],
+            ),
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava-qwen2",
+            True,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_variance",
+                num_samples=1,
+                processor=MODEL_NAMES["nanollava_vision_tower"],
+                tokenizer=MODEL_NAMES["llava-qwen2"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 15},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava_next_video",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="hessian_input_activation",
+                num_samples=1,
+                processor=MODEL_NAMES["llava_next_video"],
+            ),
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_resampler_model": {},
+                "multi_modal_projector_model": {"int8": 2},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "minicpmv",
+            True,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                processor=MODEL_NAMES["minicpmv"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "internvl_chat",
+            True,
+            dict(
+                bits=4,
+                group_size=4,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_vl",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "phi3_v",
+            True,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 4, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_5_vl",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 12},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llama4",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 46, "int4": 56},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 16},
+            },
+        ),
     ]
 
-    if is_transformers_version(">=", "4.40.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llava_next",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="hessian_input_activation",
-                        num_samples=1,
-                        processor=MODEL_NAMES["llava_next"],
-                    ),
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 9},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llava-qwen2",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=8,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_variance",
-                        num_samples=1,
-                        processor=MODEL_NAMES["nanollava_vision_tower"],
-                        tokenizer=MODEL_NAMES["llava-qwen2"],
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 16, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 15},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.42.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llava_next_video",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="hessian_input_activation",
-                        num_samples=1,
-                        processor=MODEL_NAMES["llava_next_video"],
-                    ),
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_resampler_model": {},
-                        "multi_modal_projector_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "minicpmv",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        processor=MODEL_NAMES["minicpmv"],
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 26},
-                        "resampler_model": {"int8": 6},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "internvl_chat",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=4,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 11},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_vl",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "phi3_v",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 4, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_projection_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_5_vl",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 12},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.51.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llama4",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 46, "int4": 56},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 16},
-                    },
-                ),
-            ]
-        )
+    # filter models type depending on min max transformers version
+    LOAD_IN_4_BITS_SCOPE = [config for config in LOAD_IN_4_BITS_SCOPE if config[1] in VALID_MODEL_TYPE]
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         (OVModelForCausalLM, "gpt2", False),
