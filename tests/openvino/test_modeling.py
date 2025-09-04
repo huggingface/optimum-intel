@@ -1247,7 +1247,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon": 2,
         "falcon-40b": 2,
         "persimmon": 2,
-        "biogpt": 5,
+        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
         "aquila": 2,
         "aquila2": 2,
         "xverse": 2,
@@ -1971,12 +1971,15 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         # "longt5",
         "m2m_100",
-        "marian",
         "mbart",
         "mt5",
         "pegasus",
         "t5",
     )
+
+    if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.4.0")):
+        # There are known issues with marian model on OpenVINO 2025.3.x
+        SUPPORTED_ARCHITECTURES += ("marian",)
 
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
