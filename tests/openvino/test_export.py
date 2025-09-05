@@ -76,11 +76,16 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
-        "llava": OVModelForVisualCausalLM,
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
     }
+
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "speecht5")
+
+    if is_transformers_version(">=", "4.37.2"):
+        SUPPORTED_ARCHITECTURES.update({"llava": OVModelForVisualCausalLM})
+        GENERATIVE_MODELS += ("llava",)
 
     if is_transformers_version(">=", "4.39"):
         SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
@@ -100,9 +105,6 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
-
-    if is_transformers_version(">=", "4.54"):
-        SUPPORTED_ARCHITECTURES.update({"ernie4_5": OVModelForCausalLM})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 

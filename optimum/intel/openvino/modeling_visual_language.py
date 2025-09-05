@@ -923,6 +923,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         Preprocess input instruction and an image.
         """
 
+    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
+
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def __init__(
@@ -3570,9 +3578,14 @@ class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
         for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
             nb_patches_h = p_attn_mask[:, 0].sum()
             nb_patches_w = p_attn_mask[0].sum()
-
-            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
-            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+            if is_transformers_version("<", "4.55"):
+                fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+            else:
+                h_indices = torch.arange(nb_patches_h, device=pixel_values.device, dtype=pixel_values.dtype)
+                w_indices = torch.arange(nb_patches_w, device=pixel_values.device, dtype=pixel_values.dtype)
+                fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
+                fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
 
             bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)

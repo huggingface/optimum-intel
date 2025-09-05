@@ -1190,7 +1190,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+        SUPPORTED_ARCHITECTURES += ("deepseek_v3",)
+
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -1222,24 +1225,24 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
-        "bloom": 5,
+        "bloom": 5 if is_transformers_version(">=", "4.49") else 0,
         "chatglm": 2,
         "codegen": 5,
         "codegen2": 2,
-        "gpt2": 5,
-        "gptj": 5,
-        "gpt_neo": 4,
-        "gpt_neox": 5,
+        "gpt2": 5 if is_transformers_version(">=", "4.42") else 0,
+        "gptj": 5 if is_transformers_version(">=", "4.49") else 0,
+        "gpt_neo": 4 if is_transformers_version(">=", "4.45") else 0,
+        "gpt_neox": 5 if is_transformers_version(">=", "4.45") else 0,
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
-        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
-        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mistral": 2 if is_transformers_version(">=", "4.40") else 0,
+        "mixtral": 2 if is_transformers_version(">=", "4.40") else 0,
         "mpt": 5,
-        "opt": 5,
+        "opt": 5 if is_transformers_version(">=", "4.46") else 0,
         "pegasus": 2,
         "qwen": 2,
-        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "phi": 2 if is_transformers_version(">=", "4.40") else 0,
         "internlm2": 4,
         "falcon": 2,
         "falcon-40b": 2,
@@ -1271,6 +1274,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "minicpm3": 6,
         "phi3-moe": 2,
         "deepseek": 2,
+        "deepseek_v3": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
@@ -1280,7 +1284,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
-        "ernie4_5": 2,
+        "ernie4_5": 4,
     }
 
     # TODO: remove gptq/awq from here
@@ -1394,13 +1398,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"]:
+        if model_arch in {"gemma2", "gemma3_text"}:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
+        elif model_arch in {
+            "aquila",
+            "aquila2",
+            "baichuan2",
+            "baichuan2-13b",
+            "decilm",
+            "internlm",
+            "internlm2",
+            "jais",
+            "orion",
+            "xverse",
+        }:
+            additional_inputs = {"use_cache": False}
+
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
@@ -1585,10 +1603,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs["trust_remote_code"] = True
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
@@ -1663,6 +1678,20 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
+
+        if model_arch in {
+            "aquila",
+            "aquila2",
+            "baichuan2",
+            "baichuan2-13b",
+            "decilm",
+            "internlm",
+            "internlm2",
+            "jais",
+            "orion",
+            "xverse",
+        }:
+            model_kwargs["use_cache"] = False
 
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
@@ -1969,7 +1998,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
             model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG
         )
-        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
         self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
@@ -2121,7 +2150,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         "data2vec-audio",
         "hubert",
         "sew",
-        "sew_d",
+        "sew-d",
         "unispeech",
         "unispeech-sat",
         "wavlm",
@@ -2191,7 +2220,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         "data2vec-audio",
         "hubert",
         "sew",
-        "sew_d",
+        "sew-d",
         "unispeech",
         "unispeech-sat",
         "wavlm",
@@ -2441,19 +2470,22 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["llava"]
+    SUPPORTED_ARCHITECTURES = []
     SUPPORT_VIDEO = []
     SUPPORT_AUDIO = []
 
+    if is_transformers_version(">=", "4.37.2"):
+        SUPPORTED_ARCHITECTURES += ["llava"]
+
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "nanollava"]
+        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "llava-qwen2"]
 
     if is_transformers_version(">=", "4.42.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next_video"]
         SUPPORT_VIDEO.append("llava_next_video")
 
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl_chat", "phi3_v", "qwen2_vl"]
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
@@ -2467,8 +2499,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
+
+    if is_transformers_version(">=", "4.54.0"):
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
+
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
 
     IMAGE = Image.open(
         requests.get(
@@ -2533,13 +2570,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, **loading_kwargs
         )
         transformers_model.eval()
-        if "internvl2" in model_arch:
+        if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
             transformers_model.img_context_token_id = img_context_token_id
-        if "nanollava" in model_arch:
+        if "llava-qwen2" in model_arch:
             transformers_model.get_vision_tower().load_model()
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
@@ -2572,8 +2609,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.clear_requests()
         self._check_device_and_request(ov_model, test_device, False)
 
-        # pytorch minicpmv and internvl2 are not designed to be used via forward
-        if model_arch not in ["minicpmv", "internvl2"]:
+        # pytorch minicpmv and internvl_chat are not designed to be used via forward
+        if model_arch not in ["minicpmv", "internvl_chat"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -2623,7 +2660,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             )
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "internvl2"]:
+        if model_arch in ["minicpmv", "internvl_chat"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -2649,7 +2686,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl2"]:
+            if model_arch in ["minicpmv", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -2667,7 +2704,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl2"]:
+            if model_arch in ["minicpmv", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -2813,7 +2850,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
 
-        if model_arch == "nanollava":
+        if model_arch == "llava-qwen2":
             processor = AutoProcessor.from_pretrained(
                 config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
@@ -2821,7 +2858,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
-        elif model_arch == "internvl2":
+        elif model_arch == "internvl_chat":
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
