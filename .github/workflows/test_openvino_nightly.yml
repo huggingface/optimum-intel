@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - v*-release
+      - fix-disk-issue
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
