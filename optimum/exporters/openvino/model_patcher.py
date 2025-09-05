@@ -6670,7 +6670,7 @@ class MambaPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers import PretrainedConfig
-        from transformers.cache_utils import MambaCache
+        from transformers.models.mamba.modeling_mamba import MambaCache
 
         super().__init__(config, model, model_kwargs)
 

@@ -59,7 +59,7 @@ from .utils import (
 
 
 if is_transformers_version(">=", "4.43"):
-    from transformers.cache_utils import MambaCache
+    from transformers.models.mamba.modeling_mamba import MambaCache
 else:
     MambaCache = object
 
