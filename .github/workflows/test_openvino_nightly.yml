@@ -8,7 +8,6 @@ on:
   push:
     branches:
       - v*-release
-      - fix-disk-issue
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -44,12 +43,12 @@ jobs:
 
         include:
           # stable openvino + nncf develop tests
-          - openvino-version: "openvino-stable"
-            nncf-version: "nncf-develop"
+          - nncf-version: "nncf-develop"
+            openvino-version: "openvino-stable"
             test-pattern: "*{quantization,export}*"
           # nightly openvino + nncf develop tests
-          - openvino-version: "openvino-nightly"
-            nncf-version: "nncf-develop"
+          - nncf-version: "nncf-develop"
+            openvino-version: "openvino-nightly"
             test-pattern: "*{quantization,export}*"
 
     runs-on: ubuntu-22.04
