@@ -63,7 +63,7 @@ jobs:
       - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
-          uv pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
+          uv pip install auto-gptq "autoawq<0.2.8"
 
       - name: Test with Pytest
         run: |
