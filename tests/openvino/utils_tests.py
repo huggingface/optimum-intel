@@ -170,7 +170,7 @@ MODEL_NAMES = {
     "siglip": "katuni4ka/tiny-random-SiglipModel",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
-    "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
+    "sew-d": "asapp/sew-d-tiny-100k-ft-ls100h",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
     "swin-window": "yujiepan/tiny-random-swin-patch4-window7-224",
     "t5": "hf-internal-testing/tiny-random-t5",
@@ -291,7 +291,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_resampler_model": 0,
         "multi_modal_projector_model": 2,
     },
-    "nanollava": {
+    "llava-qwen2": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 15,
@@ -470,7 +470,6 @@ TEST_NAME_TO_MODEL_TYPE = {
     "perceiver_text": "perceiver",
     "perceiver_vision": "perceiver",
     "phi3-moe": "phimoe",
-    "sew_d": "sew-d",
     "swin-window": "swin",
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
