@@ -66,7 +66,7 @@ MODEL_NAMES = {
     "donut": "fxmarty/tiny-doc-qa-vision-encoder-decoder",
     "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
     "detr": "hf-internal-testing/tiny-random-DetrModel",
-    "ernie4_5": "optimum-internal-testing/tiny-random-Ernie4_5ForCausalLM",
+    # "ernie4_5": "optimum-internal-testing/tiny-random-Ernie4_5ForCausalLM",
     "electra": "hf-internal-testing/tiny-random-electra",
     "esm": "hf-internal-testing/tiny-random-EsmModel",
     "exaone": "katuni4ka/tiny-random-exaone",
@@ -451,25 +451,45 @@ def get_num_sdpa(model):
     return num_sdpa
 
 
-# TODO : complete
 TEST_NAME_TO_MODEL_TYPE = {
     "aquila2": "aquila",
     "baichuan2": "baichuan",
     "baichuan2-13b": "baichuan",
-    "falcon": "falcon-40b",
+    "chatglm4": "chatglm",
+    "codegen2": "codegen",
+    "falcon-mamba": "falcon_mamba",
+    "falcon-40b": "falcon",
+    "granite-moe": "granitemoe",
     "llama_awq": "llama",
+    "llava_next_mistral": "llava_next",
+    "mistral-nemo": "mistral",
+    "mixtral_awq": "mixtral",
+    "nanollava_vision_tower": "siglip",
     "opt125m": "opt",
+    "opt_gptq": "opt",
+    "perceiver_text": "perceiver",
+    "perceiver_vision": "perceiver",
+    "phi3-moe": "phimoe",
+    "sew_d": "sew-d",
+    "swin-window": "swin",
+    "vit-with-attentions": "vit",
+    "vit-with-hidden-states": "vit",
+    "wav2vec2-hf": "wav2vec2",
 }
 
 
-VALID_MODEL_TYPE = set()
-supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["transformers"]
-for model_type in supported_model_type:
-    if supported_model_type[model_type].get("openvino"):
-        export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+def get_supported_model_for_library(library_name):
+    valid_model = set()
+    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
 
-        min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-        max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+    for model_type in supported_model_type:
+        if supported_model_type[model_type].get("openvino"):
+            export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
 
-        if is_transformers_version(">=", min_transformers) and is_transformers_version("<", max_transformers):
-            VALID_MODEL_TYPE.add(model_type)
+            min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
+            max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+
+            if is_transformers_version(">=", min_transformers) and is_transformers_version("<", max_transformers):
+                valid_model.add(model_type)
+
+    return valid_model

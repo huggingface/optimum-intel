@@ -25,9 +25,9 @@ from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
     TEST_NAME_TO_MODEL_TYPE,
-    VALID_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
+    get_supported_model_for_library,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -759,7 +759,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     SUPPORTED_4BIT_CONFIGURATIONS = [
         config
         for config in TEST_4BIT_CONFIGURATIONS
-        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in VALID_MODEL_TYPE
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
     def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):

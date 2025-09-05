@@ -86,7 +86,7 @@ from utils_tests import (
     get_num_quantized_nodes,
     _ARCHITECTURES_TO_EXPECTED_INT8,
     check_compression_state_per_model,
-    VALID_MODEL_TYPE,
+    get_supported_model_for_library,
     TEST_NAME_TO_MODEL_TYPE,
 )
 
@@ -1071,7 +1071,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     LOAD_IN_4_BITS_SCOPE = [
         config
         for config in LOAD_IN_4_BITS_SCOPE
-        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in VALID_MODEL_TYPE
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
@@ -1685,9 +1685,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         processor=MODEL_NAMES["whisper"],
                         trust_remote_code=True,
                     ),
-                    {"encoder": 14, "decoder": 22}
-                    if is_transformers_version("<", "4.53")
-                    else {"encoder": 14, "decoder": 22},
+                    {"encoder": 14, "decoder": 22},
                     {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
                 ),
             ]
