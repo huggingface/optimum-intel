@@ -14,8 +14,7 @@ from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
 from ...exporters.openvino.utils import save_config
-from .. import OVConfig
-from .configuration import OVQuantizationConfigBase
+from .configuration import OVConfig, OVQuantizationConfigBase
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
