@@ -9,7 +9,6 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     GenerationConfig,
@@ -342,7 +341,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
-        
+
         elif model_arch in {
             "aquila",
             "aquila2",
@@ -356,7 +355,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "xverse",
         }:
             additional_inputs = {"use_cache": False}
-
 
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
@@ -629,7 +627,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         }:
             model_kwargs["use_cache"] = False
 
-
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
@@ -722,13 +719,3 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.allclose(torch.Tensor(ov_logits), ref_logits, atol=5e-3),
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
-
-
-
-
-
-
-
-
-
-
