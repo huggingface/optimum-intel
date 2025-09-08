@@ -45,6 +45,7 @@ from optimum.exporters.onnx.model_configs import (
     MPTOnnxConfig,
     PegasusOnnxConfig,
     PhiOnnxConfig,
+    SamOnnxConfig,
     SpeechT5OnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
@@ -68,6 +69,7 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     GemmaDummyPastKeyValuesGenerator,
+    GPTBigCodeDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import (
@@ -3741,6 +3743,45 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
         return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+# TODO: remove and replace with GPTBigCodeDummyPastKeyValuesGenerator when optimum >= v2
+class GPTBigCodeOpenVINODummyPastKeyValuesGenerator(GPTBigCodeDummyPastKeyValuesGenerator):
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if is_transformers_version("<", "4.54"):
+            if self.multi_query:
+                shape = (
+                    self.batch_size,
+                    self.sequence_length,
+                    self.hidden_size // self.num_attention_heads * 2,
+                )
+            else:
+                shape = (
+                    self.batch_size,
+                    self.num_attention_heads,
+                    self.sequence_length,
+                    self.hidden_size // self.num_attention_heads * 2,
+                )
+            pkv = [
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype) for _ in range(self.num_layers)
+            ]
+
+        else:
+            shape = (
+                self.batch_size,
+                self.num_attention_heads if not self.multi_query else 1,
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+            pkv = [
+                (
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                )
+                for _ in range(self.num_layers)
+            ]
+
+        return pkv
+
+
 @register_in_tasks_manager(
     "gpt_bigcode",
     *[
@@ -3753,10 +3794,39 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     library_name="transformers",
 )
 class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeOpenVINODummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeOpenVINODummyPastKeyValuesGenerator
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
+        if is_transformers_version(">=", "4.54"):
+            return super().add_past_key_values(inputs_or_outputs, direction)
+
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            name = "present"
+        if self._normalized_config.multi_query:
+            decoder_sequence_dim = 1
+        else:
+            decoder_sequence_dim = 2
+        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{name}.{i}.key_value"] = {0: "batch_size", decoder_sequence_dim: decoder_sequence_name}
+
+    def flatten_past_key_values(self, flattened_output, name, idx, t):
+        if is_transformers_version(">=", "4.54"):
+            return super().flatten_past_key_values(flattened_output, name, idx, t)
+
+        flattened_output[f"{name}.{idx}.key_value"] = t
 
 
 @register_in_tasks_manager(
@@ -4571,3 +4641,92 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
 )
 class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
     _MODEL_PATCHER = OVVisionEncoderDecoderPatcher
+
+
+class SAMModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: OnnxConfig,
+        model: PreTrainedModel,
+        model_kwargs: dict[str, Any] | None = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        def patched_forward(
+            pixel_values=None,
+            input_points=None,
+            input_labels=None,
+            image_embeddings=None,
+            image_positional_embeddings=None,
+            return_dict=True,
+            **kwargs,
+        ):
+            if config.variant == "monolith":
+                return self.orig_forward(
+                    pixel_values=pixel_values,
+                    input_points=input_points,
+                    input_labels=input_labels,
+                    image_embeddings=image_embeddings,
+                    return_dict=return_dict,
+                    **kwargs,
+                )
+            elif config.variant == "split":
+                # return_dict = get_argument(args, kwargs, signature, "return_dict")
+                if config.vision_encoder:
+                    # pixel_values = get_argument(args, kwargs, signature, "pixel_values")
+                    image_positional_embeddings = model.get_image_wide_positional_embeddings()
+
+                    # repeat with batch size
+                    batch_size = pixel_values.shape[0]
+                    image_positional_embeddings = image_positional_embeddings.repeat(batch_size, 1, 1, 1)
+
+                    vision_outputs = model.vision_encoder(
+                        pixel_values,
+                        output_attentions=False,
+                        output_hidden_states=False,
+                        return_dict=return_dict,
+                    )
+                    image_embeddings = vision_outputs[0]
+
+                    if not return_dict:
+                        return (image_embeddings, image_positional_embeddings)
+                    else:
+                        return {
+                            "image_embeddings": image_embeddings,
+                            "image_positional_embeddings": image_positional_embeddings,
+                        }
+                else:
+                    if input_points is None:
+                        raise ValueError("input_points is required to export the prompt encoder / mask decoder.")
+
+                    sparse_embeddings, dense_embeddings = model.prompt_encoder(
+                        input_points=input_points,
+                        input_labels=input_labels,
+                        input_boxes=None,  # Not supported in the ONNX export
+                        input_masks=None,  # Not supported in the ONNX export
+                    )
+
+                    outputs = model.mask_decoder(
+                        image_embeddings=image_embeddings,
+                        image_positional_embeddings=image_positional_embeddings,
+                        sparse_prompt_embeddings=sparse_embeddings,
+                        dense_prompt_embeddings=dense_embeddings,
+                        multimask_output=True,  # Not supported in the ONNX export
+                        attention_similarity=None,  # Not supported in the ONNX export
+                        target_embedding=None,  # Not supported in the ONNX export
+                        output_attentions=False,
+                    )
+                    low_res_masks = outputs[0]
+                    iou_predictions = outputs[1]
+                    if not return_dict:
+                        return (iou_predictions, low_res_masks)
+                    else:
+                        return {"iou_scores": iou_predictions, "pred_masks": low_res_masks}
+
+        self.patched_forward = patched_forward
+
+
+# TODO: remove after next release of optimum-onnx
+@register_in_tasks_manager("sam", *["feature-extraction"])
+class SamOpenVINOConfig(SamOnnxConfig):
+    _MODEL_PATCHER = SAMModelPatcher
