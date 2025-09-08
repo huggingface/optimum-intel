@@ -503,7 +503,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    TEST_4BIT_CONFIGURATIONS = [
+    TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             "text-generation-with-past",
             "opt125m",
@@ -758,13 +758,28 @@ class OVCLIExportTestCase(unittest.TestCase):
     # filter models type depending on min max transformers version
     SUPPORTED_4BIT_CONFIGURATIONS = [
         config
-        for config in TEST_4BIT_CONFIGURATIONS
+        for config in TRANSFORMERS_4BIT_CONFIGURATIONS
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
     def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
             main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
+
+    def test_filtered_architectures(cls):
+        if is_transformers_version("<", "4.49"):
+            expected = {"llama4", "qwen2_5_vl" , "phi4mm"}
+        elif is_transformers_version("<", "4.51"):
+            expected = {"llama4", "phi4mm"}
+        elif is_transformers_version("<", "4.52"):
+            expected = set()
+        else:
+            expected = {"llava-qwen2", "phi3_v", "phi4mm"}
+
+        all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
+        filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
+        skipped = all_model_type - filtered_model_type
+        cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, task: str, model_type: str):

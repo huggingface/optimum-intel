@@ -703,7 +703,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
-    LOAD_IN_4_BITS_SCOPE = [
+    TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             OVModelForCausalLM,  # model cls
             "gpt2",  # model name
@@ -1070,7 +1070,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     # filter models type depending on min max transformers version
     LOAD_IN_4_BITS_SCOPE = [
         config
-        for config in LOAD_IN_4_BITS_SCOPE
+        for config in TRANSFORMERS_4BIT_CONFIGURATIONS
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
@@ -1120,6 +1120,21 @@ class OVWeightCompressionTest(unittest.TestCase):
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
+
+    def test_filtered_architectures(cls):
+        if is_transformers_version("<", "4.49"):
+            expected = {"llama4", "qwen2_5_vl" }
+        elif is_transformers_version("<", "4.51"):
+            expected = {"llama4"}
+        elif is_transformers_version("<", "4.52"):
+            expected = set()
+        else:
+            expected = {"llava-qwen2", "phi3_v"}
+
+        all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
+        filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
+        skipped = all_model_type - filtered_model_type
+        cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
