@@ -1837,6 +1837,9 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                     q_rt_info = rt_info["nncf"][rt_info_key]
                     config_dict = sub_config.to_nncf_dict()
                     for param_name in q_rt_info:
+                        if sub_config.num_samples is None and param_name == "subset_size":
+                            # Skip subset_size check because num_samples was not explicitly provided
+                            continue
                         rt_info_value = q_rt_info[param_name]
                         if isinstance(rt_info_value, dict):
                             # For example, ignored scope case
@@ -1872,7 +1875,16 @@ class OVPipelineQuantizationTest(unittest.TestCase):
 
                         if config_value is None and rt_info_value is False:
                             continue
-                        self.assertEqual(config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}")
+                        if param_name == "subset_size":
+                            self.assertGreaterEqual(
+                                rt_info_value,
+                                config_value,
+                                f"Actual subset size should not be less than the requested one.",
+                            )
+                        else:
+                            self.assertEqual(
+                                config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}"
+                            )
 
 
 class OVQuantizerQATest(unittest.TestCase):

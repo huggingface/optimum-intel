@@ -1,0 +1,98 @@
+name: OpenVINO - Nightly Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    # run every day at 4:41
+    - cron: "41 4 * * *"
+  push:
+    branches:
+      - v*-release
+  pull_request:
+    types:
+      - opened
+      - labeled
+      - reopened
+      - synchronize
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUN_SLOW: true
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
+  TRANSFORMERS_IS_CI: true
+  HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+
+jobs:
+  build:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-slow') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # stable and nightly openvino tests
+        openvino-version: ["openvino-stable", "openvino-nightly"]
+        nncf-version: ["nncf-stable"]
+        test-pattern:
+          [
+            "*export*",
+            "*decoder*",
+            "*seq2seq*",
+            "*modeling*",
+            "*diffusion*",
+            "*quantization*",
+          ]
+
+        include:
+          # stable openvino + nncf develop tests
+          - nncf-version: "nncf-develop"
+            openvino-version: "openvino-stable"
+            test-pattern: "*{quantization,export}*"
+          # nightly openvino + nncf develop tests
+          - nncf-version: "nncf-develop"
+            openvino-version: "openvino-nightly"
+            test-pattern: "*{quantization,export}*"
+
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.9
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip uv
+          uv pip install .[openvino,diffusers,tests]
+
+      - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
+        name: Install OpenVINO Nightly
+        run: |
+          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - if: ${{ matrix.nncf-version == 'nncf-develop' }}
+        name: Install NNCF from main
+        run: |
+          pip install git+https://github.com/openvinotoolkit/nncf.git
+
+      - if: ${{ matrix.test-pattern == '*decoder*'}}
+        name: Install auto-gptq, autoawq
+        run: |
+          uv pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Pip freeze
+        run: |
+          pip freeze
+
+      - name: Test with Pytest
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0

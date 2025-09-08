@@ -14,8 +14,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
+  HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -23,7 +29,14 @@ jobs:
       fail-fast: false
       matrix:
         test-pattern:
-          ["*modeling*", "*diffusion*", "*quantization*", "*export*"]
+          [
+            "*export*",
+            "*decoder*",
+            "*seq2seq*",
+            "*modeling*",
+            "*diffusion*",
+            "*quantization*",
+          ]
         transformers-version: ["4.45.0", "4.54.0", "latest"]
 
     runs-on: ubuntu-22.04
@@ -39,43 +52,33 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,diffusers,tests]
+          pip install --upgrade pip uv
+          uv pip install .[openvino,diffusers,tests]
 
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
-          pip install transformers==${{ matrix.transformers-version }}
+          uv pip install transformers==${{ matrix.transformers-version }}
 
       - if: ${{ matrix.transformers-version == '4.45.0' }}
         run: |
-          pip install accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
+          uv pip install accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
-      - if: ${{ matrix.test-pattern == '*modeling*'}}
+      - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
-          pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
-
-      - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Uninstall NNCF
-        run: |
-          pip uninstall -y nncf
+          uv pip install auto-gptq "autoawq<0.2.8"
 
       - name: Test with Pytest
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
-        env:
-          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Install dependencies (nightly)
+        name: Install Nightly OpenVINO
         run: |
-          pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
-        name: Test with Pytest (nightly)
+        name: Test with Pytest - Nightly OpenVINO
         run: |
           pytest tests/openvino/test_modeling_basic.py --durations=0
-        env:
-          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
