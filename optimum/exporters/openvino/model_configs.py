@@ -34,7 +34,6 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     GPT2OnnxConfig,
-    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -69,11 +68,11 @@ from optimum.utils.input_generators import (
     DummyVisionInputGenerator,
     FalconDummyPastKeyValuesGenerator,
     GemmaDummyPastKeyValuesGenerator,
-    GPTBigCodeDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import (
     NormalizedConfig,
+    NormalizedConfigManager,
     NormalizedTextConfig,
     NormalizedVisionConfig,
 )
@@ -3745,7 +3744,28 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 # TODO: remove and replace with GPTBigCodeDummyPastKeyValuesGenerator when optimum >= v2
-class GPTBigCodeOpenVINODummyPastKeyValuesGenerator(GPTBigCodeDummyPastKeyValuesGenerator):
+class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        self.multi_query = normalized_config.multi_query
+
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if is_transformers_version("<", "4.54"):
             if self.multi_query:
@@ -3794,9 +3814,12 @@ class GPTBigCodeOpenVINODummyPastKeyValuesGenerator(GPTBigCodeDummyPastKeyValues
     ],
     library_name="transformers",
 )
-class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeOpenVINODummyPastKeyValuesGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeOpenVINODummyPastKeyValuesGenerator
+class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    # TODO (echarlaix): move once added in optimum
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeDummyPastKeyValuesGenerator)
+    DEFAULT_ONNX_OPSET = 14  # GPT BigCode now uses F.scaled_dot_product_attention by default for torch>=2.1.1.
+    DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedConfigManager.get_normalized_config_class("gpt_bigcode")
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
