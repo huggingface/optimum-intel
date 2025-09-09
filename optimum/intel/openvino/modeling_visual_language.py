@@ -19,8 +19,6 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import (
     AutoConfig,
     AutoImageProcessor,
-    AutoModelForCausalLM,
-    AutoModelForVision2Seq,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -44,15 +42,14 @@ from .utils import (
 )
 
 
-try:
-    from transformers import LlavaForConditionalGeneration
-except ImportError:
-    LlavaForConditionalGeneration = None
+if is_transformers_version(">=", "4.46.0"):
+    from transformers import AutoModelForImageTextToText
 
-try:
-    from transformers import LlavaNextForConditionalGeneration
-except ImportError:
-    LlavaNextForConditionalGeneration = None
+    transformers_auto_class = AutoModelForImageTextToText
+else:
+    from transformers import AutoModelForVision2Seq
+
+    transformers_auto_class = AutoModelForVision2Seq
 
 
 if TYPE_CHECKING:
@@ -346,7 +343,7 @@ MODEL_PARTS_CLS_MAPPING = {
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
-    auto_model_class = AutoModelForCausalLM
+    auto_model_class = transformers_auto_class
 
     def __init__(
         self,
@@ -412,10 +409,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
-        try:
-            self.auto_model_class.register(AutoConfig, self.__class__)
-        except AttributeError:
-            pass
+        self.auto_model_class.register(AutoConfig, self.__class__)
 
     def clear_requests(self):
         if self._compile_only:
@@ -628,9 +622,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             from optimum.intel.openvino.quantization import OVQuantizer
 
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
-            quantization_config_copy.processor = quantization_config.processor or potential_processor_id
+            quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
             OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -931,8 +925,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
-    auto_model_class = LlavaForConditionalGeneration
-
     def __init__(
         self,
         language_model: ov.Model,
@@ -1137,8 +1129,6 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
-    auto_model_class = LlavaNextForConditionalGeneration
-
     # Adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_next/modeling_llava_next.py#L655
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
         from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
@@ -1433,7 +1423,6 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
 
 class _OVLlavaNextVideoForCausalLM(_OVLlavaNextForCausalLM):
     additional_parts = ["vision_resampler", "multi_modal_projector"]
-    auto_model_class = AutoModelForVision2Seq
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:

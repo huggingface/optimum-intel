@@ -59,7 +59,7 @@ from .utils import (
 
 
 if is_transformers_version(">=", "4.43"):
-    from transformers.cache_utils import MambaCache
+    from transformers.models.mamba.modeling_mamba import MambaCache
 else:
     MambaCache = object
 
@@ -937,7 +937,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             quantizer = OVQuantizer(causal_model)
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return causal_model
