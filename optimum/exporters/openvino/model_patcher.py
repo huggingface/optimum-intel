@@ -6993,7 +6993,6 @@ class SAMModelPatcher(ModelPatcher):
                         multimask_output=True,  # Not supported in the ONNX export
                         attention_similarity=None,  # Not supported in the ONNX export
                         target_embedding=None,  # Not supported in the ONNX export
-                        output_attentions=False,
                     )
                     low_res_masks = outputs[0]
                     iou_predictions = outputs[1]
