@@ -67,6 +67,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
+    is_diffusers_version,
 )
 
 
@@ -111,11 +112,16 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-to-image", "stable-diffusion-3"),
                 ("text-to-image", "flux"),
                 ("inpainting", "flux-fill"),
-                ("image-to-image", "flux-kontext"),
                 ("text-to-image", "sana"),
                 ("text-to-video", "ltx-video"),
             ]
         )
+        if is_diffusers_version(">=", "0.35.0"):
+            SUPPORTED_ARCHITECTURES.extend(
+                [
+                    ("image-to-image", "flux-kontext"),
+                ]
+            )
 
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.extend(
