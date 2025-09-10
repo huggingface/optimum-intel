@@ -24,7 +24,6 @@ from diffusers import (
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
     DiffusionPipeline,
-    FluxKontextPipeline,
 )
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
@@ -485,7 +484,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
         SUPPORTED_ARCHITECTURES.append("flux")
-        SUPPORTED_ARCHITECTURES.append("flux-kontext")
+        if is_diffusers_version(">=", "0.35.0"):
+            SUPPORTED_ARCHITECTURES.append("flux-kontext")
 
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
@@ -502,8 +502,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         if model_type in ["flux", "stable-diffusion-3", "flux-kontext"]:
             inputs["height"] = height
             inputs["width"] = width
-
-        inputs["strength"] = 0.75
+            
+        if model_type != "flux-kontext":
+            inputs["strength"] = 0.75
 
         return inputs
 
@@ -535,7 +536,16 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                             height=height, width=width, batch_size=batch_size, model_type=model_arch
                         )
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
-                        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
+                        if model_arch != "flux-kontext":
+                            self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
+                        else:
+                        # output shape is fixed: https://github.com/huggingface/diffusers/blob/v0.35.1/src/diffusers/pipelines/flux/pipeline_flux_kontext.py#L882
+                            if (height == width):
+                                self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, 1024, 1024, 3))
+                            elif (height > width):
+                                self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, 1448, 724, 3))
+                            else:
+                                self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, 724, 1448, 3)) 
 
     @parameterized.expand(["stable-diffusion", "stable-diffusion-xl", "latent-consistency"])
     @require_diffusers
@@ -568,8 +578,11 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_shape(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-
-        height, width, batch_size = 128, 64, 1
+        if model_arch != "flux-kontext":
+        # output shape is fixed: https://github.com/huggingface/diffusers/blob/v0.35.1/src/diffusers/pipelines/flux/pipeline_flux_kontext.py#L882
+            height, width, batch_size = 128, 64, 1
+        else:
+            height, width, batch_size = 1448, 724, 1
 
         for input_type in ["pil", "np", "pt"]:
             inputs = self.generate_inputs(
@@ -586,7 +599,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                 elif output_type == "pt":
                     self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
-                    if model_arch != "flux" and model_arch != "flux-kontext":
+                    if not model_arch.startswith("flux"):
                         out_channels = (
                             pipeline.unet.config.out_channels
                             if pipeline.unet is not None
@@ -611,9 +624,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 128, 128, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
-
-        auto_cls = self.AUTOMODEL_CLASS if "flux-kontext" not in model_arch else FluxKontextPipeline
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)        
+        auto_cls = self.AUTOMODEL_CLASS
+        
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 

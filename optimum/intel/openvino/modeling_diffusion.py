@@ -1791,8 +1791,8 @@ if is_diffusers_version(">=", "0.33.0"):
     OV_TEXT2IMAGE_PIPELINES_MAPPING["sana-sprint"] = OVSanaSprintPipeline
 
 
-if is_diffusers_version(">", "0.34.0"):
-    SUPPORTED_OV_PIPELINES.extend([OVFluxKontextPipeline])
+if is_diffusers_version(">=", "0.34.0"):
+    SUPPORTED_OV_PIPELINES.append(OVFluxKontextPipeline)
     OV_IMAGE2IMAGE_PIPELINES_MAPPING["flux-kontext"] = OVFluxKontextPipeline
 
 SUPPORTED_OV_PIPELINES_MAPPINGS = [
