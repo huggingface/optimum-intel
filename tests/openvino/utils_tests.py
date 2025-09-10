@@ -197,6 +197,7 @@ MODEL_NAMES = {
     "sana": "katuni4ka/tiny-random-sana",
     "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
     "ltx-video": "katuni4ka/tiny-random-ltx-video",
+    "vit-with-pooler": "snake7gun/tiny-random-dinov3",
 }
 
 

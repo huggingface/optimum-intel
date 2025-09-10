@@ -3063,6 +3063,10 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_ATTENTION = ["vit-with-attentions"]
     SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES = ["vit-with-hidden-states"]
+    SUPPORTED_ARCHITECTURES_WITH_POOLER = []
+    if is_transformers_version(">=", "4.56"):
+        SUPPORTED_ARCHITECTURES_WITH_POOLER += ("vit-with-pooler",)
+
 
     def _get_sample_image(self):
         url = TEST_IMAGE_URL
@@ -3139,6 +3143,36 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
                     ),
                     f"Hidden states mismatch at layer {i}",
                 )
+        del transformers_model
+        del ov_model
+        gc.collect()
+        
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_POOLER)
+    def test_compare_output_pooler(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+
+        image = self._get_sample_image()
+        preprocessor = AutoImageProcessor.from_pretrained(model_id)
+        inputs = preprocessor(images=image, return_tensors="pt")
+
+        transformers_model = AutoModel.from_pretrained(model_id, attn_implementation="eager")
+        transformers_model.eval()
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, output_attentions=True)
+
+        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(images=image, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("last_hidden_state", ov_outputs)
+            self.assertIsInstance(ov_outputs.last_hidden_state, TENSOR_ALIAS_TO_TYPE[input_type])
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.last_hidden_state), transformers_outputs.last_hidden_state, atol=1e-4))
+            self.assertIn("pooler_output", ov_outputs)
+            self.assertIsInstance(ov_outputs.pooler_output, TENSOR_ALIAS_TO_TYPE[input_type])
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.pooler_output), transformers_outputs.pooler_output, atol=1e-4))
+
         del transformers_model
         del ov_model
         gc.collect()
