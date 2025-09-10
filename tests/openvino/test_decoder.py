@@ -621,20 +621,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
 
-        if model_arch in {
-            "aquila",
-            "aquila2",
-            "baichuan2",
-            "baichuan2-13b",
-            "decilm",
-            "internlm",
-            "internlm2",
-            "jais",
-            "orion",
-            "xverse",
-        }:
-            model_kwargs["use_cache"] = False
-
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
@@ -682,10 +668,25 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 continue
             set_seed(SEED)
 
-            if model_arch in ["gemma2", "gemma3_text"]:
+            if model_arch in {"gemma2", "gemma3_text"}:
                 from transformers.cache_utils import DynamicCache
 
                 additional_inputs["past_key_values"] = DynamicCache()
+
+            elif model_arch in {
+                "aquila",
+                "aquila2",
+                "baichuan2",
+                "baichuan2-13b",
+                "decilm",
+                "internlm",
+                "internlm2",
+                "jais",
+                "orion",
+                "xverse",
+            }:
+                additional_inputs["use_cache"] = False
+
             with patch_awq_for_inference("awq" in model_arch):
                 transformers_outputs = transformers_model.generate(
                     **tokens, generation_config=gen_config, **additional_inputs
