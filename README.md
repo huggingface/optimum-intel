@@ -40,31 +40,22 @@ or to install from source including dependencies:
 python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
-where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `nncf`.
+where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`.
 
 # Quick tour
 
 ## Neural Compressor
 
-Dynamic quantization can be used through the Optimum command-line interface:
+Dynamic quantization can be used through the Optimum CLI:
 
 ```bash
 optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
 ```
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
 
-To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
-```python
-from optimum.intel import INCModelForSequenceClassification
-
-model_id = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-model = INCModelForSequenceClassification.from_pretrained(model_id)
-```
-
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-For more details on the supported compression techniques, please refer to the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_inc).
-
+For more details on the supported compression techniques, please refer to the [documentation](https://huggingface.co/docs/optimum-intel/en/neural_compressor/optimization).
 
 ## OpenVINO
 
@@ -75,27 +66,26 @@ Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.a
 It is also possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```plain
-optimum-cli export openvino --model gpt2 ov_model
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_llama/
 ```
 
 You can also apply 8-bit weight-only quantization when exporting your model : the model linear, embedding and convolution weights will be quantized to INT8, the activations will be kept in floating point precision.
 
 ```plain
-optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int8 ov_llama_int8/
 ```
 
 Quantization in hybrid mode can be applied to Stable Diffusion pipeline during model export. This involves applying hybrid post-training quantization to the UNet model and weight-only quantization for the rest of the pipeline components. In the hybrid mode, weights in MatMul and Embedding layers are quantized, as well as activations of other layers.
 
 ```plain
-optimum-cli export openvino --model stabilityai/stable-diffusion-2-1 --dataset conceptual_captions --weight-format int8 ov_model
+optimum-cli export openvino --model stabilityai/stable-diffusion-2-1 --dataset conceptual_captions --weight-format int8 ov_model_sd/
 ```
 
-To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov).
+To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/optimization).
 
 #### Inference:
 
 To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-
 
 ```diff
 - from transformers import AutoModelForSeq2SeqLM
@@ -112,50 +102,22 @@ To load a model and run inference with OpenVINO Runtime, you can just replace yo
   [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
 
-If you want to load a PyTorch checkpoint, set `export=True` to convert your model to the OpenVINO IR.
+#### Quantization:
+
+Post-training static quantization can also be applied. Here is an example on how to apply static quantization on a Whisper model using the [LibriSpeech](https://huggingface.co/datasets/openslr/librispeech_asr) dataset for the calibration step.
 
 ```python
-from optimum.intel import OVModelForCausalLM
+from optimum.intel import OVModelForSpeechSeq2Seq, OVQuantizationConfig
 
-model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
-model.save_pretrained("./ov_model")
-```
+model_id = "openai/whisper-tiny"
+q_config = OVQuantizationConfig(dtype="int8", dataset="librispeech", num_samples=50)
+q_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, quantization_config=q_config)
 
-
-#### Post-training static quantization:
-
-Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters. Here is an example on how to apply static quantization on a fine-tuned DistilBERT.
-
-```python
-from functools import partial
-from optimum.intel import OVQuantizer, OVModelForSequenceClassification, OVConfig, OVQuantizationConfig
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-def preprocess_fn(examples, tokenizer):
-    return tokenizer(
-        examples["sentence"], padding=True, truncation=True, max_length=128
-    )
-
-quantizer = OVQuantizer.from_pretrained(model)
-calibration_dataset = quantizer.get_calibration_dataset(
-    "glue",
-    dataset_config_name="sst2",
-    preprocess_function=partial(preprocess_fn, tokenizer=tokenizer),
-    num_samples=100,
-    dataset_split="train",
-    preprocess_batch=True,
-)
 # The directory where the quantized model will be saved
 save_dir = "nncf_results"
-# Apply static quantization and save the resulting model in the OpenVINO IR format
-ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-quantizer.quantize(ov_config=ov_config, calibration_dataset=calibration_dataset, save_directory=save_dir)
-# Load the quantized model
-optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
+q_model.save_pretrained(save_dir)
 ```
+You can find more information in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/optimization).
 
 
 ## IPEX

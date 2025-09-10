@@ -65,7 +65,8 @@ logger = logging.getLogger(__name__)
 class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
-    _supports_cache_class = False
+    _supports_cache_class = False  # No loger defined/used in transformers
+    _is_stateful = False  # for Transformers it's False, but True for SSMs
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
     _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
@@ -428,8 +429,8 @@ class OVBaseModel(OptimizedModel):
 
             quantizer = OVQuantizer(model)
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
-            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
+            quantization_config_copy.processor = str(quantization_config.processor or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -478,7 +479,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else ".*\.onnx$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,

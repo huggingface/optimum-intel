@@ -569,8 +569,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
             quantizer = OVQuantizer(model)
             quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
-            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
+            quantization_config_copy.processor = str(quantization_config.processor or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -1463,11 +1463,16 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         }
 
     def _get_logits_processor(self, generation_config: GenerationConfig, *args, **kwargs):
-        forced_decoder_ids = generation_config.forced_decoder_ids
         # Whisper uses forced_decoder_ids for default task and language specification, while original _get_logits_processor does not allow it
         # see for details https://github.com/huggingface/transformers/issues/37172
-        if is_transformers_version(">=", "4.50.0"):
-            generation_config.forced_decoder_ids = None
-        logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
-        generation_config.forced_decoder_ids = forced_decoder_ids
+        if not hasattr(generation_config, "forced_decoder_ids") or is_transformers_version(">=", "4.53.0"):
+            # since transformers 4.53.0, forced_decoder_ids is deprecated: https://github.com/huggingface/transformers/pull/38232
+            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
+        else:
+            forced_decoder_ids = generation_config.forced_decoder_ids
+
+            if is_transformers_version(">=", "4.50.0"):
+                generation_config.forced_decoder_ids = None
+            logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
+            generation_config.forced_decoder_ids = forced_decoder_ids
         return logits_processor

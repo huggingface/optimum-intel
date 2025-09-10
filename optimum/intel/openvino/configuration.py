@@ -68,7 +68,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-2-7b-hf": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
@@ -77,9 +76,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "meta-llama/Llama-2-13b-chat-hf": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {
@@ -87,7 +84,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "stabilityai/stablelm-zephyr-3b": {
@@ -116,9 +112,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "Qwen/Qwen2.5-Coder-3B-Instruct": {
         "bits": 4,
@@ -142,9 +136,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": True,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "Qwen/Qwen3-8B": {
         "bits": 4,
@@ -202,9 +194,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "lmsys/longchat-7b-16k": {
         "bits": 4,
@@ -222,9 +212,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "microsoft/phi-2": {
         "bits": 4,
@@ -248,25 +236,21 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-3.2-1B-Instruct": {
         "bits": 4,
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "meta-llama/Meta-Llama-3.1-8B": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
-        "scale_estimation": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-3-mini-4k-instruct": {
         "bits": 4,
@@ -281,43 +265,34 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "microsoft/Phi-4-mini-instruct": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
         "bits": 4,
         "sym": False,
         "group_size": 32,
         "ratio": 0.7,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
         "bits": 4,
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
     },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "bits": 4,
         "sym": False,
         "group_size": 64,
         "ratio": 0.8,
-        "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
@@ -682,6 +657,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 retained in their original precision without any quantization.
             - "int8_sym" stands for 8-bit integer symmetric quantization without zero point.
             - "int8_asym" stands for 8-bit integer asymmetric quantization with zero points per each quantization group.
+        statistics_path (`str`, *optional*):
+            Directory path to dump/load data-aware statistics. This is useful when running data-aware quantization
+            multiple times on the same model and dataset to avoid recomputing statistics.
+            Please note that the statistics depend on the dataset, so if you change the dataset, you should also change
+            the statistics path to avoid confusion.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -705,6 +685,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         processor: Optional[str] = None,
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
+        statistics_path: Optional[str] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -735,6 +716,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.lora_correction = lora_correction
         self.backup_precision = backup_precision
         self.dtype = dtype
+        self.statistics_path = statistics_path
         self.post_init()
 
     def post_init(self):
@@ -891,6 +873,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
+        kwargs = self.kwargs.copy()
+        if self.statistics_path:
+            advanced_parameters = kwargs.get("advanced_parameters", nncf.AdvancedCompressionParameters())
+            advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            kwargs["advanced_parameters"] = advanced_parameters
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -904,7 +891,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
-            **self.kwargs,
+            **kwargs,
         }
         return result
 
@@ -1290,6 +1277,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         quantization_configs: Dict[str, Union[Dict, OVQuantizationConfigBase]],
+        default_config: Optional[Union[Dict, OVQuantizationConfigBase]] = None,
         num_samples: Optional[int] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
@@ -1306,6 +1294,9 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
                 A dictionary where keys are submodel names and values are either dictionaries or instances of
                 `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+            default_config (Optional[Union[Dict, OVQuantizationConfigBase]]):
+                A default quantization configuration that will be applied to all submodels that do not have a
+                specific configuration provided in `quantization_configs`.
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
@@ -1336,6 +1327,8 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         for submodel_name, submodel_config in quantization_configs.items():
             if isinstance(submodel_config, dict):
                 quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
+        if default_config is not None and isinstance(default_config, dict):
+            default_config = _quantization_config_from_dict(default_config)
 
         # Pull dataset-related parameters from child configs
         configs = quantization_configs.values()
@@ -1355,6 +1348,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             **kwargs,
         )
         self.quantization_configs = quantization_configs
+        self.default_config = default_config
         self.post_init()
 
     def to_dict(self) -> Dict[str, Any]:

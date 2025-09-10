@@ -114,6 +114,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-to-video", "ltx-video"),
             ]
         )
+
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "ernie4_5"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
@@ -137,6 +145,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "mamba": 2,
         "falcon-mamba": 2,
+        "ernie4_5": 2,
+        "qwen3": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -215,13 +225,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 8, "decoder": 12, "decoder_with_past": 11}
+            {"encoder": 14, "decoder": 22, "decoder_with_past": 21}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
+            else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
             (
-                {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
+                {"encoder": {"int8": 14}, "decoder": {"int8": 21}, "decoder_with_past": {"int8": 17}}
                 if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}, "decoder_with_past": {"int8": 18}}
+                else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -229,13 +239,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 9, "decoder": 13, "decoder_with_past": 12}
+            {"encoder": 14, "decoder": 22, "decoder_with_past": 21}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 9, "decoder": 14, "decoder_with_past": 25},
+            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
             (
-                {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 11}, "decoder_with_past": {"f8e4m3": 9}}
+                {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 21}, "decoder_with_past": {"f8e4m3": 17}}
                 if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 12}, "decoder_with_past": {"f8e4m3": 18}}
+                else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
         (
@@ -433,7 +443,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset c4 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
             if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 30, "decoder": 62},
+            else {
+                "encoder": 30,
+                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+            },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
                 if is_transformers_version("<=", "4.36.0")
@@ -455,6 +468,28 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version(">=", "4.45.0"):
+        SUPPORTED_QUANTIZATION_ARCHITECTURES.extend(
+            [
+                (
+                    "image-text-to-text",
+                    "internvl2",
+                    "f8e4m3",
+                    "--dataset contextual --num-samples 1 --trust-remote-code",
+                    {
+                        "lm_model": 15,
+                        "text_embeddings_model": 0,
+                        "vision_embeddings_model": 17,
+                    },
+                    {
+                        "lm_model": {"f8e4m3": 15},
+                        "text_embeddings_model": {"int8": 1},
+                        "vision_embeddings_model": {"f8e4m3": 11},
+                    },
+                ),
+            ]
+        )
 
     TEST_4BIT_CONFIGURATIONS = [
         (
@@ -1026,6 +1061,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
 
+    def test_exporters_cli_4bit_with_statistics_path(self):
+        with TemporaryDirectory() as tmpdir:
+            statistics_path = f"{tmpdir}/statistics"
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --weight-format int4 --awq "
+                f"--dataset wikitext2 --group-size 4 --quantization-statistics-path {statistics_path} {tmpdir}",
+                shell=True,
+                check=True,
+                capture_output=True,
+            )
+            self.assertTrue(
+                b"Statistics were successfully saved to a directory " + bytes(statistics_path, "utf-8")
+                in result.stdout
+            )
+            self.assertTrue(
+                b"Statistics were successfully loaded from a directory " + bytes(statistics_path, "utf-8")
+                in result.stdout
+            )
+
     @parameterized.expand(SUPPORTED_QUANTIZATION_ARCHITECTURES)
     def test_exporters_cli_full_quantization(
         self,
@@ -1050,7 +1104,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if "--library sentence_transformers" in option
                 else eval(_HEAD_TO_AUTOMODELS[task])
             )
-            model = model_cls.from_pretrained(tmpdir)
+            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task
@@ -1069,7 +1123,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         [
             (
                 "falcon-40b",
-                "tiiuae/falcon-7b-instruct",
+                "bigscience/bloomz-560m",
                 AutoModelForCausalLM,
                 OVModelForCausalLM,
                 "--task text-generation-with-past --weight-format int4",
@@ -1112,8 +1166,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             with open(Path(tmpdir) / "config.json", "w") as wf:
                 json.dump(config, wf)
 
+            is_weight_compression = "--weight-format" in options
+            run_command = f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}"
+            if is_weight_compression:
+                # Providing quantization statistics path should not interfere with the default configuration matching
+                run_command += f" --quantization-statistics-path {tmpdir}/statistics"
             subprocess.run(
-                f"optimum-cli export openvino --model {tmpdir} {options} {tmpdir}",
+                run_command,
                 shell=True,
                 check=True,
             )
@@ -1121,7 +1180,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = ov_model_cls.from_pretrained(tmpdir)
             rt_info = model.model.get_rt_info()
             nncf_info = rt_info["nncf"]
-            is_weight_compression = "weight_compression" in nncf_info
             model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
             default_config = {**default_configs_collection[model_id]}
@@ -1130,10 +1188,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 bits = default_config.pop("bits", None)
                 self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
-                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+                default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
                 quant_method = default_config.pop("quant_method", None)
                 default_config["awq"] = quant_method == "awq"
                 default_config["gptq"] = quant_method == "gptq"
+                advanced_parameters = eval(model_quantization_config["advanced_parameters"].value)
+                model_quantization_config["statistics_path"] = Mock()
+                model_quantization_config["statistics_path"].value = advanced_parameters["statistics_path"]
+                default_config["statistics_path"] = f"{tmpdir}/statistics"
             else:
                 dtype = default_config.pop("dtype", None)
                 self.assertEqual(dtype, "int8")
