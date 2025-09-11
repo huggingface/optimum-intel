@@ -245,7 +245,7 @@ class OVCalibrationDatasetBuilder:
     will contain two keys: `encoder_model` and `decoder_model`.
     """
 
-    def __init__(self, model: "OVModel", seed: int = 42):
+    def __init__(self, model: OVModel, seed: int = 42):
         """
 
         Args:
@@ -1140,7 +1140,7 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: "OVModel", task: Optional[str] = None, seed: int = 42, **kwargs):
+    def __init__(self, model: OVModel, task: Optional[str] = None, seed: int = 42, **kwargs):
         """
         Args:
             model (`OVModel`):
@@ -1156,7 +1156,7 @@ class OVQuantizer(OptimumQuantizer):
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
 
     @classmethod
-    def from_pretrained(cls, model: "OVModel", **kwargs):
+    def from_pretrained(cls, model: OVModel, **kwargs):
         # TODO : Create model
         return cls(model, **kwargs)
 
