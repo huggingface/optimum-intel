@@ -83,8 +83,6 @@ from .model_patcher import (
     BaichuanModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
-    BlenderbotSmallStatefulSeq2SeqDecoderPatcher,
-    BlenderbotStatefulSeq2SeqDecoderPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -117,7 +115,6 @@ from .model_patcher import (
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MarianModelPatcher,
-    MarianStatefulSeq2SeqDecoderPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -126,9 +123,9 @@ from .model_patcher import (
     MixtralModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
+    OVSeq2SeqModelPatcher,
     OVSpeechT5ModelPatcher,
     PegasusModelPatcher,
-    PegasusStatefulSeq2SeqDecoderPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
@@ -144,7 +141,6 @@ from .model_patcher import (
     Qwen3MoeModelPatcher,
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
-    StatefulSeq2SeqDecoderPatcher,
     XverseModelPatcher,
 )
 
@@ -168,7 +164,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
@@ -304,7 +299,17 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
@@ -312,13 +317,28 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.task in ["feature-extraction"]:
+            common_inputs = {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            }
+        else:
+            common_inputs = super().inputs
+        return common_inputs
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3_moe",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -3490,7 +3510,11 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_vl",
+    *["image-text-to-text", "video-text-to-text"],
+    library_name="transformers",
+)
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3623,7 +3647,11 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_5_vl",
+    *["image-text-to-text", "video-text-to-text"],
+    library_name="transformers",
+)
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
 
@@ -3738,9 +3766,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
     def inputs(self):
@@ -3764,9 +3790,7 @@ class T5OpenVINOConfig(T5OnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self):
@@ -3812,9 +3836,7 @@ class BartOpenVINOConfig(BartOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self):
@@ -4056,8 +4078,6 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return BlenderbotStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4084,8 +4104,6 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return BlenderbotSmallStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4112,8 +4130,6 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return PegasusStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4140,8 +4156,6 @@ class MarianOpenVINOConfig(MarianOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return MarianStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property

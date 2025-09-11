@@ -644,7 +644,7 @@ def export_from_model(
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
         raise ValueError(
             f"model.config.is_encoder_decoder is True and task is `{task}`, which are incompatible. If the task was auto-inferred, please fill a bug report"
-            f"at https://github.com/huggingface/optimum, if --task was explicitely passed, make sure you selected the right task for the model,"
+            f"at https://github.com/huggingface/optimum, if --task was explicitly passed, make sure you selected the right task for the model,"
             f" referring to `optimum.exporters.tasks.TaskManager`'s `_TRANSFORMERS_TASKS_TO_MODEL_LOADERS`."
         )
     if library_name != "diffusers" and model_type in TasksManager._UNSUPPORTED_CLI_MODEL_TYPE:
@@ -839,8 +839,6 @@ def export_tokenizer(
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
-        set_simplified_chat_template(converted[0], processor_chat_template)
-
     except NotImplementedError:
         logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
@@ -852,6 +850,11 @@ def export_tokenizer(
             f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
         )
         return
+
+    try:
+        set_simplified_chat_template(converted[0], processor_chat_template)
+    except Exception as exception:
+        logger.debug(f"Error during chat template simplification. Exception: {exception}")
 
     if not isinstance(converted, tuple):
         converted = (converted,)

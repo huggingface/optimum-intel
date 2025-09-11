@@ -321,7 +321,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             <td style="text-align: center; vertical-align: middle;">–</td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/whisper-large-v3-turbo --quant-mode int8 --dataset librispeech --num-samples 10 ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/whisper-large-v3-turbo --disable-stateful --quant-mode int8 --dataset librispeech --num-samples 10 ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -332,7 +332,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'openai/whisper-large-v3-turbo\', quantization_config=OVQuantizationConfig(bits=8, dataset=\'librispeech\', num_samples=10)).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForSpeechSeq2Seq.from_pretrained(\'openai/whisper-large-v3-turbo\', stateful=False, quantization_config=OVQuantizationConfig(bits=8, dataset=\'librispeech\', num_samples=10)).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -1002,6 +1002,7 @@ The speech-to-text Whisper model can be quantized without the need for preparing
 model_id = "openai/whisper-tiny"
 ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
     model_id,
+    stateful=False,
     quantization_config=OVQuantizationConfig(
         num_samples=10,
         dataset="librispeech",

@@ -86,7 +86,7 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
                 task = TasksManager.infer_task_from_model(model_id)
             except Exception as e:
                 return (
-                    f"### Error: {e}. Please pass explicitely the task as it could not be infered.",
+                    f"### Error: {e}. Please pass explicitely the task as it could not be inferred.",
                     None,
                 )
 
