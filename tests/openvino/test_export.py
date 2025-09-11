@@ -103,6 +103,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.54"):
         SUPPORTED_ARCHITECTURES.update({"ernie4_5": OVModelForCausalLM})
+        
+    if is_transformers_version(">=", "4.56"):
+        SUPPORTED_ARCHITECTURES.update({"hunyuan_v1_dense": OVModelForCausalLM})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 

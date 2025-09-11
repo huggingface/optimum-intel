@@ -129,6 +129,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+        
+    if is_transformers_version(">=", "4.56.0"):
+        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -219,6 +222,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon-mamba": 0,
         "arcee": 2,
         "ernie4_5": 2,
+        "hunyuan_v1_dense": 2,
     }
 
     # TODO: remove gptq/awq from here
