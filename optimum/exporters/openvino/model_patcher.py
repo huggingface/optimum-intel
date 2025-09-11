@@ -6803,9 +6803,6 @@ class MambaPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.orig_forward)
         for layer in self._model.backbone.layers:
-<<<<<<< HEAD
-            layer.mixer.forward = layer.mixer._orig_forward
-=======
             layer.mixer.forward = layer.mixer._orig_forward
 
 
@@ -6864,4 +6861,3 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 
         if is_transformers_version(">=", "4.53"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
->>>>>>> upstream/main
