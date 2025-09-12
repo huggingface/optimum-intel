@@ -9,7 +9,6 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     GenerationConfig,
@@ -127,8 +126,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
-    if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -171,8 +170,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
-        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
-        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mistral": 2,
+        "mixtral": 2,
         "mpt": 5,
         "opt": 5,
         "pegasus": 2,
@@ -218,7 +217,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
-        "ernie4_5": 2,
     }
 
     # TODO: remove gptq/awq from here
@@ -332,13 +330,28 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"]:
+        if model_arch in {"gemma2", "gemma3_text"}:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
+
+        elif model_arch in {
+            "aquila",
+            "aquila2",
+            "baichuan2",
+            "baichuan2-13b",
+            "decilm",
+            "internlm",
+            "internlm2",
+            "jais",
+            "orion",
+            "xverse",
+        }:
+            additional_inputs = {"use_cache": False}
+
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
@@ -361,10 +374,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
 
         if model_arch == "qwen":
@@ -523,10 +533,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
@@ -649,10 +656,25 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 continue
             set_seed(SEED)
 
-            if model_arch in ["gemma2", "gemma3_text"]:
+            if model_arch in {"gemma2", "gemma3_text"}:
                 from transformers.cache_utils import DynamicCache
 
                 additional_inputs["past_key_values"] = DynamicCache()
+
+            elif model_arch in {
+                "aquila",
+                "aquila2",
+                "baichuan2",
+                "baichuan2-13b",
+                "decilm",
+                "internlm",
+                "internlm2",
+                "jais",
+                "orion",
+                "xverse",
+            }:
+                additional_inputs["use_cache"] = False
+
             with patch_awq_for_inference("awq" in model_arch):
                 transformers_outputs = transformers_model.generate(
                     **tokens, generation_config=gen_config, **additional_inputs
