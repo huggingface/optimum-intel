@@ -28,8 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum==1.27.*",
-    "transformers>=4.36,<4.54",
+    "optimum==",
+    "transformers>=4.36",
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
