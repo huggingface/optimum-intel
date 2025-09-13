@@ -4362,8 +4362,10 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
                 deepstack_visual_embeds=deepstack_visual_embeds,
             )
             hidden_states = outputs[0]
+            logits_to_keep = 1
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            logits = self.lm_head(hidden_states)
+            slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+            logits = self.lm_head(hidden_states[:, slice_indices, :])
             return (logits, outputs.past_key_values.to_legacy_cache())
 
         model.__orig_forward = model.forward
