@@ -3755,7 +3755,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
 
         idx_tensor = torch.tensor(idx_list)
         weight_tensor = torch.tensor(weight_list)
-        pos_embeds = torch.from_numpy(self.vision_embeddings_pos(idx_tensor)[0]) * weight_tensor[:, :, None]
+        pos_embeds = torch.from_numpy(self.vision_embeddings_pos(idx_tensor)) * weight_tensor[:, :, None]
         patch_pos_embeds = pos_embeds[0] + pos_embeds[1] + pos_embeds[2] + pos_embeds[3]
 
         patch_pos_embeds = patch_pos_embeds.split([h * w for h, w in zip(grid_hs, grid_ws)])
