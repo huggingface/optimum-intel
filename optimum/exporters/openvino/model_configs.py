@@ -349,13 +349,40 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
         "visual_pos_masks",
         "deepstack_visual_embeds",
     )
-        
+    
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        num_choices: int = DEFAULT_DUMMY_SHAPES["num_choices"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        random_num_choices_range: Optional[Tuple[int, int]] = None,
+        padding_side: str = "right",
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            num_choices=num_choices,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            random_num_choices_range=random_num_choices_range,
+            padding_side=padding_side,
+            **kwargs,
+        )
+        self.embed_dim = normalized_config.hidden_size
+
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32", bool_dtype: str = "bool"):
         if input_name == "deepstack_visual_embeds":
-            return self.random_float_tensor([3, 32, 2560], framework=framework, dtype=float_dtype)
+            return self.random_float_tensor([3, 2*self.sequence_length, self.embed_dim], framework=framework, dtype=float_dtype)
         if input_name == "visual_pos_masks":
             return self.constant_tensor(
-                shape=[self.batch_size, 16],
+                shape=[self.batch_size, self.sequence_length],
                 framework=framework,
                 value=1,
                 dtype=DTYPE_MAPPER.pt(bool_dtype),
@@ -381,7 +408,7 @@ class Qwen3VLTextOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
         common_inputs["visual_pos_masks"] = {0: "batch_size", 1: "sequence_length"}
-        common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen", 2: "embed_dim"}
+        common_inputs["deepstack_visual_embeds"] = {0: "num_layers", 1: "visual_seqlen"}
         return common_inputs
 
     def patch_model_for_export(
@@ -3962,7 +3989,7 @@ class Qwen3_VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             }
         if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {
-                "input": {0: "sequence_length", 1: "sequence_length"},
+                "input": {1: "sequence_length"},
             }
             
             
