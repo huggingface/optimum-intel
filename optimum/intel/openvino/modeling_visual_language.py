@@ -198,15 +198,13 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if visual_pos_masks is not None:
                 inputs["visual_pos_masks"] = visual_pos_masks
             else:
-                inputs["visual_pos_masks"] = torch.ones(1, 1, dtype=torch.bool)
+                inputs["visual_pos_masks"] = torch.zeros(1, 1, dtype=torch.bool)
 
         if "deepstack_visual_embeds" in self.input_names:
             if isinstance(deepstack_visual_embeds, list):
                 inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
             else:
-                inputs["deepstack_visual_embeds"] = torch.ones((3, 1, 1), dtype=torch.float32)
-            print(inputs["deepstack_visual_embeds"].shape)
-
+                inputs["deepstack_visual_embeds"] = torch.zeros((3, 1, 1), dtype=torch.float32)
         if "token_type_ids" in self.input_names:
             if token_type_ids is None:
                 token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
@@ -216,11 +214,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
-        for key, value in inputs.items():
-            if hasattr(value, 'dtype'):
-                print(f"{key}: {value.dtype}")
-            else:
-                print(f"{key}: {type(value)}")
         return inputs
 
     def forward(
@@ -2549,27 +2542,6 @@ class QWen2VLModelOutputWithPast(ModelOutput):
     rope_deltas: Optional[torch.FloatTensor] = None
     second_per_grid_ts: Optional[torch.FloatTensor] = None
 
-
-# @dataclass
-# class QWen3VLModelOutputWithPast(ModelOutput):
-#     r"""
-#     past_key_values (`Cache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-#         Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-#         `(batch_size, num_heads, sequence_length, embed_size_per_head)`)
-
-#         Contains pre-computed hidden-states (key and values in the self-attention blocks) that can be used (see
-#         `past_key_values` input) to speed up sequential decoding.
-#     rope_deltas (`torch.LongTensor` of shape `(batch_size, )`, *optional*):
-#         The rope index difference between sequence length and multimodal rope.
-#     """
-
-#     last_hidden_state: Optional[torch.FloatTensor] = None
-#     past_key_values: Optional[list[torch.FloatTensor]] = None
-#     hidden_states: Optional[tuple[torch.FloatTensor]] = None
-#     attentions: Optional[tuple[torch.FloatTensor]] = None
-#     rope_deltas: Optional[torch.LongTensor] = None
-
-
 class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["vision_embeddings_merger"]
 
@@ -3855,9 +3827,7 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
         image_embeds, deepstack_image_embeds = self.get_vision_embeddings(pixel_values, image_grid_thw)
         image_embeds, deepstack_image_embeds = torch.from_numpy(image_embeds), torch.from_numpy(deepstack_image_embeds)
         deepstack_image_embeds = deepstack_image_embeds.tolist()
-        print(image_grid_thw.prod(-1))
         split_sizes = (image_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
-        print(image_embeds.shape)
         image_embeds = torch.split(image_embeds, split_sizes)
         return image_embeds, deepstack_image_embeds
     

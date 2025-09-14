@@ -3819,7 +3819,7 @@ class Qwen3_VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen3VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
+    MIN_TRANSFORMERS_VERSION = version.parse("4.56.0")
 
     def __init__(
         self,
@@ -3964,7 +3964,6 @@ class Qwen3_VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return {
                 "input": {0: "sequence_length", 1: "sequence_length"},
             }
-            
             
             
     @property
