@@ -4537,3 +4537,25 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("dinov3_vit", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("dinov3_convnext", *["feature-extraction"], library_name="transformers")
+class OpenDinoV3OpenVINOConfig(VisionOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.55.0")
+
+    DEFAULT_ONNX_OPSET = 14
+
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "pixel_values": {0: "image_batch_size", 1: "num_channels", 2: "height", 3: "width"},
+        }
+        
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "image_batch_size"},
+            "pooler_output": {0: "image_batch_size"},
+        }

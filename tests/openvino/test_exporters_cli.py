@@ -121,6 +121,13 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "ernie4_5"),
             ]
         )
+        
+    if is_transformers_version(">=", "4.56"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "vit-with-pooler"),
+            ]
+        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
