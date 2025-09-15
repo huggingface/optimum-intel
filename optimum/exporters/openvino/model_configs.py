@@ -146,7 +146,6 @@ from .model_patcher import (
     XverseModelPatcher,
 )
 
-
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
@@ -167,6 +166,10 @@ def init_model_configs():
         "AutoModelForImageTextToText",
     )
     TasksManager._CUSTOM_CLASSES[("pt", "qwen3_vl", "image-text-to-text")] = (
+        "transformers",
+        "AutoModelForImageTextToText",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "qwen3_vl_moe", "image-text-to-text")] = (
         "transformers",
         "AutoModelForImageTextToText",
     )
@@ -391,6 +394,14 @@ class DummyQwen3VLLMInputGenerator(DummyTextInputGenerator):
     
 @register_in_tasks_manager(
     "qwen3_vl_text",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+@register_in_tasks_manager(
+    "qwen3_vl_moe_text",
     *[
         "text-generation",
         "text-generation-with-past",
@@ -4002,6 +4013,68 @@ class Qwen3_VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
             return {"last_hidden_state": {0: "seq_len", 1: "seq_len"}}
         return {}
+
+
+@register_in_tasks_manager(
+    "qwen3_vl_moe",
+    *["image-text-to-text", "video-text-to-text"],
+    library_name="transformers",
+)
+class Qwen3_VL_MOEOpenVINOConfig(Qwen3_VLOpenVINOConfig):
+    def with_behavior(
+        self,
+        behavior: Union[str, Qwen3VLConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3VLConfigBehavior):
+            behavior = Qwen3VLConfigBehavior(behavior)
+
+        if behavior == Qwen3VLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("qwen3_vl_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Qwen3VLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_vl_moe_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3VLLanguageModelPatcher,
+                dummy_input_generator=DummyQwen2VLLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+
+        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+        if behavior == Qwen3VLConfigBehavior.VISION_EMBEDDINGS_POS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
 
 
 @register_in_tasks_manager(

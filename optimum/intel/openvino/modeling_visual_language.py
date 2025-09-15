@@ -189,7 +189,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[:, -inputs_embeds.shape[1] :]
 
-            if (self.config.model_type == "qwen2_vl" or self.config.model_type == "qwen3_vl") and position_ids.ndim != 3:
+            if (self.config.model_type == "qwen2_vl" or self.config.model_type == "qwen3_vl" or self.config.model_type == "qwen3_vl_moe") and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
 
             inputs["position_ids"] = position_ids
@@ -230,7 +230,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         **kwargs,
     ):
         self.compile()
-
         inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -787,7 +786,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     ):
         if pixel_values is None:
             pixel_values = images if images is not None else image_pixel_values
-        if self.config.model_type == "qwen3_vl":
+        if self.config.model_type == "qwen3_vl" or self.config.model_type == "qwen3_vl_moe":
             inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds = self.get_multimodal_embeddings(
                 input_ids,
                 pixel_values,
@@ -4986,6 +4985,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_vl": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
+    "qwen3_vl_moe": _OVQwen3VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
