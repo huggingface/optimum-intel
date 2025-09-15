@@ -4552,6 +4552,7 @@ class HunyuanOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, HunyuanDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = HunyuanDummyPastKeyValuesGenerator
+
 @register_in_tasks_manager("ernie4_5", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.54.0"
