@@ -79,6 +79,7 @@ MODEL_NAMES = {
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "flux": "katuni4ka/tiny-random-flux",
     "flux-fill": "katuni4ka/tiny-random-flux-fill",
+    "flux-kontext": "snake7gun/flux-kontext-random",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
@@ -260,6 +261,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder_2": 64,
     },
     "flux-fill": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
+    "flux-kontext": {
         "transformer": 56,
         "vae_decoder": 28,
         "vae_encoder": 24,
