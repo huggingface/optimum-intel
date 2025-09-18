@@ -267,6 +267,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
         "text_encoder_2": 64,
     },
+    "flux-kontext": {
+        "transformer": 56,
+        "vae_decoder": 28,
+        "vae_encoder": 24,
+        "text_encoder": 64,
+        "text_encoder_2": 64,
+    },
     "llava": {
         "lm_model": 30,
         "text_embeddings_model": 1,
