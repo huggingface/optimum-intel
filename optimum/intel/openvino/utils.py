@@ -139,6 +139,7 @@ _HEAD_TO_AUTOMODELS = {
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
     "flux-fill": "OVFluxFillPipeline",
+    "flux-kontext": "OVFluxKontextPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
     "open_clip_text": "OVModelOpenCLIPText",
