@@ -115,7 +115,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe", "deepseek_v3")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -124,7 +124,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("deepseek_v3", "ernie4_5")
+        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
 
