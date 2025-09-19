@@ -3845,10 +3845,9 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             video_grid_thw (`torch.LongTensor` of shape `(num_videos, 3)`, *optional*):
                 The temporal, height and width of feature shape of each video in LLM.
         """
-        pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
         video_embeds = self.get_vision_embeddings(pixel_values_videos, video_grid_thw)
         video_embeds, deepstack_video_embeds = torch.from_numpy(video_embeds[0]), torch.from_numpy(video_embeds[1])
-        split_sizes = (video_grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
+        split_sizes = (video_grid_thw.prod(-1) // self.spatial_merge_size**2).tolist()
         video_embeds = torch.split(video_embeds, split_sizes)
         return video_embeds, deepstack_video_embeds
     
