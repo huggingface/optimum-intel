@@ -59,7 +59,7 @@ from .utils import (
 
 
 if is_transformers_version(">=", "4.43"):
-    from transformers.cache_utils import MambaCache
+    from transformers.models.mamba.modeling_mamba import MambaCache
 else:
     MambaCache = object
 
@@ -823,6 +823,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
+    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -937,7 +945,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             quantizer = OVQuantizer(causal_model)
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return causal_model

@@ -423,7 +423,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             from optimum.intel.openvino.quantization import OVQuantizer
 
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
