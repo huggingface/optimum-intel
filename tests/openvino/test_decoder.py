@@ -102,9 +102,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
-        # openvino 2025.0 required for disabling check_trace
-        if is_openvino_version(">=", "2025.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek",)
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
@@ -118,7 +115,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe", "deepseek_v3")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -126,6 +123,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
+    if is_transformers_version(">=", "4.54.0"):
+        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"}
 
@@ -149,7 +148,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "exaone",
         "decilm",
         "minicpm3",
-        "deepseek",
     )
 
     EXPECTED_NUM_SDPA = {
@@ -163,6 +161,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "chatglm": 2,
         "codegen": 5,
         "codegen2": 2,
+        "deepseek_v3": 2,
         "gpt2": 5,
         "gptj": 5,
         "gpt_neo": 4,
@@ -207,7 +206,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral-nemo": 8,
         "minicpm3": 6,
         "phi3-moe": 2,
-        "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
@@ -322,10 +320,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
@@ -542,10 +536,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "chatglm4"]:
             return
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
