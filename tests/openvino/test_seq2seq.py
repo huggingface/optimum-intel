@@ -109,7 +109,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
             model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG
         )
-        expected_stateful = is_transformers_version(">", "4.43") and model_arch in self.SUPPORT_STATEFUL
+        expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
         self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
@@ -476,14 +476,14 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     SUPPORT_AUDIO = []
 
     if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "nanollava"]
+        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "llava-qwen2"]
 
     if is_transformers_version(">=", "4.42.0"):
         SUPPORTED_ARCHITECTURES += ["llava_next_video"]
         SUPPORT_VIDEO.append("llava_next_video")
 
     if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl2", "phi3_v", "qwen2_vl"]
+        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl_chat", "phi3_v", "qwen2_vl"]
         SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
@@ -497,8 +497,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
+
+    if is_transformers_version(">=", "4.54.0"):
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
+
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl2", "minicpmv", "nanollava", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
 
     IMAGE = Image.open(
         requests.get(
@@ -563,13 +568,13 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, **loading_kwargs
         )
         transformers_model.eval()
-        if "internvl2" in model_arch:
+        if "internvl_chat" in model_arch:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
             transformers_model.img_context_token_id = img_context_token_id
-        if "nanollava" in model_arch:
+        if "llava-qwen2" in model_arch:
             transformers_model.get_vision_tower().load_model()
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
@@ -602,8 +607,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.clear_requests()
         self._check_device_and_request(ov_model, test_device, False)
 
-        # pytorch minicpmv and internvl2 are not designed to be used via forward
-        if model_arch not in ["minicpmv", "internvl2"]:
+        # pytorch minicpmv and internvl_chat are not designed to be used via forward
+        if model_arch not in ["minicpmv", "internvl_chat"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -653,7 +658,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             )
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "internvl2"]:
+        if model_arch in ["minicpmv", "internvl_chat"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -679,7 +684,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl2"]:
+            if model_arch in ["minicpmv", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -697,7 +702,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl2"]:
+            if model_arch in ["minicpmv", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -843,7 +848,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
 
-        if model_arch == "nanollava":
+        if model_arch == "llava-qwen2":
             processor = AutoProcessor.from_pretrained(
                 config.mm_vision_tower, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
@@ -851,7 +856,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             preprocessors = {"processor": processor, "tokenizer": tokenizer, "config": config}
-        elif model_arch == "internvl2":
+        elif model_arch == "internvl_chat":
             tokenizer = AutoTokenizer.from_pretrained(
                 model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
