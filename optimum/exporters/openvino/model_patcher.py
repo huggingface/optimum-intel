@@ -4363,8 +4363,7 @@ class Qwen3VLLanguageModelPatcher(OVDecoderModelPatcher):
             )
             hidden_states = outputs[0]
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            slice_indices = slice(-1, None)
-            logits = self.lm_head(hidden_states[:, slice_indices, :])
+            logits = self.lm_head(hidden_states)
             return (logits, outputs.past_key_values.to_legacy_cache())
 
         model.__orig_forward = model.forward
