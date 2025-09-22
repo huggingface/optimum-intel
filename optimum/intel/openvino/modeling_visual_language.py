@@ -3908,18 +3908,28 @@ class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
             deepstack_visual_embeds = deepstack_video_embeds
 
         if position_ids is None:
+            attention_mask_tensor = (
+                attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]
+            )
+            if attention_mask_tensor is not None and attention_mask_tensor.ndim == 4:
+                attention_mask_tensor = torch.diagonal(attention_mask_tensor[:, 0], dim1=1, dim2=2)
+                # Only apply conversion for floating point tensors (inverted masks)
+                if attention_mask_tensor.dtype.is_floating_point:
+                    attention_mask_tensor = attention_mask_tensor / torch.finfo(attention_mask_tensor.dtype).min
+                    attention_mask_tensor = (1.0 - attention_mask_tensor).int()
 
             # Calculate RoPE index once per generation in the pre-fill stage only.
             # When compiling, we can't check tensor values thus we check only input length
             # It is safe to assume that `length!=1` means we're in pre-fill because compiled
             # models currently cannot do asssisted decoding
-            if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
-                # calculate RoPE index once per generation in the pre-fill stage only
-                if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                    position_ids, rope_deltas = self.get_rope_index(
-                        input_ids, image_grid_thw, video_grid_thw, attention_mask
-                    )
-                    self.rope_deltas = rope_deltas
+            if self.rope_deltas is None:
+                position_ids, rope_deltas = self.get_rope_index(
+                    input_ids,
+                    image_grid_thw,
+                    video_grid_thw,
+                    attention_mask=attention_mask_tensor,
+                )
+                self.rope_deltas = rope_deltas
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
