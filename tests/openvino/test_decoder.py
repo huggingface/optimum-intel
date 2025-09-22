@@ -162,6 +162,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen": 5,
         "codegen2": 2,
         "deepseek_v3": 2,
+        "ernie4_5": 4,
         "gpt2": 5,
         "gptj": 5,
         "gpt_neo": 4,
