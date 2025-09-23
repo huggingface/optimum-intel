@@ -4544,7 +4544,6 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class OpenDinoV3OpenVINOConfig(VisionOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0"
 
-    DEFAULT_ONNX_OPSET = 14
 
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     @property
