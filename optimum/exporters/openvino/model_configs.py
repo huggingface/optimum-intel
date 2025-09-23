@@ -4542,7 +4542,7 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager("dinov3_vit", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("dinov3_convnext", *["feature-extraction"], library_name="transformers")
 class OpenDinoV3OpenVINOConfig(VisionOnnxConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.55.0")
+    MIN_TRANSFORMERS_VERSION = "4.55.0"
 
     DEFAULT_ONNX_OPSET = 14
 
