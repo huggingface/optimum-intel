@@ -4541,7 +4541,7 @@ class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("dinov3_vit", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("dinov3_convnext", *["feature-extraction"], library_name="transformers")
-class OpenDinoV3OpenVINOConfig(VisionOnnxConfig):
+class DinoV3OpenVINOConfig(VisionOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0"
 
 
