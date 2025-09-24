@@ -33,6 +33,7 @@ from optimum.exporters.onnx.model_patcher import (
     DecoderModelPatcher,
     ModelPatcher,
     Seq2SeqModelPatcher,
+    VisionEncoderDecoderPatcher,
     override_arguments,
     sdpa_mask_without_vmap,
 )
@@ -49,6 +50,7 @@ from optimum.intel.utils.import_utils import (
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+
 
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
@@ -356,14 +358,10 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for non-stateful decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
-            if not getattr(self.real_config, "stateful", False):
-                logger.warning(
-                    "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
-                    "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
-                )
-                ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+            # for decoder models, we use eager mask without vmap for sdpa as well
+            # to avoid a nan output issue in OpenVINO that only happens in case of:
+            # non-stateful models on cpu and stateful models on npu
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -377,6 +375,22 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
             del self._model._update_causal_mask_original
 
         if is_transformers_version(">=", "4.53.0"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+
+
+class OVVisionEncoderDecoderPatcher(VisionEncoderDecoderPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if is_transformers_version(">=", "4.54"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if is_transformers_version(">=", "4.54"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
@@ -1191,12 +1205,14 @@ class BaichuanModelPatcher(OVDecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Modified from https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/mpt/modeling_mpt.py#L90
 def _mpt_sdpa_attention_forward(
     self,
     hidden_states: torch.Tensor,
     position_bias: torch.Tensor,
     past_key_value: Optional[Tuple[torch.Tensor]] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    cache_position: Optional[torch.Tensor] = None,
 ):
     batch_size, seq_length = hidden_states.shape[:2]
 
@@ -1207,15 +1223,21 @@ def _mpt_sdpa_attention_forward(
     value_states = value_states.reshape(batch_size, seq_length, self.n_heads, self.head_dim).transpose(1, 2)
 
     if past_key_value is not None:
-        if len(past_key_value) != 0:
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
-        past_key_value = (key_states, value_states)
-    else:
-        past_key_value = (key_states, value_states)
+        # starting from v4.54 https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/mpt/modeling_mpt.py#L362
+        if is_transformers_version(">=", "4.54"):
+            cache_kwargs = {"cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            pkv_seq_length = past_key_value.get_seq_length()
+
+        else:
+            if len(past_key_value) != 0:
+                key_states = torch.cat([past_key_value[0], key_states], dim=2)
+                value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            past_key_value = (key_states, value_states)
+            pkv_seq_length = past_key_value[0].shape[2]
 
     key_length = key_states.shape[-2]
-    query_length = seq_length if past_key_value is None else seq_length + past_key_value[0].shape[2]
+    query_length = seq_length if past_key_value is None else seq_length + pkv_seq_length
     attention_mask_sdpa = torch.ones(
         (query_states.shape[0], query_states.shape[1], query_states.shape[2], key_states.shape[2]),
         dtype=query_states.dtype,
@@ -1239,9 +1261,15 @@ def _mpt_sdpa_attention_forward(
     context_states = context_states.permute(0, 2, 1, 3).contiguous().view(batch_size, seq_length, -1)
     attn_output = self.out_proj(context_states)
 
-    return attn_output, None, past_key_value
+    outputs = (attn_output, None)
+
+    if is_transformers_version("<", "4.54"):
+        outputs += (past_key_value,)
+
+    return outputs
 
 
+# Mofied from https://github.com/huggingface/transformers/blob/v4.48.0/src/transformers/models/mpt/modeling_mpt.py#L188
 def _mpt_block_forward(
     self,
     hidden_states: torch.Tensor,
@@ -1250,6 +1278,7 @@ def _mpt_block_forward(
     layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     use_cache: bool = False,
     output_attentions: bool = False,
+    cache_position: Optional[torch.Tensor] = None,
 ):
     # hidden_states: [batch_size, seq_length, hidden_size]
     # Layer norm at the beginning of the transformer layer.
@@ -1259,21 +1288,23 @@ def _mpt_block_forward(
 
     if not output_attentions:
         # Self attention.
-        attn_outputs, attn_weights, past_key_value = self.attn(
+        attn_out = self.attn(
             layernorm_output,
             position_bias=position_bias,
             attention_mask=attention_mask,
             past_key_value=layer_past,
+            cache_position=cache_position,
         )
     else:
-        attn_outputs, attn_weights, past_key_value = self.attn._orig_forward(
+        attn_out = self.attn._orig_forward(
             layernorm_output,
             position_bias=position_bias,
             attention_mask=attention_mask,
             past_key_value=layer_past,
+            cache_position=cache_position,
         )
 
-    hidden_states = self.resid_attn_dropout(attn_outputs) + residual
+    hidden_states = self.resid_attn_dropout(attn_out[0]) + residual
 
     layernorm_output = self.norm_2(hidden_states)
 
@@ -1284,11 +1315,11 @@ def _mpt_block_forward(
     output = self.ffn(layernorm_output, residual)
     outputs = (output,)
 
-    if use_cache:
-        outputs += (past_key_value,)
+    if use_cache and is_transformers_version("<", "4.54"):
+        outputs += (attn_out[2],)
 
     if output_attentions:
-        outputs += (attn_weights,)
+        outputs += (attn_out[1],)
 
     return outputs
 
@@ -2541,7 +2572,12 @@ def _persimmon_self_attn_sdpa_forward(
 
     attn_output = self.dense(attn_output)
 
-    return attn_output, None, past_key_value
+    outputs = (attn_output, None)
+
+    if is_transformers_version("<", "4.54"):
+        outputs += (past_key_value,)
+
+    return outputs
 
 
 class PersimmonModelPatcher(OVDecoderModelPatcher):
@@ -4703,14 +4739,18 @@ def gpt_bigcode_attn(self, query, key, value, attention_mask=None, head_mask=Non
 class GptBigCodeModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa" and is_transformers_version(
+            "<", "4.54"
+        ):
             for layer in self._model.transformer.h:
                 layer.attn._orig_attn = layer.attn._attn
                 layer.attn._attn = types.MethodType(gpt_bigcode_attn, layer.attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa":
+        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa" and is_transformers_version(
+            "<", "4.54"
+        ):
             for layer in self._model.transformer.h:
                 layer.attn._attn = layer.attn._orig_attn
 
@@ -4771,14 +4811,10 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for non-stateful decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of non-stateful models
-            if not getattr(self.real_config, "stateful", False):
-                logger.warning(
-                    "Exporting a non-stateful decoder model currently results in a nan output in OpenVINO. "
-                    "There might be a performance impact due to the use of eager mask (floats) instead of sdpa mask (bools). "
-                )
-                ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+            # for decoder models, we use eager mask without vmap for sdpa as well
+            # to avoid a nan output issue in OpenVINO that only happens in case of:
+            # non-stateful models on cpu and stateful models on npu
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -5104,8 +5140,14 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
                     nb_patches_h = p_attn_mask[:, 0].sum()
                     nb_patches_w = p_attn_mask[0].sum()
 
-                    fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
-                    fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+                    if is_transformers_version("<", "4.55"):
+                        fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                        fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+                    else:
+                        h_indices = torch.arange(nb_patches_h, device=pixel_values.device, dtype=pixel_values.dtype)
+                        w_indices = torch.arange(nb_patches_w, device=pixel_values.device, dtype=pixel_values.dtype)
+                        fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
+                        fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
 
                     bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
                     bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
@@ -5375,7 +5417,12 @@ def _blenderbot_attn_forward_new(
 
     attn_output = self.out_proj(attn_output)
 
-    return attn_output, None, past_key_value
+    outputs = (attn_output, None)
+
+    if is_transformers_version("<", "4.54"):
+        outputs += (past_key_value,)
+
+    return outputs
 
 
 if is_transformers_version(">=", "4.52"):
@@ -5559,7 +5606,7 @@ def speecht5_decoder_prenet_forward(
     return inputs_embeds
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L993
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L889
 # this is a patch to avoid CPU plugin issue that is happened on 16-th iteration of token generation
 # values computed by self-attention attn_output = torch.bmm(attn_probs, value_states) in a decoder gets incorrect
 def speecht5_attention_forward(
@@ -5685,7 +5732,7 @@ def speecht5_attention_forward(
     return attn_output, attn_weights_reshaped, past_key_value
 
 
-# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1175
+# Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L1121
 # this is a patch for a model to avoid incorrect tracing
 # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple are computed using encoder_hidden_states
 def speecht5_decoder_layer_forward(
@@ -5772,11 +5819,12 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
                 speecht5_decoder_prenet_forward, self._model.speecht5.decoder.prenet
             )
-            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
-                layer.__orig_forward = layer.forward
-                layer.forward = types.MethodType(speecht5_decoder_layer_forward, layer)
-                layer.self_attn.__orig_forward = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
+            if is_transformers_version("<", "4.54"):
+                for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                    layer.__orig_forward = layer.forward
+                    layer.forward = types.MethodType(speecht5_decoder_layer_forward, layer)
+                    layer.self_attn.__orig_forward = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(speecht5_attention_forward, layer.self_attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.real_config._behavior != "vocoder":
@@ -5785,9 +5833,10 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
                 self._model.speecht5.decoder.prenet.__orig_forward, self._model.speecht5.decoder.prenet
             )
-            for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
-                layer.forward = types.MethodType(layer.__orig_forward, layer)
-                layer.self_attn.forward = types.MethodType(layer.self_attn.__orig_forward, layer.self_attn)
+            if is_transformers_version("<", "4.54"):
+                for layer in self._model.speecht5.decoder.wrapped_decoder.layers:
+                    layer.forward = types.MethodType(layer.__orig_forward, layer)
+                    layer.self_attn.forward = types.MethodType(layer.self_attn.__orig_forward, layer.self_attn)
 
     def __init__(
         self,
@@ -6342,6 +6391,7 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         self._model.forward = self._model.__orig_forward
 
 
@@ -6441,6 +6491,7 @@ def llama4_attn_forward(
             attention_interface = eager_attention_forward
         else:
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
     attn_output, attn_weights = attention_interface(
         self,
         query_states,
@@ -6501,7 +6552,7 @@ class Llama4TextModelPatcher(ModelPatcher):
         self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
         self._model.model.rotary_emb.forward = types.MethodType(llama4_rope_forward, self._model.model.rotary_emb)
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
-            if layer.is_moe_layer:
+            if layer.is_moe_layer and is_transformers_version("<", "4.54"):
                 layer.feed_forward._orig_forward = layer.feed_forward.forward
                 layer.feed_forward.forward = types.MethodType(llama4_moe_forward, layer.feed_forward)
             layer.self_attn._orig_forward = layer.self_attn.forward
@@ -6511,7 +6562,7 @@ class Llama4TextModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
-            if layer.is_moe_layer:
+            if layer.is_moe_layer and is_transformers_version("<", "4.54"):
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
 
@@ -6678,7 +6729,7 @@ class MambaPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers import PretrainedConfig
-        from transformers.cache_utils import MambaCache
+        from transformers.models.mamba.modeling_mamba import MambaCache
 
         super().__init__(config, model, model_kwargs)
 
@@ -6869,3 +6920,85 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 
         if is_transformers_version(">=", "4.53"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
+
+
+class SAMModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: OnnxConfig,
+        model: PreTrainedModel,
+        model_kwargs: Optional[dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        def patched_forward(
+            pixel_values=None,
+            input_points=None,
+            input_labels=None,
+            image_embeddings=None,
+            image_positional_embeddings=None,
+            return_dict=True,
+            **kwargs,
+        ):
+            if config.variant == "monolith":
+                return self.orig_forward(
+                    pixel_values=pixel_values,
+                    input_points=input_points,
+                    input_labels=input_labels,
+                    image_embeddings=image_embeddings,
+                    return_dict=return_dict,
+                    **kwargs,
+                )
+            elif config.variant == "split":
+                # return_dict = get_argument(args, kwargs, signature, "return_dict")
+                if config.vision_encoder:
+                    # pixel_values = get_argument(args, kwargs, signature, "pixel_values")
+                    image_positional_embeddings = model.get_image_wide_positional_embeddings()
+
+                    # repeat with batch size
+                    batch_size = pixel_values.shape[0]
+                    image_positional_embeddings = image_positional_embeddings.repeat(batch_size, 1, 1, 1)
+
+                    vision_outputs = model.vision_encoder(
+                        pixel_values,
+                        output_attentions=False,
+                        output_hidden_states=False,
+                        return_dict=return_dict,
+                    )
+                    image_embeddings = vision_outputs[0]
+
+                    if not return_dict:
+                        return (image_embeddings, image_positional_embeddings)
+                    else:
+                        return {
+                            "image_embeddings": image_embeddings,
+                            "image_positional_embeddings": image_positional_embeddings,
+                        }
+                else:
+                    if input_points is None:
+                        raise ValueError("input_points is required to export the prompt encoder / mask decoder.")
+
+                    sparse_embeddings, dense_embeddings = model.prompt_encoder(
+                        input_points=input_points,
+                        input_labels=input_labels,
+                        input_boxes=None,  # Not supported in the ONNX export
+                        input_masks=None,  # Not supported in the ONNX export
+                    )
+
+                    outputs = model.mask_decoder(
+                        image_embeddings=image_embeddings,
+                        image_positional_embeddings=image_positional_embeddings,
+                        sparse_prompt_embeddings=sparse_embeddings,
+                        dense_prompt_embeddings=dense_embeddings,
+                        multimask_output=True,  # Not supported in the ONNX export
+                        attention_similarity=None,  # Not supported in the ONNX export
+                        target_embedding=None,  # Not supported in the ONNX export
+                    )
+                    low_res_masks = outputs[0]
+                    iou_predictions = outputs[1]
+                    if not return_dict:
+                        return (iou_predictions, low_res_masks)
+                    else:
+                        return {"iou_scores": iou_predictions, "pred_masks": low_res_masks}
+
+        self.patched_forward = patched_forward
