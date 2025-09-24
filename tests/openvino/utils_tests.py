@@ -85,6 +85,7 @@ MODEL_NAMES = {
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_neox_japanese": "hf-internal-testing/tiny-random-GPTNeoXJapaneseForCausalLM",
     "gpt_oss": "trl-internal-testing/tiny-GptOssForCausalLM",
+    "gpt_oss_mxfp4": "echarlaix/tiny-random-gpt-oss-mxfp4",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "granite": "katuni4ka/tiny-random-granite",
     "granite-moe": "katuni4ka/tiny-random-granite-moe",
