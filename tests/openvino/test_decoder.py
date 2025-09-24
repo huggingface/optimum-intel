@@ -126,6 +126,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
+    if is_transformers_version(">=", "4.54.0"):
+        SUPPORTED_ARCHITECTURES += ("gpt_oss",)
+
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
 
