@@ -243,6 +243,7 @@ def main_export(
     dtype = loading_kwargs.get("torch_dtype", None)
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
+
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -255,6 +256,11 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
+
+        # mxfp4 quantized model will be dequantized to bf16
+        if quantization_config["quant_method"] == "mxfp4":
+            dtype = torch.bfloat16
+
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
