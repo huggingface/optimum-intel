@@ -459,6 +459,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "codegen2": "codegen",
     "falcon-mamba": "falcon_mamba",
     "falcon-40b": "falcon",
+    "gpt_oss_mxfp4": "gpt_oss",
     "granite-moe": "granitemoe",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
