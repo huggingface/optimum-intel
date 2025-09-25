@@ -231,10 +231,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    @unittest.skipIf(
-        is_transformers_version("<", "4.45"),
-        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
-    )
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
         if is_transformers_version(">=", "4.51"):
@@ -399,10 +395,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @require_diffusers
-    @unittest.skipIf(
-        is_transformers_version("<", "4.45"),
-        "model tokenizer exported with tokenizers 0.20 is not compatible with old transformers",
-    )
     def test_load_from_hub_and_save_flux_model(self):
         loaded_pipeline = OVDiffusionPipeline.from_pretrained(self.OV_FLUX_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
@@ -1963,9 +1955,7 @@ class OVSamIntegrationTest(unittest.TestCase):
 
 
 class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["clip"]
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.append("siglip")
+    SUPPORTED_ARCHITECTURES = ["clip", "siglip"]
     TASK = "zero-shot-image-classification"
     IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
