@@ -48,7 +48,8 @@ from .utils import (
     load_preprocessors,
 )
 
-if is_transformers_version(">=","4.55"):
+
+if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
 FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
@@ -261,7 +262,7 @@ def main_export(
         quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
         # mxfp4 quantized model will be dequantized to bf16
-        if quant_method == "mxfp4" and is_transformers_version(">=","4.55"):
+        if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
