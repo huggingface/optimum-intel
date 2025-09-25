@@ -24,7 +24,7 @@ env:
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
-  HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
