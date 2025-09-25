@@ -478,7 +478,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         "llava_next_mistral",
         "llava_next_video",
         "llava-qwen2",
-        "minicpmv" "phi3_v",
+        "minicpmv",
+        "phi3_v",
         "qwen2_vl",
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
