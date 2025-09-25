@@ -1974,8 +1974,7 @@ def codegen_wrapped_scaled_dot_product(
                 query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
             )
     else:
-        query_length, key_length = query.size(-2), key.size(-2)
-
+        query_length = query.size(-2)
         # causal_mask is always [True, ..., True] otherwise, so executing this
         # is unnecessary
         if query_length > 1:
@@ -2699,8 +2698,7 @@ def _gptj_attn(self, query, key, value, attention_mask=None, head_mask=None):
                 query, key, value, attn_mask=None, dropout_p=dropout_p, is_causal=False
             )
     else:
-        query_length, key_length = query.size(-2), key.size(-2)
-
+        query_length = query.size(-2)
         # causal_mask is always [True, ..., True] otherwise, so executing this
         # is unnecessary
         if query_length > 1:
