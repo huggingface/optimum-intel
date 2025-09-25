@@ -641,7 +641,7 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
 class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
-    MIN_TRANSFORMERS_VERSION = "4.55"
+    MIN_TRANSFORMERS_VERSION = "4.55.1"
 
 
 @register_in_tasks_manager(
