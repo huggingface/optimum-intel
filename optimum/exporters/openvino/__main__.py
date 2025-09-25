@@ -256,7 +256,7 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
-        quant_method =  quantization_config.get("quant_method", None) if quantization_config else None
+        quant_method = quantization_config.get("quant_method", None) if quantization_config else None
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4":
