@@ -377,6 +377,7 @@ SKIP_CHECK_TRACE_MODELS = (
     "llama4",
 )
 
+
 def allow_skip_tracing_check(library_name, model_type):
     if is_openvino_version("<", "2025.0.0"):
         return False

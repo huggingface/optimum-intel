@@ -78,7 +78,6 @@ from optimum.utils.normalized_config import (
 )
 
 from ...intel.utils.import_utils import (
-    _transformers_version,
     is_diffusers_available,
     is_diffusers_version,
     is_transformers_version,
@@ -1025,6 +1024,7 @@ class BloomOpenVINOConfig(BloomOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager(
     "cohere",

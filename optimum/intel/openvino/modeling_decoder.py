@@ -32,6 +32,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.models.mamba.modeling_mamba import MambaCache
 from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -56,7 +57,7 @@ from .utils import (
     get_export_transformers_version,
     model_has_dynamic_inputs,
 )
-from transformers.models.mamba.modeling_mamba import MambaCache
+
 
 if TYPE_CHECKING:
     try:

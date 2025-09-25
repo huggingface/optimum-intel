@@ -24,6 +24,7 @@ import torch
 import torch.nn.functional as F
 from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
+from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.utils import is_tf_available
 
@@ -45,7 +46,6 @@ from optimum.intel.utils.import_utils import (
     is_torch_version,
     is_transformers_version,
 )
-from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 
 
 if is_transformers_version(">=", "4.53"):
@@ -82,9 +82,8 @@ def patch_model_with_bettertransformer(model):
     if hasattr(model, "use_bettertransformer") and model.use_bettertransformer is True:
         return model
 
-    if (
-        getattr(model.config, "model_type") in {"gpt_bigcode", "llama", "gemma"}
-        and is_openvino_version("<", "2024.1.0-14612")
+    if getattr(model.config, "model_type") in {"gpt_bigcode", "llama", "gemma"} and is_openvino_version(
+        "<", "2024.1.0-14612"
     ):
         # display commit-id only when a nightly/prerelease of OpenVINO is installed.
         display_version = _openvino_version.split("-")[0] if "-" in _openvino_version else _openvino_version
@@ -2630,7 +2629,7 @@ class FalconModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
         patch_cos_sin_cached_fp32(self._model.transformer)
 
-        if is_transformers_version("<", "4.53")  and hasattr(self._model.transformer, "_update_causal_mask"):
+        if is_transformers_version("<", "4.53") and hasattr(self._model.transformer, "_update_causal_mask"):
             self._model.transformer._update_causal_mask_original = self._model.transformer._update_causal_mask
             self._model.transformer._update_causal_mask = types.MethodType(
                 _falcon_update_causal_mask, self._model.transformer

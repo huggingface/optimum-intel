@@ -8,7 +8,7 @@ import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino as ov
@@ -41,6 +41,7 @@ from .utils import (
     OV_VISION_EMBEDDINGS_MODEL_NAME,
     TemporaryDirectory,
 )
+
 
 if is_transformers_version(">=", "4.46.0"):
     from transformers import AutoModelForImageTextToText
