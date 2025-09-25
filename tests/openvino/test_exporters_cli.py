@@ -83,6 +83,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "gpt2"),
         ("text2text-generation", "t5"),
         ("text2text-generation-with-past", "t5"),
+        ("text-generation-with-past", "mamba"),
+        ("text-generation-with-past", "falcon-mamba"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -93,29 +95,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
+        ("text-to-image", "stable-diffusion-3"),
+        ("text-to-image", "flux"),
+        ("inpainting", "flux-fill"),
+        ("text-to-image", "sana"),
+        ("text-to-video", "ltx-video"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
     ]
-
-    if is_transformers_version(">=", "4.39"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "mamba"),
-                ("text-generation-with-past", "falcon-mamba"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-to-image", "stable-diffusion-3"),
-                ("text-to-image", "flux"),
-                ("inpainting", "flux-fill"),
-                ("text-to-image", "sana"),
-                ("text-to-video", "ltx-video"),
-            ]
-        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
@@ -176,23 +164,15 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
+        "glm": {  # transformers, no processor, no simplified chat template
+            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "task": "text-generation-with-past",
+            "expected_chat_template": True,
+            "simplified_chat_template": False,
+            "processor_chat_template": False,
+            "remote_code": True,
+        },
     }
-
-    if is_transformers_version("<", "4.45"):
-        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
-            {
-                "glm": {  # transformers, no processor, no simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
-                    "task": "text-generation-with-past",
-                    "expected_chat_template": True,
-                    "simplified_chat_template": False,
-                    "processor_chat_template": False,
-                    "remote_code": True,
-                },
-            }
-        )
 
     if is_transformers_version("<", "4.54"):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
@@ -221,15 +201,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         )
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
+        ("flux", 7, 56),
+        ("latent-consistency", 50, 135),
+        ("sana", 19, 53),
         ("stable-diffusion", 72, 195),
         ("stable-diffusion-xl", 84, 331),
-        ("latent-consistency", 50, 135),
+        ("stable-diffusion-3", 9, 65),
     ]
-
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 19, 53))
 
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         (
@@ -479,29 +457,23 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            "f8e4m3",
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": 15,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 17,
+            },
+            {
+                "lm_model": {"f8e4m3": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"f8e4m3": 11},
+            },
+        ),
     ]
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_QUANTIZATION_ARCHITECTURES.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "internvl_chat",
-                    "f8e4m3",
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": 15,
-                        "text_embeddings_model": 0,
-                        "vision_embeddings_model": 17,
-                    },
-                    {
-                        "lm_model": {"f8e4m3": 15},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"f8e4m3": 11},
-                    },
-                ),
-            ]
-        )
 
     TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
@@ -838,12 +810,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
 
-    # some testing models required transformers at least 4.45 for conversion
     @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
-    @unittest.skipIf(
-        is_transformers_version("<", "4.45.0") or not is_openvino_tokenizers_available(),
-        reason="test required openvino tokenizers and transformers >= 4.45",
-    )
+    @unittest.skipIf(not is_openvino_tokenizers_available(), reason="test required openvino tokenizers")
     def test_exporters_cli_tokenizers_chat_template(self, model_type):
         import openvino as ov
 
