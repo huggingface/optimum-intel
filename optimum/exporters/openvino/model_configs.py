@@ -1026,31 +1026,6 @@ class BloomOpenVINOConfig(BloomOnnxConfig):
     ) -> "ModelPatcher":
         return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
 
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        if is_transformers_version(">=", "4.44"):
-            super().add_past_key_values(inputs_or_outputs, direction)
-        else:
-            if direction not in ["inputs", "outputs"]:
-                raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-            if direction == "inputs":
-                decoder_sequence_name = "past_sequence_length"
-                name = "past_key_values"
-            else:
-                decoder_sequence_name = "past_sequence_length + 1"
-                name = "present"
-
-            for i in range(self._normalized_config.num_layers):
-                inputs_or_outputs[f"{name}.{i}.key"] = {
-                    0: "batch_size x num_heads",
-                    2: decoder_sequence_name,
-                }
-                inputs_or_outputs[f"{name}.{i}.value"] = {
-                    0: "batch_size x num_heads",
-                    1: decoder_sequence_name,
-                }
-
-
 @register_in_tasks_manager(
     "cohere",
     *[
@@ -1216,11 +1191,6 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if is_transformers_version("<=", "4.36.0"):
-            raise ValueError(
-                f"Model patching for Arctic models only available for transformers >= v4.37.0, found {_transformers_version}"
-            )
-
         return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -3877,9 +3847,8 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
             common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
 
         if self._behavior is not ConfigBehavior.ENCODER and self.use_past_in_inputs:
-            if is_transformers_version(">=", "4.43.0"):
-                # since https://github.com/huggingface/transformers/pull/31166
-                common_inputs["cache_position"] = {0: "decoder_sequence_length"}
+            # since https://github.com/huggingface/transformers/pull/31166
+            common_inputs["cache_position"] = {0: "decoder_sequence_length"}
         return common_inputs
 
 

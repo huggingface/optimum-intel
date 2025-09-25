@@ -45,6 +45,7 @@ from optimum.intel.utils.import_utils import (
     is_torch_version,
     is_transformers_version,
 )
+from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 
 
 if is_transformers_version(">=", "4.53"):
@@ -69,9 +70,7 @@ for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
         UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
 
 
-BETTERTRANSFORMER_IGNORE = ["codegen"]
-if is_transformers_version(">=", "4.45"):
-    BETTERTRANSFORMER_IGNORE.append("gpt_neo")
+BETTERTRANSFORMER_IGNORE = ["codegen", "gpt_neo"]
 
 
 # TODO: should be removed beceause optimum is removing it in next version
@@ -85,7 +84,6 @@ def patch_model_with_bettertransformer(model):
 
     if (
         getattr(model.config, "model_type") in {"gpt_bigcode", "llama", "gemma"}
-        and is_transformers_version(">=", "4.38")
         and is_openvino_version("<", "2024.1.0-14612")
     ):
         # display commit-id only when a nightly/prerelease of OpenVINO is installed.
@@ -129,80 +127,8 @@ def patch_update_causal_mask(
             inner_model._update_causal_mask = types.MethodType(patch_fn, inner_model)
 
 
-# adopted from
-# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/gemma/modeling_gemma.py#L965
-# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/llama/modeling_llama.py#L1058
-def _update_causal_mask_patched_legacy(self, attention_mask, input_tensor, cache_position, past_seen_tokens=None):
-    from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-
-    if self.config._attn_implementation == "sdpa" and past_seen_tokens is not None:
-        # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument,
-        # in order to dispatch on Flash Attention 2.
-        if AttentionMaskConverter._ignore_causal_mask_sdpa(
-            attention_mask, inputs_embeds=input_tensor, past_key_values_length=past_seen_tokens
-        ):
-            return None
-
-    dtype, device = input_tensor.dtype, input_tensor.device
-
-    # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
-    # during execution on platforms with default lower precision (bfloat16, float16)
-    min_dtype = torch.finfo(torch.float16).min
-    sequence_length = input_tensor.shape[1]
-    # difference with original modeling
-    if hasattr(getattr(self.layers[0], "self_attn", {}), "past_key_value"):  # static cache
-        target_length = self.config.max_position_embeddings
-    else:  # dynamic cache
-        if past_seen_tokens is not None:
-            current_length = past_seen_tokens + sequence_length + 1
-        # TODO : remove after support of transformers >= v4.40.0
-        else:
-            current_length = cache_position[-1] + 1
-
-        target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else current_length
-
-    # difference with original modeling
-    causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
-
-    if sequence_length != 1:
-        causal_mask = torch.triu(causal_mask, diagonal=1)
-    causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-    causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
-    if attention_mask is not None:
-        causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-        if attention_mask.dim() == 2:
-            mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[..., :mask_length].eq(0.0) * attention_mask[:, None, None, :].eq(0.0)
-            causal_mask[..., :mask_length] = causal_mask[..., :mask_length].masked_fill(padding_mask, min_dtype)
-        elif attention_mask.dim() == 4:
-            # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
-            # cache. In that case, the 4D attention mask attends to the newest tokens only.
-            if attention_mask.shape[-2] < cache_position[0] + sequence_length:
-                offset = cache_position[0]
-            else:
-                offset = 0
-            mask_shape = attention_mask.shape
-            mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
-
-    if (
-        self.config._attn_implementation == "sdpa"
-        and attention_mask is not None
-        and attention_mask.device.type == "cuda"
-    ):
-        # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
-        # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
-        # Details: https://github.com/pytorch/pytorch/issues/110213
-        causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
-
-    return causal_mask
-
-
 # adopted from https://github.com/huggingface/transformers/blob/f4014e75db0190792b3feeccfc5dc5b5f9f0ce7b/src/transformers/models/llama/modeling_llama.py#L1036
-def _update_causal_mask_patched_latest(
+def _update_causal_mask_patched(
     self,
     attention_mask,
     input_tensor,
@@ -292,13 +218,6 @@ def _update_causal_mask_patched_latest(
     return causal_mask
 
 
-# TODO : remove _update_causal_mask_patched_legacy when transformers>=4.41.0
-if is_transformers_version(">=", "4.41"):
-    _update_causal_mask_patched = _update_causal_mask_patched_latest
-else:
-    _update_causal_mask_patched = _update_causal_mask_patched_legacy
-
-
 # TODO: this is a numerical issue in OpenVINO, let's open an issue to track it
 # initialization of sin/cos cached in bf16/fp16 leads to accuracy loss
 # reinitialize them to save in float32 before export
@@ -345,11 +264,7 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
         if hasattr(self._model, "model"):
             patch_cos_sin_cached_fp32(self._model.model)
 
-        if (
-            is_transformers_version(">=", "4.36.0")
-            and is_transformers_version("<", "4.53.0")
-            and hasattr(self._model, "_update_causal_mask")
-        ):
+        if is_transformers_version("<", "4.53.0") and hasattr(self._model, "_update_causal_mask"):
             self._model._update_causal_mask_original = self._model._update_causal_mask
             self._model._update_causal_mask = types.MethodType(_update_causal_mask_patched, self._model)
 
@@ -366,11 +281,7 @@ class OVDecoderModelPatcher(DecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if (
-            is_transformers_version(">=", "4.36")
-            and is_transformers_version("<", "4.53")
-            and hasattr(self._model, "_update_causal_mask_original")
-        ):
+        if is_transformers_version("<", "4.53") and hasattr(self._model, "_update_causal_mask_original"):
             self._model._update_causal_mask = self._model._update_causal_mask_original
             del self._model._update_causal_mask_original
 
@@ -424,10 +335,7 @@ def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
         # the current expert. We need to make sure to multiply the output hidden
         # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
         current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-        if is_transformers_version("<", "4.37.0"):
-            current_hidden_states = expert_layer(current_state, routing_weights[top_x, idx, None])
-        else:
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
 
         final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
     final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
@@ -771,16 +679,12 @@ def _mistral_update_causal_mask(
 class MistralModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
+        if is_transformers_version("<", "4.48.0"):
             # apply fix https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
 
-        if (
-            hasattr(self._model, "model")
-            and hasattr(self._model.model, "layers")
-            and is_transformers_version(">=", "4.41.0")
-        ):
+        if hasattr(self._model, "model") and hasattr(self._model.model, "layers"):
             for layer in self._model.model.layers:
                 if hasattr(layer.self_attn, "rotary_emb"):
                     embed_positions = create_embed_positions_buffer(
@@ -796,15 +700,11 @@ class MistralModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
+        if is_transformers_version("<", "4.48.0"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
             del self._model.model._orig_update_causal_mask
 
-        if (
-            hasattr(self._model.model, "model")
-            and hasattr(self._model.model.model, "layers")
-            and is_transformers_version(">=", "4.41.0")
-        ):
+        if hasattr(self._model.model, "model") and hasattr(self._model.model.model, "layers"):
             for layer in self._model.model.layers:
                 if hasattr(layer.self_attn, "rotary_emb"):
                     layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
@@ -1605,11 +1505,6 @@ def _phi3_self_attn_sdpa_forward(
             use_cache=use_cache,
         )
 
-    if is_transformers_version(">=", "4.41.0"):
-        from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
-    else:
-        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
-
     bsz, q_len, _ = hidden_states.size()
 
     qkv = self.qkv_proj(hidden_states)
@@ -1674,7 +1569,7 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
         ):
             self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
-        if is_transformers_version(">=", "4.42.0") and is_transformers_version("<", "4.48.0"):
+        if is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
 
@@ -2085,20 +1980,7 @@ def codegen_wrapped_scaled_dot_product(
         # causal_mask is always [True, ..., True] otherwise, so executing this
         # is unnecessary
         if query_length > 1:
-            if not is_transformers_version(">", "4.44.99"):
-                causal_mask = self.causal_mask[:, :, key_length - query_length : key_length, :key_length].to(
-                    torch.bool
-                )
-
-                causal_mask = torch.where(causal_mask, 0, mask_value)
-
-                # torch.Tensor.expand does no memory copy
-                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
-
-                # we use torch.min to avoid having tensor(-inf)
-                attention_mask = torch.min(causal_mask, attention_mask)
-            else:
-                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
 
         sdpa_result = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
@@ -2173,7 +2055,7 @@ class CodeGenModelPatcher(OVDecoderModelPatcher):
 
         # TODO: why is this needed again ? it's too convoluted
         attn_fn = codegen_wrapped_scaled_dot_product
-        if is_torch_version(">=", "2.1.0") and is_transformers_version(">=", "4.45"):
+        if is_torch_version(">=", "2.1.0"):
             # in transformers 4.45 causal_mask const buffer was removed from the model
             # if it still exists, it means legacy remote code was loaded
             if hasattr(self._model.transformer.h[0].attn, "causal_mask"):
@@ -2188,11 +2070,7 @@ class CodeGenModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if (
-            is_transformers_version(">=", "4.45")
-            and is_transformers_version("<", "4.53")
-            and hasattr(self._model.transformer, "_update_causal_mask_original")
-        ):
+        if is_transformers_version("<", "4.53") and hasattr(self._model.transformer, "_update_causal_mask_original"):
             self._model.transformer._update_causal_mask = self._model.transformer._update_causal_mask_original
             del self._model.transformer._update_causal_mask_original
 
@@ -2246,81 +2124,8 @@ def _dbrx_experts_forward(
     return out
 
 
-# Adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L1228
-def _dbrx_update_causal_mask_legacy(
-    self, attention_mask: Optional[torch.Tensor], input_tensor: torch.Tensor, cache_position: torch.Tensor
-) -> Optional[torch.Tensor]:
-    from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-
-    if self.config._attn_implementation == "flash_attention_2":
-        if attention_mask is not None and 0.0 in attention_mask:
-            return attention_mask
-        return None
-
-    dtype, device = input_tensor.dtype, input_tensor.device
-    # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
-    # during execution on platforms with default lower precision (bfloat16, float16)
-    min_dtype = torch.finfo(torch.float16).min
-    sequence_length = input_tensor.shape[1]
-    if hasattr(self.blocks[0].norm_attn_norm.attn, "past_key_value"):  # static cache
-        target_length = self.config.max_position_embeddings
-    else:  # dynamic cache
-        target_length = (
-            attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else cache_position[-1] + 1
-        )
-    # difference with original modeling
-    # removed target_length = int(target_length).
-    # Casting to int leads to constant folding during tracing that makes impossible to use model for sequence of different length
-    causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
-    if sequence_length != 1:
-        causal_mask = torch.triu(causal_mask, diagonal=1)
-    causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-    causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
-    if attention_mask is not None:
-        causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-        if attention_mask.dim() == 2:
-            mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
-            padding_mask = padding_mask == 0
-            causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                padding_mask, min_dtype
-            )
-        elif attention_mask.dim() == 4:
-            # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
-            # cache. In that case, the 4D attention mask attends to the newest tokens only.
-            if attention_mask.shape[-2] < cache_position[0] + sequence_length:
-                offset = cache_position[0]
-            else:
-                offset = 0
-            mask_shape = attention_mask.shape
-            mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
-
-    if (
-        self.config._attn_implementation == "sdpa"
-        and attention_mask is not None
-        and attention_mask.device.type == "cuda"
-    ):
-        # TODO: For dynamo, rather use a check on fullgraph=True once this is possible (https://github.com/pytorch/pytorch/pull/120400).
-        is_tracing = (
-            torch.jit.is_tracing()
-            or isinstance(input_tensor, torch.fx.Proxy)
-            or (hasattr(torch, "_dynamo") and torch._dynamo.is_compiling())
-        )
-        if not is_tracing and torch.any(attention_mask != 1):
-            # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
-            # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
-            # Details: https://github.com/pytorch/pytorch/issues/110213
-            causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
-
-    return causal_mask
-
-
 # adopted from https://github.com/huggingface/transformers/blob/1b3dba9417eebe16b7c206d1dfca6a4c7f11dbec/src/transformers/models/dbrx/modeling_dbrx.py#L1204
-def _dbrx_update_causal_mask_latest(
+def _dbrx_update_causal_mask(
     self,
     attention_mask: torch.Tensor,
     input_tensor: torch.Tensor,
@@ -2408,12 +2213,6 @@ def _dbrx_update_causal_mask_latest(
     return causal_mask
 
 
-if is_transformers_version(">", "4.40.2"):
-    _dbrx_update_causal_mask = _dbrx_update_causal_mask_latest
-else:
-    _dbrx_update_causal_mask = _dbrx_update_causal_mask_legacy
-
-
 class DBRXModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -2424,17 +2223,13 @@ class DBRXModelPatcher(OVDecoderModelPatcher):
             _dbrx_update_causal_mask, self._model.transformer
         )
 
-        # starting from transformers 4.41 issue also observable for calculation sin/cos for rotary_emb
-        patch_rope_sin_cos = is_transformers_version(">=", "4.41.0")
-
         inv_freq = getattr(self._model.transformer.blocks[0].norm_attn_norm.attn.rotary_emb, "inv_freq")
         dim, base = None, None
         if inv_freq is None:
             dim = self._model.transformer.blocks[0].norm_attn_norm.attn.rotary_emb.dim
             base = self._model.transformer.blocks[0].norm_attn_norm.attn.rotary_emb.base
         max_positions = self._model.config.max_seq_len
-        if patch_rope_sin_cos:
-            embed_positions = create_sinusoidal_positions(max_positions, dim, base, inv_freq)
+        embed_positions = create_sinusoidal_positions(max_positions, dim, base, inv_freq)
 
         for block in self._model.transformer.blocks:
             rotary_emb = block.norm_attn_norm.attn.rotary_emb
@@ -2445,10 +2240,9 @@ class DBRXModelPatcher(OVDecoderModelPatcher):
                 )
                 rotary_emb.inv_freq = inv_freq
 
-            if patch_rope_sin_cos:
-                rotary_emb.register_buffer("embed_positions", embed_positions)
-                rotary_emb._orig_forward = rotary_emb.forward
-                rotary_emb.forward = types.MethodType(llama_gemma_rotary_emb_forward, rotary_emb)
+            rotary_emb.register_buffer("embed_positions", embed_positions)
+            rotary_emb._orig_forward = rotary_emb.forward
+            rotary_emb.forward = types.MethodType(llama_gemma_rotary_emb_forward, rotary_emb)
 
             # remove continue-operator from iteration loop over experts
             block.ffn.experts._orig_forward = block.ffn.experts.forward
@@ -2500,34 +2294,18 @@ def _persimmon_self_attn_sdpa_forward(
     value_states = value_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
 
-    if is_transformers_version("<", "4.44.99"):
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    if position_embeddings is None:
+        log.warning(
+            "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+            "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+            "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+            "removed and `position_embeddings` will be mandatory."
+        )
+        cos, sin = self.rotary_emb(value_states, position_ids)
     else:
-        if position_embeddings is None:
-            log.warning(
-                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
-                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
-                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
-                "removed and `position_embeddings` will be mandatory."
-            )
-            cos, sin = self.rotary_emb(value_states, position_ids)
-        else:
-            cos, sin = position_embeddings
+        cos, sin = position_embeddings
 
-    if is_transformers_version("<", "4.44.99"):
-        rotary_ndims = self.rotary_emb.dim
-    else:
-        rotary_ndims = self.rotary_ndims
-
+    rotary_ndims = self.rotary_ndims
     # Partial rotary embedding
     query_rot, query_pass = (
         query_states[..., :rotary_ndims],
@@ -2852,11 +2630,7 @@ class FalconModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
         patch_cos_sin_cached_fp32(self._model.transformer)
 
-        if (
-            is_transformers_version(">=", "4.45")
-            and is_transformers_version("<", "4.53")
-            and hasattr(self._model.transformer, "_update_causal_mask")
-        ):
+        if is_transformers_version("<", "4.53")  and hasattr(self._model.transformer, "_update_causal_mask"):
             self._model.transformer._update_causal_mask_original = self._model.transformer._update_causal_mask
             self._model.transformer._update_causal_mask = types.MethodType(
                 _falcon_update_causal_mask, self._model.transformer
@@ -2865,11 +2639,7 @@ class FalconModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if (
-            is_transformers_version(">=", "4.45")
-            and is_transformers_version("<", "4.53")
-            and hasattr(self._model.transformer, "_update_causal_mask_original")
-        ):
+        if is_transformers_version("<", "4.53") and hasattr(self._model.transformer, "_update_causal_mask_original"):
             self._model.transformer._update_causal_mask = self._model.transformer._update_causal_mask_original
             del self._model.transformer._update_causal_mask_original
 
@@ -2879,8 +2649,7 @@ class GptNeoxModelPatcher(OVDecoderModelPatcher):
         super().__enter__()
 
         if (
-            is_transformers_version(">=", "4.45")
-            and is_transformers_version("<", "4.53")
+            is_transformers_version("<", "4.53")
             and hasattr(self._model, "transformer")
             and hasattr(self._model.transformer, "_update_causal_mask")
         ):
@@ -2893,8 +2662,7 @@ class GptNeoxModelPatcher(OVDecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
 
         if (
-            is_transformers_version(">=", "4.45")
-            and is_transformers_version("<", "4.53")
+            is_transformers_version("<", "4.53")
             and hasattr(self._model, "transformer")
             and hasattr(self._model.transformer, "_update_causal_mask_original")
         ):
@@ -2937,18 +2705,7 @@ def _gptj_attn(self, query, key, value, attention_mask=None, head_mask=None):
         # causal_mask is always [True, ..., True] otherwise, so executing this
         # is unnecessary
         if query_length > 1:
-            if not is_transformers_version(">=", "4.44.99"):
-                causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].to(torch.bool)
-
-                causal_mask = torch.where(causal_mask, 0, mask_value)
-
-                # torch.Tensor.expand does no memory copy
-                causal_mask = causal_mask.expand(batch_size, -1, -1, -1)
-                if attention_mask is not None:
-                    attention_mask = causal_mask + attention_mask
-
-            else:
-                attention_mask = attention_mask[:, :, :, : key.shape[-2]]
+            attention_mask = attention_mask[:, :, :, : key.shape[-2]]
 
         sdpa_result = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=dropout_p, is_causal=False
@@ -3175,7 +2932,7 @@ def _gpt_neo_attn_sdpa(
 class GptNeoModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.45.0") and is_torch_version(">=", "2.1.0"):
+        if is_torch_version(">=", "2.1.0"):
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
             for layer in self._model.transformer.h:

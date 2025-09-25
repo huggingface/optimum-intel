@@ -25,6 +25,7 @@ from transformers import (
     PreTrainedTokenizer,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -41,7 +42,6 @@ from .utils import (
     TemporaryDirectory,
 )
 
-
 if is_transformers_version(">=", "4.46.0"):
     from transformers import AutoModelForImageTextToText
 
@@ -54,12 +54,7 @@ else:
 
 if TYPE_CHECKING:
     from PIL.Image import Image
-
-    if is_transformers_version(">=", "4.42.0"):
-        from transformers.image_utils import VideoInput
-    else:
-        VideoInput = List[Image]
-
+    from transformers.image_utils import VideoInput
 
 logger = logging.getLogger(__name__)
 
@@ -2525,19 +2520,9 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         self.rope_deltas = None  # cache rope_deltas here
-
-        if is_transformers_version(">=", "4.45.0"):
-            from transformers.models.qwen2_vl.modeling_qwen2_vl import (
-                VisionRotaryEmbedding,
-            )
-
-            self._rotary_pos_emb = VisionRotaryEmbedding(
-                self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
-            )
-        else:
-            raise ValueError(
-                f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
-            )
+        self._rotary_pos_emb = VisionRotaryEmbedding(
+            self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
+        )
 
     def prepare_inputs_for_generation(
         self,

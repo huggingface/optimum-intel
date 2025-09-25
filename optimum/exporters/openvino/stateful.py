@@ -122,7 +122,6 @@ def make_stateful(
     key_value_input_names: List[str],
     key_value_output_names: List[str],
     batch_dim: int,
-    num_attention_heads: int,
     num_beams_and_batch: int = None,
 ):
     """
@@ -139,8 +138,6 @@ def make_stateful(
             list of names for key value input layers
         batch_dim (int):
             index of batch dimension in key value layers
-        num_attention_heads (int):
-            number of attention heads for batch dimension initialization
         num_beams_an_batch (int):
             precalculated number of beams and batch for shapes initialization
     """
@@ -164,7 +161,7 @@ def make_stateful(
         if num_beams_and_batch is not None:
             input = ov_model.input(kv_name_pair[0])
             shape = input.get_partial_shape()
-            shape[batch_dim] = num_beams_and_batch * num_attention_heads
+            shape[batch_dim] = num_beams_and_batch
             input.get_node().set_partial_shape(shape)
 
     if num_beams_and_batch is not None:
@@ -332,12 +329,7 @@ def patch_stateful_decoder(config: PretrainedConfig, ov_model: ov.Model):
     batch_dim = 1 if config.model_type == "chatglm" and not hasattr(config, "rope_ratio") else 0
 
     fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
-    num_attention_heads = (
-        config.num_attention_heads if (config.model_type == "bloom" and is_transformers_version("<", "4.44")) else 1
-    )
-    make_stateful(
-        ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
-    )
+    make_stateful(ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, None)
 
 
 def patch_stateful_encoder_decoder(config, ov_model):
