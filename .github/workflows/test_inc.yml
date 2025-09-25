@@ -15,6 +15,7 @@ concurrency:
 
 env:
   TRANSFORMERS_IS_CI: true
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -48,5 +49,4 @@ jobs:
       - name: Test with Pytest
         run: |
           pytest tests/neural_compressor
-        env:
-          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+
