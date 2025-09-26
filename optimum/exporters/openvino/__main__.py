@@ -49,6 +49,9 @@ from .utils import (
 )
 
 
+if is_transformers_version(">=", "4.55"):
+    from transformers import Mxfp4Config
+
 FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
 
 if TYPE_CHECKING:
@@ -243,6 +246,7 @@ def main_export(
     dtype = loading_kwargs.get("torch_dtype", None)
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
+
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -255,11 +259,19 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
+        quant_method = quantization_config.get("quant_method", None) if quantization_config else None
+
+        # mxfp4 quantized model will be dequantized to bf16
+        if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
+            dtype = torch.bfloat16
+            loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
+
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
-        do_quant_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
-        do_gptq_patching = do_quant_patching and quantization_config["quant_method"] == "gptq"
+        do_quant_patching = quant_method in supported_quant_methods
+        do_gptq_patching = quant_method == "gptq"
+
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True

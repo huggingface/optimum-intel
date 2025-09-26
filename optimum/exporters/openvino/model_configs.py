@@ -628,6 +628,23 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
 
 
 @register_in_tasks_manager(
+    "gpt_oss",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    MIN_TRANSFORMERS_VERSION = "4.55.1"
+
+
+@register_in_tasks_manager(
     "exaone",
     *[
         "feature-extraction",
