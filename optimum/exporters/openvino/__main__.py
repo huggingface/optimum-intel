@@ -28,12 +28,10 @@ from transformers.utils import is_torch_available
 from openvino import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
-    is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
@@ -293,15 +291,8 @@ def main_export(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
             )
 
-        if (
-            is_transformers_version(">=", "4.36")
-            and is_transformers_version("<=", "4.45.0")
-            and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-        ):
-            loading_kwargs["attn_implementation"] = "eager"
-
         # some models force flash_attn attention by default that does not support load model on cpu
-        if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
+        if model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
         if model_type == "phi4mm":
             if "activation_checkpointing" in config.audio_processor["config"]:

@@ -276,7 +276,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         # whisper cache class support implemented in 4.43
-        expected_stateful = is_transformers_version(">", "4.43")
+        expected_stateful = True
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
         self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
@@ -471,20 +471,19 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["llava"]
-    SUPPORT_VIDEO = []
+    SUPPORTED_ARCHITECTURES = [
+        "internvl_chat",
+        "llava",
+        "llava_next",
+        "llava_next_mistral",
+        "llava_next_video",
+        "llava-qwen2",
+        "minicpmv",
+        "phi3_v",
+        "qwen2_vl",
+    ]
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
-
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "llava-qwen2"]
-
-    if is_transformers_version(">=", "4.42.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next_video"]
-        SUPPORT_VIDEO.append("llava_next_video")
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl_chat", "phi3_v", "qwen2_vl"]
-        SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
@@ -718,9 +717,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(["llava", "llava_next", "llava_next_video", "llava_next_mistral"])
-    @unittest.skipIf(
-        is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
-    )
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]

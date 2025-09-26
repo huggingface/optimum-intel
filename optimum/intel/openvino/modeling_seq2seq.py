@@ -353,21 +353,20 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         generation_config = kwargs.get("generation_config", None)
         self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-        if is_transformers_version(">=", "4.44.99"):
-            # some model configs may have issues with loading without parameters initialization
-            try:
-                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-            except (KeyError, TypeError):
-                misplaced_generation_parameters = {}
-            if len(misplaced_generation_parameters) > 0:
-                logger.warning(
-                    "Moving the following attributes in the config to the generation config: "
-                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                    "generation parameters in the model config, as opposed to in the generation config.",
-                )
-                for param_name, param_value in misplaced_generation_parameters.items():
-                    setattr(self.generation_config, param_name, param_value)
-                    setattr(self.config, param_name, None)
+        # some model configs may have issues with loading without parameters initialization
+        try:
+            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+        except (KeyError, TypeError):
+            misplaced_generation_parameters = {}
+        if len(misplaced_generation_parameters) > 0:
+            logger.warning(
+                "Moving the following attributes in the config to the generation config: "
+                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                "generation parameters in the model config, as opposed to in the generation config.",
+            )
+            for param_name, param_value in misplaced_generation_parameters.items():
+                setattr(self.generation_config, param_name, param_value)
+                setattr(self.config, param_name, None)
 
         self._openvino_config = None
         if quantization_config:

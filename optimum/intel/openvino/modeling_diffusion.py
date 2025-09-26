@@ -64,7 +64,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version, is_openvino_version, is_transformers_version
+from ..utils.import_utils import is_diffusers_version, is_openvino_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
@@ -86,7 +86,7 @@ else:
     from diffusers.models.vae import DiagonalGaussianDistribution
 
 # Required EncoderDecoderCache object from transformers
-if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45"):
+if is_diffusers_version(">=", "0.32"):
     from diffusers import LTXPipeline
 else:
     LTXPipeline = object
@@ -1743,7 +1743,7 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
 
 OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
 
-if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45.0"):
+if is_diffusers_version(">=", "0.32"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTXPipeline)
 
