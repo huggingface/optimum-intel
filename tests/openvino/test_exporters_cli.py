@@ -164,15 +164,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
-        "glm": {  # transformers, no processor, no simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "text-generation-with-past",
-            "expected_chat_template": True,
-            "simplified_chat_template": False,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
     }
+
+    if is_transformers_version(">=", "4.46"):
+        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
+            {
+                "glm": {  # transformers, no processor, no simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "text-generation-with-past",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": False,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+            }
+        )
 
     if is_transformers_version("<", "4.54"):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
