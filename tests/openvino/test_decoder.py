@@ -9,7 +9,6 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     GenerationConfig,
@@ -26,6 +25,9 @@ from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
+
+if is_transformers_version(">=", "4.55"):
+    from transformers import Mxfp4Config
 
 SEED = 42
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -128,7 +130,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("ernie4_5",)
+        # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
+
+    if is_transformers_version(">=", "4.55.0"):
+        SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
         
     if is_transformers_version(">=", "4.56.0"):
         SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
@@ -174,8 +180,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
-        "mistral": 2 if is_transformers_version(">=", "4.40.0") else 0,
-        "mixtral": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "mistral": 2,
+        "mixtral": 2,
         "mpt": 5,
         "opt": 5,
         "pegasus": 2,
@@ -221,8 +227,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
+<<<<<<< HEAD
         "ernie4_5": 2,
         "hunyuan_v1_dense": 2,
+=======
+>>>>>>> upstream/main
     }
 
     # TODO: remove gptq/awq from here
@@ -288,10 +297,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if "awq" in model_arch or "gptq" in model_arch:
             model_kwargs["torch_dtype"] = torch.float32
 
+        # the mxfp4 model will be dequantized to bf16 by the Mxfp4HfQuantizer, we later cast it to fp32
+        if "mxfp4" in model_arch:
+            model_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
+
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["qwen", "arctic", "chatglm4"]:
+        if model_arch in ["qwen", "arctic", "chatglm4", "gpt_oss_mxfp4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -336,13 +349,28 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
         # align cache representation in torch model
-        if model_arch in ["gemma2", "gemma3_text"]:
+        if model_arch in {"gemma2", "gemma3_text"}:
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
             additional_inputs = {"past_key_values": DynamicCache()}
+
+        elif model_arch in {
+            "aquila",
+            "aquila2",
+            "baichuan2",
+            "baichuan2-13b",
+            "decilm",
+            "internlm",
+            "internlm2",
+            "jais",
+            "orion",
+            "xverse",
+        }:
+            additional_inputs = {"use_cache": False}
+        set_seed(SEED)
         with patch_awq_for_inference("awq" in model_arch):
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
@@ -365,10 +393,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
 
         if model_arch == "qwen":
@@ -527,10 +552,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
         if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
@@ -606,10 +628,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # infer in FP32
             model_kwargs["torch_dtype"] = torch.float32
 
+        # the mxfp4 model will be dequantized to bf16 by the Mxfp4HfQuantizer, we later cast it to fp32
+        if "mxfp4" in model_arch:
+            model_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
+
         set_seed(SEED)
         with mock_torch_cuda_is_available("awq" in model_arch or "gptq" in model_arch):
             transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch == "arctic":
+        if model_arch == "arctic" or "mxfp4" in model_arch:
             transformers_model.to(torch.float32)
         additional_inputs = {}
         # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
@@ -653,10 +679,25 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 continue
             set_seed(SEED)
 
-            if model_arch in ["gemma2", "gemma3_text"]:
+            if model_arch in {"gemma2", "gemma3_text"}:
                 from transformers.cache_utils import DynamicCache
 
                 additional_inputs["past_key_values"] = DynamicCache()
+
+            elif model_arch in {
+                "aquila",
+                "aquila2",
+                "baichuan2",
+                "baichuan2-13b",
+                "decilm",
+                "internlm",
+                "internlm2",
+                "jais",
+                "orion",
+                "xverse",
+            }:
+                additional_inputs["use_cache"] = False
+
             with patch_awq_for_inference("awq" in model_arch):
                 transformers_outputs = transformers_model.generate(
                     **tokens, generation_config=gen_config, **additional_inputs

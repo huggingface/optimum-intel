@@ -572,9 +572,9 @@ class OVModelIntegrationTest(unittest.TestCase):
     @slow
     def test_load_model_from_hub_private_with_token(self):
         model_id = "optimum-internal-testing/tiny-random-phi-private"
-        token = os.environ.get("HF_HUB_READ_TOKEN", None)
+        token = os.environ.get("HF_TOKEN", None)
         if not token:
-            self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
+            self.skipTest("Test requires a token `HF_TOKEN` in the environment variable")
 
         model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
         self.assertIsInstance(model.config, PretrainedConfig)
@@ -1251,7 +1251,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         "data2vec-audio",
         "hubert",
         "sew",
-        "sew_d",
+        "sew-d",
         "unispeech",
         "unispeech-sat",
         "wavlm",
@@ -1321,7 +1321,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         "data2vec-audio",
         "hubert",
         "sew",
-        "sew_d",
+        "sew-d",
         "unispeech",
         "unispeech-sat",
         "wavlm",

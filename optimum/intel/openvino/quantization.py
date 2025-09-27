@@ -16,7 +16,6 @@ import copy
 import dataclasses
 import inspect
 import logging
-import os
 from collections import UserDict, deque
 from contextlib import contextmanager
 from io import BytesIO
@@ -30,30 +29,23 @@ import numpy as np
 import openvino
 import requests
 import torch
-import transformers
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf.quantization.advanced_parameters import OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from PIL import Image
-from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
+from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
 from optimum.exporters.tasks import TasksManager
-from optimum.exporters.utils import check_dummy_inputs_are_allowed
 from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 from optimum.quantization_base import OptimumQuantizer
 from optimum.utils.logging import warn_once
 
-from ...exporters.openvino import export, export_pytorch_via_onnx
-from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
-from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
@@ -63,7 +55,6 @@ from ..utils.import_utils import (
     is_nncf_version,
     is_sentence_transformers_available,
 )
-from ..utils.modeling_utils import get_model_device
 from .configuration import (
     OVConfig,
     OVMixedQuantizationConfig,
@@ -73,17 +64,13 @@ from .configuration import (
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
 )
-from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
+from .modeling import OVModel, OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel, OVModelForCausalLM
 from .modeling_sam import OVSamModel
 from .modeling_seq2seq import OVDecoder, OVEncoder, OVModelForSeq2SeqLM, _OVModelForWhisper
 from .modeling_visual_language import OVModelForVisualCausalLM, OVVisionEmbedding
 from .utils import (
-    MAX_ONNX_OPSET,
-    MIN_ONNX_QDQ_OPSET,
-    ONNX_WEIGHTS_NAME,
-    OV_XML_FILE_NAME,
     PREDEFINED_LANGUAGE_DATASETS,
     PREDEFINED_SAM_DATASETS,
     PREDEFINED_SD_DATASETS,
@@ -258,11 +245,11 @@ class OVCalibrationDatasetBuilder:
     will contain two keys: `encoder_model` and `decoder_model`.
     """
 
-    def __init__(self, model: transformers.PreTrainedModel, seed: int = 42):
+    def __init__(self, model: OVModel, seed: int = 42):
         """
 
         Args:
-            model (`transformers.PreTrainedModel`):
+            model (`OVModel`):
                 The model to build calibration dataset for.
             seed (`int`, defaults to 42):
                 Random seed to use for reproducibility.
@@ -1153,11 +1140,11 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: transformers.PreTrainedModel, task: Optional[str] = None, seed: int = 42, **kwargs):
+    def __init__(self, model: OVModel, task: Optional[str] = None, seed: int = 42, **kwargs):
         """
         Args:
-            model (`transformers.PreTrainedModel`):
-                The [PreTrainedModel](https://huggingface.co/docs/transformers/main_classes/model#transformers.PreTrainedModel) to quantize.
+            model (`OVModel`):
+                The [OVModel](https://huggingface.co/docs/optimum-intel/en/openvino/reference) to quantize.
             task (`str`, defaults to None):
                 The task defining the model topology used for the ONNX export.
             seed (`int`, defaults to 42):
@@ -1169,7 +1156,7 @@ class OVQuantizer(OptimumQuantizer):
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
 
     @classmethod
-    def from_pretrained(cls, model: PreTrainedModel, **kwargs):
+    def from_pretrained(cls, model: OVModel, **kwargs):
         # TODO : Create model
         return cls(model, **kwargs)
 
@@ -1314,18 +1301,9 @@ class OVQuantizer(OptimumQuantizer):
                 calibration_dataset,
                 **kwargs,
             )
-
         elif isinstance(self.model, torch.nn.Module):
-            logger.warning(
-                "The support of `torch.nn.Module` will be deprecated in a future release of optimum-intel, please use the corresponding `OVModelForXxx` class to load you model."
-                "To convert a PyTorch model to OpenVINO, you can set `export=True` when loading your model as `OVModelForXxx.from_pretrained(..., export=True)`"
-            )
-            self._quantize_torchmodel(
-                ov_config,
-                save_directory,
-                calibration_dataset,
-                file_name,
-                **kwargs,
+            raise TypeError(
+                "The support of `torch.nn.Module` is deprecated, please use the corresponding `OVModelForXxx` class to load and export your model to the OpenVINO IR format."
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
@@ -1478,121 +1456,6 @@ class OVQuantizer(OptimumQuantizer):
             save_directory.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(save_directory)
             ov_config.save_pretrained(save_directory)
-
-    def _quantize_torchmodel(
-        self,
-        ov_config: OVConfig,
-        save_directory: Union[str, Path],
-        calibration_datasets: Optional[OVCalibrationDataset] = None,
-        file_name: Optional[str] = None,
-        **kwargs,
-    ):
-        if save_directory is None:
-            # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
-            raise ValueError("`save_directory` needs to be specified")
-
-        self._set_task()
-        save_directory = Path(save_directory)
-        save_directory.mkdir(parents=True, exist_ok=True)
-        ov_file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        output_path = save_directory.joinpath(ov_file_name)
-        output_path = output_path.with_suffix(".xml").as_posix()
-
-        model_type = self.model.config.model_type
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            exporter="openvino",
-            model=self.model,
-            task=self.task,
-            model_type=model_type,
-        )
-
-        save_onnx_model = ov_config.save_onnx_model
-        onnx_file_name = (
-            ONNX_WEIGHTS_NAME if file_name is None and save_onnx_model else Path(ov_file_name).with_suffix(".onnx")
-        )
-
-        task = self.task
-        model = self.model
-        self.model.config.save_pretrained(save_directory)
-        if task.startswith("text-generation"):
-            onnx_config = onnx_config_class(
-                model.config, use_past=model.config.use_cache, use_past_in_inputs=model.config.use_cache
-            )
-            if model.config.use_cache:
-                task = "text-generation-with-past"
-        else:
-            onnx_config = onnx_config_class(model.config)
-
-        stateful = ensure_stateful_is_available() and ensure_export_task_support_stateful(task)
-
-        quantization_config = ov_config.quantization_config
-        if isinstance(quantization_config, OVWeightQuantizationConfig):
-            if stateful:
-                # patch model before weight compression
-                model = patch_model_with_bettertransformer(model)
-
-            dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            device = get_model_device(model)
-            dummy_inputs = tree_map(
-                lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
-            )
-            check_dummy_inputs_are_allowed(model, dummy_inputs)
-
-            nncf.compress_weights(model, dataset=nncf.Dataset([dummy_inputs]))
-        else:
-            if not isinstance(quantization_config, OVQuantizationConfig):
-                raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
-            if stateful:
-                logger.warning(
-                    "Quantization algorithm does not support optimized stateful models. "
-                    "The original model without optimization will be quantized and exported."
-                )
-                stateful = False
-
-            if calibration_datasets is None:
-                raise ValueError("Calibration dataset is required to run quantization.")
-            if "model" not in calibration_datasets:
-                raise RuntimeError("Calibration dataset should contain a key 'model' with a dataset.")
-            model = nncf.quantize(
-                model,
-                calibration_datasets["model"],
-                subset_size=quantization_config.num_samples or 128,
-                ignored_scope=quantization_config.get_ignored_scope_instance(),
-                model_type=nncf.ModelType(quantization_config.model_type),
-                preset=(
-                    nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED
-                ),
-                fast_bias_correction=quantization_config.fast_bias_correction,
-                advanced_parameters=nncf.AdvancedQuantizationParameters(
-                    overflow_fix=OverflowFix(quantization_config.overflow_fix)
-                ),
-                **kwargs,
-            )
-
-        model_path = save_directory / (onnx_file_name if save_onnx_model else ov_file_name)
-        onnx_path = save_directory / onnx_file_name
-        export_fn = export if not save_onnx_model else export_pytorch_via_onnx
-        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        export_kwargs = {}
-        if not save_onnx_model:
-            export_kwargs = {"stateful": stateful}
-
-        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs)
-        if is_onnx:
-            # Load and save the compressed model
-            model = core.read_model(onnx_path)
-            # Model required second saving for appling weights compression transformations
-            self._save_pretrained(model, output_path)
-            # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
-            if not save_onnx_model:
-                os.remove(onnx_path)
-                try:
-                    os.remove(f"{onnx_path}_data")
-                except FileNotFoundError:
-                    pass
-
-        ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.Model, output_path: str):

@@ -21,7 +21,7 @@ env:
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
-  HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -37,7 +37,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        transformers-version: ["4.36.0", "latest"]
+        transformers-version: ["4.45.0", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -58,7 +58,7 @@ jobs:
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
+          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
       - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq

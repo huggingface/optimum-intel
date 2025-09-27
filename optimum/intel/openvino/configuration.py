@@ -315,6 +315,15 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openai/gpt-oss-20b": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 32,
+        "ignored_scope": {
+            "patterns": [".*self_attn.*", ".*router.*"],
+        },
+        "backup_precision": "none",
+    },
 }
 
 # Add configs for model id aliases
