@@ -16,7 +16,6 @@ import enum
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from packaging import version
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
@@ -34,7 +33,7 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
-    GPTBigCodeOnnxConfig,
+    GPT2OnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -45,11 +44,13 @@ from optimum.exporters.onnx.model_configs import (
     MPTOnnxConfig,
     PegasusOnnxConfig,
     PhiOnnxConfig,
+    SamOnnxConfig,
     SpeechT5OnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
+    VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
@@ -69,7 +70,12 @@ from optimum.utils.input_generators import (
     GemmaDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
-from optimum.utils.normalized_config import NormalizedConfig, NormalizedTextConfig, NormalizedVisionConfig
+from optimum.utils.normalized_config import (
+    NormalizedConfig,
+    NormalizedConfigManager,
+    NormalizedTextConfig,
+    NormalizedVisionConfig,
+)
 
 from ...intel.utils.import_utils import (
     _transformers_version,
@@ -83,8 +89,6 @@ from .model_patcher import (
     BaichuanModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
-    BlenderbotSmallStatefulSeq2SeqDecoderPatcher,
-    BlenderbotStatefulSeq2SeqDecoderPatcher,
     BloomModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -117,7 +121,6 @@ from .model_patcher import (
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MarianModelPatcher,
-    MarianStatefulSeq2SeqDecoderPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
@@ -126,9 +129,10 @@ from .model_patcher import (
     MixtralModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
+    OVSeq2SeqModelPatcher,
     OVSpeechT5ModelPatcher,
+    OVVisionEncoderDecoderPatcher,
     PegasusModelPatcher,
-    PegasusStatefulSeq2SeqDecoderPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
@@ -143,8 +147,8 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3MoeModelPatcher,
     QwenModelPatcher,
+    SAMModelPatcher,
     SanaTextEncoderModelPatcher,
-    StatefulSeq2SeqDecoderPatcher,
     XverseModelPatcher,
 )
 
@@ -168,7 +172,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-
     TasksManager._CUSTOM_CLASSES[("pt", "llava_next_video", "image-text-to-text")] = (
         "transformers",
         "AutoModelForVision2Seq",
@@ -279,7 +282,6 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 )
 class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -304,13 +306,33 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
 class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.task in ["feature-extraction"]:
+            common_inputs = {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            }
+        else:
+            common_inputs = super().inputs
+        return common_inputs
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -318,7 +340,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("qwen3_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen3_moe",
+    *["text-generation", "text-generation-with-past", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
+)
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -329,7 +355,7 @@ class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -383,7 +409,7 @@ class OVMiniCPM3DummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
 @register_in_tasks_manager("minicpm3", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -550,8 +576,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 @register_in_tasks_manager("mixtral", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     # This is because of the patching of torch.triu in AttentionMaskConverter, that exists from transformers>=4.35
-    MIN_TRANSFORMERS_VERSION = version.parse("4.34.99")
-
+    MIN_TRANSFORMERS_VERSION = "4.35.0"
     # The ONNX export of this architecture needs the Trilu operator support, available since opset 14
     DEFAULT_ONNX_OPSET = 14
     DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -600,6 +625,23 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gpt_oss",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    MIN_TRANSFORMERS_VERSION = "4.55.1"
 
 
 @register_in_tasks_manager(
@@ -1186,6 +1228,8 @@ class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("arctic", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
@@ -1302,7 +1346,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     library_name="transformers",
 )
 class Gemma2OpenVINOConfig(GemmaOnnxConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
+    MIN_TRANSFORMERS_VERSION = "4.43.0"
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -1322,7 +1366,7 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
     library_name="transformers",
 )
 class Gemma3TextOpenVINOConfig(Gemma2OpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.50.0")
+    MIN_TRANSFORMERS_VERSION = "4.50.0"
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -1782,7 +1826,7 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
 
 @register_in_tasks_manager("llava", *["image-text-to-text"], library_name="transformers")
 class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.37.2")
+    MIN_TRANSFORMERS_VERSION = "4.37.2"
 
     def __init__(
         self,
@@ -1822,7 +1866,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("llava_next", *["image-text-to-text"], library_name="transformers")
 class LlavaNextOpenVINOConfig(LlavaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
+    MIN_TRANSFORMERS_VERSION = "4.40.0"
 
 
 class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
@@ -1879,7 +1923,7 @@ class LlavaNextVideoConfigBehavior(str, enum.Enum):
     "llava_next_video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
 )
 class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.42.0")
+    MIN_TRANSFORMERS_VERSION = "4.42.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaNextVideoConfigBehavior]
 
     def with_behavior(
@@ -1945,7 +1989,7 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
     "maira2", *["image-text-to-text", "text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class MairaOpenVINOConfig(LlavaOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.46.0")
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
     SUPPORTS_PAST = True
 
     def patch_model_for_export(
@@ -2062,7 +2106,8 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
 )
 class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTS_PAST = True
-    MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
+    MIN_TRANSFORMERS_VERSION = "4.40.0"
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
 
     def __init__(
         self,
@@ -2950,7 +2995,8 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi3VisionConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = version.parse("4.40.0")
+    MIN_TRANSFORMERS_VERSION = "4.40.0"
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
 
     def __init__(
         self,
@@ -3199,7 +3245,8 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = version.parse("4.51.0")
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
 
     def __init__(
         self,
@@ -3500,12 +3547,16 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager("qwen2_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_vl",
+    *["image-text-to-text", "video-text-to-text"],
+    library_name="transformers",
+)
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = version.parse("4.45.0")
+    MIN_TRANSFORMERS_VERSION = "4.45.0"
 
     def __init__(
         self,
@@ -3633,9 +3684,13 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager(
+    "qwen2_5_vl",
+    *["image-text-to-text", "video-text-to-text"],
+    library_name="transformers",
+)
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3715,6 +3770,66 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
         return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+# TODO: remove and replace with GPTBigCodeDummyPastKeyValuesGenerator when optimum >= v2
+class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        self.multi_query = normalized_config.multi_query
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if is_transformers_version("<", "4.54"):
+            if self.multi_query:
+                shape = (
+                    self.batch_size,
+                    self.sequence_length,
+                    self.hidden_size // self.num_attention_heads * 2,
+                )
+            else:
+                shape = (
+                    self.batch_size,
+                    self.num_attention_heads,
+                    self.sequence_length,
+                    self.hidden_size // self.num_attention_heads * 2,
+                )
+            pkv = [
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype) for _ in range(self.num_layers)
+            ]
+
+        else:
+            shape = (
+                self.batch_size,
+                self.num_attention_heads if not self.multi_query else 1,
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+            pkv = [
+                (
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                )
+                for _ in range(self.num_layers)
+            ]
+
+        return pkv
+
+
 @register_in_tasks_manager(
     "gpt_bigcode",
     *[
@@ -3726,11 +3841,43 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    # TODO (echarlaix): move once added in optimum
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeDummyPastKeyValuesGenerator)
+    DEFAULT_ONNX_OPSET = 14  # GPT BigCode now uses F.scaled_dot_product_attention by default for torch>=2.1.1.
+    DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedConfigManager.get_normalized_config_class("gpt_bigcode")
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
+
+    def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
+        if is_transformers_version(">=", "4.54"):
+            return super().add_past_key_values(inputs_or_outputs, direction)
+
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            name = "past_key_values"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            name = "present"
+        if self._normalized_config.multi_query:
+            decoder_sequence_dim = 1
+        else:
+            decoder_sequence_dim = 2
+        for i in range(self._normalized_config.num_layers):
+            inputs_or_outputs[f"{name}.{i}.key_value"] = {0: "batch_size", decoder_sequence_dim: decoder_sequence_name}
+
+    def flatten_past_key_values(self, flattened_output, name, idx, t):
+        if is_transformers_version(">=", "4.54"):
+            return super().flatten_past_key_values(flattened_output, name, idx, t)
+
+        flattened_output[f"{name}.{idx}.key_value"] = t
 
 
 @register_in_tasks_manager(
@@ -3748,9 +3895,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
     def inputs(self):
@@ -3774,9 +3919,7 @@ class T5OpenVINOConfig(T5OnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self):
@@ -3822,9 +3965,7 @@ class BartOpenVINOConfig(BartOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> ModelPatcher:
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return StatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
     def inputs(self):
@@ -3869,6 +4010,8 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.54.0"
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
@@ -4066,8 +4209,6 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return BlenderbotStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4094,8 +4235,6 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return BlenderbotSmallStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4122,8 +4261,6 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return PegasusStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4150,8 +4287,6 @@ class MarianOpenVINOConfig(MarianOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            return MarianStatefulSeq2SeqDecoderPatcher(self, model, model_kwargs)
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4448,7 +4583,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MambaCacheDummyInputGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MambaCacheDummyInputGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
+    MIN_TRANSFORMERS_VERSION = "4.43.0"
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -4521,15 +4656,39 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         return dummy_inputs
 
 
-@register_in_tasks_manager("ernie4_5", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class ErnieOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    MIN_TRANSFORMERS_VERSION = "4.54.0"
-
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
+@register_in_tasks_manager(
+    "gpt2",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-classification",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
+class GPT2OpenVINOConfig(GPT2OnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "vision-encoder-decoder",
+    *[
+        "image-to-text",
+        "image-to-text-with-past",
+        "document-question-answering",
+        "document-question-answering-with-past",
+    ],
+)
+class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
+    _MODEL_PATCHER = OVVisionEncoderDecoderPatcher
+
+
+# TODO: remove after next release of optimum-onnx
+@register_in_tasks_manager("sam", *["feature-extraction"])
+class SamOpenVINOConfig(SamOnnxConfig):
+    _MODEL_PATCHER = SAMModelPatcher

@@ -153,3 +153,6 @@ class OVSentenceTransformer(OVModel):
             )
         )
         return output
+
+    def get_model_kwargs(self):
+        return []
