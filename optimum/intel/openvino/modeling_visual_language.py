@@ -979,13 +979,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         Preprocess input instruction and an image.
         """
 
-    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
-    def _prepare_cache_for_generation(self, *args, **kwargs):
-        """
-        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
-        For OVModel, we don't want model_kwargs to be updated before generation.
-        """
-        return
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def __init__(
