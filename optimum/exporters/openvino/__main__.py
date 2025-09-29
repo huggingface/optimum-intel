@@ -91,9 +91,14 @@ def infer_task(
                     library_name=library_name,
                 )
             except KeyError as e:
-                raise KeyError(
-                    f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-                )
+                try:
+                    config = AutoConfig.from_pretrained(model_name_or_path)
+                    if "MistralForCausalLM" in config.architectures:
+                        task = "text-generation-with-past"
+                except Exception:
+                    raise KeyError(
+                        f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                    )
             except RequestsConnectionError as e:
                 raise RequestsConnectionError(
                     f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
