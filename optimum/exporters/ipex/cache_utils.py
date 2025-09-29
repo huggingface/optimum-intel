@@ -1,12 +1,98 @@
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any
 
 import intel_extension_for_pytorch as ipex
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
+from transformers.cache_utils import StaticLayer, CacheLayerMixin
 
 from optimum.intel.utils.import_utils import is_ipex_version
+
+
+class IPEXLayer(CacheLayerMixin):
+    """
+    A cache layer for IPEX PagedAttention that stores key and value states
+    as paged tensors optimized for Intel XPU and CPU devices.
+    """
+    
+    is_compileable = True
+    is_sliding = False
+    
+    def __init__(
+        self,
+        key_cache_shape: tuple = None,
+        value_cache_shape: tuple = None,
+        device: torch.device = None,
+        dtype: torch.dtype = torch.float32,
+        supports_flash_decoding: bool = False,
+        **kwargs
+    ):
+        super().__init__()
+        
+        # Create cache tensors if shapes are provided
+        if key_cache_shape is not None and value_cache_shape is not None:
+            self.keys = torch.zeros(key_cache_shape, dtype=dtype, device=device)
+            self.values = torch.zeros(value_cache_shape, dtype=dtype, device=device)
+        else:
+            # Fallback for direct tensor provision
+            self.keys = kwargs.get('key_cache', None)
+            self.values = kwargs.get('value_cache', None)
+            
+        self.device = device
+        self._supports_flash_decoding = supports_flash_decoding
+        
+        # Mark tensors as static for torch.compile
+        if self.keys is not None:
+            torch._dynamo.mark_static_address(self.keys)
+        if self.values is not None:
+            torch._dynamo.mark_static_address(self.values)
+    
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        cache_kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Update method will be called by the paged cache's reshape_and_cache method."""
+        # For IPEXPagedCache, the actual update is handled by reshape_and_cache
+        # This method just returns the current cache tensors
+        return self.keys, self.values
+    
+    def get_seq_length(self, cache_position=None) -> int:
+        """Returns the sequence length. For paged cache, this is managed by the parent."""
+        # This will be overridden by the parent IPEXPagedCache
+        return 0
+    
+    def get_max_cache_shape(self) -> int:
+        """Returns the maximum cache shape."""
+        # For paged cache, return the total number of blocks * block_size
+        if self.keys is not None:
+            return self.keys.shape[0]  # num_blocks dimension
+        return 0
+    
+    def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
+        """Return the length and offset of the cache for attention mask generation."""
+        # For paged attention, this is handled differently
+        kv_offset = 0
+        kv_length = self.get_max_cache_shape()
+        return kv_length, kv_offset
+    
+    def reset(self) -> None:
+        """Reset cache values while preserving objects."""
+        if self.keys is not None:
+            self.keys.zero_()
+        if self.values is not None:
+            self.values.zero_()
+    
+    def reorder_cache(self, beam_idx: torch.LongTensor) -> None:
+        """Reorder cache for beam search."""
+        if self.keys is not None and self.keys.numel():
+            device = self.keys.device
+            self.keys = self.keys.index_select(0, beam_idx.to(device))
+        if self.values is not None and self.values.numel():
+            device = self.values.device
+            self.values = self.values.index_select(0, beam_idx.to(device))
 
 
 class IPEXPagedCache(Cache):
@@ -43,8 +129,9 @@ class IPEXPagedCache(Cache):
         dtype=None,
         **kwargs,
     ) -> None:
-        super().__init__()
-        self.max_batch_size = max_batch_size
+        # Initialize with IPEXLayer as the layer class
+        super().__init__(config=config, layer_classes=IPEXLayer, batch_size=max_batch_size, **kwargs)
+        # Note: max_batch_size is now handled by the parent class
         default_device = torch.device("xpu") if ipex._C._has_xpu() else torch.device("cpu")
         device = device or default_device
         self.device = device
@@ -64,7 +151,7 @@ class IPEXPagedCache(Cache):
             max_batch_size, -1
         )
         self.free_blocks = torch.ones([self.num_blocks], dtype=torch.int32, device=device)
-        self.max_cache_len = max_cache_len
+        # self.max_cache_len = max_cache_len
         self.num_kv_heads = config.num_key_value_heads
         self.num_hidden_layers = config.num_hidden_layers
         if getattr(config, "head_dim", None) is not None:
@@ -73,9 +160,7 @@ class IPEXPagedCache(Cache):
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
 
-        self.key_cache: List[torch.Tensor] = []
-        self.value_cache: List[torch.Tensor] = []
-
+        # Determine cache tensor shapes
         if device.type == "cpu":
             key_cache_shape = (self.num_blocks, self.num_kv_heads, self.block_size, head_size)
             value_cache_shape = (self.num_blocks, self.num_kv_heads, self.block_size, head_size)
@@ -86,13 +171,19 @@ class IPEXPagedCache(Cache):
             else:
                 key_cache_shape = (self.num_blocks, self.num_kv_heads, head_size, self.block_size, 1)
                 value_cache_shape = (self.num_blocks, self.num_kv_heads, head_size, self.block_size)
-        for i in range(config.num_hidden_layers):
-            new_layer_key_cache = torch.zeros(key_cache_shape, dtype=dtype, device=device)
-            new_layer_value_cache = torch.zeros(value_cache_shape, dtype=dtype, device=device)
-            torch._dynamo.mark_static_address(new_layer_key_cache)
-            torch._dynamo.mark_static_address(new_layer_value_cache)
-            self.key_cache.append(new_layer_key_cache)
-            self.value_cache.append(new_layer_value_cache)
+        
+        # Store shape information for layer creation
+        self._key_cache_shape = key_cache_shape
+        self._value_cache_shape = value_cache_shape
+        
+        # Update layer_init_kwargs to include our custom parameters
+        self.layer_init_kwargs.update({
+            'key_cache_shape': key_cache_shape,
+            'value_cache_shape': value_cache_shape,
+            'device': device,
+            'dtype': dtype,
+            'supports_flash_decoding': self._supports_flash_decoding
+        })
 
     def reshape_and_cache(
         self,
@@ -183,10 +274,10 @@ class IPEXPagedCache(Cache):
         """
 
         self.reshape_and_cache(
-            key_states, value_states, self.key_cache[layer_idx], self.value_cache[layer_idx], self.slots
+            key_states, value_states, self.layers[layer_idx].keys, self.layers[layer_idx].values, self.slots
         )
 
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+        return self.layers[layer_idx].keys, self.layers[layer_idx].values
 
     def get_seq_length(self) -> int:
         """Returns the sequence length of the cached states that were seen by the model."""
@@ -215,10 +306,10 @@ class IPEXPagedCache(Cache):
             updated_table[i] = self.block_tables[i][nb - 1]
         for layer_idx in range(self.num_hidden_layers):
             # The updated_table cannot contain the whole block table, otherwise will cause core-dump.
-            self.key_cache[layer_idx][updated_table] = self.key_cache[layer_idx].index_select(
+            self.layers[layer_idx].keys[updated_table] = self.layers[layer_idx].keys.index_select(
                 0, updated_table[beam_idx]
             )
-            self.value_cache[layer_idx][updated_table] = self.value_cache[layer_idx].index_select(
+            self.layers[layer_idx].values[updated_table] = self.layers[layer_idx].values.index_select(
                 0, updated_table[beam_idx]
             )
 
