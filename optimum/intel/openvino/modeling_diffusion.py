@@ -64,7 +64,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version, is_openvino_version, is_transformers_version
+from ..utils.import_utils import is_diffusers_version, is_openvino_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
@@ -86,7 +86,7 @@ else:
     from diffusers.models.vae import DiagonalGaussianDistribution
 
 # Required EncoderDecoderCache object from transformers
-if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45"):
+if is_diffusers_version(">=", "0.32"):
     from diffusers import LTXPipeline
 else:
     LTXPipeline = object
@@ -126,6 +126,11 @@ if is_diffusers_version(">=", "0.35.0"):
 else:
     QwenImagePipeline = object
 
+
+if is_diffusers_version(">=", "0.35.0"):
+    from diffusers.models.cache_utils import CacheMixin
+else:
+    CacheMixin = object
 
 DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER = "transformer"
 DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER = "text_encoder_3"
@@ -1077,7 +1082,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
 
-class OVPipelinePart(ConfigMixin):
+class OVPipelinePart(ConfigMixin, CacheMixin):
     config_name: str = CONFIG_NAME
 
     def __init__(
@@ -1165,6 +1170,11 @@ class OVPipelinePart(ConfigMixin):
 
     def modules(self):
         return []
+
+    def named_modules(self):
+        # starting from diffusers 0.35.0 some model parts inherit from `CacheMixin` which uses `named_modules` method
+        # to register some hooks for attention caching, we return empty list here since it can't be used with OpenVINO
+        yield from []
 
 
 class OVModelTextEncoder(OVPipelinePart):
@@ -1743,7 +1753,7 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
 
 OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
 
-if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45.0"):
+if is_diffusers_version(">=", "0.32"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTXPipeline)
 

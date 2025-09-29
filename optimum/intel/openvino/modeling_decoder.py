@@ -32,6 +32,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.models.mamba.modeling_mamba import MambaCache
 from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -39,7 +40,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
+from ..utils.import_utils import compare_versions, is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
@@ -57,11 +58,6 @@ from .utils import (
     model_has_dynamic_inputs,
 )
 
-
-if is_transformers_version(">=", "4.43"):
-    from transformers.cache_utils import MambaCache
-else:
-    MambaCache = object
 
 if TYPE_CHECKING:
     try:
@@ -746,12 +742,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        if is_transformers_version(">=", "4.39.0"):
-            _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
-            generation_mode = _generation_config.get_generation_mode(assistant_model)
-        else:
-            _generation_config = generation_config or self.generation_config
-            generation_mode = self._get_generation_mode(_generation_config, assistant_model)
+        _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
+        generation_mode = _generation_config.get_generation_mode(assistant_model)
 
         is_beam_search = generation_mode in [
             GenerationMode.BEAM_SEARCH,
@@ -822,6 +814,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     for layer_past in past_key_values
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
+
+    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
 
     @classmethod
     def _from_pretrained(
@@ -937,7 +937,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             quantizer = OVQuantizer(causal_model)
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return causal_model

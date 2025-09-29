@@ -353,21 +353,20 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         generation_config = kwargs.get("generation_config", None)
         self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-        if is_transformers_version(">=", "4.44.99"):
-            # some model configs may have issues with loading without parameters initialization
-            try:
-                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-            except (KeyError, TypeError):
-                misplaced_generation_parameters = {}
-            if len(misplaced_generation_parameters) > 0:
-                logger.warning(
-                    "Moving the following attributes in the config to the generation config: "
-                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                    "generation parameters in the model config, as opposed to in the generation config.",
-                )
-                for param_name, param_value in misplaced_generation_parameters.items():
-                    setattr(self.generation_config, param_name, param_value)
-                    setattr(self.config, param_name, None)
+        # some model configs may have issues with loading without parameters initialization
+        try:
+            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+        except (KeyError, TypeError):
+            misplaced_generation_parameters = {}
+        if len(misplaced_generation_parameters) > 0:
+            logger.warning(
+                "Moving the following attributes in the config to the generation config: "
+                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                "generation parameters in the model config, as opposed to in the generation config.",
+            )
+            for param_name, param_value in misplaced_generation_parameters.items():
+                setattr(self.generation_config, param_name, param_value)
+                setattr(self.config, param_name, None)
 
         self._openvino_config = None
         if quantization_config:
@@ -569,8 +568,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
             quantizer = OVQuantizer(model)
             quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
-            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
+            quantization_config_copy.processor = str(quantization_config.processor or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -822,6 +821,13 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
 
         return shifted_input_ids
+
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
 
 
 class OVEncoder:

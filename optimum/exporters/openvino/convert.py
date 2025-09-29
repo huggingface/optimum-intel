@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+from packaging.version import Version
 from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_tf_available, is_torch_available
@@ -186,6 +187,27 @@ def export(
 
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
         raise ImportError("The package `diffusers` is required to export diffusion models to OpenVINO.")
+
+    min_version = getattr(config, "MIN_TRANSFORMERS_VERSION", None)
+    max_version = getattr(config, "MAX_TRANSFORMERS_VERSION", None)
+
+    if min_version is not None:
+        if isinstance(min_version, Version):
+            min_version = min_version.base_version
+        if is_transformers_version("<", min_version):
+            raise ValueError(
+                f"The current version of Transformers does not allow for the export of the model. Minimum required is "
+                f"{config.MIN_TRANSFORMERS_VERSION}, got: {_transformers_version}"
+            )
+
+    if max_version is not None:
+        if isinstance(max_version, Version):
+            max_version = max_version.base_version
+        if is_transformers_version(">=", max_version):
+            raise ValueError(
+                f"The current version of Transformers does not allow for the export of the model. Maximum required is "
+                f"{config.MAX_TRANSFORMERS_VERSION}, got: {_transformers_version}"
+            )
 
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
@@ -632,7 +654,11 @@ def export_from_model(
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
 
-    if stateful and is_encoder_decoder and not getattr(model, "_supports_cache_class", False):
+    if (
+        stateful
+        and is_encoder_decoder
+        and not getattr(model, "_supports_cache_class", is_transformers_version(">=", "4.54"))
+    ):
         stateful = False
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
@@ -643,7 +669,7 @@ def export_from_model(
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
         raise ValueError(
             f"model.config.is_encoder_decoder is True and task is `{task}`, which are incompatible. If the task was auto-inferred, please fill a bug report"
-            f"at https://github.com/huggingface/optimum, if --task was explicitely passed, make sure you selected the right task for the model,"
+            f"at https://github.com/huggingface/optimum, if --task was explicitly passed, make sure you selected the right task for the model,"
             f" referring to `optimum.exporters.tasks.TaskManager`'s `_TRANSFORMERS_TASKS_TO_MODEL_LOADERS`."
         )
     if library_name != "diffusers" and model_type in TasksManager._UNSUPPORTED_CLI_MODEL_TYPE:
@@ -709,21 +735,20 @@ def export_from_model(
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
-        if is_transformers_version(">=", "4.44.99"):
-            # some model configs may have issues with loading without parameters initialization
-            try:
-                misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
-            except (KeyError, TypeError):
-                misplaced_generation_parameters = {}
-            if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
-                logger.warning(
-                    "Moving the following attributes in the config to the generation config: "
-                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                    "generation parameters in the model config, as opposed to in the generation config.",
-                )
-                for param_name, param_value in misplaced_generation_parameters.items():
-                    setattr(model.generation_config, param_name, param_value)
-                    setattr(model.config, param_name, None)
+        # some model configs may have issues with loading without parameters initialization
+        try:
+            misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+        except (KeyError, TypeError):
+            misplaced_generation_parameters = {}
+        if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
+            logger.warning(
+                "Moving the following attributes in the config to the generation config: "
+                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                "generation parameters in the model config, as opposed to in the generation config.",
+            )
+            for param_name, param_value in misplaced_generation_parameters.items():
+                setattr(model.generation_config, param_name, param_value)
+                setattr(model.config, param_name, None)
 
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)
@@ -838,8 +863,6 @@ def export_tokenizer(
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
-        set_simplified_chat_template(converted[0], processor_chat_template)
-
     except NotImplementedError:
         logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
@@ -851,6 +874,11 @@ def export_tokenizer(
             f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
         )
         return
+
+    try:
+        set_simplified_chat_template(converted[0], processor_chat_template)
+    except Exception as exception:
+        logger.debug(f"Error during chat template simplification. Exception: {exception}")
 
     if not isinstance(converted, tuple):
         converted = (converted,)
