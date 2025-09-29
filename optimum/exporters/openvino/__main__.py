@@ -32,6 +32,7 @@ from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
+    is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
