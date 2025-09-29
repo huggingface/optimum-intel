@@ -415,34 +415,28 @@ class OVQuantizerTest(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="contextual",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 13,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 14,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
     ]
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_vl",
-                    OVQuantizationConfig(
-                        bits=8,
-                        dataset="contextual",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": 13,
-                        "text_embeddings_model": 0,
-                        "vision_embeddings_model": 1,
-                        "vision_embeddings_merger_model": 14,
-                    },
-                    {
-                        "lm_model": {"int8": 15},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
-                    },
-                ),
-            ]
-        )
 
     @staticmethod
     def get_calibration_dataset(
@@ -1034,35 +1028,23 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionPipeline, "stable-diffusion", False),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
+        (OVModelForVisualCausalLM, "llava", False),
+        (OVModelForVisualCausalLM, "llava_next_video", False),
+        (OVModelForVisualCausalLM, "minicpmv", True),
+        (OVModelForVisualCausalLM, "qwen2_vl", False),
     ]
 
-    if is_transformers_version(">=", "4.37.2"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava", False))
-
-    if is_transformers_version(">=", "4.40.0") and is_transformers_version("<", "4.54.0"):
+    if is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
-
-    if is_transformers_version(">=", "4.42.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava_next_video", False))
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen2_vl", False))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
         (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
+        (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
+        (OVFluxPipeline, "flux", 7, 56),
+        (OVSanaPipeline, "sana", 19, 53),
     ]
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION.extend(
-            [
-                (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
-                (OVFluxPipeline, "flux", 7, 56),
-                (OVSanaPipeline, "sana", 19, 53),
-            ]
-        )
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
@@ -1563,93 +1545,82 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 0},
             },
         ),
-    ]
-
-    if is_transformers_version(">", "4.43.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVStableDiffusion3Pipeline,
-                    "stable-diffusion-3",
-                    False,
-                    dict(
-                        quantization_configs={
-                            "transformer": dict(
-                                dataset="conceptual_captions",
-                                num_samples=1,
-                                quant_method=OVQuantizationMethod.HYBRID,
-                            ),
-                            "vae_decoder": OVWeightQuantizationConfig(),
-                            "vae_encoder": OVWeightQuantizationConfig(),
-                            "text_encoder": OVWeightQuantizationConfig(),
-                        }
-                    ),
-                    {
-                        "transformer": 9,
-                        "vae_decoder": 0,
-                        "vae_encoder": 0,
-                        "text_encoder": 0,
-                        "text_encoder_2": 0,
-                        "text_encoder_3": 0,
-                    },
-                    {
-                        "transformer": {"int8": 65},
-                        "vae_decoder": {"int8": 58},
-                        "vae_encoder": {"int8": 42},
-                        "text_encoder": {"int8": 30},
-                        "text_encoder_2": {"int8": 0},
-                        "text_encoder_3": {"int8": 0},
-                    },
-                ),
-                (
-                    OVModelForSpeechSeq2Seq,
-                    "whisper",
-                    True,
-                    dict(
-                        quantization_configs={
-                            "encoder": dict(smooth_quant_alpha=0.95),
-                            "decoder": dict(smooth_quant_alpha=0.9),
-                        },
-                        dataset="librispeech",
+        (
+            OVStableDiffusion3Pipeline,
+            "stable-diffusion-3",
+            False,
+            dict(
+                quantization_configs={
+                    "transformer": dict(
+                        dataset="conceptual_captions",
                         num_samples=1,
-                        processor=MODEL_NAMES["whisper"],
-                        trust_remote_code=True,
+                        quant_method=OVQuantizationMethod.HYBRID,
                     ),
-                    {"encoder": 14, "decoder": 22},
-                    {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
-                ),
-            ]
-        )
-        if is_transformers_version(">=", "4.45.0"):
-            PIPELINE_QUANTIZATION_SCOPE.extend(
-                [
-                    (
-                        OVModelForVisualCausalLM,
-                        "internvl_chat",
-                        True,
-                        dict(
-                            quantization_configs={
-                                "lm_model": dict(bits=8, weight_only=True),
-                                "vision_embeddings_model": dict(bits=8, weight_only=False),
-                            },
-                            dataset="contextual",
-                            num_samples=1,
-                            trust_remote_code=True,
-                            default_config=dict(bits=8, sym=True, weight_only=True),
-                        ),
-                        {
-                            "lm_model": 0,
-                            "text_embeddings_model": 0,
-                            "vision_embeddings_model": 15,
-                        },
-                        {
-                            "lm_model": {"int8": 30},
-                            "text_embeddings_model": {"int8": 1},
-                            "vision_embeddings_model": {"int8": 11},
-                        },
-                    ),
-                ]
-            )
+                    "vae_decoder": OVWeightQuantizationConfig(),
+                    "vae_encoder": OVWeightQuantizationConfig(),
+                    "text_encoder": OVWeightQuantizationConfig(),
+                }
+            ),
+            {
+                "transformer": 9,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+                "text_encoder_2": 0,
+                "text_encoder_3": 0,
+            },
+            {
+                "transformer": {"int8": 65},
+                "vae_decoder": {"int8": 58},
+                "vae_encoder": {"int8": 42},
+                "text_encoder": {"int8": 30},
+                "text_encoder_2": {"int8": 0},
+                "text_encoder_3": {"int8": 0},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            True,
+            dict(
+                quantization_configs={
+                    "encoder": dict(smooth_quant_alpha=0.95),
+                    "decoder": dict(smooth_quant_alpha=0.9),
+                },
+                dataset="librispeech",
+                num_samples=1,
+                processor=MODEL_NAMES["whisper"],
+                trust_remote_code=True,
+            ),
+            {"encoder": 14, "decoder": 22},
+            {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "internvl_chat",
+            True,
+            dict(
+                quantization_configs={
+                    "lm_model": dict(bits=8, weight_only=True),
+                    "vision_embeddings_model": dict(bits=8, weight_only=False),
+                },
+                dataset="contextual",
+                num_samples=1,
+                trust_remote_code=True,
+                default_config=dict(bits=8, sym=True, weight_only=True),
+            ),
+            {
+                "lm_model": 0,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 15,
+            },
+            {
+                "lm_model": {"int8": 30},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+    ]
 
     if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
         PIPELINE_QUANTIZATION_SCOPE.extend(

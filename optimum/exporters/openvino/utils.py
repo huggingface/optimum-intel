@@ -25,7 +25,6 @@ from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.intel.utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
@@ -304,14 +303,10 @@ def save_preprocessors(
         model_type = config.model_type
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
-        if is_transformers_version(">=", "4.45") and model_type == "phi3_v" and len(preprocessors) > 1:
+        if model_type == "phi3_v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
-        if (
-            is_transformers_version(">=", "4.45")
-            and model_type in ["llava", "llava_next", "llava_next_video"]
-            and preprocessors is not None
-        ):
+        if model_type in ["llava", "llava_next", "llava_next_video"] and preprocessors is not None:
             if len(preprocessors) > 1 and getattr(preprocessors[1], "patch_size", None) is None:
                 preprocessors[1].patch_size = config.vision_config.patch_size
                 preprocessors[1].vision_feature_select_strategy = config.vision_feature_select_strategy
@@ -381,9 +376,6 @@ SKIP_CHECK_TRACE_MODELS = (
     "levit",
     "llama4",
 )
-
-if is_transformers_version("<", "4.41"):
-    SKIP_CHECK_TRACE_MODELS += ("gemma",)
 
 
 def allow_skip_tracing_check(library_name, model_type):
