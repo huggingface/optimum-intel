@@ -2768,6 +2768,7 @@ class MiniCPMVConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("minicpmo", *["image-text-to-text"], library_name="transformers")
 class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig

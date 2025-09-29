@@ -25,7 +25,6 @@ from transformers import (
     PreTrainedTokenizer,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
-from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -42,8 +41,8 @@ from .utils import (
     TemporaryDirectory,
 )
 
-
 if is_transformers_version(">=", "4.46.0"):
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
     from transformers import AutoModelForImageTextToText
 
     transformers_auto_class = AutoModelForImageTextToText
@@ -4355,4 +4354,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
+    "minicpmo": _OVMiniCPMVForCausalLM,
 }
