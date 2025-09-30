@@ -4739,7 +4739,7 @@ class DummyQwenTextInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
                 [self.batch_size]
             )
             dtype = DTYPE_MAPPER.pt(int_dtype)
-            return torch.full(shape, 1, dtype=dtype)
+            return torch.full(shape, self.sequence_length, dtype=dtype)
         if input_name == "encoder_hidden_states_mask":
             import torch
 
