@@ -3653,7 +3653,11 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager(
     "qwen2_5_vl",
     *["image-text-to-text", "video-text-to-text", "feature-extraction", "feature-extraction-with-past"],
+    library_name="transformers",
 )
+class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
@@ -3676,7 +3680,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     
 @register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text"], library_name="diffusers")
 class Qwen2_5_VLTextEncoderOpenVINOConfig(Qwen2_5_VLOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = version.parse("4.49.0")
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
 
     def with_behavior(
         self,

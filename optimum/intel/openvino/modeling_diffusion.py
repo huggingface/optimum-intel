@@ -68,6 +68,7 @@ from ..utils.import_utils import is_diffusers_version, is_openvino_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
+from .modeling_visual_language import OVModelForVisualCausalLM
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -1702,6 +1703,10 @@ class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Qw
     main_input_name = "prompt"
     export_feature = "text-to-image"
     auto_model_class = QwenImagePipeline
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.text_encoder = OVModelForVisualCausalLM.from_pretrained(self.model_save_dir, device=self._device)
+
 
 
 SUPPORTED_OV_PIPELINES = [

@@ -419,14 +419,9 @@ def export_pytorch(
         if hasattr(model, "config"):
             model.config.torchscript = False
             model.config.return_dict = True
-
-        # Check if we need to override certain configuration item
-            if config.values_override is not None:
-                logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
-                for override_config_key, override_config_value in config.values_override.items():
-                    logger.info(f"\t- {override_config_key} -> {override_config_value}")
-                    setattr(model.config, override_config_key, override_config_value)
         model.eval()
+
+        # Check if we need to override certain configuration items
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
 
@@ -981,7 +976,7 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
     )
     for behavior in main_config.SUPPORTED_BEHAVIORS:
-        model_id = f"{custom_path}{behavior}_model"
+        model_id = f"{behavior}_model"
         model_part_config = main_config.with_behavior(behavior)
         model_part = main_config.get_model_for_behavior(model, behavior)
         models_for_export[model_id] = (model_part, model_part_config)

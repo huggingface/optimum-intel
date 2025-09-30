@@ -223,15 +223,17 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         self.request.wait()
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
-        try:
-            logits = self.request.get_tensor("logits").data
-            logits = torch.from_numpy(logits).clone().to(self.device)
-            return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
-        except:
+        # Check if model has "last_hidden_state" output
+        has_last_hidden_state = any(output.get_any_name() == "last_hidden_state" for output in self.model.outputs)
+        
+        if has_last_hidden_state:
             last_hidden_state = self.request.get_tensor("last_hidden_state").data
             last_hidden_state = torch.from_numpy(last_hidden_state).clone().to(self.device)
             return CausalLMOutputWithPast(hidden_state=last_hidden_state, past_key_values=past_key_values)
-
+        else:
+            logits = self.request.get_tensor("logits").data
+            logits = torch.from_numpy(logits).clone().to(self.device)
+            return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
 class OVVisionEmbedding(OVModelPart):
     _model_name = "vision_embeddings"
