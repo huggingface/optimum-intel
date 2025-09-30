@@ -2768,7 +2768,6 @@ class MiniCPMVConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager("minicpmv", *["image-text-to-text"], library_name="transformers")
-@register_in_tasks_manager("minicpmo", *["image-text-to-text"], library_name="transformers")
 class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMVConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -2893,6 +2892,11 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
             return MiniCPMVResamplerModelPatcher(self, model, model_kwargs)
 
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("minicpmo", *["image-text-to-text"], library_name="transformers")
+class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
+    MAX_TRANSFORMERS_VERSION = "4.51.0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
