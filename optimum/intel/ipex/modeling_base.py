@@ -411,7 +411,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return self.model._reorder_cache(*args, **kwargs)
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
-        return self.model.prepare_inputs_for_generation(*args, **kwargs)
+        input_kwargs = self.model.prepare_inputs_for_generation(*args, **kwargs)
+        input_kwargs["attention_mask"] = kwargs.get("attention_mask", None)
+        return input_kwargs
 
     def _supports_logits_to_keep(self) -> bool:
         """
