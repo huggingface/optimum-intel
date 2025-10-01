@@ -16,10 +16,12 @@ from transformers import (
     pipeline,
     set_seed,
 )
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, get_num_sdpa, mock_torch_cuda_is_available, patch_awq_for_inference
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -39,7 +41,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bart",
         "baichuan2",
         "baichuan2-13b",
-        "gpt_bigcode",
+        "bigbird_pegasus",
+        "biogpt",
         "blenderbot",
         "blenderbot-small",
         "bloom",
@@ -48,10 +51,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen2",
         "gpt2",
         "gptj",
+        "gpt_bigcode",
         "gpt_neo",
         "gpt_neox",
+        "gpt_neox_japanese",
         "llama",
         "marian",
+        "mbart",
         "minicpm",
         "mistral",
         "mixtral",
@@ -65,8 +71,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon",
         "falcon-40b",
         "persimmon",
-        "biogpt",
-        "gpt_neox_japanese",
         "xglm",
         "aquila",
         "aquila2",
@@ -88,10 +92,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gemma2",
         "exaone",
         "granite",
-        "granite-moe",
+        "granitemoe",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
@@ -201,7 +205,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gemma2": 4,
         "exaone": 8,
         "granite": 6,
-        "granite-moe": 6,
+        "granitemoe": 6,
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
@@ -214,9 +218,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen3": 2,
         "qwen3_moe": 2,
         "mamba": 0,
-        "falcon-mamba": 0,
+        "falcon_mamba": 0,
         "arcee": 2,
     }
+    TASK = "text-generation"
+
+    def test_find_untested_architectures(self):
+        if len(self.SUPPORTED_ARCHITECTURES) != len(set(self.SUPPORTED_ARCHITECTURES)):
+            raise ValueError(
+                f"For the task `{self.TASK}`, some architectures are duplicated in the list of tested architectures: "
+                f"{self.SUPPORTED_ARCHITECTURES}.\n"
+            )
+
+        tested_architectures = set(self.SUPPORTED_ARCHITECTURES)
+        transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
+        ov_architectures = set(TasksManager.get_supported_model_type_for_task(task=self.TASK, exporter="openvino"))
+        supported_architectures = ov_architectures & transformers_architectures
+
+        untested_architectures = supported_architectures - tested_architectures
+
+        if len(untested_architectures) > 0:
+            raise ValueError(
+                f"For the task `{self.TASK}`, the ONNX exporter supports {supported_architectures} but some of them are not "
+                f"tested: {untested_architectures}.\n"
+            )
 
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

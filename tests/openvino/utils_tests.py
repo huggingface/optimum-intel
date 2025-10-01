@@ -75,7 +75,7 @@ MODEL_NAMES = {
     "gemma3": "katuni4ka/tiny-random-gemma3",
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
-    "falcon-mamba": "rkazants/tiny-falcon-mamba",
+    "falcon_mamba": "rkazants/tiny-falcon-mamba",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "flux": "katuni4ka/tiny-random-flux",
     "flux-fill": "katuni4ka/tiny-random-flux-fill",
@@ -88,7 +88,7 @@ MODEL_NAMES = {
     "gpt_oss_mxfp4": "echarlaix/tiny-random-gpt-oss-mxfp4",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "granite": "katuni4ka/tiny-random-granite",
-    "granite-moe": "katuni4ka/tiny-random-granite-moe",
+    "granitemoe": "katuni4ka/tiny-random-granite-moe",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
     "idefics3": "hf-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
@@ -326,7 +326,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "clip": {"model": 130},
     "mamba": {"model": 386},
-    "falcon-mamba": {"model": 194},
+    "falcon_mamba": {"model": 194},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -457,10 +457,8 @@ TEST_NAME_TO_MODEL_TYPE = {
     "baichuan2-13b": "baichuan",
     "chatglm4": "chatglm",
     "codegen2": "codegen",
-    "falcon-mamba": "falcon_mamba",
     "falcon-40b": "falcon",
     "gpt_oss_mxfp4": "gpt_oss",
-    "granite-moe": "granitemoe",
     "llama_awq": "llama",
     "llava_next_mistral": "llava_next",
     "mistral-nemo": "mistral",

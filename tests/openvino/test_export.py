@@ -81,7 +81,7 @@ class ExportModelTest(unittest.TestCase):
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
         "mamba": OVModelForCausalLM,
-        "falcon-mamba": OVModelForCausalLM,
+        "falcon_mamba": OVModelForCausalLM,
         "stable-diffusion-3": OVStableDiffusion3Pipeline,
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,

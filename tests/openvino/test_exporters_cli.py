@@ -84,7 +84,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text2text-generation", "t5"),
         ("text2text-generation-with-past", "t5"),
         ("text-generation-with-past", "mamba"),
-        ("text-generation-with-past", "falcon-mamba"),
+        ("text-generation-with-past", "falcon_mamba"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -127,7 +127,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "speecht5": 2,
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "mamba": 2,
-        "falcon-mamba": 2,
+        "falcon_mamba": 2,
         "qwen3": 2,
     }
 
