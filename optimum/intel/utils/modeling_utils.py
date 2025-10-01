@@ -28,7 +28,7 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 
 from .import_utils import is_diffusers_available, is_numa_available, is_open_clip_available, is_psutil_available
 

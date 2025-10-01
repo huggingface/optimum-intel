@@ -199,7 +199,7 @@ _DECODER_TASKS_WITH_PAST = ("text-generation",)
 
 
 def ensure_export_task_support_stateful(task: str):
-    from optimum.exporters import TasksManager
+    from optimum.exporters.tasks import TasksManager
 
     task = TasksManager.map_from_synonym(task)
 

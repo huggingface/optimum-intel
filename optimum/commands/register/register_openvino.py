@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ..export import ExportCommand
+from optimum.commands.export.base import ExportCommand
+
 from ..export.openvino import OVExportCommand
 
 

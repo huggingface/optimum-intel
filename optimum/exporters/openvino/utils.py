@@ -23,8 +23,8 @@ from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available

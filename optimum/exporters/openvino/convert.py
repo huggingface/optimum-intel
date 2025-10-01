@@ -29,7 +29,7 @@ from transformers.utils import is_tf_available, is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
     ENCODER_NAME,
@@ -720,7 +720,6 @@ def export_from_model(
             library_name=library_name,
             model_kwargs=model_kwargs,
             _variant="default",
-            legacy=False,
             exporter="openvino",
             stateful=stateful,
         )
@@ -1003,7 +1002,6 @@ def _get_submodels_and_export_configs(
     float_dtype: str = "fp32",
     fn_get_submodels: Optional[Callable] = None,
     preprocessors: Optional[List[Any]] = None,
-    legacy: bool = False,
     model_kwargs: Optional[Dict] = None,
     exporter: str = "openvino",
     stateful: bool = False,
@@ -1033,7 +1031,6 @@ def _get_submodels_and_export_configs(
         float_dtype,
         fn_get_submodels,
         preprocessors,
-        legacy,
         model_kwargs,
         exporter,
     )
@@ -1422,7 +1419,6 @@ def _get_encoder_decoder_stateful_models_for_export(
         int_dtype=int_dtype,
         float_dtype=float_dtype,
         preprocessors=preprocessors,
-        legacy=False,
     )
 
     export_config.variant = _variant
@@ -1468,7 +1464,6 @@ def _get_speecht5_tss_model_for_export(
         int_dtype=int_dtype,
         float_dtype=float_dtype,
         preprocessors=preprocessors,
-        legacy=False,
     )
     export_config.variant = "default"
 
