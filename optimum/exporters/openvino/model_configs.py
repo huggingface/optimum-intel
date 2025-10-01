@@ -4348,7 +4348,6 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
         use_past_in_inputs: bool = True,
         behavior: SpeechT5ConfigBehavior = SpeechT5ConfigBehavior.ENCODER,
         preprocessors: Optional[List[Any]] = None,
-        legacy: bool = False,
     ):
         super().__init__(
             config=config,
@@ -4360,7 +4359,6 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             behavior=behavior,
             preprocessors=preprocessors,
             is_postnet_and_vocoder=False,
-            legacy=legacy,
         )
 
     def patch_model_for_export(
