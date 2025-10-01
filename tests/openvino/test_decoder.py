@@ -101,7 +101,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phimoe")
         # openvino 2025.0 required for disabling check_trace
         if is_openvino_version(">=", "2025.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
@@ -132,6 +132,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
+
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -210,7 +211,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
-        "phi3-moe": 2,
+        "phimoe": 2,
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
