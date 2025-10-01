@@ -17,4 +17,6 @@ from optimum.commands.export.base import ExportCommand
 from ..export.openvino import OVExportCommand
 
 
-REGISTER_COMMANDS = [(OVExportCommand, ExportCommand)]
+REGISTER_COMMANDS = [
+    (OVExportCommand, ExportCommand),
+]
