@@ -242,8 +242,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if len(untested_architectures) > 0:
             raise ValueError(
-                f"For the task `{self.TASK}`, the ONNX exporter supports {supported_architectures} but some of them are not "
-                f"tested: {untested_architectures}.\n"
+                f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
             )
 
     # TODO: remove gptq/awq from here
