@@ -5,7 +5,7 @@ import intel_extension_for_pytorch as ipex
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
-from transformers.cache_utils import StaticLayer, CacheLayerMixin
+from transformers.cache_utils import CacheLayerMixin
 
 from optimum.intel.utils.import_utils import is_ipex_version
 
@@ -15,10 +15,10 @@ class IPEXLayer(CacheLayerMixin):
     A cache layer for IPEX PagedAttention that stores key and value states
     as paged tensors optimized for Intel XPU and CPU devices.
     """
-    
+
     is_compileable = True
     is_sliding = False
-    
+
     def __init__(
         self,
         key_cache_shape: tuple = None,
@@ -26,37 +26,37 @@ class IPEXLayer(CacheLayerMixin):
         device: torch.device = None,
         dtype: torch.dtype = torch.float32,
         supports_flash_decoding: bool = False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
-        
+
         # Create cache tensors if shapes are provided, otherwise use pre-created tensors
         if key_cache_shape is not None and value_cache_shape is not None:
             self.keys = torch.zeros(key_cache_shape, dtype=dtype, device=device)
             self.values = torch.zeros(value_cache_shape, dtype=dtype, device=device)
         else:
             # Fallback for pre-created tensors
-            self.keys = kwargs.get('key_cache', None)
-            self.values = kwargs.get('value_cache', None)
-            
+            self.keys = kwargs.get("key_cache", None)
+            self.values = kwargs.get("value_cache", None)
+
         self.device = device
         self._supports_flash_decoding = supports_flash_decoding
-        
+
         # Mark tensors as static for torch.compile
         if self.keys is not None:
             torch._dynamo.mark_static_address(self.keys)
         if self.values is not None:
             torch._dynamo.mark_static_address(self.values)
-        
+
         # Set max_batch_size and max_cache_len properties required by parent
         # Extract from tensor shape if available
         if self.keys is not None:
-            self.max_batch_size = kwargs.get('max_batch_size', 1)
-            self.max_cache_len = kwargs.get('max_cache_len', self.keys.shape[0])
+            self.max_batch_size = kwargs.get("max_batch_size", 1)
+            self.max_cache_len = kwargs.get("max_cache_len", self.keys.shape[0])
         else:
-            self.max_batch_size = kwargs.get('max_batch_size', 1)
-            self.max_cache_len = kwargs.get('max_cache_len', 1)
-    
+            self.max_batch_size = kwargs.get("max_batch_size", 1)
+            self.max_cache_len = kwargs.get("max_cache_len", 1)
+
     def update(
         self,
         key_states: torch.Tensor,
@@ -67,33 +67,33 @@ class IPEXLayer(CacheLayerMixin):
         # For IPEXPagedCache, the actual update is handled by reshape_and_cache
         # This method just returns the current cache tensors
         return self.keys, self.values
-    
+
     def get_seq_length(self, cache_position=None) -> int:
         """Returns the sequence length. For paged cache, this is managed by the parent."""
         # This will be overridden by the parent IPEXPagedCache
         return 0
-    
+
     def get_max_cache_shape(self) -> int:
         """Returns the maximum cache shape."""
         # For paged cache, return the total number of blocks * block_size
         if self.keys is not None:
             return self.keys.shape[0]  # num_blocks dimension
         return 0
-    
+
     def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
         """Return the length and offset of the cache for attention mask generation."""
         # For paged attention, this is handled differently
         kv_offset = 0
         kv_length = self.get_max_cache_shape()
         return kv_length, kv_offset
-    
+
     def reset(self) -> None:
         """Reset cache values while preserving objects."""
         if self.keys is not None:
             self.keys.zero_()
         if self.values is not None:
             self.values.zero_()
-    
+
     def reorder_cache(self, beam_idx: torch.LongTensor) -> None:
         """Reorder cache for beam search."""
         if self.keys is not None and self.keys.numel():
@@ -142,7 +142,7 @@ class IPEXPagedCache(Cache):
         default_device = torch.device("xpu") if ipex._C._has_xpu() else torch.device("cpu")
         device = device or default_device
         self.device = device
-        
+
         # Set up cache-related attributes
         self.num_kv_heads = config.num_key_value_heads
         self.num_hidden_layers = config.num_hidden_layers
@@ -151,7 +151,7 @@ class IPEXPagedCache(Cache):
         else:
             head_size = config.hidden_size // config.num_attention_heads
         self.head_size = head_size
-        
+
         # Calculate block parameters
         default_block_size = 16 if max_cache_len <= 64 else 64
         self.block_size = int(os.environ.get("OI_PAGED_ATTN_BLOCK_SIZE", str(default_block_size)))
@@ -167,35 +167,34 @@ class IPEXPagedCache(Cache):
 
         # Store custom parameters for later use
         self._custom_layer_kwargs = {
-            'key_cache_shape': key_cache_shape,
-            'value_cache_shape': value_cache_shape,
-            'device': device,
-            'dtype': dtype,
-            'max_batch_size': max_batch_size,
-            'max_cache_len': max_cache_len
+            "key_cache_shape": key_cache_shape,
+            "value_cache_shape": value_cache_shape,
+            "device": device,
+            "dtype": dtype,
+            "max_batch_size": max_batch_size,
+            "max_cache_len": max_cache_len,
         }
-        
+
         # Now call parent without our custom parameters
         super().__init__(config=config, layer_classes=IPEXLayer, batch_size=max_batch_size, **kwargs)
-        
+
         # Update layer_init_kwargs after parent initialization
         self.layer_init_kwargs.update(self._custom_layer_kwargs)
-        
+
         # Clear existing layers and recreate with correct parameters
         self.layers.clear()
         self.append_new_layers(self.num_hidden_layers - 1)
-        
+
         # Initialize other attributes
         self._seen_tokens = torch.zeros([max_batch_size], dtype=torch.int32, device=device)
         self.slots = torch.zeros([max_cache_len * max_batch_size], dtype=torch.int32, device=device)
         torch._dynamo.mark_static_address(self._seen_tokens)
         torch._dynamo.mark_static_address(self.slots)
-        
+
         self.block_tables = -1 * torch.ones([self.num_blocks], dtype=torch.int32, device=device).reshape(
             max_batch_size, -1
         )
         self.free_blocks = torch.ones([self.num_blocks], dtype=torch.int32, device=device)
-
 
     def reshape_and_cache(
         self,

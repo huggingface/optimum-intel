@@ -407,8 +407,27 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return generation_config, model_kwargs
 
-    def _reorder_cache(self, *args, **kwargs):
-        return self.model._reorder_cache(*args, **kwargs)
+    def _reorder_cache(self, past_key_values, beam_idx):
+        """
+        Reorders the cache for beam search, supporting both new and old cache architectures.
+        """
+        # Handle new cache architecture with reorder_cache method
+        if hasattr(past_key_values, "reorder_cache"):
+            return past_key_values.reorder_cache(beam_idx)
+
+        # Fallback to model's _reorder_cache for old cache formats
+        if hasattr(self.model, "_reorder_cache"):
+            return self.model._reorder_cache(past_key_values, beam_idx)
+
+        # Final fallback for tuple-based cache (old transformers versions)
+        if isinstance(past_key_values, tuple):
+            return tuple(
+                tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+                for layer_past in past_key_values
+            )
+
+        # Default return
+        return past_key_values
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
         input_kwargs = self.model.prepare_inputs_for_generation(*args, **kwargs)
@@ -447,7 +466,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 # Change cache implementation temporarily
                 orig_cache_implementation = kwargs["generation_config"].cache_implementation
                 kwargs["generation_config"].cache_implementation = "ipex_paged"
-
 
         try:
             result = super().generate(*args, **kwargs)
@@ -514,8 +532,27 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
         return generation_config, model_kwargs
 
-    def _reorder_cache(self, *args, **kwargs):
-        return self.model._reorder_cache(*args, **kwargs)
+    def _reorder_cache(self, past_key_values, beam_idx):
+        """
+        Reorders the cache for beam search, supporting both new and old cache architectures.
+        """
+        # Handle new cache architecture with reorder_cache method
+        if hasattr(past_key_values, "reorder_cache"):
+            return past_key_values.reorder_cache(beam_idx)
+
+        # Fallback to model's _reorder_cache for old cache formats
+        if hasattr(self.model, "_reorder_cache"):
+            return self.model._reorder_cache(past_key_values, beam_idx)
+
+        # Final fallback for tuple-based cache (old transformers versions)
+        if isinstance(past_key_values, tuple):
+            return tuple(
+                tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+                for layer_past in past_key_values
+            )
+
+        # Default return
+        return past_key_values
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
         return self.model.prepare_inputs_for_generation(*args, **kwargs)
