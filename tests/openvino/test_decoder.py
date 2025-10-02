@@ -55,8 +55,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        "llama4",
-        "llama4_text",
         "marian",
         "minicpm",
         "mistral",
@@ -123,7 +121,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("llama4", "llama4_text", "qwen3", "qwen3_moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
@@ -165,6 +163,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
+        "bigbird_pegasus": 2,
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
@@ -180,10 +179,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "llama4": 5,
         "llama4_text": 2,
         "marian": 2,
+        "mbart": 2,
         "minicpm": 4,
         "mistral": 2,
         "mixtral": 2,
         "mpt": 5,
+        "olmo2": 2,
         "opt": 5,
         "pegasus": 2,
         "qwen": 2,
@@ -204,6 +205,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "olmo": 2,
         "stablelm": 2,
         "starcoder2": 2,
+        "smollm3": 2,
         "dbrx": 2,
         "cohere": 2,
         "qwen2": 2,
