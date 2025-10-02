@@ -4744,7 +4744,7 @@ class OVSeq2SeqModelPatcher(OVModelPatcher):
 
         if is_transformers_version(">=", "4.53.0"):
             # for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-            # to aoid overflow issues on some hardware (e.g. Intel NPU)
+            # to avoid overflow issues on some hardware (e.g. Intel NPU)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
             # for decoder models, we use eager mask without vmap for sdpa as well
