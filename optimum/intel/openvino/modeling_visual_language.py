@@ -25,6 +25,7 @@ from transformers import (
     PreTrainedTokenizer,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -44,7 +45,6 @@ from .utils import (
 
 if is_transformers_version(">=", "4.46.0"):
     from transformers import AutoModelForImageTextToText
-    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 
     transformers_auto_class = AutoModelForImageTextToText
 else:
