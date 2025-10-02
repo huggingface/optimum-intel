@@ -243,9 +243,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_architectures = set(TasksManager.get_supported_model_type_for_task(task=self.TASK, exporter="openvino"))
         supported_architectures = ov_architectures & transformers_architectures
 
-        if is_transformers_version(
-            "<", str(DeepseekOpenVINOConfig.MIN_TRANSFORMERS_VERSION)
-        ) or is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
             if "deepseek_v2" in supported_architectures:
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
