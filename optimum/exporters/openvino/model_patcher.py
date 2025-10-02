@@ -32,7 +32,6 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
-    Seq2SeqModelPatcher,
     VisionEncoderDecoderPatcher,
     override_arguments,
     sdpa_mask_without_vmap,
@@ -4456,7 +4455,7 @@ class GptBigCodeModelPatcher(OVDecoderModelPatcher):
                 layer.attn._attn = layer.attn._orig_attn
 
 
-class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
+class OVSeq2SeqModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4464,14 +4463,26 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)
+        allow_past_in_outputs = getattr(self.real_config, "use_past", False)
 
-        non_stateful_patched_forward = self.patched_forward
+        # sometimes the text_config/decoder is set to False
+        if allow_past_in_outputs:
+            if hasattr(model.config, "text_config"):
+                model.config.text_config.use_cache = True
+            elif hasattr(model.config, "decoder"):
+                model.config.decoder.use_cache = True
 
-        @functools.wraps(non_stateful_patched_forward)
+        # Re-use the patched forward method from the parent class
+        self.super_patched_forward = self.patched_forward
+
+        # NOTE: same as the one optimum-onnx, with stateful decoder patching
+        @functools.wraps(self.super_patched_forward)
         def patched_forward(*args, **kwargs):
-            signature = inspect.signature(non_stateful_patched_forward)
+            signature = inspect.signature(self.super_patched_forward)
             args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
 
+            pkv = None
+            return_legacy_cache = True
             if (
                 getattr(self.real_config, "stateful", False)
                 and self.real_config._behavior == "decoder"
@@ -4479,7 +4490,6 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
             ):
                 pkv_argument_index = list(signature.parameters.keys()).index("past_key_values")
 
-                pkv = None
                 if "past_key_values" in kwargs:
                     pkv = kwargs["past_key_values"]
                 elif len(args) > pkv_argument_index:
@@ -4488,6 +4498,7 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
                 if pkv is not None:
                     if isinstance(pkv, EncoderDecoderCache):
                         pkv = pkv.to_legacy_cache()
+                        return_legacy_cache = False
 
                     only_self_attn = [cache_item[:2] for cache_item in pkv]
                     pkv = EncoderDecoderCache.from_legacy_cache(only_self_attn)
@@ -4497,7 +4508,35 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
                     elif len(args) > pkv_argument_index:
                         args[pkv_argument_index] = pkv
 
-            return non_stateful_patched_forward(*args, **kwargs)
+            outputs = self.super_patched_forward(*args, **kwargs)
+
+            if pkv is not None and return_legacy_cache:
+                outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
+
+            # Filter out cross attention past key values output from the decoder using KV cache, as they are constants.
+            filtered_outputs = {}
+            for name, value in outputs.items():
+                onnx_output_name = config.torch_to_onnx_output_map.get(name, name)
+                if (
+                    onnx_output_name in config.outputs
+                    or (allow_past_in_outputs and name.startswith("past_key_values"))
+                    or any(key.startswith(onnx_output_name) for key in config.outputs)
+                ):
+                    if name != "past_key_values":
+                        if self.real_config._behavior == "decoder" and name == "encoder_last_hidden_state":
+                            continue
+                        else:
+                            filtered_outputs[name] = value
+                    else:
+                        if self.real_config._behavior == "monolith" or (
+                            self.real_config._behavior == "decoder"
+                            and (self.real_config.is_merged or not self.real_config.use_past_in_inputs)
+                        ):
+                            filtered_outputs[name] = value
+                        elif self.real_config._behavior == "decoder" and self.real_config.use_past_in_inputs:
+                            # The filtering happens here. The decoder with use_past_in_inputs=True corresponds to the autoregressive one.
+                            filtered_outputs[name] = tuple([v[:2] for v in value])
+            return filtered_outputs
 
         self.patched_forward = patched_forward
 
