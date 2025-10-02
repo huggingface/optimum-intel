@@ -234,7 +234,7 @@ class IPEXModel(OptimizedModel):
         ):
             return False
 
-        if self.use_cache and not self.model._supports_cache_class and not self._add_patch:
+        if self.use_cache and not self._supports_cache_class and not self._add_patch:
             return False
 
         return True
