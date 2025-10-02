@@ -101,6 +101,7 @@ MODEL_NAMES = {
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
     "llama4": "hf-internal-testing/tiny-random-llama4",
+    "llama4_text": "trl-internal-testing/tiny-Llama4ForCausalLM",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
     "llava_next_mistral": "optimum-internal-testing/tiny-random-llava-next-mistral",
