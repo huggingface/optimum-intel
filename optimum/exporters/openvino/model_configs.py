@@ -53,7 +53,6 @@ from optimum.exporters.onnx.model_configs import (
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
-from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -123,6 +122,7 @@ from .model_patcher import (
     MixtralModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
+    OVModelPatcher,
     OVSeq2SeqModelPatcher,
     OVSpeechT5ModelPatcher,
     OVVisionEncoderDecoderPatcher,
@@ -255,7 +255,7 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return BaichuanModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -279,7 +279,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -293,7 +293,7 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -327,7 +327,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -339,7 +339,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return Qwen3MoeModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -353,7 +353,7 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return MiniCPMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -407,7 +407,7 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return MiniCPM3Patcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -421,7 +421,7 @@ class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -560,7 +560,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return ChatGLMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -578,7 +578,7 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return MixtralModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -596,7 +596,7 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class GemmaOpenVINOConfig(GemmaOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -614,7 +614,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
 class LlamaOpenVINOConfig(LlamaOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -777,7 +777,7 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return QwenModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -793,7 +793,7 @@ class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -807,7 +807,7 @@ class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return InternLM2Patcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -832,7 +832,7 @@ class OlmoOpenVINOConfig(LlamaOpenVINOConfig):
 class MPTOpenVINOConfig(MPTOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return MPTModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -856,7 +856,7 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return Phi3ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -876,7 +876,7 @@ class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return PhiMoEModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -894,7 +894,7 @@ class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
 class PhiOpenVINOConfig(PhiOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -946,7 +946,7 @@ class FalconOpenVINOConfig(FalconOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return FalconModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -967,7 +967,7 @@ class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return PersimmonModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -994,7 +994,7 @@ class BioGPTOpenVINOConfig(
 class GPTNeoOpenVINOConfig(GPTNeoOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return GptNeoModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1012,7 +1012,7 @@ class GPTNeoOpenVINOConfig(GPTNeoOnnxConfig):
 class GPTJOpenVINOConfig(GPTJOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return GptJModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1031,7 +1031,7 @@ class GPTJOpenVINOConfig(GPTJOnnxConfig):
 class BloomOpenVINOConfig(BloomOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1108,7 +1108,7 @@ class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return AquilaModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1122,7 +1122,7 @@ class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return XverseModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1136,7 +1136,7 @@ class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return InternLMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1148,7 +1148,7 @@ class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return CodeGenModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1171,7 +1171,7 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return DBRXModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1189,7 +1189,7 @@ class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return JaisModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1199,7 +1199,7 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1260,7 +1260,7 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return MistralModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1278,7 +1278,7 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
 class GPTNeoxOpenVINOConfig(GPTNeoXOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1292,7 +1292,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1312,7 +1312,7 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1381,7 +1381,7 @@ class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return DeciLMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1428,8 +1428,8 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+    ) -> OVModelPatcher:
+        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="open_clip")
@@ -1463,8 +1463,8 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+    ) -> OVModelPatcher:
+        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="open_clip")
@@ -1497,8 +1497,8 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
 class CLIPOpenVINOConfig(CLIPOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+    ) -> OVModelPatcher:
+        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
@@ -1506,24 +1506,24 @@ class CLIPOpenVINOConfig(CLIPOnnxConfig):
 class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+    ) -> OVModelPatcher:
+        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
 class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+    ) -> OVModelPatcher:
+        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="transformers")
 class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
-        return ModelPatcher(self, model, model_kwargs=model_kwargs)
+    ) -> OVModelPatcher:
+        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -1541,7 +1541,7 @@ class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
 class IBertOpenVINOConfig(IBertOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return IBertModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -1564,7 +1564,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         model_kwargs = model_kwargs or {}
         model_kwargs["use_cache"] = True
         if self.patcher_cls is not None:
@@ -1623,7 +1623,7 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         # making 16bit tracable overrides embeedings input signature these changes required to prevent this issue
         return InputEmbeddingPatcher(self, model, model_kwargs)
 
@@ -2322,7 +2322,7 @@ class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return SanaTextEncoderModelPatcher(self, model, model_kwargs)
 
 
@@ -2524,7 +2524,7 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -3615,7 +3615,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2VLVisionEmbMergerPatcher(self, model, model_kwargs)
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
-            return ModelPatcher(self, model, model_kwargs=model_kwargs)
+            return OVModelPatcher(self, model, model_kwargs=model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
@@ -3718,7 +3718,7 @@ class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -3802,7 +3802,7 @@ class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
 
     def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
@@ -3846,7 +3846,7 @@ class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVSeq2SeqModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -3869,7 +3869,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
 class T5OpenVINOConfig(T5OnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
@@ -3915,7 +3915,7 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
 class BartOpenVINOConfig(BartOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVSeq2SeqModelPatcher(self, model, model_kwargs)
 
     @property
@@ -3965,7 +3965,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
 
 
@@ -4159,7 +4159,7 @@ class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
 class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4185,7 +4185,7 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
 class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4211,7 +4211,7 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
 class PegasusOpenVINOConfig(PegasusOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4237,7 +4237,7 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
 class MarianOpenVINOConfig(MarianOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
 
     @property
@@ -4341,7 +4341,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVSpeechT5ModelPatcher(self, model, model_kwargs=model_kwargs)
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
@@ -4620,7 +4620,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 class GPT2OpenVINOConfig(GPT2OnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> ModelPatcher:
+    ) -> OVModelPatcher:
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
 
 

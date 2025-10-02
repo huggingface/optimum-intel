@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import dataclasses
 import functools
 import inspect
 import logging
@@ -22,19 +23,23 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+import transformers
 from transformers import PreTrainedModel, TFPreTrainedModel
-from transformers.modeling_outputs import BaseModelOutputWithPast, BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.base import ConfigBehavior, OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
-    UNSUPPORTED_OPS_PATCHING_SPEC,
-    DecoderModelPatcher,
-    ModelPatcher,
-    Seq2SeqModelPatcher,
+    PatchingSpec,
     VisionEncoderDecoderPatcher,
+    find_packed_sequence_indices_patched,
+    onnx_compatible_linalg_norm,
+    onnx_compatible_rms_norm,
+    onnx_compatible_tril,
+    onnx_compatible_triu,
+    onnx_compatible_unfold,
     override_arguments,
     sdpa_mask_without_vmap,
 )
@@ -45,10 +50,15 @@ from optimum.intel.utils.import_utils import (
 )
 
 
+if is_transformers_version(">=", "4.48"):
+    from transformers.cache_utils import DynamicCache, EncoderDecoderCache
+if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
+    from optimum.exporters.onnx._traceable_cache import TraceableCache
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
-
+if is_transformers_version(">=", "4.53.1"):
+    from transformers.masking_utils import find_packed_sequence_indices
 
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
@@ -62,9 +72,187 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
-    if spec.name in {"repeat_interleave", "scaled_dot_product_attention"}:
-        UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
+UNSUPPORTED_OPS_PATCHING_SPEC = [
+    PatchingSpec(torch, "tril", onnx_compatible_tril, torch.tril),
+    PatchingSpec(torch, "triu", onnx_compatible_triu, torch.triu),
+    PatchingSpec(torch, "rms_norm", onnx_compatible_rms_norm, torch.rms_norm),
+    PatchingSpec(torch.Tensor, "unfold", onnx_compatible_unfold, torch.Tensor.unfold),
+    PatchingSpec(torch.linalg, "norm", onnx_compatible_linalg_norm, torch.linalg.norm),
+    # TracerWarning: Using len to get tensor shape might cause the trace to be incorrect. Recommended usage would be tensor.shape[0]. Passing a tensor of different shape might lead to errors or silently give incorrect results.
+    PatchingSpec(torch.Tensor, "__len__", lambda x: x.shape[0], torch.Tensor.__len__),
+]
+
+
+class OVModelPatcher:
+    def __init__(self, config: OnnxConfig, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        self._model = model
+
+        patching_specs = config.PATCHING_SPECS or []
+        patching_specs.extend(UNSUPPORTED_OPS_PATCHING_SPEC)
+
+        self._patching_specs = []
+        for spec in patching_specs:
+            final_spec = spec
+            if spec.orig_op is None:
+                final_spec = dataclasses.replace(spec, orig_op=getattr(spec.o, spec.name))
+            self._patching_specs.append(final_spec)
+
+        self.orig_forward_name = "forward" if hasattr(self._model, "forward") else "call"
+        self.orig_forward = getattr(self._model, self.orig_forward_name)
+
+        self.real_config = config
+        self.model_kwargs = model_kwargs if model_kwargs is not None else {}
+        allow_past_in_outputs = hasattr(self.real_config, "use_past") and self.real_config.use_past
+
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            signature = inspect.signature(self.orig_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            if is_transformers_version(">=", "4.48"):
+                if "past_key_values" in signature.parameters:
+                    pkv_index = list(signature.parameters.keys()).index("past_key_values")
+
+                    if (
+                        pkv_index < len(args)  # pkv is in args
+                        and isinstance(args[pkv_index], (list, tuple))
+                        and isinstance(args[pkv_index][0], (list, tuple))
+                    ):
+                        if len(args[pkv_index][0]) == 2:
+                            args[pkv_index] = DynamicCache.from_legacy_cache(args[pkv_index])
+                        elif len(args[pkv_index][0]) == 4:
+                            args[pkv_index] = EncoderDecoderCache.from_legacy_cache(args[pkv_index])
+                        else:
+                            raise ValueError(
+                                f"past_key_values should have either 2 or 4 elements, but it has {len(args[pkv_index][0])} elements"
+                            )
+                    elif (
+                        "past_key_values" in kwargs  # pkv is in kwargs
+                        and isinstance(kwargs["past_key_values"], (list, tuple))
+                        and isinstance(kwargs["past_key_values"][0], (list, tuple))
+                    ):
+                        if len(kwargs["past_key_values"][0]) == 2:
+                            kwargs["past_key_values"] = DynamicCache.from_legacy_cache(kwargs["past_key_values"])
+                        elif len(kwargs["past_key_values"][0]) == 4:
+                            kwargs["past_key_values"] = EncoderDecoderCache.from_legacy_cache(
+                                kwargs["past_key_values"]
+                            )
+                        else:
+                            raise ValueError(
+                                f"past_key_values should have either 2 or 4 elements, but it has {len(kwargs['past_key_values'][0])} elements"
+                            )
+
+            if is_transformers_version(">=", "4.54"):
+                # Some encoder-decoder models started to not accept encoder_outputs as tuple (e.g. moonshine)
+                if "encoder_outputs" in signature.parameters:
+                    encoder_outputs_index = list(signature.parameters.keys()).index("encoder_outputs")
+                    if (
+                        encoder_outputs_index < len(args)  # encoder_outputs is in args
+                        and isinstance(args[encoder_outputs_index], (list, tuple))
+                        and not isinstance(args[encoder_outputs_index], transformers.file_utils.ModelOutput)
+                    ):
+                        args[encoder_outputs_index] = BaseModelOutput(*args[encoder_outputs_index])
+                    elif (
+                        "encoder_outputs" in kwargs  # encoder_outputs is in kwargs
+                        and isinstance(kwargs["encoder_outputs"], (list, tuple))
+                        and not isinstance(kwargs["encoder_outputs"], transformers.file_utils.ModelOutput)
+                    ):
+                        kwargs["encoder_outputs"] = BaseModelOutput(*kwargs["encoder_outputs"])
+
+            outputs = self.orig_forward(*args, **kwargs)
+
+            # This code block handles different cases of the filterd_outputs input to align it with the expected
+            # format of outputs. It is common for the output type of a model to vary, such as tensor, list,
+            # tuple, etc. For Transformers models, the output is encapsulated in a ModelOutput object that
+            # contains the output names of the model. In the case of Timm classification models, the output
+            # is of type tensor. By default, it is assumed that the output names mentioned in the ONNX config
+            # match the outputs in order.
+            filtered_outputs = {}
+            if isinstance(outputs, dict):
+                for name, value in outputs.items():
+                    onnx_output_name = config.torch_to_onnx_output_map.get(name, name)
+                    if (
+                        onnx_output_name in config.outputs
+                        or (allow_past_in_outputs and name.startswith("past_key_values"))
+                        or any(key.startswith(onnx_output_name) for key in config.outputs)
+                    ):
+                        filtered_outputs[name] = value
+            elif isinstance(outputs, (list, tuple)):
+                outputs_list = list(config.outputs.keys())
+                filtered_outputs = dict(zip(outputs_list, outputs))
+            else:
+                if len(config.outputs) > 1:
+                    num_outputs = len(config.outputs)
+                    outputs_str = ", ".join(config.outputs.keys())
+                    raise ValueError(
+                        f"config.outputs should have only one outputs, but it has {num_outputs} keys: {outputs_str}"
+                    )
+                else:
+                    name = next(iter(config.outputs.keys()))
+                    filtered_outputs[name] = outputs
+                name = next(iter(config.outputs.keys()))
+                filtered_outputs[name] = outputs
+
+            if is_transformers_version(">=", "4.48"):
+                if isinstance(filtered_outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
+                    filtered_outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
+
+            return filtered_outputs
+
+        self.patched_forward = patched_forward
+
+    def patch_ops(self):
+        for spec in self._patching_specs:
+            custom_op = spec.custom_op if spec.op_wrapper is None else spec.op_wrapper(spec.custom_op)
+            setattr(spec.o, spec.name, custom_op)
+
+    def restore_ops(self):
+        for spec in self._patching_specs:
+            orig_op = spec.orig_op if spec.op_wrapper is None else spec.op_wrapper(spec.orig_op)
+            setattr(spec.o, spec.name, orig_op)
+
+    def __enter__(self):
+        self.patch_ops()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        # This is a workaround for the Cache class in transformers, we replace it
+        # with traceable cache is because the original one used in transformers
+        # inherited from nn.Module (for a couple versions), which can't be traced as input.
+        if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
+            self.original_cache_class = transformers.cache_utils.Cache
+            transformers.cache_utils.Cache = TraceableCache
+
+        # This is a workaround for mask generation in transformers >= 4.53.
+        # The masking process uses vmap which is not traceable by TorchScript.
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask_without_vmap)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
+
+        # This is a workaround for the find_packed_sequence_indices function in transformers which
+        # should only return a tensor of zeros with the same shape as position_ids indicating no packed sequence indices.
+        # The function uses torch.diff which is not traceable by TorchScript.
+        if is_transformers_version(">=", "4.53.1"):
+            self.original_find_packed_sequence_indices = find_packed_sequence_indices
+            transformers.masking_utils.find_packed_sequence_indices = find_packed_sequence_indices_patched
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.restore_ops()
+        setattr(self._model, self.orig_forward_name, self.orig_forward)
+
+        if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
+            transformers.cache_utils.Cache = self.original_cache_class
+
+        if is_transformers_version(">=", "4.53"):
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+
+        if is_transformers_version(">=", "4.53.1"):
+            transformers.masking_utils.find_packed_sequence_indices = self.original_find_packed_sequence_indices
+
+    def __call__(self, *args, **kwargs):
+        if getattr(self._model, self.orig_forward_name) is self.orig_forward:
+            logger.warning("Running the non-patched model")
+        return self._model(*args, **kwargs)
 
 
 def patch_update_causal_mask(
@@ -208,7 +396,7 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     return mask
 
 
-class OVDecoderModelPatcher(DecoderModelPatcher):
+class OVDecoderModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -3083,7 +3271,7 @@ class DeciLMModelPatcher(OVDecoderModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-class IBertModelPatcher(ModelPatcher):
+class IBertModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3101,7 +3289,7 @@ class IBertModelPatcher(ModelPatcher):
             self._model(torch.ones([1, 1], dtype=torch.long))
 
 
-class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
+class InternVLChatImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3246,7 +3434,7 @@ def maira_vision_embed_forward(self, pixel_values):
     return self.get_image_features(pixel_values, vision_feature_layer, vision_feature_select_strategy)
 
 
-class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+class LlavaImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3263,7 +3451,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class MairaImageEmbeddingModelPatcher(ModelPatcher):
+class MairaImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3280,7 +3468,7 @@ class MairaImageEmbeddingModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
+class LlavaNextVideoImageEmbeddingModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3321,7 +3509,7 @@ def _embednb_forward(self, ids: torch.Tensor) -> torch.Tensor:
     return emb.unsqueeze(1)
 
 
-class FluxTransfromerModelPatcher(ModelPatcher):
+class FluxTransfromerModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
         if is_diffusers_version("<", "0.31.0"):
@@ -3496,7 +3684,7 @@ def _minicpmv_siglip_transformer_forward(
     )
 
 
-class MiniCPMVResamplerModelPatcher(ModelPatcher):
+class MiniCPMVResamplerModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3513,7 +3701,7 @@ class MiniCPMVResamplerModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
+class MiniCPMVImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3544,7 +3732,7 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
+class LlavaQwen2ImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3562,7 +3750,7 @@ class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class InputEmbeddingPatcher(ModelPatcher):
+class InputEmbeddingPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -3587,7 +3775,7 @@ def phi3_vision_embeddings_forward(self, pixel_values: torch.FloatTensor):
     return self.get_img_features(pixel_values)
 
 
-class Phi3VisionImageEmbeddingsPatcher(ModelPatcher):
+class Phi3VisionImageEmbeddingsPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4198,7 +4386,7 @@ def patch_qwen2vl_vision_blocks(model, force_new_behaviour=False):
         block.attn.forward = types.MethodType(sdpa_attn_forward, block.attn)
 
 
-class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
+class Qwen2VLVisionEmbMergerPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4232,7 +4420,7 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
             block.attn.forward = block.attn._orig_forward
 
 
-class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
+class Qwen2_5_VLVisionEmbMergerPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4457,7 +4645,7 @@ class GptBigCodeModelPatcher(OVDecoderModelPatcher):
                 layer.attn._attn = layer.attn._orig_attn
 
 
-class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
+class OVSeq2SeqModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4465,52 +4653,92 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if getattr(config, "stateful", False) and config._behavior == ConfigBehavior.DECODER:
-            model.__orig_forward = model.forward
+            model.non_stateful_forward = model.forward
 
-            @functools.wraps(model.__orig_forward)
-            def patched_forward(*args, **kwargs):
-                from transformers.cache_utils import EncoderDecoderCache
-
-                signature = inspect.signature(self.orig_forward)
+            @functools.wraps(model.non_stateful_forward)
+            def stateful_forward(*args, **kwargs):
+                signature = inspect.signature(model.non_stateful_forward)
                 args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
 
-                return_legacy_cache = False
-                pkv_in_args = False
-                legacy_pkv = None
+                pkv_argument_index = -1
+                if "past_key_values" in signature.parameters:
+                    pkv_argument_index = list(signature.parameters.keys()).index("past_key_values")
+
+                pkv = None
                 if "past_key_values" in kwargs:
-                    legacy_pkv = kwargs.pop("past_key_values", None)
-                sign_names = list(signature.parameters.keys())
-                pkv_argument_index = sign_names.index("past_key_values")
-                if legacy_pkv is None and len(args) > pkv_argument_index:
-                    legacy_pkv = args[pkv_argument_index]
-                    pkv_in_args = True
-                if legacy_pkv is not None:
-                    if isinstance(legacy_pkv, EncoderDecoderCache):
-                        legacy_pkv = legacy_pkv.to_legacy_cache()
-                    only_self_cache = [cache_item[:2] for cache_item in legacy_pkv]
-                    pkv = EncoderDecoderCache.from_legacy_cache(only_self_cache)
-                    return_legacy_cache = True
-                    if not pkv_in_args:
+                    pkv = kwargs["past_key_values"]
+                elif len(args) > pkv_argument_index:
+                    pkv = args[pkv_argument_index]
+
+                if pkv is not None:
+                    if isinstance(pkv, EncoderDecoderCache):
+                        pkv = pkv.to_legacy_cache()
+
+                    only_self_attn = [cache_item[:2] for cache_item in pkv]
+                    pkv = EncoderDecoderCache.from_legacy_cache(only_self_attn)
+                    if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
-                    else:
+                    elif len(args) > pkv_argument_index:
                         args[pkv_argument_index] = pkv
 
-                outputs = model.__orig_forward(*args, **kwargs)
-                if return_legacy_cache:
-                    outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+                outputs = model.non_stateful_forward(*args, **kwargs)
 
                 return outputs
 
-            model.forward = patched_forward
+            model.forward = stateful_forward
 
         super().__init__(config, model, model_kwargs)
+        allow_past_in_outputs = getattr(self.real_config, "use_past", False)
+
+        # sometimes the text_config/decoder is set to False
+        if allow_past_in_outputs:
+            if hasattr(model.config, "text_config"):
+                model.config.text_config.use_cache = True
+            elif hasattr(model.config, "decoder"):
+                model.config.decoder.use_cache = True
+
+        # Re-use the patched forward method from the parent class
+        self.super_patched_forward = self.patched_forward
+
+        @functools.wraps(self.super_patched_forward)
+        def patched_forward(*args, **kwargs):
+            signature = inspect.signature(self.super_patched_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            outputs = self.super_patched_forward(*args, **kwargs)
+
+            # Filter out cross attention past key values output from the decoder using KV cache, as they are constants.
+            filtered_outputs = {}
+            for name, value in outputs.items():
+                onnx_output_name = config.torch_to_onnx_output_map.get(name, name)
+                if (
+                    onnx_output_name in config.outputs
+                    or (allow_past_in_outputs and name.startswith("past_key_values"))
+                    or any(key.startswith(onnx_output_name) for key in config.outputs)
+                ):
+                    if name != "past_key_values":
+                        if self.real_config._behavior == "decoder" and name == "encoder_last_hidden_state":
+                            continue
+                        else:
+                            filtered_outputs[name] = value
+                    else:
+                        if self.real_config._behavior == "monolith" or (
+                            self.real_config._behavior == "decoder" and not self.real_config.use_past_in_inputs
+                        ):
+                            filtered_outputs[name] = value
+                        elif self.real_config._behavior == "decoder" and self.real_config.use_past_in_inputs:
+                            # The filtering happens here. The decoder with use_past_in_inputs=True corresponds to the autoregressive one.
+                            filtered_outputs[name] = tuple([v[:2] for v in value])
+            return filtered_outputs
+
+        self.patched_forward = patched_forward
 
     def __enter__(self):
         super().__enter__()
 
         if is_transformers_version(">=", "4.53.0"):
             # for OpenVINO, we use torch.finfo(torch.float16).min instead of torch.finfo(dtype).min
-            # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
+            # to aoid overflow issues on some hardware (e.g. Intel NPU)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
             # for decoder models, we use eager mask without vmap for sdpa as well
@@ -4526,7 +4754,7 @@ class OVSeq2SeqModelPatcher(Seq2SeqModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
 
-class SanaTextEncoderModelPatcher(ModelPatcher):
+class SanaTextEncoderModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
 
@@ -4577,7 +4805,7 @@ class MiniCPMModelPatcher(OVDecoderModelPatcher):
         super().__init__(config, model, model_kwargs)
 
 
-class CommonImageEmbeddingsModelPatcher(ModelPatcher):
+class CommonImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -4729,7 +4957,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
             del self._model.model._orig_update_causual_mask
 
 
-class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
+class Idefics3ImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -5510,7 +5738,7 @@ def speecht5_decoder_layer_forward(
     return outputs
 
 
-class OVSpeechT5ModelPatcher(ModelPatcher):
+class OVSpeechT5ModelPatcher(OVModelPatcher):
     def __enter__(self):
         if self.real_config._behavior != "vocoder":
             setattr(self._model, self.orig_forward_name, self.patched_forward)
@@ -5692,7 +5920,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
+class Phi4MMAudioForwardEmbeddingsPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -5716,7 +5944,7 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Phi4MMAudioEncoderPatcher(ModelPatcher):
+class Phi4MMAudioEncoderPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -5757,7 +5985,7 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
         self._model.forward = self._model.__orig_forward
 
 
-class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
+class Phi4MMVisionEmbeddingsPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -6066,7 +6294,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
         self._model.img_processor.embeddings.forward = self._model.img_processor.embeddings._orig_forward
 
 
-class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
+class Llama4ImageEmbeddingsModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -6246,7 +6474,7 @@ def llama4_moe_forward(self, hidden_states):
     return out, router_scores
 
 
-class Llama4TextModelPatcher(ModelPatcher):
+class Llama4TextModelPatcher(OVModelPatcher):
     def __enter__(self):
         super().__enter__()
         self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
@@ -6421,7 +6649,7 @@ def mamba_mixer_forward(
 # 1. Inject a MambaCache structure into the original model to simplify input and output handling related to SSM states
 # 2. Patch ConvSequenceTransform module to avoid if-else branching
 # 3. Vectorize the selective scan operation to ensure correct behavior during JIT tracing
-class MambaPatcher(ModelPatcher):
+class MambaPatcher(OVModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
@@ -6622,7 +6850,7 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
-class SAMModelPatcher(ModelPatcher):
+class SAMModelPatcher(OVModelPatcher):
     def __init__(
         self,
         config: OnnxConfig,
