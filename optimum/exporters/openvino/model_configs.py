@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
     BartOnnxConfig,
@@ -3849,17 +3848,6 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     ) -> OVModelPatcher:
         return OVSeq2SeqModelPatcher(self, model, model_kwargs=model_kwargs)
 
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-
-        if self._behavior is not ConfigBehavior.ENCODER and self.use_past_in_inputs:
-            # since https://github.com/huggingface/transformers/pull/31166
-            common_inputs["cache_position"] = {0: "decoder_sequence_length"}
-        return common_inputs
-
 
 @register_in_tasks_manager(
     "t5",
@@ -3871,13 +3859,6 @@ class T5OpenVINOConfig(T5OnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> OVModelPatcher:
         return OVSeq2SeqModelPatcher(self, model, model_kwargs)
-
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-        return common_inputs
 
 
 @register_in_tasks_manager(
@@ -3917,13 +3898,6 @@ class BartOpenVINOConfig(BartOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> OVModelPatcher:
         return OVSeq2SeqModelPatcher(self, model, model_kwargs)
-
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-        return common_inputs
 
 
 @register_in_tasks_manager(
@@ -4162,13 +4136,6 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     ) -> OVModelPatcher:
         return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
 
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-        return common_inputs
-
 
 @register_in_tasks_manager(
     "blenderbot-small",
@@ -4187,13 +4154,6 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> OVModelPatcher:
         return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
-
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-        return common_inputs
 
 
 @register_in_tasks_manager(
@@ -4214,13 +4174,6 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
     ) -> OVModelPatcher:
         return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
 
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-        return common_inputs
-
 
 @register_in_tasks_manager(
     "marian",
@@ -4239,13 +4192,6 @@ class MarianOpenVINOConfig(MarianOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> OVModelPatcher:
         return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
-
-    @property
-    def inputs(self):
-        common_inputs = super().inputs
-        if getattr(self, "stateful", False) and self._behavior == ConfigBehavior.DECODER:
-            common_inputs["decoder_input_ids"] = {0: "batch_size", 1: "decoder_sequence_length"}
-        return common_inputs
 
 
 class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):

@@ -25,6 +25,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from transformers import PreTrainedModel, TFPreTrainedModel
+from transformers.cache_utils import DynamicCache, EncoderDecoderCache
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
@@ -50,8 +51,6 @@ from optimum.intel.utils.import_utils import (
 )
 
 
-if is_transformers_version(">=", "4.48"):
-    from transformers.cache_utils import DynamicCache, EncoderDecoderCache
 if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
     from optimum.exporters.onnx._traceable_cache import TraceableCache
 if is_transformers_version(">=", "4.53"):
@@ -4670,18 +4669,25 @@ class OVSeq2SeqModelPatcher(OVModelPatcher):
                 elif len(args) > pkv_argument_index:
                     pkv = args[pkv_argument_index]
 
+                return_legacy_cache = False
                 if pkv is not None:
                     if isinstance(pkv, EncoderDecoderCache):
                         pkv = pkv.to_legacy_cache()
+                    else:
+                        return_legacy_cache = True
 
                     only_self_attn = [cache_item[:2] for cache_item in pkv]
                     pkv = EncoderDecoderCache.from_legacy_cache(only_self_attn)
+
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
                     elif len(args) > pkv_argument_index:
                         args[pkv_argument_index] = pkv
 
                 outputs = model.non_stateful_forward(*args, **kwargs)
+
+                if pkv is not None and return_legacy_cache:
+                    outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
 
                 return outputs
 
