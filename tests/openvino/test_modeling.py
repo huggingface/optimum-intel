@@ -70,7 +70,6 @@ from optimum.intel import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
-    OVModelForPix2Struct,
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
@@ -85,7 +84,6 @@ from optimum.intel import (
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_base import OVBaseModel
-from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
