@@ -2745,8 +2745,7 @@ def gptj_attn_forward(
 class GptJModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-
-        if is_transformers_version(">=", "4.49"):
+        if is_transformers_version(">=", "4.45.0"):
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
             for block in self._model.transformer.h:
@@ -2757,8 +2756,7 @@ class GptJModelPatcher(OVDecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-
-        if is_transformers_version(">=", "4.49"):
+        if is_transformers_version(">=", "4.45.0"):
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             for block in self._model.transformer.h:
                 block.attn.forward = block.attn._orig_forward
@@ -2843,7 +2841,7 @@ def _bloom_attn_forward(
 class BloomModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
             for block in self._model.transformer.h:
@@ -2852,7 +2850,7 @@ class BloomModelPatcher(OVDecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             for block in self._model.transformer.h:
                 block.self_attention.forward = block.self_attention._orig_forward
@@ -5209,14 +5207,14 @@ def modulewise_unpatch(model, module_cls):
 class BlenderbotModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
             modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
             modulewise_unpatch(self._model, BlenderbotAttention)
@@ -5225,14 +5223,14 @@ class BlenderbotModelPatcher(OVSeq2SeqModelPatcher):
 class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
             modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
             modulewise_unpatch(self._model, BlenderbotSmallAttention)
@@ -5241,14 +5239,14 @@ class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
 class PegasusModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
             modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.45.0"):
             from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
             modulewise_unpatch(self._model, PegasusAttention)

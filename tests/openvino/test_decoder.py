@@ -172,7 +172,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral": 2,
         "mixtral": 2,
         "mpt": 5,
-        "opt": 5,
+        "opt": 5 if is_transformers_version(">=", "4.46.0") else 0,
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
