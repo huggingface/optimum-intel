@@ -20,6 +20,7 @@ from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, get_num_sdpa, mock_torch_cuda_is_available, patch_awq_for_inference
 
+from optimum.exporters.openvino.model_configs import DeepseekOpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
@@ -73,6 +74,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm2",
         "jais",
         "llama",
+        "llama4",
+        "llama4_text",
         "marian",
         "mbart",
         "minicpm",
@@ -174,6 +177,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo": 4,
         "gpt_neox": 5,
         "llama": 2,
+        "llama4": 5,
+        "llama4_text": 2,
         "marian": 2,
         "minicpm": 4,
         "mistral": 2,
@@ -237,6 +242,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
         ov_architectures = set(TasksManager.get_supported_model_type_for_task(task=self.TASK, exporter="openvino"))
         supported_architectures = ov_architectures & transformers_architectures
+
+        if is_transformers_version(
+            "<", str(DeepseekOpenVINOConfig.MIN_TRANSFORMERS_VERSION)
+        ) or is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+            if "deepseek_v2" in supported_architectures:
+                supported_architectures.remove("deepseek_v2")
+            if "deepseek_v3" in supported_architectures:
+                supported_architectures.remove("deepseek_v3")
 
         untested_architectures = supported_architectures - tested_architectures
 
