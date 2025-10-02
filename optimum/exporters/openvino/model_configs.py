@@ -16,8 +16,7 @@ import enum
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
-from transformers.utils import is_tf_available
+from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
@@ -52,6 +51,7 @@ from optimum.exporters.onnx.model_configs import (
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
+from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -69,7 +69,6 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import (
     NormalizedConfig,
-    NormalizedConfigManager,
     NormalizedTextConfig,
     NormalizedVisionConfig,
 )
@@ -92,7 +91,6 @@ from .model_patcher import (
     FluxTransfromerModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
-    GptBigCodeModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
@@ -121,7 +119,6 @@ from .model_patcher import (
     MixtralModelPatcher,
     MPTModelPatcher,
     OVDecoderModelPatcher,
-    OVModelPatcher,
     OVSeq2SeqModelPatcher,
     OVSpeechT5ModelPatcher,
     OVVisionEncoderDecoderPatcher,
@@ -143,6 +140,10 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
 )
+
+
+if TYPE_CHECKING:
+    from transformers.modeling_utils import PreTrainedModel  # noqa: F811
 
 
 def init_model_configs():
@@ -235,13 +236,6 @@ def init_model_configs():
 init_model_configs()
 
 
-if TYPE_CHECKING:
-    from transformers.modeling_utils import PreTrainedModel  # noqa: F811
-
-    if is_tf_available():
-        from transformers.modeling_tf_utils import TFPreTrainedModel  # noqa: F811
-
-
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
 
 
@@ -251,11 +245,7 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return BaichuanModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = BaichuanModelPatcher
 
 
 @register_in_tasks_manager(
@@ -275,25 +265,16 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager("qwen2_moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return Qwen2MoEPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = Qwen2MoEPatcher
 
 
 @register_in_tasks_manager(
@@ -312,6 +293,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -324,11 +306,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             common_inputs = super().inputs
         return common_inputs
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager(
     "qwen3_moe",
@@ -336,10 +313,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return Qwen3MoeModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = Qwen3MoeModelPatcher
 
 
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -349,11 +323,7 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return MiniCPMModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = MiniCPMModelPatcher
 
 
 class OVMiniCPM3DummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
@@ -403,25 +373,16 @@ class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return MiniCPM3Patcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = MiniCPM3Patcher
 
 
 @register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -476,6 +437,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(vocab_size="padded_vocab_size", num_layers="num_layers")
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ChatGLM2DummyPastKeyValuesGenerator
+    _MODEL_PATCHER = ChatGLMModelPatcher
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -557,16 +519,9 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
                 else {0: "batch_size", 2: decoder_sequence_name}
             )
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return ChatGLMModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager("mixtral", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    # This is because of the patching of torch.triu in AttentionMaskConverter, that exists from transformers>=4.35
-    MIN_TRANSFORMERS_VERSION = "4.35.0"
     # The ONNX export of this architecture needs the Trilu operator support, available since opset 14
     DEFAULT_ONNX_OPSET = 14
     DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -574,11 +529,7 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return MixtralModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = MixtralModelPatcher
 
 
 @register_in_tasks_manager(
@@ -593,10 +544,7 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class GemmaOpenVINOConfig(GemmaOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -611,10 +559,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
     library_name="transformers",
 )
 class LlamaOpenVINOConfig(LlamaOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -705,6 +650,7 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     )
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, QwenDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = QwenDummyPastKeyValuesGenerator
+    _MODEL_PATCHER = QwenModelPatcher
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -774,40 +720,25 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             inputs_or_outputs[f"{name}.{i}.key"] = {0: "batch_size", 1: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.value"] = {0: "batch_size", 1: decoder_sequence_name}
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return QwenModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager(
     "starcoder2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return InternLM2Patcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = InternLM2Patcher
 
 
 @register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -829,10 +760,7 @@ class OlmoOpenVINOConfig(LlamaOpenVINOConfig):
     "mpt", *["text-generation", "text-generation-with-past", "text-classification"], library_name="transformers"
 )
 class MPTOpenVINOConfig(MPTOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return MPTModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = MPTModelPatcher
 
 
 @register_in_tasks_manager(
@@ -852,11 +780,7 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return Phi3ModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = Phi3ModelPatcher
 
 
 @register_in_tasks_manager(
@@ -872,11 +796,7 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
 )
 class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return PhiMoEModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = PhiMoEModelPatcher
 
 
 @register_in_tasks_manager(
@@ -891,10 +811,7 @@ class PhiMoEOpenVINOConfig(Phi3OpenVINOConfig):
     library_name="transformers",
 )
 class PhiOpenVINOConfig(PhiOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 class OVFalconDummyPastKeyValuesGenerator(FalconDummyPastKeyValuesGenerator):
@@ -942,11 +859,7 @@ class FalconOpenVINOConfig(FalconOnnxConfig):
         OVFalconDummyPastKeyValuesGenerator,
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = OVFalconDummyPastKeyValuesGenerator
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return FalconModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = FalconModelPatcher
 
 
 @register_in_tasks_manager(
@@ -963,11 +876,7 @@ class FalconOpenVINOConfig(FalconOnnxConfig):
 class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return PersimmonModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = PersimmonModelPatcher
 
 
 @register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -991,10 +900,7 @@ class BioGPTOpenVINOConfig(
     library_name="transformers",
 )
 class GPTNeoOpenVINOConfig(GPTNeoOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return GptNeoModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = GptNeoModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1009,10 +915,7 @@ class GPTNeoOpenVINOConfig(GPTNeoOnnxConfig):
     library_name="transformers",
 )
 class GPTJOpenVINOConfig(GPTJOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return GptJModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = GptJModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1028,10 +931,7 @@ class GPTJOpenVINOConfig(GPTJOnnxConfig):
     library_name="transformers",
 )
 class BloomOpenVINOConfig(BloomOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return BloomModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = BloomModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1100,43 +1000,28 @@ class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("aquila", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, AquilaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = AquilaDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return AquilaModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = AquilaModelPatcher
 
 
 @register_in_tasks_manager("xverse", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return XverseModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = XverseModelPatcher
 
 
 @register_in_tasks_manager("internlm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return InternLMModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = InternLMModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1145,10 +1030,7 @@ class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return CodeGenModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = CodeGenModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1167,11 +1049,7 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     )
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return DBRXModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = DBRXModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1181,25 +1059,16 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 )
 class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return JaisModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = JaisModelPatcher
 
 
 @register_in_tasks_manager("arctic", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.54.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = ArcticModelPatcher
 
 
 class OVMistralDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
@@ -1256,11 +1125,7 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
         OVMistralDummyPastKeyValuesGenerator,
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = OVMistralDummyPastKeyValuesGenerator
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return MistralModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = MistralModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1275,10 +1140,7 @@ class MistralOpenVINOConfig(MistralOnnxConfig):
     library_name="transformers",
 )
 class GPTNeoxOpenVINOConfig(GPTNeoXOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = GptNeoxModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1288,11 +1150,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     # GPTNeoxJapanese does not require position_ids input.
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = GptNeoxModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1308,11 +1166,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
 )
 class Gemma2OpenVINOConfig(GemmaOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = Gemma2ModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1373,15 +1227,10 @@ class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("deci", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DeciDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DeciDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return DeciLMModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = DeciLMModelPatcher
 
 
 @register_in_tasks_manager("clip", *["zero-shot-image-classification"], library_name="open_clip")
@@ -1425,11 +1274,6 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
             reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
         return super().generate_dummy_inputs_for_validation(reference_model_inputs)
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
@@ -1460,11 +1304,6 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
         return dummy_inputs
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
-
 
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="open_clip")
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
@@ -1494,35 +1333,23 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
     "clip", *["feature-extraction", "zero-shot-image-classification"], library_name="transformers"
 )
 class CLIPOpenVINOConfig(CLIPOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
+    pass
 
 
 @register_in_tasks_manager("clip_text_model", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("clip-text", *["feature-extraction"], library_name="diffusers")
 class CLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
+    pass
 
 
 @register_in_tasks_manager("clip-text-with-projection", *["feature-extraction"], library_name="diffusers")
 class CLIPTextWithProjectionOpenVINOConfig(CLIPTextWithProjectionOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
+    pass
 
 
 @register_in_tasks_manager("clip_vision_model", *["feature-extraction"], library_name="transformers")
 class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVModelPatcher(self, model, model_kwargs=model_kwargs)
+    pass
 
 
 @register_in_tasks_manager(
@@ -1538,10 +1365,7 @@ class CLIPVisionModelOpenVINOConfig(CLIPVisionModelOnnxConfig):
     library_name="transformers",
 )
 class IBertOpenVINOConfig(IBertOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return IBertModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = IBertModelPatcher
 
 
 # TODO: this is a very confusing class TBH, why not simply decompose the VLM into components, like diffusion models ?
@@ -1562,8 +1386,8 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
         self.input_info_upd = inputs_update
 
     def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
+        self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
         model_kwargs = model_kwargs or {}
         model_kwargs["use_cache"] = True
         if self.patcher_cls is not None:
@@ -1606,6 +1430,7 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
 
 class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = InputEmbeddingPatcher
 
     @property
     def inputs(self):
@@ -1619,12 +1444,6 @@ class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
         model_inputs = {}
         model_inputs["input"] = inputs["input_ids"]
         return model_inputs
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        # making 16bit tracable overrides embeedings input signature these changes required to prevent this issue
-        return InputEmbeddingPatcher(self, model, model_kwargs)
 
 
 def get_vlm_internal_text_generation_config(model_type, model_config, int_dtype, float_dtype):
@@ -1776,9 +1595,7 @@ class BaseVLMOpenVINOConfig(OnnxConfig):
             text_embedding.config = model.language_model.config
             return text_embedding
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -1811,9 +1628,7 @@ class LlavaOpenVINOConfig(BaseVLMOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -1937,9 +1752,7 @@ class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
 
         return super().get_model_for_behavior(model, behavior)
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != LlavaNextVideoConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -1953,9 +1766,7 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.46.0"
     SUPPORTS_PAST = True
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -2053,9 +1864,7 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
             text_embedding.config = model.language_model.config
             return text_embedding
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -2154,9 +1963,7 @@ class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -2312,17 +2119,14 @@ class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
 @register_in_tasks_manager("gemma2-text-encoder", *["feature-extraction"], library_name="diffusers")
 class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    _MODEL_PATCHER = SanaTextEncoderModelPatcher
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return SanaTextEncoderModelPatcher(self, model, model_kwargs)
 
 
 class DummySanaSeq2SeqDecoderTextWithEncMaskInputGenerator(DummySeq2SeqDecoderTextInputGenerator):
@@ -2503,6 +2307,7 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         DummyFluxTextInputGenerator,
         PooledProjectionsDummyInputGenerator,
     )
+    _MODEL_PATCHER = FluxTransfromerModelPatcher
 
     @property
     def inputs(self):
@@ -2520,11 +2325,6 @@ class FluxTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         if getattr(self._normalized_config, "guidance_embeds", False):
             common_inputs["guidance"] = {0: "batch_size"}
         return common_inputs
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return FluxTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
@@ -2872,9 +2672,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
             model.resampler.config = model.vpm.config
             return model.resampler
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
             return MiniCPMVImageEmbeddingsModelPatcher(self, model, model_kwargs)
@@ -3052,9 +2850,7 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
             text_embedding.config = model.config
             return text_embedding
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == Phi3VisionConfigBehavior.VISION_EMBEDDINGS:
             return Phi3VisionImageEmbeddingsPatcher(self, model, model_kwargs)
@@ -3392,9 +3188,7 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
                 audio_projection.config = model.config
                 return audio_projection
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == Phi4MMConfigBehavior.VISION_EMBEDDINGS:
             return Phi4MMVisionEmbeddingsPatcher(self, model, model_kwargs)
@@ -3607,14 +3401,12 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
                 preprocessors=self._preprocessors,
             )
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2VLVisionEmbMergerPatcher(self, model, model_kwargs)
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
-            return OVModelPatcher(self, model, model_kwargs=model_kwargs)
+            return ModelPatcher(self, model, model_kwargs=model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
@@ -3655,9 +3447,7 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             }
         return super().inputs
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
@@ -3714,11 +3504,7 @@ class GraniteOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.45.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return GraniteMoEModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = GraniteMoEModelPatcher
 
 
 # TODO: remove and replace with GPTBigCodeDummyPastKeyValuesGenerator when optimum >= v2
@@ -3782,56 +3568,6 @@ class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 
 
 @register_in_tasks_manager(
-    "gpt_bigcode",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "text-generation",
-        "text-generation-with-past",
-        "text-classification",
-    ],
-    library_name="transformers",
-)
-class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    # TODO (echarlaix): move once added in optimum
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GPTBigCodeDummyPastKeyValuesGenerator)
-    DEFAULT_ONNX_OPSET = 14  # GPT BigCode now uses F.scaled_dot_product_attention by default for torch>=2.1.1.
-    DUMMY_PKV_GENERATOR_CLASS = GPTBigCodeDummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedConfigManager.get_normalized_config_class("gpt_bigcode")
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return GptBigCodeModelPatcher(self, model, model_kwargs=model_kwargs)
-
-    def add_past_key_values(self, inputs_or_outputs: dict[str, dict[int, str]], direction: str):
-        if is_transformers_version(">=", "4.54"):
-            return super().add_past_key_values(inputs_or_outputs, direction)
-
-        if direction not in ["inputs", "outputs"]:
-            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
-
-        if direction == "inputs":
-            decoder_sequence_name = "past_sequence_length"
-            name = "past_key_values"
-        else:
-            decoder_sequence_name = "past_sequence_length + sequence_length"
-            name = "present"
-        if self._normalized_config.multi_query:
-            decoder_sequence_dim = 1
-        else:
-            decoder_sequence_dim = 2
-        for i in range(self._normalized_config.num_layers):
-            inputs_or_outputs[f"{name}.{i}.key_value"] = {0: "batch_size", decoder_sequence_dim: decoder_sequence_name}
-
-    def flatten_past_key_values(self, flattened_output, name, idx, t):
-        if is_transformers_version(">=", "4.54"):
-            return super().flatten_past_key_values(flattened_output, name, idx, t)
-
-        flattened_output[f"{name}.{idx}.key_value"] = t
-
-
-@register_in_tasks_manager(
     "whisper",
     *[
         "feature-extraction",
@@ -3843,10 +3579,7 @@ class GPTBigCodeOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVSeq2SeqModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager(
@@ -3855,10 +3588,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     library_name="transformers",
 )
 class T5OpenVINOConfig(T5OnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager(
@@ -3894,10 +3624,7 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
     library_name="transformers",
 )
 class BartOpenVINOConfig(BartOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVSeq2SeqModelPatcher(self, model, model_kwargs)
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
 
 
 @register_in_tasks_manager(
@@ -3936,11 +3663,7 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.54.0"
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return DeepseekPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = DeepseekPatcher
 
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
@@ -4079,9 +3802,7 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -4131,10 +3852,7 @@ class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     library_name="transformers",
 )
 class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return BlenderbotModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = BlenderbotModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4150,10 +3868,7 @@ class BlenderbotOpenVINOConfig(BlenderbotOnnxConfig):
     library_name="transformers",
 )
 class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return BlenderbotSmallModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = BlenderbotSmallModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4169,10 +3884,7 @@ class BlenderbotSmallOpenVINOConfig(BlenderbotSmallOnnxConfig):
     library_name="transformers",
 )
 class PegasusOpenVINOConfig(PegasusOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return PegasusModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = PegasusModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4188,10 +3900,7 @@ class PegasusOpenVINOConfig(PegasusOnnxConfig):
     library_name="transformers",
 )
 class MarianOpenVINOConfig(MarianOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return MarianModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = MarianModelPatcher
 
 
 class DummySpeechT5OpenVINOInputGenerator(DummyInputGenerator):
@@ -4261,6 +3970,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
         DummySeq2SeqPastKeyValuesGenerator,
         DummySpeechT5OpenVINOInputGenerator,
     )
+    _MODEL_PATCHER = OVSpeechT5ModelPatcher
 
     def __init__(
         self,
@@ -4284,11 +3994,6 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             preprocessors=preprocessors,
             is_postnet_and_vocoder=False,
         )
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVSpeechT5ModelPatcher(self, model, model_kwargs=model_kwargs)
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -4404,11 +4109,7 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
-        return Llama4TextModelPatcher(self, model, model_kwargs)
+    _MODEL_PATCHER = Llama4TextModelPatcher
 
 
 @register_in_tasks_manager(
@@ -4417,9 +4118,7 @@ class Llama4TextOpenVINOConfig(LlamaOpenVINOConfig):
 class Llama4OpenVINOConfig(GotOCR2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
@@ -4479,6 +4178,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = MambaCacheDummyInputGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.43.0"
+    _MODEL_PATCHER = MambaPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -4515,11 +4215,6 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
             inputs_or_outputs[f"{ssm_conv_states_name}.ssm.{i}"] = {0: "batch_size"}
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{ssm_conv_states_name}.conv.{i}"] = {0: "batch_size"}
-
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ):
-        return MambaPatcher(self, model, model_kwargs)
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         # need to override `generate_dummy_inputs` since mamba model has other states: ssm_states and conv_states
@@ -4564,10 +4259,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
     library_name="transformers",
 )
 class GPT2OpenVINOConfig(GPT2OnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> OVModelPatcher:
-        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
