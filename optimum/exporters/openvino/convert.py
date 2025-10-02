@@ -57,7 +57,6 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 
 from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
-from .model_patcher import patch_model_with_bettertransformer
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
@@ -405,15 +404,6 @@ def export_pytorch(
 
     # TODO: temporary solution but statefulness should be added to the export config earlier
     config.stateful = stateful
-
-    if stateful:
-        # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
-        # both of them are applied to demonstrate the best performance.
-        # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
-        model = patch_model_with_bettertransformer(model)
-        # TODO: Consider unpatching model after export is done in the end of this function.
-        #       Now it is left as-is because the model is not expected to be used after call export_pytorch, and
-        #       this function is one of the _internal_ steps in a bigger model conversion pipeline.
 
     with torch.no_grad():
         if hasattr(model, "config"):

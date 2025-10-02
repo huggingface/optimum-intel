@@ -39,10 +39,7 @@ from optimum.exporters.onnx.model_patcher import (
     sdpa_mask_without_vmap,
 )
 from optimum.intel.utils.import_utils import (
-    _openvino_version,
-    _transformers_version,
     is_diffusers_version,
-    is_openvino_version,
     is_torch_version,
     is_transformers_version,
 )
@@ -68,50 +65,6 @@ logger = logging.getLogger(__name__)
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
     if spec.name in {"repeat_interleave", "scaled_dot_product_attention"}:
         UNSUPPORTED_OPS_PATCHING_SPEC.pop(idx)
-
-
-BETTERTRANSFORMER_IGNORE = ["codegen", "gpt_neo"]
-
-
-# TODO: should be removed beceause optimum is removing it in next version
-def patch_model_with_bettertransformer(model):
-    COLOR_RED = "\033[1;31m"
-    COLOR_RESET = "\033[0m"
-
-    # check that the model has not yet been pathced
-    if hasattr(model, "use_bettertransformer") and model.use_bettertransformer is True:
-        return model
-
-    if getattr(model.config, "model_type") in {"gpt_bigcode", "llama", "gemma"} and is_openvino_version(
-        "<", "2024.1.0-14612"
-    ):
-        # display commit-id only when a nightly/prerelease of OpenVINO is installed.
-        display_version = _openvino_version.split("-")[0] if "-" in _openvino_version else _openvino_version
-        log.warning(
-            COLOR_RED
-            + f"[WARNING] Stateful models are not supported for Llama, Gemma and GPTBigCode with Transformers "
-            f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
-            "https://docs.openvino.ai/2024/get-started/install-openvino.html. For gpt-bigcode and llama models, "
-            "it is also an option to downgrade transformers: `pip install transformers==4.37.2`" + COLOR_RESET
-        )
-
-    # model already has required SDPA implementation
-    if getattr(model, "_supports_sdpa", False) and getattr(model.config, "_attn_implementation", "eager") == "sdpa":
-        return model
-
-    if model.config.model_type in BETTERTRANSFORMER_IGNORE:
-        return model
-
-    try:
-        model = model.to_bettertransformer()
-    except Exception as e:
-        log.warning(
-            f"Cannot apply model.to_bettertransformer because of the exception:\n{e}."
-            " Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
-        )
-        return model
-
-    return model
 
 
 def patch_update_causal_mask(
