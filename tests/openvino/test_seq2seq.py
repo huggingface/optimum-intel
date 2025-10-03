@@ -654,14 +654,14 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
-            tokenizer = None
             if model_arch in ["minicpmo"]:
                 # `generate` method for minicpmo requires tokenizer
                 tokenizer = AutoTokenizer.from_pretrained(
                     model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
                 )
+                additional_inputs["tokenizer"] = tokenizer
             transformers_outputs = transformers_model.generate(
-                **transformers_inputs, generation_config=gen_config, tokenizer=tokenizer, **additional_inputs
+                **transformers_inputs, generation_config=gen_config, **additional_inputs
             )
             if model_arch in ["minicpmo"]:
                 # retrieve decoded tokens for comparation
