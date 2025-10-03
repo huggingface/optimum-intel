@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.cache_utils import DynamicCache, EncoderDecoderCache
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
@@ -39,13 +38,10 @@ from optimum.exporters.onnx.model_patcher import (
 from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_version, is_transformers_version
 
 
-if is_transformers_version(">=", "4.44") and is_transformers_version("<", "4.50"):
-    pass
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
-if is_transformers_version(">=", "4.53.1"):
-    pass
+
 
 if TYPE_CHECKING:
     from transformers.cache_utils import Cache
@@ -58,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
     if spec.name in {
+        # onnx-exporter-specific fixes
         "triu",
         "tril",
         "norm",
@@ -456,7 +453,7 @@ class ChatGLMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         super().__init__(config, model, model_kwargs)
@@ -840,7 +837,7 @@ class QwenModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         super().__init__(config, model, model_kwargs)
@@ -1001,7 +998,7 @@ class BaichuanModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         super().__init__(config, model, model_kwargs)
@@ -2902,7 +2899,7 @@ class Gemma2ModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)
@@ -3087,7 +3084,7 @@ class IBertModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         super().__init__(config, model, model_kwargs)
@@ -3105,7 +3102,7 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3127,9 +3124,7 @@ class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
 
 
 class InternVL2ChatLangModelPatcher(OVDecoderModelPatcher):
-    def __init__(
-        self, config: "OnnxConfig", model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Dict[str, Any]
-    ):
+    def __init__(self, config: "OnnxConfig", model: "PreTrainedModel", model_kwargs: Dict[str, Any]):
         model_type = model.config.model_type
         patcher_for_model_type = {
             "llama": OVDecoderModelPatcher,
@@ -3250,7 +3245,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3267,7 +3262,7 @@ class MairaImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3284,7 +3279,7 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3500,7 +3495,7 @@ class MiniCPMVResamplerModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3517,7 +3512,7 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3548,7 +3543,7 @@ class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3566,7 +3561,7 @@ class InputEmbeddingPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -3591,7 +3586,7 @@ class Phi3VisionImageEmbeddingsPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -4043,7 +4038,7 @@ class Qwen2VLLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
         model.__orig_forward = model.forward
@@ -4200,7 +4195,7 @@ class Qwen2VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
         model.__orig_forward = model.forward
@@ -4234,7 +4229,7 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any] = None,
     ):
         super().__init__(config, model, model_kwargs)
@@ -4459,7 +4454,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)
@@ -4587,7 +4582,7 @@ class MiniCPMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         for layer in model.model.layers:
@@ -4602,7 +4597,7 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -4673,7 +4668,7 @@ class Gemma3LMModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         # Difference from original:
@@ -4752,7 +4747,7 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.49.0-SmolVLM-2/src/transformers/models/idefics3/modeling_idefics3.py#L999-L1005
@@ -5559,7 +5554,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         super().__init__(config, model, model_kwargs)
@@ -5675,7 +5670,7 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if hasattr(model.config, "vision_lora") and model.config.vision_lora is not None:
@@ -5712,7 +5707,7 @@ class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1121
@@ -5736,7 +5731,7 @@ class Phi4MMAudioEncoderPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L1201-L1212
@@ -5777,7 +5772,7 @@ class Phi4MMVisionEmbeddingsPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         def get_img_features_legacy(
@@ -6086,7 +6081,7 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
@@ -6441,7 +6436,7 @@ class MambaPatcher(ModelPatcher):
     def __init__(
         self,
         config: "OnnxConfig",
-        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers import PretrainedConfig
@@ -6642,7 +6637,7 @@ class SAMModelPatcher(ModelPatcher):
     def __init__(
         self,
         config: OnnxConfig,
-        model: PreTrainedModel,
+        model: "PreTrainedModel",
         model_kwargs: Optional[dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)

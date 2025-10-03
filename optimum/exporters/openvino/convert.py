@@ -153,7 +153,7 @@ def export(
     Exports a Pytorch model to an OpenVINO Intermediate Representation.
 
     Args:
-        model ([`PreTrainedModel`] or [`TFPreTrainedModel`]):
+        model ([`PreTrainedModel`]):
             The model to export.
         config ([`~exporters.onnx.config.OnnxConfig`]):
             The ONNX configuration associated with the exported model.
