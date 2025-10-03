@@ -2897,7 +2897,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 @register_in_tasks_manager("minicpmo", *["image-text-to-text"], library_name="transformers")
 class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
-    MAX_TRANSFORMERS_VERSION = "4.51.0"
+    MAX_TRANSFORMERS_VERSION = "4.52.0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
