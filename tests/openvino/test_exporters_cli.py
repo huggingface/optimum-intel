@@ -1043,7 +1043,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
                 shell=True,
-                #check=True,
+                check=True,
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
