@@ -479,7 +479,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         "llava_next_video",
         "llava-qwen2",
         "minicpmv",
-        "minicpmo",
         "phi3_v",
         "qwen2_vl",
     ]
@@ -497,6 +496,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
+    if is_transformers_version("<", "4.51"):
+        SUPPORTED_ARCHITECTURES += ["minicpmo"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
@@ -653,9 +654,18 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
+            tokenizer = None
+            if model_arch in ["minicpmo"]:
+                # `generate` method for minicpmo requires tokenizer
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                )
             transformers_outputs = transformers_model.generate(
-                **transformers_inputs, generation_config=gen_config, **additional_inputs
+                **transformers_inputs, generation_config=gen_config, tokenizer=tokenizer, **additional_inputs
             )
+            if model_arch in ["minicpmo"]:
+                # retrieve decoded tokens for comparation
+                transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
         if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
