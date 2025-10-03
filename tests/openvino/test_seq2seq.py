@@ -88,7 +88,7 @@ class Timer(object):
 class OVSeq2SeqTestMixin(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = None
 
-    def check_openvino_model_attributes(self, openvino_model, use_cache: bool = True, stateful: bool = True):
+    def _check_openvino_model_attributes(self, openvino_model, use_cache: bool = True, stateful: bool = True):
         self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
         self.assertIsInstance(openvino_model.config, PretrainedConfig)
         self.assertIsInstance(openvino_model.generation_config, GenerationConfig)
@@ -171,8 +171,8 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
             model_id, use_cache=False, stateful=False, ov_config=F32_CONFIG
         )
         expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
-        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=expected_stateful)
-        self.check_openvino_model_attributes(ov_stateless_model, use_cache=False, stateful=False)
+        self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=expected_stateful)
+        self._check_openvino_model_attributes(ov_stateless_model, use_cache=False, stateful=False)
 
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -329,8 +329,8 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG)
         ov_model_stateless = self.OVMODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG, stateful=False)
-        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
-        self.check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
+        self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
+        self._check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
@@ -456,7 +456,7 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
         model_id = MODEL_NAMES[model_arch]
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id)
 
-        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
+        self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
 
         set_seed(SEED)
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
@@ -600,6 +600,20 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             self.assertEqual(component._device, expected_device)
             request_check_fn(component.request is None)
 
+    def _check_openvino_model_attributes(self, openvino_model, use_cache: bool = True, stateful: bool = True):
+        self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
+        self.assertIsInstance(openvino_model.config, PretrainedConfig)
+        self.assertIsInstance(openvino_model.generation_config, GenerationConfig)
+        self.assertIsInstance(openvino_model, MODEL_TYPE_TO_CLS_MAPPING[openvino_model.config.model_type])
+
+        for component_name, component in openvino_model.components.items():
+            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
+            self.assertIsInstance(component.model, openvino.Model)
+
+        self.assertEqual(openvino_model.use_cache, use_cache)
+        self.assertEqual(openvino_model.language_model.stateful, stateful)
+        self.assertEqual(model_has_state(openvino_model.language_model.model), stateful)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         prompt = "What is shown in this image?"
@@ -623,13 +637,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, trust_remote_code=trust_remote_code, compile=False)
-        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
-        for component_name, component in ov_model.components.items():
-            self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
 
-        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
+        self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
-        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((100, 100)))
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
         # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
@@ -949,7 +960,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         else:
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
-    def check_openvino_model_attributes(self, openvino_model, use_cache: bool = True):
+    def _check_openvino_model_attributes(self, openvino_model, use_cache: bool = True):
         self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
         self.assertIsInstance(openvino_model.config, PretrainedConfig)
         self.assertIsInstance(openvino_model.generation_config, GenerationConfig)
@@ -986,7 +997,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, vocoder=vocoder_id)
         ov_speech = ov_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
-        self.check_openvino_model_attributes(ov_model, use_cache=True)
+        self._check_openvino_model_attributes(ov_model, use_cache=True)
         self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
 
         del vocoder
@@ -1016,7 +1027,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
         set_seed(SEED)
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
 
-        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
+        self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
 
         question = "Who am I?"
         transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
