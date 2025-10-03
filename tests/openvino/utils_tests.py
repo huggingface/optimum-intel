@@ -19,7 +19,7 @@ import numpy as np
 import openvino as ov
 import torch
 
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
 
