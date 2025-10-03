@@ -85,6 +85,12 @@ class Timer(object):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
+MODEL_NOT_TESTED = set()
+
+if is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0"):
+    MODEL_NOT_TESTED = {"marian"}
+
+
 class OVSeq2SeqTestMixin(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = None
 
@@ -122,7 +128,7 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
 
         untested_architectures = supported_architectures - tested_architectures
 
-        if len(untested_architectures) > 0:
+        if len(untested_architectures - MODEL_NOT_TESTED) > 0:
             raise ValueError(
                 f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
             )
@@ -137,7 +143,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "encoder-decoder",
         "longt5",
         "m2m_100",
-        "marian",
         "mbart",
         "mt5",
         "pegasus",
