@@ -61,6 +61,7 @@ TESTS_REQUIRE = [
     "hf_xet",
     "num2words",
     "vocos",
+    "vector_quantize_pytorch",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
