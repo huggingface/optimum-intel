@@ -66,6 +66,7 @@ MODEL_NAMES = {
     "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
     "detr": "hf-internal-testing/tiny-random-DetrModel",
     "electra": "hf-internal-testing/tiny-random-electra",
+    "encoder-decoder": "optimum-internal-testing/tiny-random-encoder-decoder-gpt2-bert",
     "esm": "hf-internal-testing/tiny-random-EsmModel",
     "exaone": "katuni4ka/tiny-random-exaone",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",

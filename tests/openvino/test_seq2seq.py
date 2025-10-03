@@ -42,6 +42,7 @@ from transformers import (
     pipeline,
     set_seed,
 )
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
@@ -49,6 +50,7 @@ from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
+from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVModelForPix2Struct,
     OVModelForSeq2SeqLM,
@@ -58,6 +60,12 @@ from optimum.intel import (
     OVModelForVisualCausalLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
+from optimum.intel.openvino.modeling_text2speech import (
+    OVTextToSpeechDecoder,
+    OVTextToSpeechEncoder,
+    OVTextToSpeechPostNet,
+    OVTextToSpeechVocoder,
+)
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -100,24 +108,46 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
         self.assertEqual(openvino_model.decoder.stateful, stateful)
         self.assertEqual(model_has_state(openvino_model.decoder.model), stateful)
 
+    def _test_find_untested_architectures(self):
+        if len(self.SUPPORTED_ARCHITECTURES) != len(set(self.SUPPORTED_ARCHITECTURES)):
+            raise ValueError(
+                f"For the task `{self.TASK}`, some architectures are duplicated in the list of tested architectures: "
+                f"{self.SUPPORTED_ARCHITECTURES}.\n"
+            )
+
+        tested_architectures = set(self.SUPPORTED_ARCHITECTURES)
+        transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
+        ov_architectures = set(TasksManager.get_supported_model_type_for_task(task=self.TASK, exporter="openvino"))
+        supported_architectures = ov_architectures & transformers_architectures
+
+        untested_architectures = supported_architectures - tested_architectures
+
+        if len(untested_architectures) > 0:
+            raise ValueError(
+                f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
+            )
+
 
 class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = (
         "bart",
-        # "bigbird_pegasus",
+        "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
-        # "longt5",
+        "encoder-decoder",
+        "longt5",
         "m2m_100",
+        "marian",
         "mbart",
         "mt5",
         "pegasus",
         "t5",
     )
-    GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.1
     OVMODEL_CLASS = OVModelForSeq2SeqLM
     AUTOMODEL_CLASS = AutoModelForSeq2SeqLM
+    TASK = "text2text-generation"
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.1
 
     if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0")):
         # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
@@ -128,6 +158,9 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
     if is_transformers_version(">=", "4.53.0"):
         SUPPORT_STATEFUL += ("pegasus",)
+
+    def test_find_untested_architectures(self):
+        self._test_find_untested_architectures()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -278,9 +311,9 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
 
 class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("whisper",)
-
     OVMODEL_CLASS = OVModelForSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
+    TASK = "automatic-speech-recognition"
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
@@ -916,6 +949,23 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         else:
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
+    def check_openvino_model_attributes(self, openvino_model, use_cache: bool = True):
+        self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
+        self.assertIsInstance(openvino_model.config, PretrainedConfig)
+        self.assertIsInstance(openvino_model.generation_config, GenerationConfig)
+
+        self.assertIsInstance(openvino_model.encoder, OVTextToSpeechEncoder)
+        self.assertIsInstance(openvino_model.decoder, OVTextToSpeechDecoder)
+        self.assertIsInstance(openvino_model.postnet, OVTextToSpeechPostNet)
+        self.assertIsInstance(openvino_model.vocoder, OVTextToSpeechVocoder)
+        self.assertIsInstance(openvino_model.encoder.model, openvino.Model)
+        self.assertIsInstance(openvino_model.decoder.model, openvino.Model)
+        self.assertIsInstance(openvino_model.postnet.model, openvino.Model)
+        self.assertIsInstance(openvino_model.vocoder.model, openvino.Model)
+
+        self.assertEqual(openvino_model.use_cache, use_cache)
+        self.assertEqual(model_has_state(openvino_model.decoder.model), use_cache)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
@@ -923,24 +973,20 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         speaker_embeddings = self._generate_speaker_embedding()
         model_id = MODEL_NAMES[model_arch]
 
-        if model_arch == "speecht5":
-            # since Auto class for text-to-audio is not implemented in optimum
-            # generate model classes for reference generation
-            vocoder_id = "fxmarty/speecht5-hifigan-tiny"
-            processor = self._get_processor(model_id, model_arch)
+        # since Auto class for text-to-audio is not implemented in optimum
+        # generate model classes for reference generation
+        vocoder_id = "fxmarty/speecht5-hifigan-tiny"
+        processor = self._get_processor(model_id, model_arch)
+        vocoder = self._get_vocoder(vocoder_id, model_arch)
+        model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
 
-            model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
-
-            vocoder = self._get_vocoder(vocoder_id, model_arch)
-            inputs = processor(text=text_data, return_tensors="pt")
-            ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
-            ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
-        else:
-            raise Exception("{} unknown model for text-to-speech".format(model_arch))
+        inputs = processor(text=text_data, return_tensors="pt")
+        ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
+        ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
 
         ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, vocoder=vocoder_id)
         ov_speech = ov_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
-        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
+        self.check_openvino_model_attributes(ov_model, use_cache=True)
         self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
 
         del vocoder
