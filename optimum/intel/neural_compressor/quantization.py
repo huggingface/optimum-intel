@@ -37,7 +37,7 @@ from transformers import (
     default_data_collator,
 )
 
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, WEIGHTS_NAME

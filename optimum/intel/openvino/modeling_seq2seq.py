@@ -683,19 +683,19 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 input_ids=(
                     decoder_input_ids[:, -1:] if past_key_values is not None and self.use_cache else decoder_input_ids
                 ),
-                past_key_values=past_key_values,
+                attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
-                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
                 cache_position=cache_position,
             )
         else:
             decoder_outputs = self.decoder_with_past(
                 input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                past_key_values=past_key_values,
+                attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
-                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
                 cache_position=cache_position,
             )
 
@@ -977,10 +977,10 @@ class OVDecoder:
     def forward(
         self,
         input_ids: torch.LongTensor,
-        encoder_hidden_states: torch.FloatTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        decoder_attention_mask: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Seq2SeqLMOutput:
         self._compile()
@@ -1003,6 +1003,9 @@ class OVDecoder:
 
         inputs["input_ids"] = input_ids
 
+        if "attention_mask" in self.input_names and attention_mask is not None:
+            inputs["attention_mask"] = attention_mask
+
         # Add the encoder_attention_mask inputs when needed
         if "encoder_attention_mask" in self.input_names and encoder_attention_mask is not None:
             inputs["encoder_attention_mask"] = encoder_attention_mask
@@ -1010,9 +1013,6 @@ class OVDecoder:
         # Add the encoder_hidden_states inputs when needed
         if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
             inputs["encoder_hidden_states"] = encoder_hidden_states
-
-        if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
-            inputs["decoder_attention_mask"] = decoder_attention_mask
 
         if "cache_position" in self.input_names:
             if cache_position is None:
@@ -1025,6 +1025,7 @@ class OVDecoder:
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
             )
+
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
