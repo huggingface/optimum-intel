@@ -31,7 +31,6 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
-    VisionEncoderDecoderPatcher,
     override_arguments,
     sdpa_mask_without_vmap,
 )
@@ -237,22 +236,6 @@ class OVDecoderModelPatcher(ModelPatcher):
             del self._model._update_causal_mask_original
 
         if is_transformers_version(">=", "4.53.0"):
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
-            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
-
-
-class OVVisionEncoderDecoderPatcher(VisionEncoderDecoderPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        if is_transformers_version(">=", "4.54"):
-            ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-
-        if is_transformers_version(">=", "4.54"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
@@ -4356,100 +4339,6 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
             block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
-# copied from https://github.com/huggingface/transformers/blob/v4.46.3/src/transformers/models/gpt_bigcode/modeling_gpt_bigcode.py#L401
-def gpt_bigcode_attn(self, query, key, value, attention_mask=None, head_mask=None):
-    if head_mask is not None:
-        # The super dispatch is done in the forward.
-        raise ValueError("PyTorch SDPA does not support head_mask. Please open an issue in Transformers repository.")
-
-    scale = None
-    if not self.scale_attn_weights:
-        scale = 1
-
-    # MQA models: (batch_size, query_length, num_heads * head_dim)
-    # MHA models: (batch_size, num_heads, query_length, head_dim)
-    query_shape = query.shape
-    batch_size = query_shape[0]
-    key.shape[-2]
-
-    if self.multi_query:
-        query_length = query_shape[1]
-
-        # SDPA requires the dimension [..., sequence_length, head_dim].
-        query = query.view(batch_size, query_length, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # Without these unsqueeze, SDPA complains as the query and key/value have a different number of dimensions.
-        key = key.unsqueeze(1)
-        value = value.unsqueeze(1)
-
-        # Although these expand are not numerically useful, PyTorch can not dispatch to memory-efficient backend
-        # and flash attention backend (No available kernel.  Aborting execution.) from the shapes
-        # query = [batch_size, num_heads, query_length, head_dim]
-        # key = [batch_size, 1, past_length, head_dim]
-        # value = [batch_size, 1, past_length, head_dim]
-        #
-        # torch==2.1.2 is bugged with non-contiguous inputs with custom attn_mask (https://github.com/pytorch/pytorch/issues/112577), hence the check.
-        if is_torch_version(">=", "2.2.0"):
-            key = key.expand(-1, self.num_heads, -1, -1)
-            value = value.expand(-1, self.num_heads, -1, -1)
-    else:
-        query_length = query_shape[-1]
-
-        # See the comment above.
-        if query.device.type == "cuda" and attention_mask is not None:
-            query = query.contiguous()
-            key = key.contiguous()
-            value = value.contiguous()
-
-    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
-    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
-    # The query_length > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not
-    # create a causal mask in case query_length == 1.
-    is_causal = True if self.is_causal and attention_mask is None and query_length > 1 else False
-    # different from original, due to loading model weights in original format transformer.wte dtype may be different from query dtype
-    if attention_mask is not None:
-        attention_mask = attention_mask.to(query.dtype)
-    sdpa_result = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=attention_mask,
-        dropout_p=self.attn_pdrop if self.training else 0.0,
-        is_causal=is_causal,
-        scale=scale,
-    )
-
-    if self.multi_query:
-        # (batch_size, num_heads, seq_len, head_dim) --> (batch_size, seq_len, num_heads, head_dim)
-        sdpa_result = sdpa_result.transpose(1, 2)
-
-        # Reshape is kind of expensive here, as it does a memory copy,
-        # but I did not manage to make away without it (logits do not match when using view)
-        # (batch_size, seq_len, num_heads, head_dim) --> (batch_size, seq_len, num_heads * head_dim)
-        sdpa_result = sdpa_result.reshape(query_shape)
-
-    return sdpa_result, None
-
-
-class GptBigCodeModelPatcher(OVDecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa" and is_transformers_version(
-            "<", "4.54"
-        ):
-            for layer in self._model.transformer.h:
-                layer.attn._orig_attn = layer.attn._attn
-                layer.attn._attn = types.MethodType(gpt_bigcode_attn, layer.attn)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        if getattr(self._model.config, "_attn_implementation", "eager") == "sdpa" and is_transformers_version(
-            "<", "4.54"
-        ):
-            for layer in self._model.transformer.h:
-                layer.attn._attn = layer.attn._orig_attn
-
-
 class OVSeq2SeqModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -4459,12 +4348,14 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
     ):
         super().__init__(config, model, model_kwargs)
 
-        # sometimes the text_config/decoder is set to False
+        # sometimes the use_cache is not properly set in the model config
         if self.real_config.use_past:
+            if hasattr(model.config, "decoder"):
+                model.config.decoder.use_cache = True
             if hasattr(model.config, "text_config"):
                 model.config.text_config.use_cache = True
-            elif hasattr(model.config, "decoder"):
-                model.config.decoder.use_cache = True
+            if model.config.model_type == "vision-encoder-decoder" and model.config.decoder.model_type == "trocr":
+                model.decoder.model.decoder.config.use_cache = True
 
         # re-use the patched forward method from the parent class
         self.super_patched_forward = self.patched_forward
@@ -6356,7 +6247,6 @@ class SelectiveScan(torch.nn.Module):
 
 # The original implementation of this forward method can be found at:
 # https://github.com/huggingface/transformers/blob/v4.53.2/src/transformers/models/mamba/modeling_mamba.py#L233
-#
 # This patch modifies the method to vectorize the selective scan procedure, enabling correct graph tracing
 def mamba_mixer_forward(
     self,
@@ -6631,85 +6521,3 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 
         if is_transformers_version(">=", "4.53"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
-
-
-class SAMModelPatcher(ModelPatcher):
-    def __init__(
-        self,
-        config: OnnxConfig,
-        model: "PreTrainedModel",
-        model_kwargs: Optional[dict[str, Any]] = None,
-    ):
-        super().__init__(config, model, model_kwargs)
-
-        def patched_forward(
-            pixel_values=None,
-            input_points=None,
-            input_labels=None,
-            image_embeddings=None,
-            image_positional_embeddings=None,
-            return_dict=True,
-            **kwargs,
-        ):
-            if config.variant == "monolith":
-                return self.orig_forward(
-                    pixel_values=pixel_values,
-                    input_points=input_points,
-                    input_labels=input_labels,
-                    image_embeddings=image_embeddings,
-                    return_dict=return_dict,
-                    **kwargs,
-                )
-            elif config.variant == "split":
-                # return_dict = get_argument(args, kwargs, signature, "return_dict")
-                if config.vision_encoder:
-                    # pixel_values = get_argument(args, kwargs, signature, "pixel_values")
-                    image_positional_embeddings = model.get_image_wide_positional_embeddings()
-
-                    # repeat with batch size
-                    batch_size = pixel_values.shape[0]
-                    image_positional_embeddings = image_positional_embeddings.repeat(batch_size, 1, 1, 1)
-
-                    vision_outputs = model.vision_encoder(
-                        pixel_values,
-                        output_attentions=False,
-                        output_hidden_states=False,
-                        return_dict=return_dict,
-                    )
-                    image_embeddings = vision_outputs[0]
-
-                    if not return_dict:
-                        return (image_embeddings, image_positional_embeddings)
-                    else:
-                        return {
-                            "image_embeddings": image_embeddings,
-                            "image_positional_embeddings": image_positional_embeddings,
-                        }
-                else:
-                    if input_points is None:
-                        raise ValueError("input_points is required to export the prompt encoder / mask decoder.")
-
-                    sparse_embeddings, dense_embeddings = model.prompt_encoder(
-                        input_points=input_points,
-                        input_labels=input_labels,
-                        input_boxes=None,  # Not supported in the ONNX export
-                        input_masks=None,  # Not supported in the ONNX export
-                    )
-
-                    outputs = model.mask_decoder(
-                        image_embeddings=image_embeddings,
-                        image_positional_embeddings=image_positional_embeddings,
-                        sparse_prompt_embeddings=sparse_embeddings,
-                        dense_prompt_embeddings=dense_embeddings,
-                        multimask_output=True,  # Not supported in the ONNX export
-                        attention_similarity=None,  # Not supported in the ONNX export
-                        target_embedding=None,  # Not supported in the ONNX export
-                    )
-                    low_res_masks = outputs[0]
-                    iou_predictions = outputs[1]
-                    if not return_dict:
-                        return (iou_predictions, low_res_masks)
-                    else:
-                        return {"iou_scores": iou_predictions, "pred_masks": low_res_masks}
-
-        self.patched_forward = patched_forward

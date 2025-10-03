@@ -121,7 +121,6 @@ from .model_patcher import (
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
     OVSpeechT5ModelPatcher,
-    OVVisionEncoderDecoderPatcher,
     PegasusModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
@@ -4272,4 +4271,4 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
     ],
 )
 class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
-    _MODEL_PATCHER = OVVisionEncoderDecoderPatcher
+    _MODEL_PATCHER = OVSeq2SeqModelPatcher
