@@ -19,6 +19,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import openvino
 import pytest
 import requests
 import torch
@@ -76,7 +77,30 @@ class Timer(object):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
-class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
+class OVSeq2SeqTestMixin(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = None
+    def check_openvino_model_attributes(self, openvino_model, use_cache: bool = True, stateful: bool = True):
+        self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
+        self.assertIsInstance(openvino_model.config, PretrainedConfig)
+        self.assertIsInstance(openvino_model.generation_config, GenerationConfig)
+
+        self.assertIsInstance(openvino_model.encoder, OVEncoder)
+        self.assertIsInstance(openvino_model.decoder, OVDecoder)
+        self.assertIsInstance(openvino_model.encoder.model, openvino.Model)
+        self.assertIsInstance(openvino_model.decoder.model, openvino.Model)
+
+        self.assertEqual(openvino_model.use_cache, use_cache)
+        self.assertEqual(openvino_model.decoder.stateful, stateful)
+        self.assertEqual(model_has_state(openvino_model.decoder.model), stateful)
+
+        if not stateful and use_cache:
+            self.assertIsInstance(openvino_model.decoder_with_past, OVDecoder)
+            self.assertIsInstance(openvino_model.decoder_with_past.model, openvino.Model)
+        else:
+            self.assertIsNone(openvino_model.decoder_with_past)
+
+
+class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = (
         "bart",
         # "bigbird_pegasus",
@@ -89,13 +113,14 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "pegasus",
         "t5",
     )
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.1
+    OVMODEL_CLASS = OVModelForSeq2SeqLM
+    AUTOMODEL_CLASS = AutoModelForSeq2SeqLM
 
     if not (is_openvino_version(">=", "2025.3.0") and is_openvino_version("<", "2025.5.0")):
         # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
         SUPPORTED_ARCHITECTURES += ("marian",)
-
-    GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.1
 
     SUPPORT_STATEFUL = ("t5", "mt5")
     if is_transformers_version(">=", "4.52.0"):
@@ -107,22 +132,15 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-        ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
-            model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG)
+        ov_stateless_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, use_cache=False, stateful=False, ov_config=F32_CONFIG
         )
         expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
-        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
-        self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
-        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
-        check_with_past_available(ov_model.decoder_with_past)
-        self.assertIsInstance(ov_model.encoder, OVEncoder)
-        self.assertIsInstance(ov_model.decoder, OVDecoder)
-        if not ov_model.decoder.stateful:
-            self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-            self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=expected_stateful)
+        self.check_openvino_model_attributes(ov_stateless_model, use_cache=False, stateful=False)
 
-        transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         decoder_start_token_id = transformers_model.config.decoder_start_token_id if model_arch != "mbart" else 2
@@ -169,7 +187,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a test"
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, compile=False)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False)
         model.eval()
         model.half()
         model.to("cpu")
@@ -206,7 +224,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     @slow
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -229,15 +247,15 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
+        model_with_pkv = self.OVMODEL_CLASS.from_pretrained(model_id, use_cache=True)
 
-        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True)
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = self.OVMODEL_CLASS.from_pretrained(model_id, use_cache=False)
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
@@ -257,8 +275,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
 
-class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
+class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("whisper",)
+
+    OVMODEL_CLASS = OVModelForSpeechSeq2Seq
+    AUTOMODEL_CLASS = AutoModelForSpeechSeq2Seq
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
@@ -271,19 +292,11 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-        ov_model_stateless = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, stateful=False
-        )
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
-        # whisper cache class support implemented in 4.43
-        expected_stateful = True
-        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
-        self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
-        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
-        check_with_past_available(ov_model.decoder_with_past)
-
+        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG)
+        ov_model_stateless = self.OVMODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG, stateful=False)
+        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
+        self.check_openvino_model_attributes(ov_model_stateless, use_cache=True, stateful=False)
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
@@ -342,7 +355,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id)
         processor = get_preprocessor(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
@@ -363,9 +376,10 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
 
-class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
+class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
-
+    OVMODEL_CLASS = OVModelForVision2Seq
+    AUTOMODEL_CLASS = AutoModelForVision2Seq
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -382,7 +396,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True)
+            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
 
         self.assertIn("only supports the tasks", str(context.exception))
 
@@ -391,7 +405,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     @slow
     def test_generate_utils(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
 
         data = self._get_sample_image()
@@ -406,17 +420,12 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id)
 
-        self.assertIsInstance(ov_model.encoder, OVEncoder)
-
-        self.assertIsInstance(ov_model.decoder, OVDecoder)
-        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
 
         set_seed(SEED)
-        transformers_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
 
         data = self._get_sample_image()
@@ -449,7 +458,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, compile=False)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
         ov_model.reshape(1, -1)
         ov_model.compile()
@@ -472,7 +481,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
 
-class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
+class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
         "internvl_chat",
         "llava",
@@ -486,6 +495,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     ]
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
+    OVMODEL_CLASS = OVModelForVisualCausalLM
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
@@ -563,29 +573,27 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         loading_kwargs = {}
 
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
         if "llama4" in model_arch:
             loading_kwargs = {"_attn_implementation": "sdpa"}
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(
-            model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, **loading_kwargs
+            model_id, trust_remote_code=trust_remote_code, **loading_kwargs
         )
         transformers_model.eval()
         if "internvl_chat" in model_arch:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
-            )
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trast_remote_code=trust_remote_code)
             img_context_token_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
             transformers_model.img_context_token_id = img_context_token_id
         if "llava-qwen2" in model_arch:
             transformers_model.get_vision_tower().load_model()
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
-        ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
-        )
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, trust_remote_code=trust_remote_code, compile=False)
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         for component_name, component in ov_model.components.items():
             self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
         transformers_inputs = copy.deepcopy(inputs)
@@ -722,7 +730,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         processor = AutoProcessor.from_pretrained(
             model_id,
             patch_size=config.vision_config.patch_size,
@@ -731,9 +740,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             num_additional_image_tokens=1,
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
-        ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-        )
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         self.assertTrue(ov_model._support_new_processing)
         self.assertTrue(processor.patch_size is not None)
         self.assertTrue(processor.vision_feature_select_strategy is not None)
@@ -776,11 +783,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
-        )
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, trust_remote_code=trust_remote_code)
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         question = "Describe image"
         preprocessors = self.get_preprocessors(model_arch)
         inputs = model.preprocess_inputs(**preprocessors, text=question, image=self.IMAGE.resize((600, 600)))
@@ -871,18 +877,20 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     def test_model_can_be_loaded_after_saving(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         with TemporaryDirectory() as save_dir:
-            ov_model = OVModelForVisualCausalLM.from_pretrained(
+            ov_model = self.OVMODEL_CLASS.from_pretrained(
                 model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             ov_model.save_pretrained(save_dir)
-            ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
+            ov_restored_model = self.OVMODEL_CLASS.from_pretrained(
                 save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
 
-class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
+class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("speecht5",)
+    OVMODEL_CLASS = OVModelForTextToSpeechSeq2Seq
+    AUTOMODEL_CLASS = AutoModelForTextToSpectrogram
 
     def _generate_text(self):
         return "This text is converted to speech using OpenVINO backend"
@@ -897,12 +905,6 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             return AutoProcessor.from_pretrained(model_id)
         else:
             raise Exception("{} unknown processor for text-to-speech".format(model_arch))
-
-    def _get_model(self, model_id, model_arch):
-        if model_arch == "speecht5":
-            return AutoModelForTextToSpectrogram.from_pretrained(model_id)
-        else:
-            raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
     def _get_vocoder(self, vocoder_id, model_arch):
         if model_arch == "speecht5":
@@ -925,7 +927,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             # generate model classes for reference generation
             vocoder_id = "fxmarty/speecht5-hifigan-tiny"
             processor = self._get_processor(model_id, model_arch)
-            model = self._get_model(model_id, model_arch)
+
+            model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
+
             vocoder = self._get_vocoder(vocoder_id, model_arch)
             inputs = processor(text=text_data, return_tensors="pt")
             ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
@@ -933,11 +937,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         else:
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
-        ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(model_id, vocoder=vocoder_id)
-        ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
-
-        self.assertIsInstance(ov_pipe.config, PretrainedConfig)
-        self.assertTrue(model_has_state(ov_pipe.decoder.model))
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, vocoder=vocoder_id)
+        ov_speech = ov_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
+        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
         self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
 
         del vocoder
@@ -946,10 +948,11 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
 
-class OVModelForPix2StructIntegrationTest(unittest.TestCase):
+class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ["pix2struct"]
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
-
+    OVMODEL_CLASS = OVModelForPix2Struct
+    AUTOMODEL_CLASS = Pix2StructForConditionalGeneration
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -964,15 +967,12 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForPix2Struct.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
 
-        self.assertIsInstance(ov_model.encoder, OVEncoder)
-        self.assertIsInstance(ov_model.decoder, OVDecoder)
-        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
 
         question = "Who am I?"
-        transformers_model = Pix2StructForConditionalGeneration.from_pretrained(model_id)
+        transformers_model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
         preprocessor = get_preprocessor(model_id)
 
         inputs = preprocessor(images=self.IMAGE, text=question, padding=True, return_tensors="pt")
@@ -993,7 +993,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForPix2Struct.from_pretrained(model_id, export=True)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True)
         preprocessor = get_preprocessor(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
@@ -1012,14 +1012,14 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
-        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = self.OVMODEL_CLASS.from_pretrained(model_id, use_cache=True)
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = self.OVMODEL_CLASS.from_pretrained(model_id, use_cache=False)
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
