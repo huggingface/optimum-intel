@@ -658,7 +658,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             if model_arch in ["minicpmo"]:
                 # `generate` method for minicpmo requires tokenizer
                 tokenizer = AutoTokenizer.from_pretrained(
-                    model_id, trast_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                    model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
                 )
             transformers_outputs = transformers_model.generate(
                 **transformers_inputs, generation_config=gen_config, tokenizer=tokenizer, **additional_inputs
