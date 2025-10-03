@@ -496,7 +496,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
-    if is_transformers_version("<", "4.51"):
+    if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
 
     if is_transformers_version(">=", "4.54.0"):
