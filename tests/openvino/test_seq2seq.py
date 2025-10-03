@@ -79,6 +79,7 @@ class Timer(object):
 
 class OVSeq2SeqTestMixin(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = None
+
     def check_openvino_model_attributes(self, openvino_model, use_cache: bool = True, stateful: bool = True):
         self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
         self.assertIsInstance(openvino_model.config, PretrainedConfig)
@@ -89,15 +90,15 @@ class OVSeq2SeqTestMixin(unittest.TestCase):
         self.assertIsInstance(openvino_model.encoder.model, openvino.Model)
         self.assertIsInstance(openvino_model.decoder.model, openvino.Model)
 
-        self.assertEqual(openvino_model.use_cache, use_cache)
-        self.assertEqual(openvino_model.decoder.stateful, stateful)
-        self.assertEqual(model_has_state(openvino_model.decoder.model), stateful)
-
         if not stateful and use_cache:
             self.assertIsInstance(openvino_model.decoder_with_past, OVDecoder)
             self.assertIsInstance(openvino_model.decoder_with_past.model, openvino.Model)
         else:
             self.assertIsNone(openvino_model.decoder_with_past)
+
+        self.assertEqual(openvino_model.use_cache, use_cache)
+        self.assertEqual(openvino_model.decoder.stateful, stateful)
+        self.assertEqual(model_has_state(openvino_model.decoder.model), stateful)
 
 
 class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
