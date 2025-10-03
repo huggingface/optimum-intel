@@ -153,7 +153,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         # There are known issues with marian model on OpenVINO 2025.3.x and 2025.4.x
         SUPPORTED_ARCHITECTURES += ("marian",)
 
-    SUPPORT_STATEFUL = ("t5", "mt5")
+    SUPPORT_STATEFUL = ("t5", "mt5", "longt5")
     if is_transformers_version(">=", "4.52.0"):
         SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
     if is_transformers_version(">=", "4.53.0"):

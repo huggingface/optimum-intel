@@ -98,7 +98,7 @@ MODEL_NAMES = {
     "internvl_chat": "katuni4ka/tiny-random-internvl2",
     "jais": "katuni4ka/tiny-random-jais",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
-    "longt5": "hf-internal-testing/tiny-random-longt5",
+    "longt5": "hf-internal-testing/tiny-random-LongT5Model",
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
     "llama4": "hf-internal-testing/tiny-random-llama4",
