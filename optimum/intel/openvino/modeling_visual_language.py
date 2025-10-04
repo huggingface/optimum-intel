@@ -2114,6 +2114,36 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        audio_bounds=None,
+        spk_bounds=None,
+        audio_features=None,
+        audio_feature_lens=None,
+        **kwargs,
+    ):
+        # Audio modality is not supported for MiniCPMO
+        if audio_features is not None and len(audio_features) > 0:
+            raise ValueError("Audio input is not supported for MiniCPMO")
+
+        return super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+
+
 class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -4355,4 +4385,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
+    "minicpmo": _OVMiniCPMOForCausalLM,
 }

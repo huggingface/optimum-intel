@@ -670,7 +670,7 @@ def export_from_model(
         # some model configs may have issues with loading without parameters initialization
         try:
             misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
-        except (KeyError, TypeError):
+        except (AttributeError, KeyError, TypeError):
             misplaced_generation_parameters = {}
         if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
             logger.warning(

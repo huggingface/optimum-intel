@@ -733,6 +733,29 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 16},
             },
         ),
+        (
+            "image-text-to-text",
+            "minicpmo",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmo",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -754,7 +777,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v", "phi4mm"}
+            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
