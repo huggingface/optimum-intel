@@ -1080,7 +1080,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v"}
+            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
