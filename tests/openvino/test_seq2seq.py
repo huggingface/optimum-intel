@@ -416,7 +416,16 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+
+    SUPPORTED_ARCHITECTURES = [
+        "donut",
+        "got_ocr2",
+        "pix2struct",
+        "trocr",
+        "vision-encoder-decoder",
+    ]
+
+    TASK = "image-to-text"
     OVMODEL_CLASS = OVModelForVision2Seq
     AUTOMODEL_CLASS = AutoModelForVision2Seq
     GENERATION_LENGTH = 100
@@ -432,6 +441,10 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         return image_processor, tokenizer
+
+    def test_find_untested_architectures(self):
+        self._test_find_untested_architectures()
+
 
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
