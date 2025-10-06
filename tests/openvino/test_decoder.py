@@ -117,8 +117,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.47"):
         SUPPORTED_ARCHITECTURES += ("olmo2",)
 
+    if is_transformers_version(">", "4.48"):
+        SUPPORTED_ARCHITECTURES += ("nemotron",)
+
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
+        SUPPORTED_ARCHITECTURES += ("gemma3_text", "helium")
 
     if is_transformers_version(">=", "4.51.0"):
         SUPPORTED_ARCHITECTURES += ("llama4", "llama4_text", "qwen3", "qwen3_moe")
