@@ -416,7 +416,6 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
 
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
-
     SUPPORTED_ARCHITECTURES = [
         "donut",
         "got_ocr2",
@@ -444,7 +443,6 @@ class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
     def test_find_untested_architectures(self):
         self._test_find_untested_architectures()
-
 
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
@@ -548,6 +546,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
     OVMODEL_CLASS = OVModelForVisualCausalLM
+    TASK = "image-text-to-text"
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
@@ -559,13 +558,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES += ["llama4"]
+        SUPPORTED_ARCHITECTURES += ["llama4", "phi4_multimodal"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
-    TASK = "image-text-to-text"
     REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
 
     IMAGE = Image.open(
@@ -631,6 +629,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self.assertEqual(openvino_model.use_cache, use_cache)
         self.assertEqual(openvino_model.language_model.stateful, stateful)
         self.assertEqual(model_has_state(openvino_model.language_model.model), stateful)
+
+    def test_find_untested_architectures(self):
+        self._test_find_untested_architectures()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
