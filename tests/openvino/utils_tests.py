@@ -145,6 +145,7 @@ MODEL_NAMES = {
     "phimoe": "katuni4ka/phi-3.5-moe-tiny-random",
     "phi3_v": "katuni4ka/tiny-random-phi3-vision",
     "phi4mm": "katuni4ka/tiny-random-phi-4-multimodal",
+    "phi4_multimodal": "echarlaix/tiny-random-phi-4-multimodal",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
