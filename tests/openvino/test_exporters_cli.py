@@ -738,7 +738,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "minicpmo",
             "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
             {
-                "lm_model": {"int8": 16, "int4": 14},
+                "lm_model": {"int8": 14, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 8},
                 "resampler_model": {"int8": 6},
