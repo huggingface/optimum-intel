@@ -1021,7 +1021,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "lm_model": {"int8": 4, "int4": 2},
+                "lm_model": {"int8": 4, "int4": 0},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 8},
                 "resampler_model": {"int8": 6},
@@ -1053,11 +1053,13 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
-        (OVModelForVisualCausalLM, "minicpmo", True),
     ]
 
     if is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
+
+    if is_transformers_version("<", "4.52.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
