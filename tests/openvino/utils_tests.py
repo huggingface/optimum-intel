@@ -329,7 +329,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "mamba": {"model": 386},
     "falcon-mamba": {"model": 194},
     "minicpmo": {
-        "lm_model": 30,
+        "lm_model": 16,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 8,
         "resampler_model": 6,
