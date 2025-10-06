@@ -279,8 +279,8 @@ class OVModelIntegrationTest(unittest.TestCase):
                     self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
                 model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
                 compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
-                for _, submodel in compile_only_model.ov_submodels.items():
-                    self.assertIsInstance(submodel, ov.runtime.CompiledModel)
+                for ov_model in compile_only_model.ov_models.values():
+                    self.assertIsInstance(ov_model, ov.runtime.CompiledModel)
                 for component_name, component in compile_only_model.components.items():
                     self.assertIsInstance(component.model, ov.runtime.CompiledModel)
                     if component_name == "language_model":

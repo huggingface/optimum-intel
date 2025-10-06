@@ -57,12 +57,97 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
+class OVModelHostMixin:
+    """
+    Mixin class for models that contain OpenVINO models as submodels.
+    """
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+        """
+        Returns a dictionary of all OpenVINO models associated with this model. Keys are model names, and values are
+        either instances of `openvino.Model` or `openvino.runtime.CompiledModel`. Compiled model instances are returned
+        if the model is initialized with `compile_only=True`.
+        """
+        return {ov_model_name: getattr(self, ov_model_name) for ov_model_name in self._ov_model_names}
+
+    @property
+    def submodels(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+        logger.warn(
+            "`submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
+        )
+        return self.ov_models
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        """
+        List of openvino model names. Used as keys for a dictionary returned by `.ov_models` property.
+        """
+        return ["model"]
+
+    @property
+    def _component_names(self) -> List[str]:
+        """
+        List of model component names. Used as keys for a dictionary returned by `.components` property.
+        """
+        return []
+
+    @property
+    def components(self) -> Dict[str, "OVModelHostMixin"]:
+        """
+        Dictionary of model components which are instances of OVModelHostMixin.
+        """
+        return {component_name: getattr(self, component_name) for component_name in self._component_names}
+
+    def replace_ov_model(self, current_model: openvino.Model, new_model: openvino.Model):
+        """
+        Replace OpenVINO model within the model with new one. Replacement is performed by object id.
+
+        Args:
+            current_model (`openvino.Model`):
+                Current OpenVINO model to be replaced.
+            new_model (`openvino.Model`):
+                New OpenVINO model to replace the current one.
+        """
+        # Validate replacement parameters
+        if isinstance(current_model, openvino.CompiledModel):
+            raise ValueError(
+                "OpenVINO model replacement is not supported for models initialized with `compile_only=True`."
+            )
+        # Replace model in the current model
+        for ov_model_name, ov_model in self.ov_models.items():
+            if ov_model_name in ["lm_model", "vision_embeddings_model", "text_embeddings_model"] and isinstance(
+                getattr(type(self), ov_model_name, None), property
+            ):
+                # TODO (nikita.savelyevv): Remove this check when these properties are removed
+                continue
+            if id(ov_model) == id(current_model) and getattr(self, ov_model_name, None) is not None:
+                setattr(self, ov_model_name, new_model)
+        # Replace model in the components
+        for component in self.components.values():
+            component.replace_ov_model(current_model, new_model)
+        # Clear requests to force recompilation with the new model
+        self.clear_requests()
+
+    def clear_requests(self):
+        """
+        Clear model inference requests.
+        """
+        raise NotImplementedError
+
+    def compile(self):
+        """
+        Compile all OpenVINO models within the model.
+        """
+        raise NotImplementedError
+
+
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(OptimizedModel):
+class OVBaseModel(OptimizedModel, OVModelHostMixin):
     auto_model_class = None
     export_feature = None
     _supports_cache_class = False  # No loger defined/used in transformers
@@ -209,17 +294,6 @@ class OVBaseModel(OptimizedModel):
                 return torch_dtype
 
         return None
-
-    @property
-    def ov_submodels(self) -> Dict[str, openvino.Model]:
-        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._ov_submodel_names}
-
-    @property
-    def _ov_submodel_names(self) -> List[str]:
-        """
-        List of openvino submodel names. Used as keys for a dictionary returned by `.ov_submodels` property.
-        """
-        return ["model"]
 
     @staticmethod
     def load_model(
@@ -803,7 +877,7 @@ class OVBaseModel(OptimizedModel):
         return None
 
 
-class OVModelPart:
+class OVModelPart(OVModelHostMixin):
     def __init__(
         self,
         model: Model,
@@ -825,7 +899,7 @@ class OVModelPart:
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
 
-    def _compile(self):
+    def compile(self):
         if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
             self.request = self.model
         if self.request is None:

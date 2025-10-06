@@ -16,9 +16,10 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
+import openvino
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
@@ -38,6 +39,7 @@ from ...exporters.openvino import main_export
 from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZeroShotImageClassification
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
+from .modeling_base import OVModelHostMixin
 from .utils import TemporaryDirectory
 
 
@@ -462,7 +464,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
     """,
     MODEL_START_DOCSTRING,
 )
-class OVModelOpenCLIPForZeroShotImageClassification:
+class OVModelOpenCLIPForZeroShotImageClassification(OVModelHostMixin):
     export_feature = "zero-shot-image-classification"
 
     def __init__(
@@ -486,6 +488,17 @@ class OVModelOpenCLIPForZeroShotImageClassification:
             self.logit_bias = torch.nn.Parameter(torch.ones([]) * init_logit_bias)
         else:
             self.logit_bias = None
+
+    @property
+    def _component_names(self) -> List[str]:
+        return ["text_model", "visual_model"]
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
+
+    def ov_models(self) -> Dict[str, openvino.Model]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

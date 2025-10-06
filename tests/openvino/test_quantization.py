@@ -626,7 +626,7 @@ class OVQuantizerTest(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                ov_model.ov_submodels,
+                ov_model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
@@ -1172,14 +1172,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         else:
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
-        submodels = (
-            {"text_model": model.text_model, "visual_model": model.visual_model}
-            if model_type == "open-clip"
-            else model.ov_submodels
-        )
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_ov_int8 = {k: {"int8": v} for k, v in expected_ov_int8.items()}
-        check_compression_state_per_model(self, submodels, expected_ov_int8)
+        check_compression_state_per_model(self, model.ov_models, expected_ov_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
@@ -1296,12 +1291,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            submodels = model.ov_submodels
-            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             # At the moment the first model in the list is the only one we apply data-aware compression to
-            wc_rt_info = next(iter(submodels.values())).get_rt_info()["nncf"]["weight_compression"]
+            wc_rt_info = next(iter(model.ov_models.values())).get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
             self.assertEqual(
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
@@ -1324,7 +1318,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         _, num_weight_nodes = get_num_quantized_nodes(model)
         expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
-        check_compression_state_per_model(self, model.ov_submodels, expected_int8)
+        check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
@@ -1332,11 +1326,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             MODEL_NAMES[model_type], export=True, load_in_8bit=False, trust_remote_code=trust_remote_code
         )
 
-        submodels = (
-            [model.text_model, model.visual_model] if model_type == "open-clip" else model.ov_submodels.values()
-        )
-        for i, submodel in enumerate(submodels):
-            ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+        for i, ov_model in enumerate(model.ov_models.values()):
             _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             self.assertEqual(0, num_weight_nodes["int8"])
             if "text-generation" in model.export_feature or ("image-text-to-text" in model.export_feature and i == 0):
@@ -1451,7 +1441,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
-            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir)
@@ -1710,13 +1700,13 @@ class OVPipelineQuantizationTest(unittest.TestCase):
 
             model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
             check_compression_state_per_model(
-                self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
+                self, model.ov_models, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
             )
             # Compare the quantization config with the model runtime info
-            for submodel_name, submodel in model.ov_submodels.items():
-                rt_info = submodel.get_rt_info()
+            for ov_model_name, ov_model in model.ov_models.items():
+                rt_info = ov_model.get_rt_info()
                 config = quantization_config.quantization_configs.get(
-                    submodel_name, quantization_config.default_config
+                    ov_model_name, quantization_config.default_config
                 )
                 if config is None:
                     self.assertTrue("nncf" not in rt_info)
@@ -1784,7 +1774,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                             )
                         else:
                             self.assertEqual(
-                                config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}"
+                                config_value, rt_info_value, f"Mismatch in {param_name} for {ov_model_name}"
                             )
 
 
