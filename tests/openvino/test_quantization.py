@@ -1012,7 +1012,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             True,
             dict(
                 bits=4,
-                group_size=16,
+                group_size=4,
                 dataset="contextual",
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
@@ -1021,7 +1021,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 trust_remote_code=True,
             ),
             {
-                "lm_model": {"int8": 4, "int4": 0},
+                "lm_model": {"int8": 6, "int4": 10},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 8},
                 "resampler_model": {"int8": 6},
