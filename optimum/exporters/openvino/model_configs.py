@@ -3207,10 +3207,9 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
         return inputs
 
 
-
 @register_in_tasks_manager(
     "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
- )
+)
 class Phi4MultimodalOpenVINOConfig(Phi4MMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.60.0"
