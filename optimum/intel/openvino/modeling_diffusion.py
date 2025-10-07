@@ -1066,7 +1066,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
 
-class OVPipelinePart(ConfigMixin, CacheMixin, OVModelHostMixin):
+class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
     config_name: str = CONFIG_NAME
 
     def __init__(
