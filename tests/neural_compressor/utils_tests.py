@@ -44,7 +44,7 @@ from optimum.intel.utils.import_utils import is_ipex_available
 
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 
 if is_ipex_available():
     from optimum.intel import (

@@ -21,15 +21,8 @@ from typing import TYPE_CHECKING, Optional
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
-from ...exporters import TasksManager
-from ...intel.utils.import_utils import (
-    DIFFUSERS_IMPORT_ERROR,
-    is_diffusers_available,
-    is_nncf_available,
-)
-from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-from ...utils.save_utils import maybe_load_preprocessors
-from ..base import BaseOptimumCLICommand, CommandInfo
+from optimum.commands.base import BaseOptimumCLICommand, CommandInfo
+from optimum.exporters.tasks import TasksManager
 
 
 logger = logging.getLogger(__name__)
@@ -348,9 +341,13 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
+        from optimum.utils.save_utils import maybe_load_preprocessors
+
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
         from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
+        from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+        from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args

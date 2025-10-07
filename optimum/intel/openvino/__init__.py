@@ -33,6 +33,16 @@ from .utils import (
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
+from .configuration import (
+    OVConfig,
+    OVDynamicQuantizationConfig,
+    OVMixedQuantizationConfig,
+    OVPipelineQuantizationConfig,
+    OVQuantizationConfig,
+    OVWeightQuantizationConfig,
+)
+
+
 if is_nncf_available():
     logging.disable(logging.INFO)
     import nncf
@@ -50,14 +60,6 @@ if is_nncf_available():
     from .quantization import OVCalibrationDataset, OVQuantizer
 
 
-from .configuration import (
-    OVConfig,
-    OVDynamicQuantizationConfig,
-    OVMixedQuantizationConfig,
-    OVPipelineQuantizationConfig,
-    OVQuantizationConfig,
-    OVWeightQuantizationConfig,
-)
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,

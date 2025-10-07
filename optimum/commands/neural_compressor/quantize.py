@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from ...exporters import TasksManager
-from ..base import BaseOptimumCLICommand, CommandInfo
+from optimum.commands.base import BaseOptimumCLICommand, CommandInfo
+from optimum.exporters.tasks import TasksManager
 
 
 if TYPE_CHECKING:
@@ -86,7 +86,7 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
                 task = TasksManager.infer_task_from_model(model_id)
             except Exception as e:
                 return (
-                    f"### Error: {e}. Please pass explicitely the task as it could not be infered.",
+                    f"### Error: {e}. Please pass explicitely the task as it could not be inferred.",
                     None,
                 )
 

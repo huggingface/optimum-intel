@@ -21,14 +21,15 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+from packaging.version import Version
 from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
-from transformers.utils import is_tf_available, is_torch_available
+from transformers.utils import is_torch_available
 
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
     ENCODER_NAME,
@@ -56,7 +57,6 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 
 from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
-from .model_patcher import patch_model_with_bettertransformer
 from .stateful import (
     ensure_export_task_support_stateful,
     ensure_model_type_support_stateful,
@@ -86,9 +86,6 @@ if is_torch_available():
 if is_diffusers_available():
     from diffusers import DiffusionPipeline, ModelMixin
 
-if is_tf_available():
-    from transformers.modeling_tf_utils import TFPreTrainedModel
-
 
 if TYPE_CHECKING:
     from optimum.exporters.onnx.base import OnnxConfig
@@ -98,7 +95,7 @@ if TYPE_CHECKING:
 def _set_runtime_options(
     models_and_export_configs: Dict[
         str,
-        Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
+        Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"],
     ],
     task: str,
     library_name: str,
@@ -140,7 +137,7 @@ def _save_model(
 
 
 def export(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
+    model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     config: "OnnxConfig",
     output: Path,
     opset: Optional[int] = None,
@@ -153,10 +150,10 @@ def export(
     library_name: Optional[str] = None,
 ) -> Tuple[List[str], List[str]]:
     """
-    Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
+    Exports a Pytorch model to an OpenVINO Intermediate Representation.
 
     Args:
-        model ([`PreTrainedModel`] or [`TFPreTrainedModel`]):
+        model ([`PreTrainedModel`]):
             The model to export.
         config ([`~exporters.onnx.config.OnnxConfig`]):
             The ONNX configuration associated with the exported model.
@@ -178,14 +175,35 @@ def export(
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
         the ONNX configuration.
     """
-    if not (is_torch_available() or is_tf_available()):
+    if not is_torch_available():
         raise ImportError(
-            "Cannot convert because neither PyTorch nor TensorFlow are installed. "
-            "Please install torch or tensorflow first."
+            "Cannot convert because torch is not installed. "
+            "Please install torch with `pip install torch` and try again."
         )
 
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
         raise ImportError("The package `diffusers` is required to export diffusion models to OpenVINO.")
+
+    min_version = getattr(config, "MIN_TRANSFORMERS_VERSION", None)
+    max_version = getattr(config, "MAX_TRANSFORMERS_VERSION", None)
+
+    if min_version is not None:
+        if isinstance(min_version, Version):
+            min_version = min_version.base_version
+        if is_transformers_version("<", min_version):
+            raise ValueError(
+                f"The current version of Transformers does not allow for the export of the model. Minimum required is "
+                f"{config.MIN_TRANSFORMERS_VERSION}, got: {_transformers_version}"
+            )
+
+    if max_version is not None:
+        if isinstance(max_version, Version):
+            max_version = max_version.base_version
+        if is_transformers_version(">=", max_version):
+            raise ValueError(
+                f"The current version of Transformers does not allow for the export of the model. Maximum required is "
+                f"{config.MAX_TRANSFORMERS_VERSION}, got: {_transformers_version}"
+            )
 
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
@@ -205,63 +223,8 @@ def export(
             patch_16bit_model=patch_16bit_model,
             library_name=library_name,
         )
-
-    elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
-        output.parent.mkdir(parents=True, exist_ok=True)
-        if opset is None:
-            opset = config.DEFAULT_ONNX_OPSET
-        if device == "cuda":
-            raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
-        if input_shapes is not None:
-            logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output, ov_config=ov_config, library_name=library_name)
-
     else:
-        raise RuntimeError(
-            "You either provided a PyTorch model with only TensorFlow installed, or a TensorFlow model with only PyTorch installed."
-        )
-
-
-def export_tensorflow(
-    model: Union["PreTrainedModel", "ModelMixin"],
-    config: "OnnxConfig",
-    opset: int,
-    output: Path,
-    ov_config: Optional["OVConfig"] = None,
-    library_name: Optional[str] = None,
-):
-    """
-    Export the TensorFlow model to OpenVINO format.
-
-    Args:
-        model (Union[): The model to export.
-        config (OnnxConfig): The configuration of the model.
-        opset (int): The ONNX opset version to use.
-        output (Path): The path to save the model.
-
-    Returns:
-        input_names: list of input names from ONNX configuration
-        output_names: list of output names from ONNX configuration
-        bool:  True if the model was exported successfully.
-    """
-    from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-
-    onnx_path = Path(output).with_suffix(".onnx")
-    input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
-    ov_model = convert_model(str(onnx_path))
-
-    library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
-
-    _save_model(
-        ov_model,
-        output.parent / output,
-        ov_config=ov_config,
-        library_name=library_name,
-        config=config,
-    )
-    del ov_model
-    gc.collect()
-    return input_names, output_names, True
+        raise RuntimeError("You either provided a non-PyTorch model or the PyTorch library is not installed.")
 
 
 def export_pytorch_via_onnx(
@@ -381,15 +344,6 @@ def export_pytorch(
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
 
-    if stateful:
-        # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
-        # both of them are applied to demonstrate the best performance.
-        # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
-        model = patch_model_with_bettertransformer(model)
-        # TODO: Consider unpatching model after export is done in the end of this function.
-        #       Now it is left as-is because the model is not expected to be used after call export_pytorch, and
-        #       this function is one of the _internal_ steps in a bigger model conversion pipeline.
-
     with torch.no_grad():
         if hasattr(model, "config"):
             model.config.torchscript = False
@@ -498,7 +452,7 @@ def export_pytorch(
 
 def export_models(
     models_and_export_configs: Dict[
-        str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"]
+        str, Tuple[Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"]
     ],
     output_dir: Path,
     opset: Optional[int] = None,
@@ -515,7 +469,7 @@ def export_models(
     Export the models to OpenVINO IR format
 
     Args:
-        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]):
+        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "ModelMixin"], "OnnxConfig"]):
         output_dir (Path): output directory for saving models
         opset (Optional[int], optional, Default to None): ONNX export opset
         output_names (Optional[List[str]], optional, Defaults to None): model output names
@@ -571,7 +525,7 @@ def export_models(
 
 
 def export_from_model(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
+    model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
     task: Optional[str] = None,
     ov_config: Optional["OVConfig"] = None,
@@ -630,7 +584,11 @@ def export_from_model(
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
 
-    if stateful and is_encoder_decoder and not getattr(model, "_supports_cache_class", False):
+    if (
+        stateful
+        and is_encoder_decoder
+        and not getattr(model, "_supports_cache_class", is_transformers_version(">=", "4.54"))
+    ):
         stateful = False
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
@@ -641,7 +599,7 @@ def export_from_model(
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
         raise ValueError(
             f"model.config.is_encoder_decoder is True and task is `{task}`, which are incompatible. If the task was auto-inferred, please fill a bug report"
-            f"at https://github.com/huggingface/optimum, if --task was explicitely passed, make sure you selected the right task for the model,"
+            f"at https://github.com/huggingface/optimum, if --task was explicitly passed, make sure you selected the right task for the model,"
             f" referring to `optimum.exporters.tasks.TaskManager`'s `_TRANSFORMERS_TASKS_TO_MODEL_LOADERS`."
         )
     if library_name != "diffusers" and model_type in TasksManager._UNSUPPORTED_CLI_MODEL_TYPE:
@@ -691,7 +649,6 @@ def export_from_model(
             library_name=library_name,
             model_kwargs=model_kwargs,
             _variant="default",
-            legacy=False,
             exporter="openvino",
             stateful=stateful,
         )
@@ -707,21 +664,20 @@ def export_from_model(
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
-        if is_transformers_version(">=", "4.44.99"):
-            # some model configs may have issues with loading without parameters initialization
-            try:
-                misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
-            except (KeyError, TypeError):
-                misplaced_generation_parameters = {}
-            if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
-                logger.warning(
-                    "Moving the following attributes in the config to the generation config: "
-                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                    "generation parameters in the model config, as opposed to in the generation config.",
-                )
-                for param_name, param_value in misplaced_generation_parameters.items():
-                    setattr(model.generation_config, param_name, param_value)
-                    setattr(model.config, param_name, None)
+        # some model configs may have issues with loading without parameters initialization
+        try:
+            misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+        except (KeyError, TypeError):
+            misplaced_generation_parameters = {}
+        if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
+            logger.warning(
+                "Moving the following attributes in the config to the generation config: "
+                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                "generation parameters in the model config, as opposed to in the generation config.",
+            )
+            for param_name, param_value in misplaced_generation_parameters.items():
+                setattr(model.generation_config, param_name, param_value)
+                setattr(model.config, param_name, None)
 
         # Saving the model config and preprocessor as this is needed sometimes.
         save_config(model.config, output)
@@ -909,7 +865,7 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
 
 
 def _get_multi_modal_submodels_and_export_configs(
-    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    model: "PreTrainedModel",
     task: str,
     library_name: str,
     int_dtype: str,
@@ -963,7 +919,7 @@ def _get_multi_modal_submodels_and_export_configs(
 
 
 def _get_submodels_and_export_configs(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "DiffusionPipeline"],
+    model: Union["PreTrainedModel", "DiffusionPipeline"],
     task: str,
     monolith: bool,
     custom_export_configs: Dict,
@@ -974,7 +930,6 @@ def _get_submodels_and_export_configs(
     float_dtype: str = "fp32",
     fn_get_submodels: Optional[Callable] = None,
     preprocessors: Optional[List[Any]] = None,
-    legacy: bool = False,
     model_kwargs: Optional[Dict] = None,
     exporter: str = "openvino",
     stateful: bool = False,
@@ -1004,7 +959,6 @@ def _get_submodels_and_export_configs(
         float_dtype,
         fn_get_submodels,
         preprocessors,
-        legacy,
         model_kwargs,
         exporter,
     )
@@ -1377,7 +1331,7 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
 
 
 def _get_encoder_decoder_stateful_models_for_export(
-    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    model: "PreTrainedModel",
     task: str,
     _variant: str,
     library_name: str,
@@ -1393,7 +1347,6 @@ def _get_encoder_decoder_stateful_models_for_export(
         int_dtype=int_dtype,
         float_dtype=float_dtype,
         preprocessors=preprocessors,
-        legacy=False,
     )
 
     export_config.variant = _variant
@@ -1416,7 +1369,7 @@ def _get_encoder_decoder_stateful_models_for_export(
 
 
 def _get_speecht5_tss_model_for_export(
-    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    model: "PreTrainedModel",
     task: str,
     library_name: str,
     int_dtype: str,
@@ -1439,7 +1392,6 @@ def _get_speecht5_tss_model_for_export(
         int_dtype=int_dtype,
         float_dtype=float_dtype,
         preprocessors=preprocessors,
-        legacy=False,
     )
     export_config.variant = "default"
 

@@ -23,10 +23,9 @@ from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline, set_seed
 from transformers.utils import SAFE_WEIGHTS_NAME
 
-from optimum.exporters import TasksManager
-
 # to trigger register creation
 from optimum.exporters.onnx.model_configs import BertOnnxConfig  # noqa # type: ignore
+from optimum.exporters.tasks import TasksManager
 from optimum.intel import (  # noqa
     INCConfig,
     INCModel,

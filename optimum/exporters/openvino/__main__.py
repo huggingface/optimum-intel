@@ -26,9 +26,8 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, Pro
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -48,6 +47,9 @@ from .utils import (
     load_preprocessors,
 )
 
+
+if is_transformers_version(">=", "4.55"):
+    from transformers import Mxfp4Config
 
 FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
 
@@ -89,9 +91,14 @@ def infer_task(
                     library_name=library_name,
                 )
             except KeyError as e:
-                raise KeyError(
-                    f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-                )
+                try:
+                    config = AutoConfig.from_pretrained(model_name_or_path)
+                    if "MistralForCausalLM" in config.architectures:
+                        task = "text-generation-with-past"
+                except Exception:
+                    raise KeyError(
+                        f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                    )
             except RequestsConnectionError as e:
                 raise RequestsConnectionError(
                     f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -243,6 +250,7 @@ def main_export(
     dtype = loading_kwargs.get("torch_dtype", None)
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
+
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -255,11 +263,19 @@ def main_export(
             trust_remote_code=trust_remote_code,
         )
         quantization_config = getattr(config, "quantization_config", None)
+        quant_method = quantization_config.get("quant_method", None) if quantization_config else None
+
+        # mxfp4 quantized model will be dequantized to bf16
+        if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
+            dtype = torch.bfloat16
+            loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
+
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
-        do_quant_patching = quantization_config and quantization_config["quant_method"] in supported_quant_methods
-        do_gptq_patching = do_quant_patching and quantization_config["quant_method"] == "gptq"
+        do_quant_patching = quant_method in supported_quant_methods
+        do_gptq_patching = quant_method == "gptq"
+
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
@@ -281,15 +297,8 @@ def main_export(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
             )
 
-        if (
-            is_transformers_version(">=", "4.36")
-            and is_transformers_version("<=", "4.45.0")
-            and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-        ):
-            loading_kwargs["attn_implementation"] = "eager"
-
         # some models force flash_attn attention by default that does not support load model on cpu
-        if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
+        if model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
         if model_type == "phi4mm":
             if "activation_checkpointing" in config.audio_processor["config"]:
