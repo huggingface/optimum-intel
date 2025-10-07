@@ -489,9 +489,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
         self.assertGreaterEqual(current_num_blobs, num_blobs)
-        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.vision_encoder.request, ov.CompiledModel)
-        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
         self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
