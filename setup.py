@@ -29,7 +29,7 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=2.1",
     # change this to optimum-onnx==*.*.* once we release it
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@cli-optimumization",
+    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git",
     "transformers>=4.45,<4.56",
     "datasets>=1.4.0",
     "setuptools",
