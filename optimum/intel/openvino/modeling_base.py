@@ -114,16 +114,16 @@ class OVModelHostMixin:
             raise ValueError(
                 "OpenVINO model replacement is not supported for models initialized with `compile_only=True`."
             )
-        # Replace model in the current model
-        for ov_model_name, ov_model in self.ov_models.items():
+        # Replace OpenVINO model stored inside the model
+        for ov_model_name in self.ov_models:
             if ov_model_name in ["lm_model", "vision_embeddings_model", "text_embeddings_model"] and isinstance(
                 getattr(type(self), ov_model_name, None), property
             ):
                 # TODO (nikita.savelyevv): Remove this check when these properties are removed
                 continue
-            if id(ov_model) == id(current_model) and getattr(self, ov_model_name, None) is not None:
+            if id(getattr(self, ov_model_name, None)) == id(current_model):
                 setattr(self, ov_model_name, new_model)
-        # Replace model in the components
+        # Replace OpenVINO model stored inside components
         for component in self.components.values():
             component.replace_ov_model(current_model, new_model)
         # Clear requests to force recompilation with the new model

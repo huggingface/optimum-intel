@@ -983,7 +983,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
         for component in self.components.values():
-            component.clear_request()
+            component.clear_requests()
 
     def compile(self):
         for component in self.components.values():

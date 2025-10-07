@@ -835,7 +835,7 @@ class OVCalibrationDatasetBuilder:
         """
 
         collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
-        for component_name, component in self.model.components:
+        for component_name, component in self.model.components.items():
             collected_inputs[component_name] = []
             component.compile()
             component.request = InferRequestWrapper(
