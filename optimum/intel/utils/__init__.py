@@ -13,6 +13,8 @@
 #  limitations under the License.
 
 from .import_utils import (
+    IPEX_IMPORT_ERROR,
+    OPENVINO_IMPORT_ERROR,
     _neural_compressor_version,
     _torch_version,
     compare_versions,
