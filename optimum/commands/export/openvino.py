@@ -54,7 +54,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=str,
         choices=["pt"],
         default="pt",
-        help=("The framework to use for the export. Defaults to 'pt' for PyTorch. "),
+        help="The framework to use for the export. Defaults to 'pt' for PyTorch. ",
     )
     optional_group.add_argument(
         "--trust-remote-code",
