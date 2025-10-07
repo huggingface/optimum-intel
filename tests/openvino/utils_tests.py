@@ -496,7 +496,7 @@ def get_supported_model_for_library(library_name):
             min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
             max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
 
-            if is_transformers_version(">=", min_transformers) and is_transformers_version("<", max_transformers):
+            if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
                 valid_model.add(model_type)
 
     return valid_model

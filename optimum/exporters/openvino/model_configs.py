@@ -318,7 +318,7 @@ class Qwen3MoEOpenVINOConfig(Qwen3OpenVINOConfig):
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -368,7 +368,7 @@ class OVMiniCPM3DummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
 @register_in_tasks_manager("minicpm3", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MiniCPM3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
@@ -1066,7 +1066,7 @@ class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("arctic", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
     _MODEL_PATCHER = ArcticModelPatcher
 
 
@@ -1876,7 +1876,7 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
 class LlavaQwen2OpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTS_PAST = True
     MIN_TRANSFORMERS_VERSION = "4.40.0"
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
 
     def __init__(
         self,
@@ -2750,7 +2750,7 @@ class Phi3VisionOpenVINOConfig(BaseVLMOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.40.0"
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
 
     def __init__(
         self,
@@ -2998,7 +2998,7 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator,)
     MIN_TRANSFORMERS_VERSION = "4.51.0"
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
 
     def __init__(
         self,
@@ -3667,7 +3667,7 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
-    MAX_TRANSFORMERS_VERSION = "4.54.0"
+    MAX_TRANSFORMERS_VERSION = "4.53.99"
     _MODEL_PATCHER = DeepseekPatcher
 
 
