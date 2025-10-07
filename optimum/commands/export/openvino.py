@@ -52,11 +52,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--framework",
         type=str,
-        choices=["pt", "tf"],
-        default=None,
-        help=(
-            "The framework to use for the export. If not provided, will attempt to use the local checkpoint's original framework or what is available in the environment."
-        ),
+        choices=["pt"],
+        default="pt",
+        help=("The framework to use for the export. Defaults to 'pt' for PyTorch. "),
     )
     optional_group.add_argument(
         "--trust-remote-code",
