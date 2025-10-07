@@ -497,6 +497,7 @@ class OVModelOpenCLIPForZeroShotImageClassification(OVModelHostMixin):
     def _ov_model_names(self) -> List[str]:
         return self._component_names
 
+    @property
     def ov_models(self) -> Dict[str, openvino.Model]:
         return {name: getattr(component, "model") for name, component in self.components.items()}
 
