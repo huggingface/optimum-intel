@@ -199,10 +199,10 @@ def export(
     if max_version is not None:
         if isinstance(max_version, Version):
             max_version = max_version.base_version
-        if is_transformers_version(">=", max_version):
+        if is_transformers_version(">", max_version):
             raise ValueError(
                 f"The current version of Transformers does not allow for the export of the model. Maximum required is "
-                f"{config.MAX_TRANSFORMERS_VERSION}, got: {_transformers_version}"
+                f"{config.MAX_TRANSFORMERS_VERSION.replace('99', '*')}, got: {_transformers_version}"
             )
 
     if stateful:
