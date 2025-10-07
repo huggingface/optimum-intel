@@ -72,9 +72,9 @@ class OVModelHostMixin:
         return {ov_model_name: getattr(self, ov_model_name) for ov_model_name in self._ov_model_names}
 
     @property
-    def submodels(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def ov_submodels(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
         logger.warn(
-            "`submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
+            "`ov_submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
         )
         return self.ov_models
 
