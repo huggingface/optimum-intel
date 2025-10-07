@@ -1696,86 +1696,87 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             model = model_cls.from_pretrained(
                 model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
             )
-            model.save_pretrained(tmp_dir)
-
-            model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
-            check_compression_state_per_model(
-                self, model.ov_models, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
-            )
-            # Compare the quantization config with the model runtime info
-            for ov_model_name, ov_model in model.ov_models.items():
-                rt_info = ov_model.get_rt_info()
-                config = quantization_config.quantization_configs.get(
-                    ov_model_name, quantization_config.default_config
+            for save_load_model in [False, True]:
+                if save_load_model:
+                    model.save_pretrained(tmp_dir)
+                    model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
+                check_compression_state_per_model(
+                    self, model.ov_models, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
                 )
-                if config is None:
-                    self.assertTrue("nncf" not in rt_info)
-                    continue
+                # Compare the quantization config with the model runtime info
+                for ov_model_name, ov_model in model.ov_models.items():
+                    rt_info = ov_model.get_rt_info()
+                    config = quantization_config.quantization_configs.get(
+                        ov_model_name, quantization_config.default_config
+                    )
+                    if config is None:
+                        self.assertTrue("nncf" not in rt_info)
+                        continue
 
-                if isinstance(config, OVWeightQuantizationConfig):
-                    sub_configs = [config]
-                    rt_info_keys = ["weight_compression"]
-                elif isinstance(config, OVQuantizationConfig):
-                    sub_configs = [config]
-                    rt_info_keys = ["quantization"]
-                elif isinstance(config, OVMixedQuantizationConfig):
-                    sub_configs = [config.weight_quantization_config, config.full_quantization_config]
-                    rt_info_keys = ["weight_compression", "quantization"]
-                else:
-                    raise ValueError(f"Unsupported config type: {type(config)}")
+                    if isinstance(config, OVWeightQuantizationConfig):
+                        sub_configs = [config]
+                        rt_info_keys = ["weight_compression"]
+                    elif isinstance(config, OVQuantizationConfig):
+                        sub_configs = [config]
+                        rt_info_keys = ["quantization"]
+                    elif isinstance(config, OVMixedQuantizationConfig):
+                        sub_configs = [config.weight_quantization_config, config.full_quantization_config]
+                        rt_info_keys = ["weight_compression", "quantization"]
+                    else:
+                        raise ValueError(f"Unsupported config type: {type(config)}")
 
-                for sub_config, rt_info_key in zip(sub_configs, rt_info_keys):
-                    q_rt_info = rt_info["nncf"][rt_info_key]
-                    config_dict = sub_config.to_nncf_dict()
-                    for param_name in q_rt_info:
-                        if sub_config.num_samples is None and param_name == "subset_size":
-                            # Skip subset_size check because num_samples was not explicitly provided
-                            continue
-                        rt_info_value = q_rt_info[param_name]
-                        if isinstance(rt_info_value, dict):
-                            # For example, ignored scope case
-                            rt_info_value_ = {}
-                            for k, v in rt_info_value.items():
-                                rt_info_value_[k] = eval_expression_if_possible(v.value)
-                            rt_info_value = rt_info_value_
-                        else:
-                            rt_info_value = eval_expression_if_possible(rt_info_value.value)
-
-                        if param_name not in config_dict:
-                            continue
-                        config_value = config_dict[param_name]
-                        if param_name == "advanced_parameters":
-                            from nncf.quantization.advanced_parameters import convert_to_dict_recursively
-
-                            config_value = convert_to_dict_recursively(config_value)
-                        if param_name == "ignored_scope":
-                            if sub_config.quant_method == OVQuantizationMethod.HYBRID:
-                                # For hybrid quantization ignored scope is set dynamically
-                                config_value = {"types": ["Convolution"]}
+                    for sub_config, rt_info_key in zip(sub_configs, rt_info_keys):
+                        q_rt_info = rt_info["nncf"][rt_info_key]
+                        config_dict = sub_config.to_nncf_dict()
+                        for param_name in q_rt_info:
+                            if sub_config.num_samples is None and param_name == "subset_size":
+                                # Skip subset_size check because num_samples was not explicitly provided
+                                continue
+                            rt_info_value = q_rt_info[param_name]
+                            if isinstance(rt_info_value, dict):
+                                # For example, ignored scope case
+                                rt_info_value_ = {}
+                                for k, v in rt_info_value.items():
+                                    rt_info_value_[k] = eval_expression_if_possible(v.value)
+                                rt_info_value = rt_info_value_
                             else:
-                                from nncf.openvino.rt_info import exclude_empty_fields
+                                rt_info_value = eval_expression_if_possible(rt_info_value.value)
 
-                                config_value = exclude_empty_fields(dataclasses.asdict(config_value))
-                                config_value = [] if config_value == {} else config_value
-                        if param_name == "backup_mode" and config_value is None:
-                            config_value = "int8_asym"
-                        if param_name == "sensitivity_metric" and config_value is None:
-                            config_value = (
-                                "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
-                            )
+                            if param_name not in config_dict:
+                                continue
+                            config_value = config_dict[param_name]
+                            if param_name == "advanced_parameters":
+                                from nncf.quantization.advanced_parameters import convert_to_dict_recursively
 
-                        if config_value is None and rt_info_value is False:
-                            continue
-                        if param_name == "subset_size":
-                            self.assertGreaterEqual(
-                                rt_info_value,
-                                config_value,
-                                f"Actual subset size should not be less than the requested one.",
-                            )
-                        else:
-                            self.assertEqual(
-                                config_value, rt_info_value, f"Mismatch in {param_name} for {ov_model_name}"
-                            )
+                                config_value = convert_to_dict_recursively(config_value)
+                            if param_name == "ignored_scope":
+                                if sub_config.quant_method == OVQuantizationMethod.HYBRID:
+                                    # For hybrid quantization ignored scope is set dynamically
+                                    config_value = {"types": ["Convolution"]}
+                                else:
+                                    from nncf.openvino.rt_info import exclude_empty_fields
+
+                                    config_value = exclude_empty_fields(dataclasses.asdict(config_value))
+                                    config_value = [] if config_value == {} else config_value
+                            if param_name == "backup_mode" and config_value is None:
+                                config_value = "int8_asym"
+                            if param_name == "sensitivity_metric" and config_value is None:
+                                config_value = (
+                                    "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
+                                )
+
+                            if config_value is None and rt_info_value is False:
+                                continue
+                            if param_name == "subset_size":
+                                self.assertGreaterEqual(
+                                    rt_info_value,
+                                    config_value,
+                                    f"Actual subset size should not be less than the requested one.",
+                                )
+                            else:
+                                self.assertEqual(
+                                    config_value, rt_info_value, f"Mismatch in {param_name} for {ov_model_name}"
+                                )
 
 
 class OVQuantizerQATest(unittest.TestCase):
