@@ -1006,6 +1006,27 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 16},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "minicpmo",
+            True,
+            dict(
+                bits=4,
+                group_size=4,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                processor=MODEL_NAMES["minicpmo"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 6, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -1037,6 +1058,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version("<", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
 
+    if is_transformers_version("<", "4.52.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
+
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
@@ -1058,7 +1082,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v"}
+            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}

@@ -116,6 +116,7 @@ MODEL_NAMES = {
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "minicpm3": "katuni4ka/tiny-random-minicpm3",
     "minicpmv": "katuni4ka/tiny-random-minicpmv-2_6",
+    "minicpmo": "rkazants/tiny-random-MiniCPM-o-2_6",
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
@@ -327,6 +328,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "clip": {"model": 130},
     "mamba": {"model": 386},
     "falcon-mamba": {"model": 194},
+    "minicpmo": {
+        "lm_model": 16,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 8,
+        "resampler_model": 6,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
