@@ -405,9 +405,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id,
             accelerator="openvino",
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
-            # in older transformers versions, remote code tokenizers are not registered in the
-            # tokenizer auto-mapping so they are not loaded automatically in the pipeline
-            tokenizer=model_id if model_arch in self.REMOTE_CODE_MODELS else None,
+            tokenizer=(
+                # in older transformers versions, qwen tokenizer didn't have a _convert_tokens_to_ids
+                # method, which made it fail during inference using pipelines
+                tokenizer
+                if is_transformers_version("<=", "4.46") and model_arch == "qwen"
+                # in older transformers versions, remote code tokenizers (and granite/granite-moe)
+                # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
+                else model_id
+                if is_transformers_version("<=", "4.46")
+                and model_arch in self.REMOTE_CODE_MODELS + ("granite", "granite-moe")
+                else None
+            ),
         )
         set_seed(SEED)
         ov_outputs = ov_pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)
