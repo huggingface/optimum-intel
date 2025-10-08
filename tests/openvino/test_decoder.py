@@ -405,7 +405,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id,
             accelerator="openvino",
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
-            tokenizer=tokenizer if model_arch == "qwen" else None,
+            # in older transformers versions, remote code tokenizers are not registered in the
+            # tokenizer auto-mapping so they are not loaded automatically in the pipeline
+            tokenizer=model_id if model_arch in self.REMOTE_CODE_MODELS else None,
         )
         set_seed(SEED)
         ov_outputs = ov_pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)

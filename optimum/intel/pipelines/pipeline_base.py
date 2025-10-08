@@ -61,7 +61,7 @@ def pipeline(  # noqa: D417
     token: Optional[Union[str, bool]] = None,
     device: Optional[Union[int, str, "torch.device"]] = None,
     # device_map: Optional[Union[str, Dict[str, Union[int, str]]]] = None, # we do not support device_map with OVModel
-    torch_dtype: Optional[Union[str, "torch.dtype"]] = "auto",
+    torch_dtype: Optional[Union[str, "torch.dtype"]] = None,  # transformers uses auto but we use None for BC
     trust_remote_code: Optional[bool] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     pipeline_class: Optional[Any] = None,
@@ -253,7 +253,7 @@ def pipeline(  # noqa: D417
         version_dependent_kwargs["processor"] = processor
 
     with patch_pipelines_to_load_accelerator_model(accelerator=accelerator):
-        pipeline_with_ov_model = transformers_pipeline(
+        pipeline_with_accelerator_model = transformers_pipeline(
             task=task,
             model=model,
             config=config,
@@ -274,4 +274,4 @@ def pipeline(  # noqa: D417
             **kwargs,
         )
 
-    return pipeline_with_ov_model
+    return pipeline_with_accelerator_model
