@@ -704,8 +704,9 @@ def _qwen2_model_forward(
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
-        attention_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        past_key_values_length = 0
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask, inputs_embeds.shape[:2], inputs_embeds, past_key_values_length
         )
 
     # decoder layers
@@ -817,8 +818,9 @@ def _mistral_model_forward(
         sin = sin.reshape(-1, sin.shape[-1])
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     if past_key_values is None:
-        attention_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        past_key_values_length = 0
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask, inputs_embeds.shape[:2], inputs_embeds, past_key_values_length
         )
 
     # decoder layers
