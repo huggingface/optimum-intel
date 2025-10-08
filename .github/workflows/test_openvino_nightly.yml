@@ -27,7 +27,6 @@ env:
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
-  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -88,6 +87,10 @@ jobs:
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Login with CI token
+        run: |
+          python tests/scripts/login_with_ci_token.py
 
       - name: Pip freeze
         run: |
