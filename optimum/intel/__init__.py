@@ -24,6 +24,7 @@ from .utils import (
     is_openvino_available,
     is_sentence_transformers_available,
 )
+from .version import __version__
 
 
 _import_structure = {
@@ -31,7 +32,6 @@ _import_structure = {
     "neural_compressor": [],
     "openvino": [],
     "pipelines": ["pipeline"],
-    "version": ["__version__"],
     # dummy objects
     "utils.dummy_ipex_objects": [],
     "utils.dummy_neural_compressor_objects": [],
@@ -294,6 +294,8 @@ else:
 
 
 if TYPE_CHECKING:
+    from .pipelines import pipeline
+
     try:
         if not is_ipex_available():
             raise OptionalDependencyNotAvailable()
