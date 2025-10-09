@@ -279,8 +279,8 @@ class OVModelIntegrationTest(unittest.TestCase):
                     self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
                 model = OVModelForVisualCausalLM.from_pretrained(tmpdirname)
                 compile_only_model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, compile_only=True)
-                for _, submodel in compile_only_model.ov_submodels.items():
-                    self.assertIsInstance(submodel, ov.runtime.CompiledModel)
+                for ov_model in compile_only_model.ov_models.values():
+                    self.assertIsInstance(ov_model, ov.runtime.CompiledModel)
                 for component_name, component in compile_only_model.components.items():
                     self.assertIsInstance(component.model, ov.runtime.CompiledModel)
                     if component_name == "language_model":
@@ -489,9 +489,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
         self.assertGreaterEqual(current_num_blobs, num_blobs)
-        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.vision_encoder.request, ov.CompiledModel)
-        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
         self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
