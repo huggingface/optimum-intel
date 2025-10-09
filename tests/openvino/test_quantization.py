@@ -1784,6 +1784,8 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                             config_value = (
                                 "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
                             )
+                        if param_name == "group_size" and config_value is None:
+                            config_value = -1 if sub_config.bits == 8 else 128
 
                         if config_value is None and rt_info_value is False:
                             continue
