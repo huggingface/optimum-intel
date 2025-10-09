@@ -4341,6 +4341,7 @@ class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
     PAD_ATTENTION_MASK_TO_PAST = False
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyInputGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyInputGenerator
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
