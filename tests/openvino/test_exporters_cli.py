@@ -105,7 +105,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
-    if is_transformers_version(">=", "4.48"):
+    if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "zamba2"),
