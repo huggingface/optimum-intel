@@ -794,7 +794,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
                 )
-            if self.group_size != -1:
+            if self.group_size is not None and self.group_size != -1:
                 raise ValueError(
                     f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )

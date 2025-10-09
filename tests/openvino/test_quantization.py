@@ -1377,7 +1377,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT8_ASYM,
                     "ratio": 1.0,
-                    "group_size": -1,
+                    "group_size": None,
                     "all_layers": None,
                     "sensitivity_metric": None,
                     "dataset": None,
