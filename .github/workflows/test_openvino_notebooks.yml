@@ -18,7 +18,6 @@ concurrency:
 
 env:
   TRANSFORMERS_IS_CI: true
-  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
