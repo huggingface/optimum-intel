@@ -6523,8 +6523,6 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
-
-
 # This patcher class serves for exporting Zamba2 model to OpenVINO IR
 class Zamba2ModelPatcher(ModelPatcher):
     def __init__(
