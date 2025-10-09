@@ -87,10 +87,6 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
     }
 
-        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
-    if is_transformers_version(">=", "4.39"):
-        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
-
     if is_transformers_version(">=", "4.48"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
