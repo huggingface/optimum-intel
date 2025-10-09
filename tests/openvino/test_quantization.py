@@ -80,7 +80,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -394,7 +394,7 @@ class OVQuantizerTest(unittest.TestCase):
             if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
-                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+                "decoder": 52,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
@@ -568,12 +568,6 @@ class OVQuantizerTest(unittest.TestCase):
         expected_fake_nodes_per_model,
         expected_num_weight_nodes_per_model,
     ):
-        if (
-            isinstance(quantization_config, dict)
-            and quantization_config.get("weight_quantization_config", {}).get("dtype") == "cb4"
-            and is_nncf_version("<=", "2.17")
-        ):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
@@ -1303,13 +1297,6 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
-        if (
-            isinstance(quantization_config, dict)
-            and quantization_config.get("dtype") == "cb4"
-            and is_nncf_version("<=", "2.17")
-        ):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
-
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)

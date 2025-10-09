@@ -715,7 +715,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         )
         self.bits = bits
         self.sym = sym
-        self.group_size = group_size or (-1 if bits == 8 else 128)
+        self.group_size = group_size
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
@@ -843,11 +843,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
         if self.dtype in ["mxfp4", "nf4", "cb4"]:
-            if self.dtype == "cb4" and is_nncf_version("<=", "2.17"):
-                raise ImportError(
-                    "Codebook quantization is currently supported only with NNCF develop. "
-                    "Please run `pip install git+https://github.com/openvinotoolkit/nncf.git`."
-                )
             if self.bits != 4:
                 raise ValueError(
                     f"When applying weight compression with '{self.dtype}' data type, the `bits` parameter must be set to 4, but found {self.bits}"
@@ -874,7 +869,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
         if mode == "mxfp4":
-            mode = "e2m1"
+            mode = "e2m1" if is_nncf_version("<=", "2.18") else "mxfp4"
         if mode == "cb4":
             mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)
