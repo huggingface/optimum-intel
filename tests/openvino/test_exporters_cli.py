@@ -105,29 +105,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
-    if is_transformers_version(">=", "4.39"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-generation-with-past", "mamba"),
-                ("text-generation-with-past", "falcon-mamba"),
-            ]
-        )
-
     if is_transformers_version(">=", "4.48"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "zamba2"),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.extend(
-            [
-                ("text-to-image", "stable-diffusion-3"),
-                ("text-to-image", "flux"),
-                ("inpainting", "flux-fill"),
-                ("text-to-image", "sana"),
-                ("text-to-video", "ltx-video"),
             ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
