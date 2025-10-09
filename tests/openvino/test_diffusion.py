@@ -38,7 +38,7 @@ from optimum.intel.openvino import (
     OVPipelineForText2Video,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_diffusers_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils.testing_utils import require_diffusers
 
 
@@ -76,11 +76,21 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
 
 
 class OVPipelineForText2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
-    NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES.extend(["stable-diffusion-3", "flux", "sana"])
-        NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES.extend(["stable-diffusion-3"])
+    SUPPORTED_ARCHITECTURES = [
+        "stable-diffusion",
+        "stable-diffusion-xl",
+        "latent-consistency",
+        "stable-diffusion-3",
+        "flux",
+        "sana",
+    ]
+    NEGATIVE_PROMPT_SUPPORT_ARCHITECTURES = [
+        "stable-diffusion",
+        "stable-diffusion-xl",
+        "stable-diffusion-3",
+        "latent-consistency",
+    ]
+
     if is_diffusers_version(">=", "0.33.0"):
         SUPPORTED_ARCHITECTURES.extend(["sana-sprint"])
     CALLBACK_SUPPORT_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
@@ -151,6 +161,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             if "sana" in model_arch:
                 # resolution binning will lead to resize output to standard resolution and back that can interpolate floating-point deviations
                 inputs["use_resolution_binning"] = False
+
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
@@ -479,14 +490,15 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
-        SUPPORTED_ARCHITECTURES.append("flux")
-
+    SUPPORTED_ARCHITECTURES = [
+        "stable-diffusion",
+        "stable-diffusion-xl",
+        "latent-consistency",
+        "stable-diffusion-3",
+        "flux",
+    ]
     AUTOMODEL_CLASS = AutoPipelineForImage2Image
     OVMODEL_CLASS = OVPipelineForImage2Image
-
     TASK = "image-to-image"
 
     def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil", model_type=None):
@@ -734,16 +746,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl"]
-
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
-        SUPPORTED_ARCHITECTURES.append("flux")
-        SUPPORTED_ARCHITECTURES.append("flux-fill")
-
+    SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "stable-diffusion-3", "flux", "flux-fill"]
     AUTOMODEL_CLASS = AutoPipelineForInpainting
     OVMODEL_CLASS = OVPipelineForInpainting
-
     TASK = "inpainting"
 
     def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil", model_arch=""):
@@ -1006,10 +1011,9 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         np.testing.assert_allclose(ov_output, diffusers_output, atol=1e-4, rtol=1e-2)
 
 
-@unittest.skipIf(is_transformers_version("<", "4.45"), "Required transformers >= 4.45")
 class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
-    if is_diffusers_version(">=", "0.28.2") and is_transformers_version(">=", "4.45.0"):
+    if is_diffusers_version(">=", "0.28.2"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
 
     OVMODEL_CLASS = OVPipelineForText2Video

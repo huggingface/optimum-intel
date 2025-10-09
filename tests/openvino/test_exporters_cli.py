@@ -24,8 +24,10 @@ from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassifi
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
+    get_supported_model_for_library,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -81,6 +83,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "gpt2"),
         ("text2text-generation", "t5"),
         ("text2text-generation-with-past", "t5"),
+        ("text-generation-with-past", "mamba"),
+        ("text-generation-with-past", "falcon-mamba"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -91,6 +95,11 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion"),
         ("text-to-image", "stable-diffusion-xl"),
         ("image-to-image", "stable-diffusion-xl-refiner"),
+        ("text-to-image", "stable-diffusion-3"),
+        ("text-to-image", "flux"),
+        ("inpainting", "flux-fill"),
+        ("text-to-image", "sana"),
+        ("text-to-video", "ltx-video"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -144,6 +153,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "mamba": 2,
         "falcon-mamba": 2,
+        "qwen3": 2,
         "zamba2": 2,
     }
 
@@ -180,42 +190,58 @@ class OVCLIExportTestCase(unittest.TestCase):
             "expected_chat_template": True,
             "remote_code": False,
         },
-        "minicpm3": {  # transformers, no processor, simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "text-generation-with-past",
-            "expected_chat_template": True,
-            "simplified_chat_template": True,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
-        "phi3_v": {  # transformers, no processor chat template, no simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "image-text-to-text",
-            "expected_chat_template": True,
-            "simplified_chat_template": False,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
-        "glm": {  # transformers, no processor, no simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-            "task": "text-generation-with-past",
-            "expected_chat_template": True,
-            "simplified_chat_template": False,
-            "processor_chat_template": False,
-            "remote_code": True,
-        },
     }
 
+    if is_transformers_version(">=", "4.46"):
+        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
+            {
+                "glm": {  # transformers, no processor, no simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "text-generation-with-past",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": False,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+            }
+        )
+
+    if is_transformers_version("<", "4.54"):
+        TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
+            {
+                "minicpm3": {  # transformers, no processor, simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "text-generation-with-past",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": True,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+                "phi3_v": {  # transformers, no processor chat template, no simplified chat template
+                    "num_tokenizers": 2
+                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
+                    else 0,
+                    "task": "image-text-to-text",
+                    "expected_chat_template": True,
+                    "simplified_chat_template": False,
+                    "processor_chat_template": False,
+                    "remote_code": True,
+                },
+            }
+        )
+
     SUPPORTED_SD_HYBRID_ARCHITECTURES = [
+        ("flux", 7, 56),
+        ("latent-consistency", 50, 135),
+        ("sana", 19, 53),
         ("stable-diffusion", 72, 195),
         ("stable-diffusion-xl", 84, 331),
-        ("latent-consistency", 50, 135),
+        ("stable-diffusion-3", 9, 65),
     ]
-
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("stable-diffusion-3", 9, 65))
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("flux", 7, 56))
-        SUPPORTED_SD_HYBRID_ARCHITECTURES.append(("sana", 19, 53))
 
     SUPPORTED_QUANTIZATION_ARCHITECTURES = [
         (
@@ -223,13 +249,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "int8",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 8, "decoder": 12, "decoder_with_past": 11}
-            if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 8, "decoder": 12, "decoder_with_past": 25},
+            {"encoder": 14, "decoder": 22, "decoder_with_past": 22}
+            if is_transformers_version("<=", "4.45")
+            else {"encoder": 14, "decoder": 22, "decoder_with_past": 25},
             (
-                {"encoder": {"int8": 8}, "decoder": {"int8": 11}, "decoder_with_past": {"int8": 9}}
-                if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"int8": 8}, "decoder": {"int8": 12}, "decoder_with_past": {"int8": 18}}
+                {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 17}}
+                if is_transformers_version("<=", "4.45")
+                else {"encoder": {"int8": 14}, "decoder": {"int8": 22}, "decoder_with_past": {"int8": 18}}
             ),
         ),
         (
@@ -237,13 +263,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             "whisper",
             "f8e4m3",
             "--dataset librispeech --num-samples 1 --smooth-quant-alpha 0.9 --trust-remote-code",
-            {"encoder": 9, "decoder": 13, "decoder_with_past": 12}
-            if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 9, "decoder": 14, "decoder_with_past": 25},
+            {"encoder": 16, "decoder": 26, "decoder_with_past": 23}
+            if is_transformers_version("<=", "4.45")
+            else {"encoder": 16, "decoder": 26, "decoder_with_past": 25},
             (
-                {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 11}, "decoder_with_past": {"f8e4m3": 9}}
-                if is_transformers_version("<=", "4.36.0")
-                else {"encoder": {"f8e4m3": 8}, "decoder": {"f8e4m3": 12}, "decoder_with_past": {"f8e4m3": 18}}
+                {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 17}}
+                if is_transformers_version("<=", "4.45")
+                else {"encoder": {"f8e4m3": 14}, "decoder": {"f8e4m3": 22}, "decoder_with_past": {"f8e4m3": 18}}
             ),
         ),
         (
@@ -440,11 +466,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int8",
             "--dataset c4 --num-samples 1",
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.36.0")
-            else {"encoder": 30, "decoder": 62},
+            if is_transformers_version("<=", "4.45")
+            else {
+                "encoder": 30,
+                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+            },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
-                if is_transformers_version("<=", "4.36.0")
+                if is_transformers_version("<=", "4.45")
                 else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
             ),
         ),
@@ -462,9 +491,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            "f8e4m3",
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": 15,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 17,
+            },
+            {
+                "lm_model": {"f8e4m3": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"f8e4m3": 11},
+            },
+        ),
     ]
 
-    TEST_4BIT_CONFIGURATIONS = [
+    TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             "text-generation-with-past",
             "opt125m",
@@ -538,215 +583,221 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --group-size 16 --backup-precision none --ratio 0.5",
             {"model": {"int4": 6}},
         ),
+        (
+            "image-text-to-text",
+            "llava_next",
+            "int4 --group-size 16 --ratio 0.8",
+            {
+                "lm_model": {"int8": 14, "int4": 16},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava_next",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava-qwen2",
+            "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 15},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava-qwen2",
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 15},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llava_next_video",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_resampler_model": {},
+                "multi_modal_projector_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "internvl_chat",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "qwen2_vl",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1",
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "phi3_v",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "phi3_v",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 4, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "qwen2_5_vl",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 10, "int4": 20}
+                if is_transformers_version(">=", "4.54")
+                else {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 12},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "phi4mm",
+            'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 8, "int4": 42},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "vision_projection_model": {"int8": 2},
+                "audio_embeddings_model": {},
+                "audio_forward_embeddings_model": {"int8": 6},
+                "audio_encoder_model": {"int8": 25},
+                "audio_vision_projection_model": {"int8": 2},
+                "audio_speech_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "llama4",
+            "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
+            '--sensitivity-metric "mean_activation_magnitude"',
+            {
+                "lm_model": {"int8": 46, "int4": 56},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 16},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmo",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 6, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
-    if is_transformers_version(">=", "4.40.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "llava_next",
-                    "int4 --group-size 16 --ratio 0.8",
-                    {
-                        "lm_model": {"int8": 14, "int4": 16},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 9},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "llava_next",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
-                    "--dataset contextual --num-samples 1",
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 9},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "nanollava",
-                    "int4 --group-size 8 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 16, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 15},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "nanollava",
-                    'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_variance" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 16, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 15},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.42.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "llava_next_video",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "hessian_input_activation" '
-                    "--dataset contextual --num-samples 1",
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_resampler_model": {},
-                        "multi_modal_projector_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "minicpmv",
-                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 26},
-                        "resampler_model": {"int8": 6},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "minicpmv",
-                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 26},
-                        "resampler_model": {"int8": 6},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "internvl2",
-                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 11},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "internvl2",
-                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 11},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "phi3_v",
-                    "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 10},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "phi3_v",
-                    'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 4, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "qwen2_vl",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1",
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "phi4mm",
-                    'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 8, "int4": 42},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 8},
-                        "vision_projection_model": {"int8": 2},
-                        "audio_embeddings_model": {},
-                        "audio_forward_embeddings_model": {"int8": 6},
-                        "audio_encoder_model": {"int8": 25},
-                        "audio_vision_projection_model": {"int8": 2},
-                        "audio_speech_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    "image-text-to-text",
-                    "qwen2_5_vl",
-                    'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
-                    "--dataset contextual --num-samples 1 --trust-remote-code",
-                    {
-                        "lm_model": {"int8": 14, "int4": 16},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 12},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.51.0"):
-        TEST_4BIT_CONFIGURATIONS.extend(
-            [
-                (
-                    "image-text-to-text",
-                    "llama4",
-                    "int4 --group-size 16 --ratio 0.8 --dataset contextual --num-samples 1 "
-                    '--sensitivity-metric "mean_activation_magnitude"',
-                    {
-                        "lm_model": {"int8": 22, "int4": 48},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 16},
-                    },
-                ),
-            ]
-        )
+    # filter models type depending on min max transformers version
+    SUPPORTED_4BIT_CONFIGURATIONS = [
+        config
+        for config in TRANSFORMERS_4BIT_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
 
     def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
             main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
+
+    def test_filtered_architectures(cls):
+        if is_transformers_version("<", "4.49"):
+            expected = {"llama4", "qwen2_5_vl", "phi4mm"}
+        elif is_transformers_version("<", "4.51"):
+            expected = {"llama4", "phi4mm"}
+        elif is_transformers_version("<", "4.52"):
+            expected = set()
+        else:
+            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+
+        all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
+        filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
+        skipped = all_model_type - filtered_model_type
+        cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, task: str, model_type: str):
@@ -805,12 +856,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
 
-    # some testing models required transformers at least 4.45 for conversion
     @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
-    @unittest.skipIf(
-        is_transformers_version("<", "4.45.0") or not is_openvino_tokenizers_available(),
-        reason="test required openvino tokenizers and transformers >= 4.45",
-    )
+    @unittest.skipIf(not is_openvino_tokenizers_available(), reason="test required openvino tokenizers")
     def test_exporters_cli_tokenizers_chat_template(self, model_type):
         import openvino as ov
 
@@ -1001,7 +1048,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_fake_nodes, num_fake_nodes)
             self.assertFalse(vision_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
-    @parameterized.expand(TEST_4BIT_CONFIGURATIONS)
+    @parameterized.expand(SUPPORTED_4BIT_CONFIGURATIONS)
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
@@ -1077,7 +1124,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if "--library sentence_transformers" in option
                 else eval(_HEAD_TO_AUTOMODELS[task])
             )
-            model = model_cls.from_pretrained(tmpdir)
+            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task
@@ -1161,7 +1208,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 bits = default_config.pop("bits", None)
                 self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
-                default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+                default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
                 quant_method = default_config.pop("quant_method", None)
                 default_config["awq"] = quant_method == "awq"
                 default_config["gptq"] = quant_method == "gptq"

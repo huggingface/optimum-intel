@@ -12,21 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from ...exporters import TasksManager
-from ..base import BaseOptimumCLICommand, CommandInfo
+from optimum.commands.base import BaseOptimumCLICommand
+from optimum.utils.constant import ALL_TASKS
 
 
 if TYPE_CHECKING:
-    from argparse import ArgumentParser, Namespace, _SubParsersAction
+    from argparse import ArgumentParser
 
 
 def parse_args_inc_quantize(parser: "ArgumentParser"):
     required_group = parser.add_argument_group("Required arguments")
     required_group.add_argument(
+        "-m",
         "--model",
         type=str,
         required=True,
@@ -45,26 +45,14 @@ def parse_args_inc_quantize(parser: "ArgumentParser"):
         "--task",
         default="auto",
         help=(
-            "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among:"
-            f" {str(TasksManager.get_all_tasks())}."
+            "The task to export the model for. If not specified, the task will be auto-inferred from the model's metadata or files. "
+            "For tasks that generate text, add the `xxx-with-past` suffix to export the model using past key values caching. "
+            f"Available tasks depend on the model, but are among the following list: {ALL_TASKS}."
         ),
     )
 
 
 class INCQuantizeCommand(BaseOptimumCLICommand):
-    def __init__(
-        self,
-        subparsers: "_SubParsersAction",
-        args: Optional["Namespace"] = None,
-        command: Optional["CommandInfo"] = None,
-        from_defaults_factory: bool = False,
-        parser: Optional["ArgumentParser"] = None,
-    ):
-        super().__init__(
-            subparsers, args=args, command=command, from_defaults_factory=from_defaults_factory, parser=parser
-        )
-        self.args_string = " ".join(sys.argv[3:])
-
     @staticmethod
     def parse_args(parser: "ArgumentParser"):
         return parse_args_inc_quantize(parser)
@@ -72,7 +60,8 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
     def run(self):
         from neural_compressor.config import PostTrainingQuantConfig
 
-        from ...intel.neural_compressor import INCQuantizer
+        from optimum.exporters.tasks import TasksManager
+        from optimum.intel.neural_compressor import INCQuantizer
 
         save_dir = self.args.output
         model_id = self.args.model
@@ -85,10 +74,9 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
             try:
                 task = TasksManager.infer_task_from_model(model_id)
             except Exception as e:
-                return (
-                    f"### Error: {e}. Please pass explicitely the task as it could not be infered.",
-                    None,
-                )
+                raise ValueError(
+                    "The task could not be inferred automatically. Please provide the task using the --task argument."
+                ) from e
 
         model = TasksManager.get_model_from_task(task, model_id)
 
