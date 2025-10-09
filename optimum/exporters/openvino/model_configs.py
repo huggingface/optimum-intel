@@ -4278,3 +4278,49 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
 )
 class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+
+class EAGLE3DummyGenerator(DummyInputGenerator):
+    """
+    Generates dummy target_hidden_state_input inputs.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("target_hidden_state_input",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.hidden_size = normalized_config.hidden_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = (
+            self.batch_size,
+            self.sequence_length,
+            self.hidden_size*3,
+        )
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+@register_in_tasks_manager( "llamaeagle3",*["text-generation","text-generation-with-past"],library_name="transformers")
+class LlamaEagle3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14  # Llama now uses F.scaled_dot_product_attention by default for torch>=2.1.1.
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator, EAGLE3DummyGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs["target_hidden_state_input"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+        return common_inputs
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
