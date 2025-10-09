@@ -170,13 +170,6 @@ def pipeline(  # noqa: D417
 
             If not provided, the default processor for the given `model` will be loaded (if it is a string). If `model`
             is not specified or not a string, then the default processor for `config` is loaded (if it is a string).
-        framework (`str`, *optional*):
-            The framework to use, either `"pt"` for PyTorch or `"tf"` for TensorFlow. The specified framework must be
-            installed.
-
-            If no framework is specified, will default to the one currently installed. If no framework is specified and
-            both frameworks are installed, will default to the framework of the `model`, or to PyTorch if no model is
-            provided.
         revision (`str`, *optional*, defaults to `"main"`):
             When passing a task name or a string model identifier: The specific model version to use. It can be a
             branch name, a tag name, or a commit id, since we use a git-based system for storing models and other
@@ -189,18 +182,6 @@ def pipeline(  # noqa: D417
         device (`int` or `str` or `torch.device`):
             Defines the device (*e.g.*, `"cpu"`, `"cuda:1"`, `"mps"`, or a GPU ordinal rank like `1`) on which this
             pipeline will be allocated.
-        device_map (`str` or `Dict[str, Union[int, str, torch.device]]`, *optional*):
-            Sent directly as `model_kwargs` (just a simpler shortcut). When `accelerate` library is present, set
-            `device_map="auto"` to compute the most optimized `device_map` automatically (see
-            [here](https://huggingface.co/docs/accelerate/main/en/package_reference/big_modeling#accelerate.cpu_offload)
-            for more information).
-
-            <Tip warning={true}>
-
-            Do not use `device_map` AND `device` at the same time as they will conflict
-
-            </Tip>
-
         torch_dtype (`str` or `torch.dtype`, *optional*):
             Sent directly as `model_kwargs` (just a simpler shortcut) to use the available precision for this model
             (`torch.float16`, `torch.bfloat16`, ... or `"auto"`).
