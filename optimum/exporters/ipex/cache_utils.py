@@ -75,10 +75,7 @@ class IPEXLayer(CacheLayerMixin):
 
     def get_max_cache_shape(self) -> int:
         """Returns the maximum cache shape."""
-        # For paged cache, return the total number of blocks * block_size
-        if self.keys is not None:
-            return self.keys.shape[0]  # num_blocks dimension
-        return 0
+        return self.max_cache_len
 
     def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
         """Return the length and offset of the cache for attention mask generation."""
@@ -94,7 +91,7 @@ class IPEXLayer(CacheLayerMixin):
         if self.values is not None:
             self.values.zero_()
 
-    def reorder_cache(self, beam_idx: torch.LongTensor) -> None:
+    def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorder cache for beam search."""
         if self.keys is not None and self.keys.numel():
             device = self.keys.device
@@ -102,6 +99,7 @@ class IPEXLayer(CacheLayerMixin):
         if self.values is not None and self.values.numel():
             device = self.values.device
             self.values = self.values.index_select(0, beam_idx.to(device))
+        return self
 
 
 class IPEXPagedCache(Cache):
@@ -327,6 +325,8 @@ class IPEXPagedCache(Cache):
         for i in free_table:
             if not (self.block_tables == i).any():
                 self.free_blocks[i] = 1
+
+        return self
 
     def crop(self, maximum_length: int):
         """Crop the past key values up to a new `maximum_length` in terms of tokens. `maximum_length` can also be
