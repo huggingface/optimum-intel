@@ -4645,7 +4645,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 
         return dummy_inputs
 
-class HunyuanDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
+class HunyuanDummyPastKeyValuesGenerator(GemmaDummyPastKeyValuesGenerator):
     def __init__(
         self,
         task: str,
@@ -4668,10 +4668,17 @@ class HunyuanDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
 
 @register_in_tasks_manager("hunyuan_v1_dense", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class HunyuanOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
-    MIN_TRANSFORMERS_VERSION = "4.56.0"
+    MIN_TRANSFORMERS_VERSION = "4.55.0.dev0"
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, HunyuanDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = HunyuanDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
 @register_in_tasks_manager(
     "gpt2",
     *[
