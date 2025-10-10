@@ -4282,10 +4282,10 @@ class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
 
 class EAGLE3DummyGenerator(DummyInputGenerator):
     """
-    Generates dummy target_hidden_state_input inputs.
+    Generates dummy hidden_states inputs.
     """
 
-    SUPPORTED_INPUT_NAMES = ("target_hidden_state_input",)
+    SUPPORTED_INPUT_NAMES = ("hidden_states",)
 
     def __init__(
         self,
@@ -4317,7 +4317,7 @@ class LlamaEagle3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
-        common_inputs["target_hidden_state_input"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
         return common_inputs
 
     def patch_model_for_export(
