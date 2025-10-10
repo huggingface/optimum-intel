@@ -23,9 +23,8 @@ from transformers.utils import is_torch_available
 
 from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.intel.utils import is_transformers_version
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
@@ -235,6 +234,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi4mm",
     "phi4_multimodal",
     "llama4",
+    "minicpmo",
 ]
 
 SSM_MODELS = ["mamba", "falcon_mamba"]
@@ -304,14 +304,10 @@ def save_preprocessors(
         model_type = config.model_type
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
-        if is_transformers_version(">=", "4.45") and model_type == "phi3_v" and len(preprocessors) > 1:
+        if model_type == "phi3_v" and len(preprocessors) > 1:
             if not hasattr(preprocessors[1], "chat_template"):
                 preprocessors[1].chat_template = getattr(preprocessors[0], "chat_template", None)
-        if (
-            is_transformers_version(">=", "4.45")
-            and model_type in ["llava", "llava_next", "llava_next_video"]
-            and preprocessors is not None
-        ):
+        if model_type in ["llava", "llava_next", "llava_next_video"] and preprocessors is not None:
             if len(preprocessors) > 1 and getattr(preprocessors[1], "patch_size", None) is None:
                 preprocessors[1].patch_size = config.vision_config.patch_size
                 preprocessors[1].vision_feature_select_strategy = config.vision_feature_select_strategy
@@ -357,13 +353,19 @@ COMPLEX_CHAT_TEMPLATES = {
 
 def set_simplified_chat_template(ov_tokenizer_model, processor_chat_template=None):
     tokenizer_chat_template = None
+    if processor_chat_template is not None:
+        ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
     if ov_tokenizer_model.has_rt_info("chat_template"):
         tokenizer_chat_template = ov_tokenizer_model.get_rt_info("chat_template")
-    if processor_chat_template is not None:
-        tokenizer_chat_template = processor_chat_template
-        ov_tokenizer_model.set_rt_info(processor_chat_template, "chat_template")
-    if tokenizer_chat_template is not None and tokenizer_chat_template in COMPLEX_CHAT_TEMPLATES:
-        ov_tokenizer_model.set_rt_info(COMPLEX_CHAT_TEMPLATES[tokenizer_chat_template], "simplified_chat_template")
+    if tokenizer_chat_template is not None:
+        tokenizer_chat_template_v = tokenizer_chat_template.value
+        if not isinstance(tokenizer_chat_template_v, dict):
+            tokenizer_chat_template_v = {"default": tokenizer_chat_template_v}
+        for chat_template in tokenizer_chat_template_v.values():
+            simplified_chat_template = COMPLEX_CHAT_TEMPLATES.get(chat_template)
+            if simplified_chat_template is not None:
+                ov_tokenizer_model.set_rt_info(simplified_chat_template, "simplified_chat_template")
+                break
     return ov_tokenizer_model
 
 
@@ -375,9 +377,6 @@ SKIP_CHECK_TRACE_MODELS = (
     "levit",
     "llama4",
 )
-
-if is_transformers_version("<", "4.41"):
-    SKIP_CHECK_TRACE_MODELS += ("gemma",)
 
 
 def allow_skip_tracing_check(library_name, model_type):

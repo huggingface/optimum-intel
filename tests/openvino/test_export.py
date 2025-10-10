@@ -80,10 +80,12 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
+        "mamba": OVModelForCausalLM,
+        "falcon-mamba": OVModelForCausalLM,
+        "stable-diffusion-3": OVStableDiffusion3Pipeline,
+        "flux": OVFluxPipeline,
+        "ltx-video": OVLTXPipeline,
     }
-
-    if is_transformers_version(">=", "4.39"):
-        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -93,10 +95,8 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.update(
-            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline}
-        )
+    if is_transformers_version(">=", "4.51"):
+        SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
 

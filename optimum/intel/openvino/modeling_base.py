@@ -34,7 +34,7 @@ from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available, is_transformers_version
+from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import (
     OVConfig,
@@ -65,7 +65,8 @@ logger = logging.getLogger(__name__)
 class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
-    _supports_cache_class = False
+    _supports_cache_class = False  # No loger defined/used in transformers
+    _is_stateful = False  # for Transformers it's False, but True for SSMs
     _library_name = "transformers"
     _xml_model_name = OV_XML_FILE_NAME
     _search_pattern = r"(.*)?openvino(.*)?\_(.*)?.xml$"
@@ -141,21 +142,20 @@ class OVBaseModel(OptimizedModel):
         if self.can_generate():
             self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-            if is_transformers_version(">=", "4.44.99"):
-                # some model configs may have issues with loading without parameters initialization
-                try:
-                    misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-                except (KeyError, TypeError):
-                    misplaced_generation_parameters = {}
-                if len(misplaced_generation_parameters) > 0:
-                    logger.warning(
-                        "Moving the following attributes in the config to the generation config: "
-                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                        "generation parameters in the model config, as opposed to in the generation config.",
-                    )
-                    for param_name, param_value in misplaced_generation_parameters.items():
-                        setattr(self.generation_config, param_name, param_value)
-                        setattr(self.config, param_name, None)
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            except (KeyError, TypeError):
+                misplaced_generation_parameters = {}
+            if len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(self.generation_config, param_name, param_value)
+                    setattr(self.config, param_name, None)
 
         else:
             self.generation_config = None
@@ -428,8 +428,8 @@ class OVBaseModel(OptimizedModel):
 
             quantizer = OVQuantizer(model)
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
-            quantization_config_copy.processor = quantization_config.processor or model_id
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
+            quantization_config_copy.processor = str(quantization_config.processor or model_id)
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return model
@@ -478,7 +478,7 @@ class OVBaseModel(OptimizedModel):
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
-                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else "*.onnx",
+                pattern=cls._search_pattern if not kwargs.get("from_onnx", False) else ".*\.onnx$",
                 subfolder=subfolder,
                 use_auth_token=token,
                 revision=revision,

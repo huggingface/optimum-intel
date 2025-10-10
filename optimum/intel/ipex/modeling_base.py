@@ -43,7 +43,7 @@ from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
