@@ -39,7 +39,6 @@ from transformers import (
     PreTrainedModel,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
-from transformers.generation.candidate_generator import _crop_past_key_values
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 
@@ -128,6 +127,7 @@ class IPEXModel(OptimizedModel):
     base_model_prefix = "ipex_model"
     main_input_name = "input_ids"
     output_name = "last_hidden_state"
+    _is_stateful = False
 
     def __init__(
         self,
@@ -234,10 +234,8 @@ class IPEXModel(OptimizedModel):
         ):
             return False
 
-        if self.use_cache and not self.model._supports_cache_class and not self._add_patch:
+        if self.use_cache and not self._supports_cache_class and not self._add_patch:
             return False
-
-        return True
 
     def apply_torch_compile(self):
         from torch._inductor import config as inductor_config
@@ -407,11 +405,29 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return generation_config, model_kwargs
 
-    def _reorder_cache(self, *args, **kwargs):
-        return self.model._reorder_cache(*args, **kwargs)
+    def _reorder_cache(self, past_key_values, beam_idx):
+        """
+        Reorders the cache for beam search, supporting both new and old cache architectures.
+        """
+        if hasattr(past_key_values, "reorder_cache"):
+            # Handle new cache architecture with reorder_cache method
+            past_key_values.reorder_cache(beam_idx)
+        elif hasattr(self.model, "_reorder_cache"):
+            # Fallback to model's _reorder_cache for old cache formats
+            self.model._reorder_cache(past_key_values, beam_idx)
+        elif isinstance(past_key_values, tuple):
+            # Final fallback for tuple-based cache (old transformers versions)
+            return tuple(
+                tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+                for layer_past in past_key_values
+            )
+
+        return past_key_values
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
-        return self.model.prepare_inputs_for_generation(*args, **kwargs)
+        input_kwargs = self.model.prepare_inputs_for_generation(*args, **kwargs)
+        input_kwargs["attention_mask"] = kwargs.get("attention_mask", None)
+        return input_kwargs
 
     def _supports_logits_to_keep(self) -> bool:
         """
@@ -446,21 +462,10 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 orig_cache_implementation = kwargs["generation_config"].cache_implementation
                 kwargs["generation_config"].cache_implementation = "ipex_paged"
 
-        if self._add_patch and kwargs.get("assistant_model", None):
-            transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
-        elif self._add_patch:
-            transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
-
         try:
             result = super().generate(*args, **kwargs)
         except Exception as e:
-            transformers.generation.utils._crop_past_key_values = _crop_past_key_values
-            transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
             raise e
-
-        if self._add_patch and kwargs.get("assistant_model", None):
-            transformers.generation.utils._crop_past_key_values = _crop_past_key_values
-            transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
 
         # change back cache_implementation
         if self._add_patch and kwargs.get("generation_config", None):
@@ -522,8 +527,24 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
         return generation_config, model_kwargs
 
-    def _reorder_cache(self, *args, **kwargs):
-        return self.model._reorder_cache(*args, **kwargs)
+    def _reorder_cache(self, past_key_values, beam_idx):
+        """
+        Reorders the cache for beam search, supporting both new and old cache architectures.
+        """
+        if hasattr(past_key_values, "reorder_cache"):
+            # Handle new cache architecture with reorder_cache method
+            past_key_values.reorder_cache(beam_idx)
+        elif hasattr(self.model, "_reorder_cache"):
+            # Fallback to model's _reorder_cache for old cache formats
+            self.model._reorder_cache(past_key_values, beam_idx)
+        elif isinstance(past_key_values, tuple):
+            # Final fallback for tuple-based cache (old transformers versions)
+            return tuple(
+                tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+                for layer_past in past_key_values
+            )
+
+        return past_key_values
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
         return self.model.prepare_inputs_for_generation(*args, **kwargs)
@@ -546,14 +567,3 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
         to save memory. Checking it in this way allows to avoid using a new model attribute.
         """
         return "num_logits_to_keep" in set(inspect.signature(self.model.forward).parameters.keys())
-
-
-def _ipex_crop_past_key_values(model, past_key_values, max_length):
-    if isinstance(model, IPEXModel) and _is_patched_with_ipex(model, "text-generation"):
-        if isinstance(past_key_values, IPEXPagedCache):
-            # .crop is an inplace op, returns None
-            past_key_values = past_key_values.crop(max_length)
-            return past_key_values
-        else:
-            raise ValueError("only support IPEXPagedCache input now")
-    return _crop_past_key_values(model, past_key_values, max_length)
