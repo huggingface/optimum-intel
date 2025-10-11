@@ -15,14 +15,13 @@ concurrency:
 
 env:
   TRANSFORMERS_IS_CI: true
-  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        transformers-version: ["4.54.0", "4.55.*"]
+        transformers-version: ["4.55.4"]
         torch-version: ["2.8.0"]
         test-file: [test_modeling.py, test_pipelines.py, test_modeling_causal_lm.py]
 

@@ -27,13 +27,13 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "torch>=1.11",
-    "optimum==1.27.*",
+    "torch>=2.1",
+    # change this to optimum-onnx==*.*.* once we release it
+    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git",
     "transformers>=4.45,<4.56",
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
-    "onnx",
 ]
 
 TESTS_REQUIRE = [
@@ -60,6 +60,8 @@ TESTS_REQUIRE = [
     "langchain-huggingface",
     "hf_xet",
     "num2words",
+    "vocos",
+    "vector_quantize_pytorch",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

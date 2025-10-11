@@ -19,7 +19,7 @@ import numpy as np
 import openvino as ov
 import torch
 
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
 
@@ -116,6 +116,7 @@ MODEL_NAMES = {
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "minicpm3": "katuni4ka/tiny-random-minicpm3",
     "minicpmv": "katuni4ka/tiny-random-minicpmv-2_6",
+    "minicpmo": "rkazants/tiny-random-MiniCPM-o-2_6",
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
@@ -327,6 +328,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "clip": {"model": 130},
     "mamba": {"model": 386},
     "falcon-mamba": {"model": 194},
+    "minicpmo": {
+        "lm_model": 16,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 8,
+        "resampler_model": 6,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -489,7 +496,7 @@ def get_supported_model_for_library(library_name):
             min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
             max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
 
-            if is_transformers_version(">=", min_transformers) and is_transformers_version("<", max_transformers):
+            if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
                 valid_model.add(model_type)
 
     return valid_model

@@ -36,6 +36,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
+    Pix2StructForConditionalGeneration,
     PretrainedConfig,
     pipeline,
     set_seed,
@@ -48,6 +49,7 @@ from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import (
+    OVModelForPix2Struct,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
@@ -276,7 +278,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         # whisper cache class support implemented in 4.43
-        expected_stateful = is_transformers_version(">", "4.43")
+        expected_stateful = True
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
         self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
         check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
@@ -471,20 +473,19 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["llava"]
-    SUPPORT_VIDEO = []
+    SUPPORTED_ARCHITECTURES = [
+        "internvl_chat",
+        "llava",
+        "llava_next",
+        "llava_next_mistral",
+        "llava_next_video",
+        "llava-qwen2",
+        "minicpmv",
+        "phi3_v",
+        "qwen2_vl",
+    ]
+    SUPPORT_VIDEO = ["llava_next_video", "qwen2_vl"]
     SUPPORT_AUDIO = []
-
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next", "llava_next_mistral", "llava-qwen2"]
-
-    if is_transformers_version(">=", "4.42.0"):
-        SUPPORTED_ARCHITECTURES += ["llava_next_video"]
-        SUPPORT_VIDEO.append("llava_next_video")
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES += ["minicpmv", "internvl_chat", "phi3_v", "qwen2_vl"]
-        SUPPORT_VIDEO.append("qwen2_vl")
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ["maira2", "idefics3"]
@@ -497,13 +498,15 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES += ["llama4"]
+    if is_transformers_version("<", "4.52"):
+        SUPPORTED_ARCHITECTURES += ["minicpmo"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
 
     IMAGE = Image.open(
         requests.get(
@@ -608,7 +611,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "internvl_chat"]:
+        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -653,12 +656,21 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
+            if model_arch in ["minicpmo"]:
+                # `generate` method for minicpmo requires tokenizer
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                )
+                additional_inputs["tokenizer"] = tokenizer
             transformers_outputs = transformers_model.generate(
                 **transformers_inputs, generation_config=gen_config, **additional_inputs
             )
+            if model_arch in ["minicpmo"]:
+                # retrieve decoded tokens for comparation
+                transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "internvl_chat"]:
+        if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -684,7 +696,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl_chat"]:
+            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -702,7 +714,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "internvl_chat"]:
+            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -718,9 +730,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(["llava", "llava_next", "llava_next_video", "llava_next_mistral"])
-    @unittest.skipIf(
-        is_transformers_version("<", "4.45.0"), reason="New preprocessing available only in transformers >= 4.45"
-    )
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
@@ -945,4 +954,97 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         del vocoder
         del model
         del processor
+        gc.collect()
+
+
+class OVModelForPix2StructIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["pix2struct"]
+    TASK = "image-to-text"  # is it fine as well with visual-question-answering?
+
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.1
+
+    IMAGE = Image.open(
+        requests.get(
+            "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg",
+            stream=True,
+        ).raw
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForPix2Struct.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+
+        self.assertIsInstance(ov_model.encoder, OVEncoder)
+        self.assertIsInstance(ov_model.decoder, OVDecoder)
+        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        question = "Who am I?"
+        transformers_model = Pix2StructForConditionalGeneration.from_pretrained(model_id)
+        preprocessor = get_preprocessor(model_id)
+
+        inputs = preprocessor(images=self.IMAGE, text=question, padding=True, return_tensors="pt")
+        ov_outputs = ov_model(**inputs)
+
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForPix2Struct.from_pretrained(model_id, export=True)
+        preprocessor = get_preprocessor(model_id)
+        question = "Who am I?"
+        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
+
+        # General case
+        outputs = model.generate(**inputs)
+        outputs = preprocessor.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(outputs[0], str)
+        del model
+
+        gc.collect()
+
+    def test_compare_with_and_without_past_key_values(self):
+        model_id = MODEL_NAMES["pix2struct"]
+        preprocessor = get_preprocessor(model_id)
+        question = "Who am I?"
+        inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
+
+        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True)
+        _ = model_with_pkv.generate(**inputs)  # warmup
+        with Timer() as with_pkv_timer:
+            outputs_model_with_pkv = model_with_pkv.generate(
+                **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
+        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False)
+        _ = model_without_pkv.generate(**inputs)  # warmup
+        with Timer() as without_pkv_timer:
+            outputs_model_without_pkv = model_without_pkv.generate(
+                **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
+        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertTrue(
+            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
+            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
+            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
+        )
+        del model_with_pkv
+        del model_without_pkv
         gc.collect()
