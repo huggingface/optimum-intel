@@ -324,7 +324,6 @@ class IPEXPagedCache(Cache):
             if not (self.block_tables == i).any():
                 self.free_blocks[i] = 1
 
-
     def crop(self, maximum_length: int):
         """Crop the past key values up to a new `maximum_length` in terms of tokens. `maximum_length` can also be
         negative to remove `maximum_length` tokens. This is used in assisted decoding and contrastive search."""
