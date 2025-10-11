@@ -29,7 +29,6 @@ class IPEXLayer(CacheLayerMixin):
         **kwargs,
     ):
         super().__init__()
-
         # Create cache tensors if shapes are provided, otherwise use pre-created tensors
         if key_cache_shape is not None and value_cache_shape is not None:
             self.keys = torch.zeros(key_cache_shape, dtype=dtype, device=device)
@@ -99,7 +98,6 @@ class IPEXLayer(CacheLayerMixin):
         if self.values is not None and self.values.numel():
             device = self.values.device
             self.values = self.values.index_select(0, beam_idx.to(device))
-        return self
 
 
 class IPEXPagedCache(Cache):
@@ -326,7 +324,6 @@ class IPEXPagedCache(Cache):
             if not (self.block_tables == i).any():
                 self.free_blocks[i] = 1
 
-        return self
 
     def crop(self, maximum_length: int):
         """Crop the past key values up to a new `maximum_length` in terms of tokens. `maximum_length` can also be
