@@ -25,13 +25,12 @@ import torch.nn.functional as F
 from torch import nn
 from transformers.cache_utils import DynamicCache, EncoderDecoderCache, Cache
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling, CausalLMOutputWithPast
+from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.modeling_utils import PreTrainedModel
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
-from transformers.integrations import use_kernel_forward_from_hub
-from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import can_return_tuple, LossKwargs
 from transformers.processing_utils import Unpack
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
@@ -6734,30 +6733,6 @@ class LlamaEagle3Config(PretrainedConfig):
         )
 
 
-@use_kernel_forward_from_hub("RMSNorm")
-class LlamaEagle3RMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6):
-        """
-        LlamaRMSNorm is equivalent to T5LayerNorm
-        """
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
-
-    def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
-
-
-ALL_LAYERNORM_LAYERS.append(LlamaEagle3RMSNorm)
-
-
 class LlamaEagle3RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
@@ -6799,38 +6774,6 @@ class LlamaEagle3RotaryEmbedding(torch.nn.Module):
         self.register_buffer("cos_cached", emb.cos()[None, None, :, :].to(dtype), persistent=False)
         self.register_buffer("sin_cached", emb.sin()[None, None, :, :].to(dtype), persistent=False)
 
-    # def forward(self, x, seq_len=None):
-    #     # x: [bs, num_attention_heads, seq_len, head_size]
-    #     print(f'forward seq_len={seq_len}')
-    #     if seq_len > self.max_seq_len_cached:
-    #         self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
-
-    #     return (
-    #         self.cos_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
-    #         self.sin_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
-    #     )
-
-
-def eagle3_rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def eagle3_apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
-    # cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
-    # sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-    # cos = cos[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
-    # sin = sin[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
-    cos = cos.unsqueeze(1)
-    sin = sin.unsqueeze(1)
-    q_embed = (q * cos) + (eagle3_rotate_half(q) * sin)
-    k_embed = (k * cos) + (eagle3_rotate_half(k) * sin)
-    return q_embed, k_embed
-
-
 class LlamaEagle3MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -6863,45 +6806,6 @@ class LlamaEagle3MLP(nn.Module):
             down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
         return down_proj
-
-
-def eagle3_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """
-    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
-    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-
-
-def eagle3_eager_attention_forward(
-    module: nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
-    scaling: float,
-    dropout: float = 0.0,
-    **kwargs,
-):
-    key_states = eagle3_repeat_kv(key, module.num_key_value_groups)
-    value_states = eagle3_repeat_kv(value, module.num_key_value_groups)
-
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_weights = attn_weights + causal_mask
-
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-    attn_output = torch.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    return attn_output, attn_weights
-
 
 class LlamaEagle3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -6965,6 +6869,8 @@ class LlamaEagle3Attention(nn.Module):
             **kwargs: Unpack[FlashAttentionKwargs]
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+        from transformers.models.llama.modeling_llama import eager_attention_forward, apply_rotary_pos_emb
+
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
@@ -6998,7 +6904,7 @@ class LlamaEagle3Attention(nn.Module):
             kv_seq_len += past_key_value[0].shape[-2]
         # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         cos, sin = self.rotary_emb(hidden_states, position_ids)
-        query_states, key_states = eagle3_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -7007,7 +6913,7 @@ class LlamaEagle3Attention(nn.Module):
 
         past_key_value = (key_states, value_states) if use_cache else None
         
-        attention_interface: Callable = eagle3_eager_attention_forward
+        attention_interface: Callable = eager_attention_forward
         
         if self.config._attn_implementation != "eager":
             if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
@@ -7028,35 +6934,6 @@ class LlamaEagle3Attention(nn.Module):
             scaling=self.scaling,
             **kwargs,
         )
-        
-        # repeat k/v heads if n_kv_heads < n_heads
-        # key_states = repeat_kv(key_states, self.num_key_value_groups)
-        # value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
-        # if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-        #     raise ValueError(
-        #         f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-        #         f" {attn_weights.size()}"
-        #     )
-
-        # if attention_mask is not None:
-        #     if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-        #         raise ValueError(
-        #             f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-        #         )
-        #     attn_weights = attn_weights + attention_mask
-
-        # # upcast attention to fp32
-        # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        # attn_output = torch.matmul(attn_weights, value_states)
-
-        # if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-        #     raise ValueError(
-        #         f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-        #         f" {attn_output.size()}"
-        #     )
 
         # attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
@@ -7081,11 +6958,11 @@ class LlamaEagle3DecoderLayeremb(nn.Module):
         self.mlp = LlamaEagle3MLP(config)
         self.last = last
         # self.fc = nn.Linear(config.hidden_size * 2, config.hidden_size)
-        self.hidden_norm = LlamaEagle3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.input_layernorm = LlamaEagle3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         # if self.index!=0:
 
-        self.post_attention_layernorm = LlamaEagle3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
             self,
@@ -7172,7 +7049,7 @@ class LlamaEagle3PreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, LlamaEagle3RMSNorm):
+        elif isinstance(module, LlamaRMSNorm):
             module.weight.data.fill_(1.0)
 
 def _make_causal_mask(
@@ -7217,7 +7094,7 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
             self.fc = nn.Linear(config.target_hidden_size * 3, self.hidden_size, bias=False)
         else:
             self.fc = nn.Linear(config.hidden_size * 3, self.hidden_size, bias=False)
-        self.norm = LlamaEagle3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = False
         d2t=torch.zeros((config.draft_vocab_size),dtype=torch.long)
         t2d=torch.zeros((config.vocab_size),dtype=torch.bool)
