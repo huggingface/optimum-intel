@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
+from safetensors.torch import save_file
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
@@ -135,11 +136,23 @@ def eagle3_config(model_path: str):
     with open(config_file, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
-def restore_config(model_path: str):
+def extract_d2t(model_path: str, output_path: str):
+    load_model_path=os.path.join(model_path, "pytorch_model.bin")
+    output_path = os.path.join(output_path, "eagle3.safetensors")
+    target_keys = ['d2t', 't2d']
+    if os.path.exists(load_model_path):
+        state_dict = torch.load(load_model_path, map_location=torch.device('cpu'))
+        extracted = {k: state_dict[k] for k in target_keys if k in state_dict.keys()}
+        # save output file
+        save_file(extracted, output_path)
+
+def restore_config(model_path: str, ov_path: str):
     # restore the origin config
     config_file = os.path.join(model_path, 'config.json')
     org_config_file = os.path.join(model_path, 'config_org.json')
     os.rename(org_config_file, config_file)
+    if os.path.exists(ov_path):
+        extract_d2t(model_path, ov_path)
 
 def main_export(
     model_name_or_path: str,
@@ -520,6 +533,8 @@ def main_export(
 
         clear_class_registry()
         del model
+        if eagle3 and library_name == "transformers":
+            restore_config(model_name_or_path, output)
         gc.collect()
 
         for submodel_path in submodel_paths:
@@ -580,6 +595,8 @@ def main_export(
             torch.cuda.is_available = orig_cuda_check
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
+        if eagle3 and library_name == "transformers":
+            restore_config(model_name_or_path, output)
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
