@@ -275,6 +275,13 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--eagle3",
+        action="store_true",
+        help=(
+            "the original model is a draft model of eagle3 pipeline."
+        ),
+    )
+    optional_group.add_argument(
         "--model-kwargs",
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
@@ -576,6 +583,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
+                eagle3=self.args.eagle3,
                 # **input_shapes,
             )
 

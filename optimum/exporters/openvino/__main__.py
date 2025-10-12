@@ -16,6 +16,9 @@ import gc
 import logging
 import operator
 import warnings
+import json
+import os
+import importlib.util
 from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
@@ -105,6 +108,38 @@ def infer_task(
                 )
     return task
 
+def eagle3_config(model_path: str):
+    config_file = os.path.join(model_path, 'config.json')
+    # rename the origin config
+    org_config_file = os.path.join(model_path, 'config_org.json')
+    os.rename(config_file, org_config_file)
+
+    # read config
+    with open(org_config_file, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    # modify config
+    if 'model_type' in config.keys():
+        org_type = config['model_type']
+        if 'eagle3' not in org_type:
+            config['model_type'] = org_type + 'eagle3'
+    moduler_name = 'optimum.exporters.openvino.model_patcher'
+    spec = importlib.util.find_spec(moduler_name)
+    if spec and spec.origin:
+        moduler_path = os.path.dirname(spec.origin)
+        config['auto_map'] = {
+            "AutoConfig": moduler_path + "--model_patcher.LlamaEagle3Config",
+            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
+            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM"
+        }
+    # write new config.json
+    with open(config_file, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+def restore_config(model_path: str):
+    # restore the origin config
+    config_file = os.path.join(model_path, 'config.json')
+    org_config_file = os.path.join(model_path, 'config_org.json')
+    os.rename(org_config_file, config_file)
 
 def main_export(
     model_name_or_path: str,
@@ -130,6 +165,7 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
+    eagle3: bool = False,
     **kwargs_shapes,
 ):
     """
@@ -187,6 +223,8 @@ def main_export(
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        eagle3 (`bool`, defaults to `False`):
+            This is needed by eagle3 draft models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 
@@ -251,6 +289,9 @@ def main_export(
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
 
     if library_name == "transformers":
+        if eagle3:
+            eagle3_config(model_name_or_path)
+
         config = AutoConfig.from_pretrained(
             model_name_or_path,
             subfolder=subfolder,
