@@ -533,8 +533,6 @@ def main_export(
 
         clear_class_registry()
         del model
-        if eagle3 and library_name == "transformers":
-            restore_config(model_name_or_path, output)
         gc.collect()
 
         for submodel_path in submodel_paths:

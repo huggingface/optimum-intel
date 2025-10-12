@@ -839,7 +839,7 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     Add eagle3 mode
     """
     try:
-        model.set_rt_info("True", ["eagle3_model"])
+        model.set_rt_info("True", ["eagle3_mode"])
     except Exception:
         pass
 
