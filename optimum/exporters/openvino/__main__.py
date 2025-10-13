@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from safetensors.torch import save_file
+from safetensors.torch import save_file, load_file
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
@@ -145,8 +145,14 @@ def extract_d2t(model_path: str, output_path: str):
     if os.path.exists(load_model_path):
         state_dict = torch.load(load_model_path, map_location=torch.device('cpu'))
         extracted = {k: state_dict[k] for k in target_keys if k in state_dict.keys()}
-        # save output file
         save_file(extracted, output_path)
+    else:
+        load_model_path=os.path.join(model_path, "model.safetensors")
+        if os.path.exists(load_model_path):
+            state_dict = load_file(load_model_path)
+            extracted = {k: state_dict[k] for k in target_keys if k in state_dict.keys()}
+            save_file(extracted, output_path)
+
 
 def restore_config(model_path: str, ov_path: str):
     # restore the origin config
