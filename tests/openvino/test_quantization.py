@@ -29,6 +29,7 @@ import openvino as ov
 import pytest
 import numpy as np
 import torch
+from PIL import Image
 from parameterized import parameterized
 import nncf
 from transformers import (
@@ -1286,7 +1287,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
-            check_model_inference(model.from_pretrained(tmp_dir), model_cls, model_id, trust_remote_code)
+            model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
+            check_model_inference(model, model_cls, model_id, trust_remote_code)
 
             # At the moment the first model in the list is the only one we apply data-aware compression to
             wc_rt_info = next(iter(submodels.values())).get_rt_info()["nncf"]["weight_compression"]
@@ -2262,9 +2264,10 @@ def check_model_inference(ov_model, model_cls, model_id, trust_remote_code):
     elif model_cls == OVModelForVisualCausalLM:
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        image = np.random.rand(224, 224, 3).astype(np.uint8)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        image = Image.fromarray(np.random.rand(224, 224, 3).astype(np.uint8))
         inputs = ov_model.preprocess_inputs(
-            image=image, text="This is a sample text", processor=processor, config=config
+            image=image, text="This is a sample text", processor=processor, tokenizer=tokenizer, config=config
         )
         ov_model(**inputs)
     elif model_cls == OVSamModel:
