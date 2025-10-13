@@ -51,6 +51,8 @@ from optimum.exporters.onnx.model_configs import (
     VisionOnnxConfig,
     WhisperOnnxConfig,
 )
+
+from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
@@ -3585,6 +3587,14 @@ class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 )
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+    @property
+    def inputs(self):
+        common_inputs = super().inputs
+        if self._behavior is not ConfigBehavior.ENCODER and self.use_past_in_inputs:
+            # since https://github.com/huggingface/transformers/pull/31166
+            common_inputs["cache_position"] = {0: "decoder_sequence_length"}
+        return common_inputs
 
 
 @register_in_tasks_manager(
