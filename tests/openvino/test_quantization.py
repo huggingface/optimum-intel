@@ -580,50 +580,11 @@ class OVQuantizerTest(unittest.TestCase):
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
-                if ov_model.decoder_with_past is None:
-                    expected_fake_nodes_per_model.pop("decoder_with_past", None)
-                    expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
+            check_model_inference(ov_model, model_cls, model_id)
 
-                if model_cls == OVModelForSpeechSeq2Seq:
-                    input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
-                    ov_model.generate(input_features)
-                else:
-                    tokenizer = AutoTokenizer.from_pretrained(model_id)
-                    inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
-                    ov_model.generate(**inputs)
-            elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
-                tokenizer = AutoTokenizer.from_pretrained(model_id)
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
-                tokens = tokenizer("This is a sample <mask>", return_tensors="pt")
-                ov_model(**tokens)
-            elif model_cls in (
-                OVStableDiffusionPipeline,
-                OVStableDiffusionXLPipeline,
-                OVLatentConsistencyModelPipeline,
-            ):
-                ov_model(prompt="A text-to-image prompt")
-            elif model_cls == OVSentenceTransformer:
-                ov_model.encode(["This is a sample input"])
-            elif model_cls == OVModelForZeroShotImageClassification:
-                processor = AutoProcessor.from_pretrained(model_id)
-                image = np.random.rand(224, 224, 3).astype(np.uint8)
-                inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
-                ov_model(**inputs)
-            elif model_cls == OVModelForVisualCausalLM:
-                processor = AutoProcessor.from_pretrained(model_id)
-                image = np.random.rand(224, 224, 3).astype(np.uint8)
-                inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
-                ov_model(**inputs)
-            elif model_cls == OVSamModel:
-                processor = AutoProcessor.from_pretrained(model_id)
-                image = np.random.rand(224, 224, 3).astype(np.uint8)
-                inputs = processor(image, input_points=[[[0, 0]]], return_tensors="pt")
-                ov_model(**inputs)
-            else:
-                raise Exception("Unexpected model class.")
-
+            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM] and ov_model.decoder_with_past is None:
+                expected_fake_nodes_per_model.pop("decoder_with_past", None)
+                expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
             check_compression_state_per_model(
                 self,
                 ov_model.ov_submodels,
@@ -1324,6 +1285,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
+            check_model_inference(model.from_pretrained(tmp_dir), model_cls, model_id)
+
             # At the moment the first model in the list is the only one we apply data-aware compression to
             wc_rt_info = next(iter(submodels.values())).get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
@@ -1733,6 +1696,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             model.save_pretrained(tmp_dir)
 
             model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
+            check_model_inference(model, model_cls, model_id)
             check_compression_state_per_model(
                 self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
             )
@@ -2263,3 +2227,45 @@ def check_optimization_not_applicable_to_optimized_model(model, quantization_con
         match="Cannot apply optimization to the model because it was already optimized with the following config",
     ):
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+
+def check_model_inference(ov_model, model_cls, model_id):
+    if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
+        if model_cls == OVModelForSpeechSeq2Seq:
+            input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
+            ov_model.generate(input_features)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
+            ov_model.generate(**inputs)
+    elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokens = tokenizer("This is a sample <mask>", return_tensors="pt")
+        ov_model(**tokens)
+    elif model_cls in (
+        OVStableDiffusionPipeline,
+        OVStableDiffusionXLPipeline,
+        OVLatentConsistencyModelPipeline,
+    ):
+        ov_model(prompt="A text-to-image prompt")
+    elif model_cls == OVSentenceTransformer:
+        ov_model.encode(["This is a sample input"])
+    elif model_cls == OVModelForZeroShotImageClassification:
+        processor = AutoProcessor.from_pretrained(model_id)
+        image = np.random.rand(224, 224, 3).astype(np.uint8)
+        inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
+        ov_model(**inputs)
+    elif model_cls == OVModelForVisualCausalLM:
+        processor = AutoProcessor.from_pretrained(model_id)
+        image = np.random.rand(224, 224, 3).astype(np.uint8)
+        inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
+        ov_model(**inputs)
+    elif model_cls == OVSamModel:
+        processor = AutoProcessor.from_pretrained(model_id)
+        image = np.random.rand(224, 224, 3).astype(np.uint8)
+        inputs = processor(image, input_points=[[[0, 0]]], return_tensors="pt")
+        ov_model(**inputs)
+    else:
+        raise Exception("Unexpected model class.")
