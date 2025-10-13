@@ -1,13 +1,11 @@
 import os
-from typing import List, Optional, Tuple, Any
+from typing import Any, Optional, Tuple
 
 import intel_extension_for_pytorch as ipex
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
 from transformers.cache_utils import CacheLayerMixin
-
-from optimum.intel.utils.import_utils import is_ipex_version
 
 
 class IPEXLayer(CacheLayerMixin):
