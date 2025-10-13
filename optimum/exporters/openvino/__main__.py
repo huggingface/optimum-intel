@@ -121,6 +121,8 @@ def eagle3_config(model_path: str):
     # modify config
     if 'model_type' in config.keys():
         org_type = config['model_type']
+        if org_type != 'llama':
+            raise ValueError(f"Currently eagle3 does not support model_type={org_type}, it only supports the conversion of llama-based draft models.")
         if 'eagle3' not in org_type:
             config['model_type'] = org_type + 'eagle3'
     moduler_name = 'optimum.exporters.openvino.model_patcher'
@@ -278,6 +280,9 @@ def main_export(
                 "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
             )
             library_name = "transformers"
+
+    if eagle3 and not os.path.isdir(model_name_or_path):
+        raise ValueError("Currently eagle3 only supports local path conversion. Please download the draft model to your local path first.")
 
     original_task = task
     task = infer_task(
