@@ -113,6 +113,8 @@ def eagle3_config(model_path: str):
     config_file = os.path.join(model_path, 'config.json')
     # rename the origin config
     org_config_file = os.path.join(model_path, 'config_org.json')
+    if os.path.exists(org_config_file):
+        os.remove(org_config_file)
     os.rename(config_file, org_config_file)
 
     # read config
@@ -158,7 +160,10 @@ def restore_config(model_path: str, ov_path: str):
     # restore the origin config
     config_file = os.path.join(model_path, 'config.json')
     org_config_file = os.path.join(model_path, 'config_org.json')
-    os.rename(org_config_file, config_file)
+    if os.path.exists(org_config_file):
+        if os.path.exists(config_file):
+            os.remove(config_file)
+        os.rename(org_config_file, config_file)
     if os.path.exists(ov_path):
         extract_d2t(model_path, ov_path)
 
