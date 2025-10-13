@@ -18,11 +18,13 @@ import operator
 import warnings
 import json
 import os
+import shutil
 import importlib.util
 from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
+from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from safetensors.torch import save_file, load_file
@@ -156,16 +158,33 @@ def extract_d2t(model_path: str, output_path: str):
             save_file(extracted, output_path)
 
 
-def restore_config(model_path: str, ov_path: str):
-    # restore the origin config
-    config_file = os.path.join(model_path, 'config.json')
-    org_config_file = os.path.join(model_path, 'config_org.json')
-    if os.path.exists(org_config_file):
-        if os.path.exists(config_file):
-            os.remove(config_file)
-        os.rename(org_config_file, config_file)
+def restore_config(model_path: str, ov_path: str, download_to_local: bool):
     if os.path.exists(ov_path):
         extract_d2t(model_path, ov_path)
+
+    if download_to_local:
+        shutil.rmtree(model_path)
+    else:
+        # restore the origin config
+        config_file = os.path.join(model_path, 'config.json')
+        org_config_file = os.path.join(model_path, 'config_org.json')
+        if os.path.exists(org_config_file):
+            if os.path.exists(config_file):
+                os.remove(config_file)
+            os.rename(org_config_file, config_file)
+
+def download_eagle3_model(model_path: str):
+    split_list = model_path.split('/')
+    dir_name = 'EAGLE3_draft_model'
+    if len(split_list) > 0:
+        dir_name = split_list[-1] + '_download'
+
+    local_dir = snapshot_download(
+        repo_id=model_path,
+        local_dir=dir_name,
+        local_dir_use_symlinks=False
+    )
+    return local_dir
 
 def main_export(
     model_name_or_path: str,
@@ -271,6 +290,13 @@ def main_export(
         if token is not None:
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
+
+    download_to_local = False
+    if eagle3 and not os.path.isdir(model_name_or_path):
+        logger.warning("Currently eagle3 only supports local path conversion. The draft model will be downloaded to the local path.")
+        model_name_or_path = download_eagle3_model(model_name_or_path)
+        if os.path.exists(model_name_or_path):
+            download_to_local = True
 
     if framework is None:
         framework = TasksManager.determine_framework(
@@ -610,7 +636,7 @@ def main_export(
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
         if eagle3 and library_name == "transformers":
-            restore_config(model_name_or_path, output)
+            restore_config(model_name_or_path, output, download_to_local)
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
