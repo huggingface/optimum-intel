@@ -312,7 +312,8 @@ def patch_stateful_ssm(config: PretrainedConfig, ov_model: ov.Model):
     # so KV tensors must be handled properly
     if kv_input_names is not None and len(kv_input_names) > 0:
         fuse_cache_reorder(ov_model, not_kv_inputs, kv_input_names, batch_dim)
-        make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim)
+        num_attention_heads = config.num_attention_heads
+        make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim, num_attention_heads, None)
 
     input_output_map = {}
     for cache_name_pair in zip(ssm_input_names, ssm_output_names):

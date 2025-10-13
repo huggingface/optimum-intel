@@ -14,7 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""Finetuning the library models for sequence classification on GLUE."""
+""" Finetuning the library models for sequence classification on GLUE."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
 import logging
@@ -155,9 +155,9 @@ class DataTrainingArguments:
             train_extension = self.train_file.split(".")[-1]
             assert train_extension in ["csv", "json"], "`train_file` should be a csv or a json file."
             validation_extension = self.validation_file.split(".")[-1]
-            assert validation_extension == train_extension, (
-                "`validation_file` should have the same extension (csv or json) as `train_file`."
-            )
+            assert (
+                validation_extension == train_extension
+            ), "`validation_file` should have the same extension (csv or json) as `train_file`."
 
 
 @dataclass

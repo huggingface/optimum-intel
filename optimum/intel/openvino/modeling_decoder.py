@@ -1051,7 +1051,7 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
 
 
-class OVHybridWithMambaCache(MambaCache):
+class OVMambaCache(MambaCache):
     """
     Cache for mamba model which does not have attention mechanism and key value states.
 
@@ -1080,15 +1080,12 @@ class OVHybridWithMambaCache(MambaCache):
     def __init__(
         self,
         config: "PretrainedConfig",
-        is_hybrid: bool = False,
         batch_size: int = None,
         dtype: torch.dtype = torch.float32,
         device: Optional[Union[torch.device, str]] = None,
         max_batch_size: Optional[int] = None,
         conv_states: Optional[List[torch.Tensor]] = None,
         ssm_states: Optional[List[torch.Tensor]] = None,
-        key_cache: Optional[List[torch.Tensor]] = None,
-        value_cache: Optional[List[torch.Tensor]] = None,
     ):
         self.dtype = dtype
         self.max_batch_size = batch_size or max_batch_size
@@ -1096,10 +1093,10 @@ class OVHybridWithMambaCache(MambaCache):
         self.ssm_state_size = config.state_size
         self.conv_kernel_size = config.conv_kernel
         self.device = torch.device(device) if device is not None else torch.device("cpu")
-        self.is_hybrid = is_hybrid
 
-        self.conv_states = conv_states
-        if self.conv_states is None:
+        if conv_states is not None:
+            self.conv_states = conv_states
+        else:
             self.conv_states = []
             for _ in range(config.num_hidden_layers):
                 conv_state: torch.Tensor = torch.zeros(
@@ -1107,8 +1104,9 @@ class OVHybridWithMambaCache(MambaCache):
                 )
                 self.conv_states.append(conv_state)
 
-        self.ssm_states = ssm_states
-        if self.ssm_states is None:
+        if ssm_states is not None:
+            self.ssm_states = ssm_states
+        else:
             self.ssm_states: List[torch.Tensor] = []
             for _ in range(config.num_hidden_layers):
                 ssm_state: torch.Tensor = torch.zeros(
@@ -1119,14 +1117,6 @@ class OVHybridWithMambaCache(MambaCache):
                     dtype=dtype,
                 )
                 self.ssm_states.append(ssm_state)
-
-        self.key_cache = key_cache
-        if self.is_hybrid and self.key_cache is None:
-            self.key_cache = [torch.tensor([[]] * self.max_batch_size, device=device) for _ in range(config.num_hidden_layers)]
-
-        self.value_cache = value_cache
-        if self.is_hybrid and self.value_cache is None:
-            self.value_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
 
 
 @dataclass
@@ -1150,7 +1140,7 @@ class MambaOutput(ModelOutput):
     """
 
     logits: Optional[torch.FloatTensor] = None
-    cache_params: Optional[OVHybridWithMambaCache] = None
+    cache_params: Optional[OVMambaCache] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
 
 
@@ -1220,7 +1210,7 @@ class OVMambaForCausalLM(OVModelForCausalLM):
 
         if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
             if cache_params is None:
-                cache_params = OVHybridWithMambaCache(self.config, input_ids.shape[0])
+                cache_params = OVMambaCache(self.config, input_ids.shape[0])
 
             ssm_cache = cache_params.ssm_states
             conv_cache = cache_params.conv_states
@@ -1233,11 +1223,6 @@ class OVMambaForCausalLM(OVModelForCausalLM):
                 if self.request is not None:
                     self.request.reset_state()
                 self._past_length = 0
-
-        # prepare beam_idx input that is required for hybrid models with both KV cache and Mamba states
-        if "beam_idx" in self.input_names:
-            batch_size = input_ids.shape[0]
-            inputs["beam_idx"] = np.arange(batch_size, dtype=int)
 
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -1258,8 +1243,7 @@ class OVMambaForCausalLM(OVModelForCausalLM):
         else:
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
-        #cache_params = OVHybridWithMambaCache(self.config, input_ids.shape[0], conv_states=conv_states, ssm_states=ssm_states)
-        cache_params = None
+        cache_params = OVMambaCache(self.config, input_ids.shape[0], conv_states=conv_states, ssm_states=ssm_states)
 
         return MambaOutput(logits=logits, cache_params=cache_params)
 

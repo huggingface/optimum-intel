@@ -14,7 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""Example for stable-diffusion to generate a picture from a text ."""
+""" Example for stable-diffusion to generate a picture from a text ."""
 # You can also adapt this script on your own text to image task. Pointers for this are left as comments.
 
 import argparse
