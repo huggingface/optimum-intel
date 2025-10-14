@@ -12,6 +12,7 @@ except ImportError:
     # Fallback for older transformers versions
     class CacheLayerMixin:
         """Minimal fallback for CacheLayerMixin when not available in transformers."""
+
         pass
 
 
