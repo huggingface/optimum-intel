@@ -2235,11 +2235,7 @@ def check_optimization_not_applicable_to_optimized_model(model, quantization_con
 
 
 def check_model_inference(ov_model, model_cls, model_id, trust_remote_code):
-    if model_cls == OVModelForSpeechSeq2Seq:
-        input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
-        generate_kwrgs = {}
-        if is_transformers_version(">=", "4.50"):
-            generate_kwrgs = {"use_model_defaults": False}
+    if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
         gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -2247,18 +2243,16 @@ def check_model_inference(ov_model, model_cls, model_id, trust_remote_code):
             do_sample=False,
             eos_token_id=None,
         )
-        ov_model.generate(input_features, generation_config=gen_config, **generate_kwrgs)
-    elif model_cls == OVModelForSeq2SeqLM:
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
-        gen_config = GenerationConfig(
-            max_new_tokens=10,
-            min_new_tokens=10,
-            num_beams=2,
-            do_sample=False,
-            eos_token_id=None,
-        )
-        ov_model.generate(**inputs, generation_config=gen_config)
+        if model_cls == OVModelForSpeechSeq2Seq:
+            input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
+            generate_kwrgs = {}
+            if is_transformers_version(">=", "4.50"):
+                generate_kwrgs = {"use_model_defaults": False}
+            ov_model.generate(input_features, generation_config=gen_config, **generate_kwrgs)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
+            ov_model.generate(**inputs, generation_config=gen_config)
     elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         if tokenizer.pad_token is None:
