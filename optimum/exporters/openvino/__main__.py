@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import atexit
 import gc
 import logging
 import operator
@@ -19,6 +20,7 @@ import warnings
 import json
 import os
 import shutil
+import tempfile
 import importlib.util
 from functools import reduce
 from pathlib import Path
@@ -162,9 +164,7 @@ def restore_config(model_path: str, ov_path: str, download_to_local: bool):
     if os.path.exists(ov_path):
         extract_d2t(model_path, ov_path)
 
-    if download_to_local:
-        shutil.rmtree(model_path)
-    else:
+    if not download_to_local:
         # restore the origin config
         config_file = os.path.join(model_path, 'config.json')
         org_config_file = os.path.join(model_path, 'config_org.json')
@@ -174,17 +174,17 @@ def restore_config(model_path: str, ov_path: str, download_to_local: bool):
             os.rename(org_config_file, config_file)
 
 def download_eagle3_model(model_path: str):
-    split_list = model_path.split('/')
-    dir_name = 'EAGLE3_draft_model'
-    if len(split_list) > 0:
-        dir_name = split_list[-1] + '_download'
-
+    dir_name = tempfile.mkdtemp()
     local_dir = snapshot_download(
         repo_id=model_path,
         local_dir=dir_name,
         local_dir_use_symlinks=False
     )
     return local_dir
+
+def clean_download(model_path: str):
+    if os.path.exists(model_path):
+        shutil.rmtree(model_path, ignore_errors=True)
 
 def main_export(
     model_name_or_path: str,
@@ -297,6 +297,11 @@ def main_export(
         model_name_or_path = download_eagle3_model(model_name_or_path)
         if os.path.exists(model_name_or_path):
             download_to_local = True
+            logger.info(f"Download eagle3 draft model to local path: {model_name_or_path}")
+
+    if download_to_local:
+        # Delete temporary directory on exit
+        atexit.register(lambda: clean_download(model_name_or_path))
 
     if framework is None:
         framework = TasksManager.determine_framework(
