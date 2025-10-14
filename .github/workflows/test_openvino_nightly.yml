@@ -9,10 +9,13 @@ on:
     branches:
       - v*-release
   pull_request:
+    branches:
+      - main
     types:
       - opened
       - labeled
       - reopened
+      - unlabeled
       - synchronize
 
 concurrency:
