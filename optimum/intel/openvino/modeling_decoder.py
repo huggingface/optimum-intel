@@ -871,7 +871,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         elif model_type in SSM_MODELS:
-            init_cls = OVMambaForCausalLM
+            init_cls = OVHybridModelForCausalLM
         else:
             init_cls = cls
 
@@ -1051,9 +1051,9 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
 
 
-class OVHybridWithMambaCache(MambaCache):
+class OVHybridCache(MambaCache):
     """
-    Cache for mamba model which does not have attention mechanism and key value states.
+    Hybrid cache for Mamba and transformer blocks
 
     Arguments:
         config (`PretrainedConfig):
@@ -1093,8 +1093,8 @@ class OVHybridWithMambaCache(MambaCache):
         self.dtype = dtype
         self.max_batch_size = batch_size or max_batch_size
         self.intermediate_size = config.intermediate_size
-        self.ssm_state_size = config.state_size
-        self.conv_kernel_size = config.conv_kernel
+        self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
+        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
         self.device = torch.device(device) if device is not None else torch.device("cpu")
         self.is_hybrid = is_hybrid
 
@@ -1130,7 +1130,7 @@ class OVHybridWithMambaCache(MambaCache):
 
 
 @dataclass
-class MambaOutput(ModelOutput):
+class OVHybridOutput(ModelOutput):
     """
     Class for the MAMBA model outputs.
 
@@ -1150,11 +1150,11 @@ class MambaOutput(ModelOutput):
     """
 
     logits: Optional[torch.FloatTensor] = None
-    cache_params: Optional[OVHybridWithMambaCache] = None
+    cache_params: Optional[OVHybridCache] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class OVMambaForCausalLM(OVModelForCausalLM):
+class OVHybridModelForCausalLM(OVModelForCausalLM):
     """
     OpenVINO-based causal language model class designed to run models that include Mamba blocks.
     This model assumes a fixed-size Mamba context for sequential computation.
@@ -1191,6 +1191,9 @@ class OVMambaForCausalLM(OVModelForCausalLM):
         self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
         self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
 
+        # in case of a hybrid model, it contains KV-cache with beam_idx input
+        self.is_hybrid = "beam_idx" in self.input_names
+
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
         return any(
@@ -1220,7 +1223,7 @@ class OVMambaForCausalLM(OVModelForCausalLM):
 
         if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
             if cache_params is None:
-                cache_params = OVHybridWithMambaCache(self.config, input_ids.shape[0])
+                cache_params = OVHybridCache(self.config, input_ids.shape[0])
 
             ssm_cache = cache_params.ssm_states
             conv_cache = cache_params.conv_states
@@ -1245,23 +1248,32 @@ class OVMambaForCausalLM(OVModelForCausalLM):
 
         if self.stateful:
             self._past_length += input_ids.shape[1]
-            num_states = len(self.request.query_state()) // 2
-            ssm_states = [None] * num_states
-            conv_states = [None] * num_states
+            ssm_states_dict = {}
+            conv_states_dict = {}
+            k_values_dict = {}
+            v_values_dict = {}
             for state in self.request.query_state():
                 if "cache_params.past.ssm" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
-                    ssm_states[idx] = state.state.data
+                    ssm_states_dict[idx] = state.state.data
                 elif "cache_params.past.conv" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
-                    conv_states[idx] = state.state.data
+                    conv_states_dict[idx] = state.state.data
+            ssm_states = [v for k, v in sorted(ssm_states_dict.items())]
+            conv_states = [v for k, v in sorted(conv_states_dict.items())]
+            k_values = [v for k, v in sorted(k_values_dict.items())]
+            v_values = [v for k, v in sorted(v_values_dict.items())]
         else:
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
-        #cache_params = OVHybridWithMambaCache(self.config, input_ids.shape[0], conv_states=conv_states, ssm_states=ssm_states)
-        cache_params = None
+            k_values = []
+            v_values=[]
 
-        return MambaOutput(logits=logits, cache_params=cache_params)
+        cache_params = OVHybridCache(self.config, is_hybrid=self.is_hybrid,
+                                     batch_size=input_ids.shape[0], conv_states=conv_states,
+                                     ssm_states=ssm_states, key_cache=k_values, value_cache=v_values)
+        #cache_params = None
+        return OVHybridOutput(logits=logits, cache_params=cache_params)
 
     def _update_model_kwargs_for_generation(
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs

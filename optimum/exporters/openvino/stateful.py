@@ -269,7 +269,7 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
-def patch_stateful_ssm(config: PretrainedConfig, ov_model: ov.Model):
+def patch_stateful_hybrid_ssm(ov_model: ov.Model):
     from openvino._offline_transformations import apply_make_stateful_transformation
 
     def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
@@ -306,14 +306,14 @@ def patch_stateful_ssm(config: PretrainedConfig, ov_model: ov.Model):
         ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
     )
 
-    batch_dim = 0
-
     # hybrid models can contain transformer blocks as well
     # so KV tensors must be handled properly
+    batch_dim = 0
     if kv_input_names is not None and len(kv_input_names) > 0:
         fuse_cache_reorder(ov_model, not_kv_inputs, kv_input_names, batch_dim)
         make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim)
 
+    # create states for SSM cache
     input_output_map = {}
     for cache_name_pair in zip(ssm_input_names, ssm_output_names):
         input_output_map[cache_name_pair[0]] = cache_name_pair[1]
@@ -326,7 +326,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
     if config.model_type in SSM_MODELS:
-        return patch_stateful_ssm(config, ov_model)
+        return patch_stateful_hybrid_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 
