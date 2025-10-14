@@ -2251,7 +2251,14 @@ def check_model_inference(ov_model, model_cls, model_id, trust_remote_code):
     elif model_cls == OVModelForSeq2SeqLM:
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
-        ov_model.generate(**inputs)
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        ov_model.generate(**inputs, generation_config=gen_config)
     elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
         if tokenizer.pad_token is None:
