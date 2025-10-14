@@ -24,6 +24,7 @@ env:
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -72,7 +73,8 @@ jobs:
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
 
-      - name: Login with CI token
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
 
