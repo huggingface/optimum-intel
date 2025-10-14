@@ -33,6 +33,7 @@ INSTALL_REQUIRE = [
     "datasets>=1.4.0",
     "setuptools",
     "scipy",
+    "onnx",
 ]
 
 TESTS_REQUIRE = [
