@@ -23,7 +23,8 @@ jobs:
       matrix:
         transformers-version: ["4.51.0", "4.52.*"]
         torch-version: ["2.7.0"]
-        test-file: [test_modeling.py, test_pipelines.py, test_modeling_causal_lm.py]
+        test-file:
+          [test_modeling.py, test_pipelines.py, test_modeling_causal_lm.py]
 
     runs-on: ubuntu-22.04
 

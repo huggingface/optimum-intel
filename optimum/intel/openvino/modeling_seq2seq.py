@@ -353,21 +353,20 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         generation_config = kwargs.get("generation_config", None)
         self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-        if is_transformers_version(">=", "4.44.99"):
-            # some model configs may have issues with loading without parameters initialization
-            try:
-                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-            except (KeyError, TypeError):
-                misplaced_generation_parameters = {}
-            if len(misplaced_generation_parameters) > 0:
-                logger.warning(
-                    "Moving the following attributes in the config to the generation config: "
-                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                    "generation parameters in the model config, as opposed to in the generation config.",
-                )
-                for param_name, param_value in misplaced_generation_parameters.items():
-                    setattr(self.generation_config, param_name, param_value)
-                    setattr(self.config, param_name, None)
+        # some model configs may have issues with loading without parameters initialization
+        try:
+            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+        except (KeyError, TypeError):
+            misplaced_generation_parameters = {}
+        if len(misplaced_generation_parameters) > 0:
+            logger.warning(
+                "Moving the following attributes in the config to the generation config: "
+                f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                "generation parameters in the model config, as opposed to in the generation config.",
+            )
+            for param_name, param_value in misplaced_generation_parameters.items():
+                setattr(self.generation_config, param_name, param_value)
+                setattr(self.config, param_name, None)
 
         self._openvino_config = None
         if quantization_config:
@@ -684,19 +683,19 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 input_ids=(
                     decoder_input_ids[:, -1:] if past_key_values is not None and self.use_cache else decoder_input_ids
                 ),
-                past_key_values=past_key_values,
+                attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
-                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
                 cache_position=cache_position,
             )
         else:
             decoder_outputs = self.decoder_with_past(
                 input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                past_key_values=past_key_values,
+                attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
-                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
                 cache_position=cache_position,
             )
 
@@ -822,6 +821,13 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
 
         return shifted_input_ids
+
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
 
 
 class OVEncoder:
@@ -971,10 +977,10 @@ class OVDecoder:
     def forward(
         self,
         input_ids: torch.LongTensor,
-        encoder_hidden_states: torch.FloatTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        decoder_attention_mask: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Seq2SeqLMOutput:
         self._compile()
@@ -997,6 +1003,9 @@ class OVDecoder:
 
         inputs["input_ids"] = input_ids
 
+        if "attention_mask" in self.input_names and attention_mask is not None:
+            inputs["attention_mask"] = attention_mask
+
         # Add the encoder_attention_mask inputs when needed
         if "encoder_attention_mask" in self.input_names and encoder_attention_mask is not None:
             inputs["encoder_attention_mask"] = encoder_attention_mask
@@ -1004,9 +1013,6 @@ class OVDecoder:
         # Add the encoder_hidden_states inputs when needed
         if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
             inputs["encoder_hidden_states"] = encoder_hidden_states
-
-        if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
-            inputs["decoder_attention_mask"] = decoder_attention_mask
 
         if "cache_position" in self.input_names:
             if cache_position is None:
@@ -1019,6 +1025,7 @@ class OVDecoder:
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
             )
+
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()

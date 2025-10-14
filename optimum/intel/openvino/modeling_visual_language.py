@@ -8,7 +8,7 @@ import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino as ov
@@ -25,6 +25,7 @@ from transformers import (
     PreTrainedTokenizer,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -54,12 +55,7 @@ else:
 
 if TYPE_CHECKING:
     from PIL.Image import Image
-
-    if is_transformers_version(">=", "4.42.0"):
-        from transformers.image_utils import VideoInput
-    else:
-        VideoInput = List[Image]
-
+    from transformers.image_utils import VideoInput
 
 logger = logging.getLogger(__name__)
 
@@ -922,6 +918,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Preprocess input instruction and an image.
         """
+
+    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
@@ -2110,6 +2114,36 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        audio_bounds=None,
+        spk_bounds=None,
+        audio_features=None,
+        audio_feature_lens=None,
+        **kwargs,
+    ):
+        # Audio modality is not supported for MiniCPMO
+        if audio_features is not None and len(audio_features) > 0:
+            raise ValueError("Audio input is not supported for MiniCPMO")
+
+        return super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+
+
 class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
@@ -2517,19 +2551,9 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         self.rope_deltas = None  # cache rope_deltas here
-
-        if is_transformers_version(">=", "4.45.0"):
-            from transformers.models.qwen2_vl.modeling_qwen2_vl import (
-                VisionRotaryEmbedding,
-            )
-
-            self._rotary_pos_emb = VisionRotaryEmbedding(
-                self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
-            )
-        else:
-            raise ValueError(
-                f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
-            )
+        self._rotary_pos_emb = VisionRotaryEmbedding(
+            self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
+        )
 
     def prepare_inputs_for_generation(
         self,
@@ -3570,9 +3594,14 @@ class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
         for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
             nb_patches_h = p_attn_mask[:, 0].sum()
             nb_patches_w = p_attn_mask[0].sum()
-
-            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
-            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+            if is_transformers_version("<", "4.55"):
+                fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+            else:
+                h_indices = torch.arange(nb_patches_h, device=pixel_values.device, dtype=pixel_values.dtype)
+                w_indices = torch.arange(nb_patches_w, device=pixel_values.device, dtype=pixel_values.dtype)
+                fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
+                fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
 
             bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
@@ -4356,4 +4385,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
+    "minicpmo": _OVMiniCPMOForCausalLM,
 }
