@@ -5,7 +5,14 @@ import intel_extension_for_pytorch as ipex
 import torch
 from intel_extension_for_pytorch.llm.modules import PagedAttention
 from transformers import Cache, PretrainedConfig
-from transformers.cache_utils import CacheLayerMixin
+
+try:
+    from transformers.cache_utils import CacheLayerMixin
+except ImportError:
+    # Fallback for older transformers versions
+    class CacheLayerMixin:
+        """Minimal fallback for CacheLayerMixin when not available in transformers."""
+        pass
 
 
 class IPEXCacheLayer(CacheLayerMixin):
