@@ -8,7 +8,7 @@ from transformers import Cache, PretrainedConfig
 from transformers.cache_utils import CacheLayerMixin
 
 
-class IPEXLayer(CacheLayerMixin):
+class IPEXCacheLayer(CacheLayerMixin):
     """
     A cache layer for IPEX PagedAttention that stores key and value states
     as paged tensors optimized for Intel XPU and CPU devices.
@@ -170,7 +170,7 @@ class IPEXPagedCache(Cache):
         }
 
         # Now call parent without our custom parameters
-        super().__init__(config=config, layer_classes=IPEXLayer, batch_size=max_batch_size, **kwargs)
+        super().__init__(config=config, layer_classes=IPEXCacheLayer, batch_size=max_batch_size, **kwargs)
 
         # Update layer_init_kwargs after parent initialization
         self.layer_init_kwargs.update(self._custom_layer_kwargs)
