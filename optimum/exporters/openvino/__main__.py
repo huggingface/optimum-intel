@@ -136,7 +136,6 @@ def eagle3_config(model_path: str):
     if spec and spec.origin:
         moduler_path = os.path.dirname(spec.origin)
         config['auto_map'] = {
-            "AutoConfig": moduler_path + "--model_patcher.LlamaEagle3Config",
             "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
             "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM"
         }
