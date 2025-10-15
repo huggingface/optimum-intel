@@ -280,3 +280,8 @@ export_from_model(model, output="ov_model", task="text-generation-with-past")
 ```
 
 Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
+
+## Troubleshooting
+
+Some models do not work with the latest transformers release. You may see an error message with a maximum supported version. To export these models, install a transformers version that supports the model, for example `pip install transformers==4.53.3`. 
+The supported transformers versions compatible with each optimum-intel release are listed on the [Github releases page](https://github.com/huggingface/optimum-intel/releases/).
