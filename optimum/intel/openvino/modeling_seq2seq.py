@@ -44,7 +44,7 @@ from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
 from .configuration import OVWeightQuantizationConfig
-from .modeling_base import OVBaseModel
+from .modeling_base import OVBaseModel, OVModelHostMixin
 from .utils import (
     ONNX_DECODER_NAME,
     ONNX_DECODER_WITH_PAST_NAME,
@@ -395,36 +395,19 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return self.encoder.dtype or self.decoder.dtype
 
     @property
-    def _ov_submodel_names(self) -> List[str]:
-        submodel_names = ["encoder", "decoder"]
+    def _component_names(self) -> List[str]:
+        component_names = ["encoder", "decoder"]
         if self.decoder_with_past is not None:
-            submodel_names.append("decoder_with_past")
-        return submodel_names
+            component_names.append("decoder_with_past")
+        return component_names
 
     @property
-    def encoder_model(self) -> openvino.Model:
-        logger.warning(
-            "Access to the `encoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `encoder.model` instead"
-        )
-        return self.encoder.model
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
 
     @property
-    def decoder_model(self) -> openvino.Model:
-        logger.warning(
-            "Access to the `decoder_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder.model` instead"
-        )
-        return self.decoder.model
-
-    @property
-    def decoder_with_past_model(self) -> openvino.Model:
-        logger.warning(
-            "Access to the `decoder_with_past_model` attribute is deprecated and will be removed in optimum-intel v1.24, please use `decoder_with_past.model` instead"
-        )
-        return getattr(self.decoder_with_past, "model", None)
-
-    @property
-    def ov_submodels(self) -> Dict[str, openvino.Model]:
-        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
+    def ov_models(self) -> Dict[str, openvino.Model]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         file_names = {
@@ -432,9 +415,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             "decoder": OV_DECODER_NAME,
             "decoder_with_past": OV_DECODER_WITH_PAST_NAME,
         }
-        for name, model in self.ov_submodels.items():
-            dst_path = os.path.join(save_directory, file_names[name])
-            openvino.save_model(model, dst_path, compress_to_fp16=False)
+        for ov_model_name, ov_model in self.ov_models.items():
+            dst_path = os.path.join(save_directory, file_names[ov_model_name])
+            openvino.save_model(ov_model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -781,9 +764,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             raise ValueError(
                 "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        for submodel in self.ov_submodels.values():
-            apply_moc_transformations(submodel, cf=False)
-            compress_model_transformation(submodel)
+        for ov_model in self.ov_models.values():
+            apply_moc_transformations(ov_model, cf=False)
+            compress_model_transformation(ov_model)
 
         self.clear_requests()
         return self
@@ -793,12 +776,12 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        for submodel_name in self._ov_submodel_names:
-            getattr(self, submodel_name).request = None
+        for component in self.components.values():
+            component.clear_requests()
 
     def compile(self):
-        for submodel_name in self._ov_submodel_names:
-            getattr(self, submodel_name)._compile()
+        for component in self.components.values():
+            component.compile()
 
     def _shift_right(self, input_ids):
         # Adopted from https://github.com/huggingface/transformers/blob/v4.53.1/src/transformers/models/t5/modeling_tf_t5.py#L957
@@ -830,7 +813,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return
 
 
-class OVEncoder:
+class OVEncoder(OVModelHostMixin):
     """
     Encoder model for OpenVINO inference.
 
@@ -842,12 +825,12 @@ class OVEncoder:
     def __init__(self, model: openvino.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
-        self._comple_only = parent_model._compile_only
+        self._compile_only = parent_model._compile_only
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.input_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.inputs}
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
-        self.request = None if not self._comple_only else self.model
+        self.request = None if not self._compile_only else self.model
 
     @property
     def _device(self):
@@ -878,7 +861,7 @@ class OVEncoder:
         attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
-        self._compile()
+        self.compile()
 
         # Model inputs
         inputs = {self.main_input_name: input_ids if input_ids is not None else kwargs.get(self.main_input_name)}
@@ -897,7 +880,7 @@ class OVEncoder:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def _compile(self):
+    def compile(self):
         ov_config = {**self.parent_model.ov_config}
         if (
             "CACHE_DIR" not in ov_config.keys()
@@ -914,8 +897,15 @@ class OVEncoder:
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 _print_compiled_model_properties(self.request)
 
+    def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        self.request = None
 
-class OVDecoder:
+
+class OVDecoder(OVModelHostMixin):
     """
     Decoder model for OpenVINO inference.
 
@@ -983,7 +973,7 @@ class OVDecoder:
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Seq2SeqLMOutput:
-        self._compile()
+        self.compile()
         # Model inputs
         inputs = {}
 
@@ -1067,7 +1057,7 @@ class OVDecoder:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def _compile(self):
+    def compile(self):
         ov_config = {**self.parent_model.ov_config}
         if (
             "CACHE_DIR" not in ov_config.keys()
@@ -1104,6 +1094,13 @@ class OVDecoder:
                     tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past[:2]) + layer_past[2:],
                 )
         return reordered_past
+
+    def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        self.request = None
 
 
 @add_start_docstrings(
