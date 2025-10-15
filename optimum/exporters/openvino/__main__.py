@@ -116,21 +116,17 @@ def infer_task(
 def eagle3_config(model_path: str):
     config_file = os.path.join(model_path, 'config.json')
     # rename the origin config
-    org_config_file = os.path.join(model_path, 'config_org.json')
-    if os.path.exists(org_config_file):
-        os.remove(org_config_file)
-    os.rename(config_file, org_config_file)
+    new_config_file = os.path.join(model_path, 'config_temp.json')
+    shutil.copy2(config_file, new_config_file)
 
     # read config
-    with open(org_config_file, 'r', encoding='utf-8') as f:
+    with open(new_config_file, 'r', encoding='utf-8') as f:
         config = json.load(f)
     # modify config
     if 'model_type' in config.keys():
         org_type = config['model_type']
         if org_type != 'llama':
             raise ValueError(f"Currently eagle3 does not support model_type={org_type}, it only supports the conversion of llama-based draft models.")
-        if 'eagle3' not in org_type:
-            config['model_type'] = org_type + 'eagle3'
     moduler_name = 'optimum.exporters.openvino.model_patcher'
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
@@ -141,8 +137,9 @@ def eagle3_config(model_path: str):
             "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM"
         }
     # write new config.json
-    with open(config_file, 'w', encoding='utf-8') as f:
+    with open(new_config_file, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+    return new_config_file
 
 def extract_d2t(model_path: str, output_path: str):
     load_model_path=os.path.join(model_path, "pytorch_model.bin")
@@ -160,18 +157,15 @@ def extract_d2t(model_path: str, output_path: str):
             save_file(extracted, output_path)
 
 
-def restore_config(model_path: str, ov_path: str, download_to_local: bool):
+def remove_config(model_path: str, ov_path: str, download_to_local: bool):
     if os.path.exists(ov_path):
         extract_d2t(model_path, ov_path)
 
     if not download_to_local:
-        # restore the origin config
-        config_file = os.path.join(model_path, 'config.json')
-        org_config_file = os.path.join(model_path, 'config_org.json')
-        if os.path.exists(org_config_file):
-            if os.path.exists(config_file):
-                os.remove(config_file)
-            os.rename(org_config_file, config_file)
+        # remove the temp config
+        new_config_file = os.path.join(model_path, 'config_temp.json')
+        if os.path.exists(new_config_file):
+            os.remove(new_config_file)
 
 def download_eagle3_model(model_path: str):
     dir_name = tempfile.mkdtemp()
@@ -348,10 +342,10 @@ def main_export(
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
 
-    if library_name == "transformers":
-        if eagle3:
-            eagle3_config(model_name_or_path)
+    if eagle3 and library_name == "transformers":
+        loading_kwargs['_configuration_file'] = eagle3_config(model_name_or_path)
 
+    if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
             subfolder=subfolder,
@@ -559,6 +553,9 @@ def main_export(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
 
+        if eagle3:
+            model.config.model_type = model.config.model_type + '_eagle3'
+
         submodel_paths = export_from_model(
             model=model,
             output=output,
@@ -641,7 +638,7 @@ def main_export(
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
         if eagle3 and library_name == "transformers":
-            restore_config(model_name_or_path, output, download_to_local)
+            remove_config(model_name_or_path, output, download_to_local)
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):

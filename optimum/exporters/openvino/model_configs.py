@@ -4307,7 +4307,7 @@ class EAGLE3DummyGenerator(DummyInputGenerator):
         )
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
-@register_in_tasks_manager( "llamaeagle3",*["text-generation","text-generation-with-past"],library_name="transformers")
+@register_in_tasks_manager( "llama_eagle3",*["text-generation","text-generation-with-past"],library_name="transformers")
 class LlamaEagle3OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14  # Llama now uses F.scaled_dot_product_attention by default for torch>=2.1.1.
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator, EAGLE3DummyGenerator)
