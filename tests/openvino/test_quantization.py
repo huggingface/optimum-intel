@@ -1489,6 +1489,14 @@ class OVPipelineQuantizationTest(unittest.TestCase):
     PIPELINE_QUANTIZATION_SCOPE = [
         (
             OVModelForCausalLM,
+            "gpt2",
+            False,
+            dict(quantization_configs={"model": dict(bits=8, weight_only=True)}),
+            {"model": 0},
+            {"model": {"int8": 44}},
+        ),
+        (
+            OVModelForCausalLM,
             "llama",
             False,
             dict(
