@@ -396,13 +396,6 @@ def _falcon_model_forward(
     if (input_ids is None) ^ (inputs_embeds is not None):
         raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
-    if self.gradient_checkpointing and self.training:
-        if use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-            )
-            use_cache = False
-
     if inputs_embeds is None:
         inputs_embeds = self.word_embeddings(input_ids)
 
@@ -662,10 +655,6 @@ def _qwen2_model_forward(
     if (input_ids is None) ^ (inputs_embeds is not None):
         raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
-    if self.gradient_checkpointing and self.training and use_cache:
-        logger.warning_once("`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.")
-        use_cache = False
-
     if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
 
@@ -704,8 +693,9 @@ def _qwen2_model_forward(
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
-        attention_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        past_key_values_length = 0
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask, inputs_embeds.shape[:2], inputs_embeds, past_key_values_length
         )
 
     # decoder layers
@@ -817,8 +807,9 @@ def _mistral_model_forward(
         sin = sin.reshape(-1, sin.shape[-1])
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     if past_key_values is None:
-        attention_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        past_key_values_length = 0
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask, inputs_embeds.shape[:2], inputs_embeds, past_key_values_length
         )
 
     # decoder layers
