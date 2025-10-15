@@ -127,6 +127,10 @@ def eagle3_config(model_path: str):
         org_type = config['model_type']
         if org_type != 'llama':
             raise ValueError(f"Currently eagle3 does not support model_type={org_type}, it only supports the conversion of llama-based draft models.")
+    # CVS-174959
+    if 'tie_word_embeddings' in config.keys():
+        if config['tie_word_embeddings']:
+            config['tie_word_embeddings'] = False
     moduler_name = 'optimum.exporters.openvino.model_patcher'
     spec = importlib.util.find_spec(moduler_name)
     if spec and spec.origin:
