@@ -5,3 +5,4 @@ torchaudio
 diffusers
 datasets
 pillow
+optimum-benchmark @ git+https://github.com/huggingface/optimum-benchmark.git
