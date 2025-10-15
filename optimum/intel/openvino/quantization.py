@@ -1335,7 +1335,7 @@ class OVQuantizer(OptimumQuantizer):
                 default_config = OVWeightQuantizationConfig(bits=8, sym=True)
             else:
                 default_config = quantization_config
-        else:
+        elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
             #
             # Hybrid/Full/Mixed quantization
             #
@@ -1397,7 +1397,7 @@ class OVQuantizer(OptimumQuantizer):
                     raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
                 default_config = quantization_config
-            elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
+            else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
         pipeline_quantization_config = (
