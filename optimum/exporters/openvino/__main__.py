@@ -139,7 +139,7 @@ def eagle3_config(model_path: str):
     # write new config.json
     with open(new_config_file, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
-    return new_config_file
+    return os.path.abspath(new_config_file)
 
 def extract_d2t(model_path: str, output_path: str):
     load_model_path=os.path.join(model_path, "pytorch_model.bin")
