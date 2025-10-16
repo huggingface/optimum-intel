@@ -4316,7 +4316,7 @@ class Zamba2DummyInputGenerator(DummyInputGenerator):
             past_key_values = []
             # generate tuples of (key, value, conv_state, ssm_state)
             for i in range(self.num_hidden_layers):
-                kv_shape = (self.batch_size, self.num_attention_heads, 1, self.head_dim)
+                kv_shape = (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
                 k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
                 v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
                 past_key_values.append(k)
@@ -4355,8 +4355,8 @@ class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
             kv_name = "present"
 
         for i in range(self._normalized_config.num_layers):
-            inputs_or_outputs[f"{kv_name}.key.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
-            inputs_or_outputs[f"{kv_name}.value.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
+            inputs_or_outputs[f"{kv_name}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{kv_name}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{kv_name}.conv_state.{i}"] = {0: "batch_size"}
             # [batch_size, d_state, d_model]
