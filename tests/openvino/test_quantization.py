@@ -1021,6 +1021,48 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "minicpmv4",
+            True,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                processor=MODEL_NAMES["minicpmv"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "minicpmv4_5",
+            True,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                processor=MODEL_NAMES["minicpmv"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -1047,6 +1089,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
+        (OVModelForVisualCausalLM, "minicpmv4", False),
+        (OVModelForVisualCausalLM, "minicpmv4_5", False),
     ]
 
     if is_transformers_version("<", "4.54.0"):

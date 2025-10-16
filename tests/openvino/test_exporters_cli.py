@@ -635,6 +635,28 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "image-text-to-text",
+            "minicpmv4",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 14},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv4_5",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 14},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
             "internvl_chat",
             "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
             {
