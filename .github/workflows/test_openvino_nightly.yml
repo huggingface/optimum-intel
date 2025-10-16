@@ -9,10 +9,13 @@ on:
     branches:
       - v*-release
   pull_request:
+    branches:
+      - main
     types:
       - opened
       - labeled
       - reopened
+      - unlabeled
       - synchronize
 
 concurrency:
@@ -31,7 +34,7 @@ env:
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-slow') }}
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-nightly') }}
     strategy:
       fail-fast: false
       matrix:
@@ -88,6 +91,11 @@ jobs:
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
 
       - name: Pip freeze
         run: |

@@ -75,33 +75,25 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "jais",
         "chatglm4",
         "decilm",
+        "gemma",
+        "olmo",
+        "stablelm",
+        "starcoder2",
+        "dbrx",
+        "cohere",
+        "qwen2",
+        "qwen2_moe",
+        "arctic",
+        "phi3",
+        "gemma2",
+        "exaone",
+        "granite",
+        "granite-moe",
     )
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
-    if is_transformers_version(">=", "4.43"):
-        SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += (
-            "gemma",
-            "olmo",
-            "stablelm",
-            "starcoder2",
-            "dbrx",
-            "cohere",
-            "qwen2",
-            "qwen2_moe",
-            "arctic",
-        )
-
-    if is_transformers_version(">=", "4.41.0"):
-        SUPPORTED_ARCHITECTURES += ("phi3",)
-
-    if is_transformers_version(">=", "4.43.0"):
-        SUPPORTED_ARCHITECTURES += ("gemma2", "exaone")
-
-    if is_transformers_version(">=", "4.44.0"):
-        SUPPORTED_ARCHITECTURES += ("granite", "granite-moe")
+    SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
@@ -180,15 +172,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral": 2,
         "mixtral": 2,
         "mpt": 5,
-        "opt": 5,
+        "opt": 5 if is_transformers_version(">=", "4.46.0") else 0,
         "pegasus": 2,
         "qwen": 2,
-        "phi": 2 if is_transformers_version(">=", "4.40.0") else 0,
+        "phi": 2,
         "internlm2": 4,
         "falcon": 2,
         "falcon-40b": 2,
         "persimmon": 2,
-        "biogpt": 5 if is_transformers_version(">=", "4.45.0") else 0,
+        "biogpt": 5,
         "aquila": 2,
         "aquila2": 2,
         "xverse": 2,
@@ -245,7 +237,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
-        if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
+        if model_arch == "gemma2":
             model_kwargs["attn_implementation"] = "sdpa"
 
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
@@ -413,7 +405,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id,
             accelerator="openvino",
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
-            tokenizer=tokenizer if model_arch == "qwen" else None,
+            tokenizer=(
+                # in older transformers versions, qwen tokenizer didn't have a _convert_tokens_to_ids
+                # method, which made it fail during inference using pipelines
+                tokenizer
+                if is_transformers_version("<=", "4.46") and model_arch == "qwen"
+                # in older transformers versions, remote code tokenizers (and granite/granite-moe)
+                # were not loaded in pipelines because they were not registered in TOKENIZER_MAPPING
+                else model_id
+                if is_transformers_version("<=", "4.46")
+                and model_arch in self.REMOTE_CODE_MODELS + ("granite", "granite-moe")
+                else None
+            ),
         )
         set_seed(SEED)
         ov_outputs = ov_pipe(inputs, min_new_tokens=5, max_new_tokens=5, **additional_args, do_sample=False)
@@ -547,7 +550,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
-        if model_arch == "gemma2" and is_transformers_version(">=", "4.45.0"):
+        if model_arch == "gemma2":
             model_kwargs["attn_implementation"] = "sdpa"
 
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
@@ -637,7 +640,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_model.generation_config.cache_implementation = None
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenization_args = {}
-        if is_transformers_version(">=", "4.45") and model_arch == "gpt_neo":
+        if model_arch == "gpt_neo":
             tokenization_args["padding_side"] = "left"
         tokens = tokenizer(
             ["Today is a nice day and I am longer", "This is me"],

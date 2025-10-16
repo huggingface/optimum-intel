@@ -12,13 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import importlib.util
 from typing import TYPE_CHECKING
 
 from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
 
 from .utils import (
-    is_accelerate_available,
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,
@@ -30,39 +28,52 @@ from .version import __version__
 
 
 _import_structure = {
+    "ipex": [],
+    "neural_compressor": [],
     "openvino": [],
+    "pipelines": ["pipeline"],
+    # dummy objects
+    "utils.dummy_ipex_objects": [],
+    "utils.dummy_neural_compressor_objects": [],
+    "utils.dummy_neural_compressor_and_diffusers_objects": [],
     "utils.dummy_openvino_and_nncf_objects": [],
+    "utils.dummy_openvino_and_diffusers_objects": [],
+    "utils.dummy_openvino_and_sentence_transformers_objects": [],
+    "utils.dummy_openvino_objects": [],
 }
 
 try:
     if not is_ipex_available():
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    from .utils import dummy_ipex_objects
-
-    _import_structure["utils.dummy_ipex_objects"] = [
-        "IPEXModelForCausalLM",
-        "IPEXModelForSequenceClassification",
-        "IPEXModelForMaskedLM",
-        "IPEXModelForTokenClassification",
-        "IPEXModelForQuestionAnswering",
-        "IPEXModelForImageClassification",
-        "IPEXModelForAudioClassification",
-        "IPEXModel",
-    ]
+    _import_structure["utils.dummy_ipex_objects"].extend(
+        [
+            "IPEXModelForCausalLM",
+            "IPEXModelForSeq2SeqLM",
+            "IPEXModelForSequenceClassification",
+            "IPEXModelForMaskedLM",
+            "IPEXModelForTokenClassification",
+            "IPEXModelForQuestionAnswering",
+            "IPEXModelForImageClassification",
+            "IPEXModelForAudioClassification",
+            "IPEXModel",
+        ]
+    )
 else:
-    _import_structure["utils.dummy_ipex_objects"] = []
-    _import_structure["ipex"] = [
-        "IPEXModelForCausalLM",
-        "IPEXModelForSeq2SeqLM",
-        "IPEXModelForSequenceClassification",
-        "IPEXModelForMaskedLM",
-        "IPEXModelForTokenClassification",
-        "IPEXModelForQuestionAnswering",
-        "IPEXModelForImageClassification",
-        "IPEXModelForAudioClassification",
-        "IPEXModel",
-    ]
+    _import_structure["ipex"].extend(
+        [
+            "IPEXModelForCausalLM",
+            "IPEXModelForSeq2SeqLM",
+            "IPEXModelForSequenceClassification",
+            "IPEXModelForMaskedLM",
+            "IPEXModelForTokenClassification",
+            "IPEXModelForQuestionAnswering",
+            "IPEXModelForImageClassification",
+            "IPEXModelForAudioClassification",
+            "IPEXModel",
+        ]
+    )
+
 
 try:
     if not (is_ipex_available() and is_sentence_transformers_available()):
@@ -106,31 +117,32 @@ try:
     if not (is_openvino_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_diffusers_objects"] = [
-        "OVStableDiffusionPipeline",
-        "OVStableDiffusionImg2ImgPipeline",
-        "OVStableDiffusionInpaintPipeline",
-        "OVStableDiffusionXLPipeline",
-        "OVStableDiffusionXLImg2ImgPipeline",
-        "OVStableDiffusionXLInpaintPipeline",
-        "OVStableDiffusion3Pipeline",
-        "OVStableDiffusion3Image2ImagePipeline",
-        "OVStableDiffusion3InpaintPipeline",
-        "OVLatentConsistencyModelPipeline",
-        "OVLatentConsistencyModelImg2ImgPipeline",
-        "OVLTXPipeline",
-        "OVLTXImage2VideoPipeline",
-        "OVFluxPipeline",
-        "OVFluxImg2ImgPipeline",
-        "OVFluxInpaintPipeline",
-        "OVFluxFillPipeline",
-        "OVSanaPipeline",
-        "OVPipelineForImage2Image",
-        "OVPipelineForText2Image",
-        "OVPipelineForInpainting",
-        "OVPipelineForText2Video",
-        "OVDiffusionPipeline",
-    ]
+    _import_structure["utils.dummy_openvino_and_diffusers_objects"].extend(
+        [
+            "OVStableDiffusionPipeline",
+            "OVStableDiffusionImg2ImgPipeline",
+            "OVStableDiffusionInpaintPipeline",
+            "OVStableDiffusionXLPipeline",
+            "OVStableDiffusionXLImg2ImgPipeline",
+            "OVStableDiffusionXLInpaintPipeline",
+            "OVStableDiffusion3Pipeline",
+            "OVStableDiffusion3Image2ImagePipeline",
+            "OVStableDiffusion3InpaintPipeline",
+            "OVLatentConsistencyModelPipeline",
+            "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXPipeline",
+            "OVFluxPipeline",
+            "OVFluxImg2ImgPipeline",
+            "OVFluxInpaintPipeline",
+            "OVFluxFillPipeline",
+            "OVSanaPipeline",
+            "OVPipelineForImage2Image",
+            "OVPipelineForText2Image",
+            "OVPipelineForInpainting",
+            "OVPipelineForText2Video",
+            "OVDiffusionPipeline",
+        ]
+    )
 else:
     _import_structure["openvino"].extend(
         [
@@ -165,9 +177,34 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_openvino_objects
 
-    _import_structure["utils.dummy_openvino_objects"] = [
-        name for name in dir(dummy_openvino_objects) if not name.startswith("_")
-    ]
+    _import_structure["utils.dummy_openvino_objects"].extend(
+        [
+            "OVModelForAudioClassification",
+            "OVModelForAudioFrameClassification",
+            "OVModelForAudioXVector",
+            "OVModelForCausalLM",
+            "OVModelForCTC",
+            "OVModelForCustomTasks",
+            "OVModelForFeatureExtraction",
+            "OVModelForImageClassification",
+            "OVModelForMaskedLM",
+            "OVModelForPix2Struct",
+            "OVModelForQuestionAnswering",
+            "OVModelForSeq2SeqLM",
+            "OVModelForSpeechSeq2Seq",
+            "OVModelForTextToSpeechSeq2Seq",
+            "OVModelForVision2Seq",
+            "OVModelForVisualCausalLM",
+            "OVModelForSequenceClassification",
+            "OVModelForTokenClassification",
+            "OVConfig",
+            "OVModelOpenCLIPVisual",
+            "OVModelOpenCLIPText",
+            "OVModelOpenCLIPForZeroShotImageClassification",
+            "OVModelForZeroShotImageClassification",
+            "OVSamModel",
+        ]
+    )
 else:
     _import_structure["openvino"].extend(
         [
@@ -202,52 +239,78 @@ try:
     if not is_neural_compressor_available():
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    from .utils import dummy_neural_compressor_objects
-
-    _import_structure["utils.dummy_neural_compressor_objects"] = [
-        name for name in dir(dummy_neural_compressor_objects) if not name.startswith("_")
-    ]
+    _import_structure["utils.dummy_neural_compressor_objects"].extend(
+        [
+            "INCConfig",
+            "INCModel",
+            "INCModelForCausalLM",
+            "INCModelForMaskedLM",
+            "INCModelForMultipleChoice",
+            "INCModelForQuestionAnswering",
+            "INCModelForSeq2SeqLM",
+            "INCModelForSequenceClassification",
+            "INCModelForTokenClassification",
+            "INCModelForVision2Seq",
+            "INCQuantizer",
+            "INCSeq2SeqTrainer",
+            "INCTrainer",
+        ]
+    )
 else:
-    _import_structure["neural_compressor"] = [
-        "INCConfig",
-        "INCModel",
-        "INCModelForCausalLM",
-        "INCModelForMaskedLM",
-        "INCModelForMultipleChoice",
-        "INCModelForQuestionAnswering",
-        "INCModelForSeq2SeqLM",
-        "INCModelForSequenceClassification",
-        "INCModelForTokenClassification",
-        "INCModelForVision2Seq",
-        "INCQuantizer",
-        "INCSeq2SeqTrainer",
-        "INCTrainer",
-    ]
+    _import_structure["neural_compressor"].extend(
+        [
+            "INCConfig",
+            "INCModel",
+            "INCModelForCausalLM",
+            "INCModelForMaskedLM",
+            "INCModelForMultipleChoice",
+            "INCModelForQuestionAnswering",
+            "INCModelForSeq2SeqLM",
+            "INCModelForSequenceClassification",
+            "INCModelForTokenClassification",
+            "INCModelForVision2Seq",
+            "INCQuantizer",
+            "INCSeq2SeqTrainer",
+            "INCTrainer",
+        ]
+    )
 
 try:
     if not (is_neural_compressor_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_neural_compressor_and_diffusers_objects"] = ["INCStableDiffusionPipeline"]
+    _import_structure["utils.dummy_neural_compressor_and_diffusers_objects"].extend(["INCStableDiffusionPipeline"])
 else:
-    _import_structure["neural_compressor"].append("INCStableDiffusionPipeline")
+    _import_structure["neural_compressor"].extend(["INCStableDiffusionPipeline"])
 
 
 try:
     if not (is_openvino_available() and is_sentence_transformers_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"] = ["OVSentenceTransformer"]
+    _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"].extend(["OVSentenceTransformer"])
 else:
     _import_structure["openvino"].extend(["OVSentenceTransformer"])
 
 
 if TYPE_CHECKING:
+    from .pipelines import pipeline
+
     try:
         if not is_ipex_available():
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_ipex_objects import *
+        from .utils.dummy_ipex_objects import (
+            IPEXModel,
+            IPEXModelForAudioClassification,
+            IPEXModelForCausalLM,
+            IPEXModelForImageClassification,
+            IPEXModelForMaskedLM,
+            IPEXModelForQuestionAnswering,
+            IPEXModelForSeq2SeqLM,
+            IPEXModelForSequenceClassification,
+            IPEXModelForTokenClassification,
+        )
     else:
         from .ipex import (
             IPEXModel,
@@ -300,11 +363,13 @@ if TYPE_CHECKING:
         from .utils.dummy_openvino_and_diffusers_objects import (
             OVDiffusionPipeline,
             OVFluxPipeline,
+            OVLatentConsistencyModelImg2ImgPipeline,
             OVLatentConsistencyModelPipeline,
             OVPipelineForImage2Image,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
             OVSanaPipeline,
+            OVSanaSprintPipeline,
             OVStableDiffusion3Img2ImgPipeline,
             OVStableDiffusion3InpaintPipeline,
             OVStableDiffusion3Pipeline,
@@ -312,6 +377,7 @@ if TYPE_CHECKING:
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
+            OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
         )
     else:
@@ -371,7 +437,21 @@ if TYPE_CHECKING:
         if not is_neural_compressor_available():
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_neural_compressor_objects import *
+        from .utils.dummy_neural_compressor_objects import (
+            INCConfig,
+            INCModel,
+            INCModelForCausalLM,
+            INCModelForMaskedLM,
+            INCModelForMultipleChoice,
+            INCModelForQuestionAnswering,
+            INCModelForSeq2SeqLM,
+            INCModelForSequenceClassification,
+            INCModelForTokenClassification,
+            INCModelForVision2Seq,
+            INCQuantizer,
+            INCSeq2SeqTrainer,
+            INCTrainer,
+        )
     else:
         from .neural_compressor import (
             INCConfig,

@@ -26,9 +26,8 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, Pro
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -92,9 +91,14 @@ def infer_task(
                     library_name=library_name,
                 )
             except KeyError as e:
-                raise KeyError(
-                    f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-                )
+                try:
+                    config = AutoConfig.from_pretrained(model_name_or_path)
+                    if "MistralForCausalLM" in config.architectures:
+                        task = "text-generation-with-past"
+                except Exception:
+                    raise KeyError(
+                        f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                    )
             except RequestsConnectionError as e:
                 raise RequestsConnectionError(
                     f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -107,7 +111,7 @@ def main_export(
     output: Union[str, Path],
     task: str = "auto",
     device: str = "cpu",
-    framework: Optional[str] = None,
+    framework: str = "pt",
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     trust_remote_code: bool = False,
     pad_token_id: Optional[int] = None,
@@ -146,9 +150,8 @@ def main_export(
             use `xxx-with-past` to export the model using past key values in the decoder.
         device (`str`, defaults to `"cpu"`):
             The device to use to do the export. Defaults to "cpu".
-        framework (`Optional[str]`, defaults to `None`):
-            The framework to use for the ONNX export (`"pt"` or `"tf"`). If not provided, will attempt to automatically detect
-            the framework for the checkpoint.
+        framework (`Optional[str]`, defaults to `pt`):
+            The framework to use for the ONNX export. Defaults to 'pt' for PyTorch.
         cache_dir (`Optional[str]`, defaults to `None`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
@@ -293,15 +296,8 @@ def main_export(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
             )
 
-        if (
-            is_transformers_version(">=", "4.36")
-            and is_transformers_version("<=", "4.45.0")
-            and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-        ):
-            loading_kwargs["attn_implementation"] = "eager"
-
         # some models force flash_attn attention by default that does not support load model on cpu
-        if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
+        if model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
         if model_type == "phi4mm":
             if "activation_checkpointing" in config.audio_processor["config"]:

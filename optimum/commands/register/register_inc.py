@@ -15,4 +15,6 @@
 from ..neural_compressor.base import INCCommand
 
 
-REGISTER_COMMANDS = [INCCommand]
+REGISTER_COMMANDS = [
+    INCCommand,
+]

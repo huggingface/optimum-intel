@@ -26,9 +26,9 @@ import torch
 from huggingface_hub import HfApi, HfFolder, hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.hf_api import file_exists
-from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
+from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel
 
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 
 from .import_utils import is_diffusers_available, is_numa_available, is_open_clip_available, is_psutil_available
 
@@ -266,7 +266,7 @@ def _infer_library_from_model_name_or_path(
 
 
 def _infer_library_from_model_or_model_class(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
+    model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     library_name: Optional[str] = None,
 ):
     if library_name is not None:
@@ -283,7 +283,7 @@ def _infer_library_from_model_or_model_class(
 
 
 def infer_library_from_model(
-    model: Union[str, "PreTrainedModel", "TFPreTrainedModel", "DiffusionPipeline", Type],
+    model: Union[str, "PreTrainedModel", "DiffusionPipeline", Type],
     subfolder: str = "",
     revision: Optional[str] = None,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
