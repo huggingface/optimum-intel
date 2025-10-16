@@ -127,6 +127,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mamba": 2,
         "falcon-mamba": 2,
         "qwen3": 2,
+        "hunyuan_v1_dense": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
