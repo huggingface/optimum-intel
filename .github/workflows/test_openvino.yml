@@ -65,6 +65,11 @@ jobs:
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
 
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
+
       - name: Test with Pytest
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
