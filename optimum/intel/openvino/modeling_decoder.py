@@ -339,6 +339,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
         variant = kwargs.pop("variant", None)
+        eagle3 = kwargs.pop("eagle3", False)
 
         main_export(
             model_name_or_path=model_id,
@@ -356,6 +357,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
             variant=variant,
+            eagle3=eagle3,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(
