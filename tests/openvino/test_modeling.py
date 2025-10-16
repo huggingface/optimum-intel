@@ -1469,6 +1469,7 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
 class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_ATTENTION = ["vit-with-attentions"]
     SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES = ["vit-with-hidden-states"]
+    SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES = ["dinov3_vit"]
 
     def _get_sample_image(self):
         url = TEST_IMAGE_URL

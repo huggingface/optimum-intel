@@ -103,6 +103,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("feature-extraction", "vit-with-pooler"),
     ]
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
