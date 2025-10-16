@@ -200,6 +200,7 @@ MODEL_NAMES = {
     "sana": "katuni4ka/tiny-random-sana",
     "sana-sprint": "katuni4ka/tiny-random-sana-sprint",
     "ltx-video": "katuni4ka/tiny-random-ltx-video",
+    "eagle3": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
 }
 
 
