@@ -92,6 +92,7 @@ if is_diffusers_available():
         OVFluxFillPipeline,
         OVFluxImg2ImgPipeline,
         OVFluxInpaintPipeline,
+        OVFluxKontextPipeline,
         OVFluxPipeline,
         OVLatentConsistencyModelImg2ImgPipeline,
         OVLatentConsistencyModelPipeline,

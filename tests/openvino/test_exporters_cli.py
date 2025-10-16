@@ -35,6 +35,7 @@ from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
     OVFluxFillPipeline,
     OVFluxPipeline,
+    OVFluxKontextPipeline,
     OVLatentConsistencyModelPipeline,
     OVLTXPipeline,
     OVModelForAudioClassification,
@@ -68,6 +69,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_tokenizers_version,
     is_transformers_version,
+    is_diffusers_version,
 )
 
 
@@ -98,6 +100,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "stable-diffusion-3"),
         ("text-to-image", "flux"),
         ("inpainting", "flux-fill"),
+        ("image-to-image", "flux-kontext"),
         ("text-to-image", "sana"),
         ("text-to-video", "ltx-video"),
         ("feature-extraction", "sam"),
@@ -120,6 +123,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "flux-kontext": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
