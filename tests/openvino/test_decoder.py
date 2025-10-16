@@ -227,11 +227,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
-<<<<<<< HEAD
-        "ernie4_5": 2,
         "hunyuan_v1_dense": 2,
-=======
->>>>>>> upstream/main
     }
 
     # TODO: remove gptq/awq from here
