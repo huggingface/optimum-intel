@@ -316,13 +316,22 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         },
     },
     "openai/gpt-oss-20b": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 32,
-        "ignored_scope": {
-            "patterns": [".*self_attn.*", ".*router.*"],
-        },
-        "backup_precision": "none",
+        "quantization_configs": [
+            {
+                "bits": 4,
+                "sym": True,
+                "group_size": 32,
+                "ignored_scope": {
+                    "patterns": [".*self_attn.*", ".*router.*"],
+                },
+                "backup_precision": "none",
+            },
+            {
+                "bits": 8,
+                "sym": False,
+                "weight_only": True,
+            },
+        ]
     },
 }
 
@@ -1149,6 +1158,9 @@ class OVConfig(BaseConfig):
         elif isinstance(quantization_config, OVPipelineQuantizationConfig):
             dtypes = [OVConfig._get_dtype(config) for config in quantization_config.quantization_configs.values()]
             dtype = "_".join(dtypes)
+        elif isinstance(quantization_config, OVSequentialQuantizationConfig):
+            dtypes = [OVConfig._get_dtype(config) for config in quantization_config.quantization_configs]
+            dtype = "_".join(dtypes)
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
         return dtype
@@ -1183,6 +1195,8 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         with `weight_quantization_config.ignored_scope` parameter, both weights and activations of these layers are
         quantized to the precision given in the `full_quantization_config`.
 
+        TODO (nikita.savelyevv): Deprecate OVMixedQuantizationConfig in favor of OVSequentialQuantizationConfig
+
         Args:
             weight_quantization_config (`OVWeightQuantizationConfig` or `dict`):
                 Configuration related to weight quantization.
@@ -1209,10 +1223,16 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         self.weight_quantization_config = self._initialize_quantization_config(
             weight_quantization_config, OVWeightQuantizationConfig
         )
+        self.weight_quantization_config.ignored_scope = _merge_ignored_scopes(
+            self.weight_quantization_config.ignored_scope, ignored_scope
+        )
         wqc = self.weight_quantization_config
 
         self.full_quantization_config = self._initialize_quantization_config(
             full_quantization_config, OVQuantizationConfig
+        )
+        self.full_quantization_config.ignored_scope = _merge_ignored_scopes(
+            self.full_quantization_config.ignored_scope, ignored_scope
         )
         fqc = self.full_quantization_config
 
@@ -1366,6 +1386,88 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             submodel_config.post_init()
 
 
+class OVSequentialQuantizationConfig(OVQuantizationConfigBase):
+    def __init__(
+        self,
+        quantization_configs: List[Union[Dict, OVQuantizationConfigBase]],
+        ignored_scope: Optional[Union[dict, "nncf.IgnoredScope"]] = None,
+        num_samples: Optional[int] = None,
+        dataset: Optional[Union[str, List[str]]] = None,
+        tokenizer: Optional[str] = None,
+        processor: Optional[str] = None,
+        trust_remote_code: Optional[bool] = False,
+        **kwargs,
+    ):
+        """
+        Configuration class for sequential quantization of models.
+        Each quantization config in the list is applied sequentially to the model.
+
+        Args:
+            quantization_configs (List[Union[Dict, OVQuantizationConfigBase]]):
+                A list of dictionaries or instances of `OVQuantizationConfigBase` containing quantization configurations.
+                Each configuration is applied sequentially to the model.
+            ignored_scope (`dict` or `nncf.IgnoredScope`, *optional*):
+                An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
+                entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
+            num_samples (Optional[int]):
+                The maximum number of samples composing the calibration dataset. Defaults to None.
+            dataset (Optional[Union[str, List[str]]]):
+                The dataset used for data-aware optimization with NNCF. Can be a string or a list of strings. Defaults to None.
+            tokenizer (Optional[str]):
+                The tokenizer used to process the dataset. Can be a model ID or a path to a directory containing
+                tokenizer files. Defaults to None.
+            processor (Optional[str]):
+                A transformers processor used to process the dataset inputs. Can be a model ID or a path to a
+                directory containing processor files. Defaults to None.
+            trust_remote_code (Optional[bool]):
+                If True, allows the use of custom code hosted in the model repository. This should only be set for repositories
+                you trust, as it will execute arbitrary code on your local machine. Defaults to False.
+            **kwargs:
+                Additional parameters for the configuration.
+        """
+
+        def or_op(a, b):
+            return a or b
+
+        quantization_configs = copy.deepcopy(quantization_configs)
+        for i, config in enumerate(quantization_configs):
+            if isinstance(config, dict):
+                quantization_configs[i] = _quantization_config_from_dict(config)
+            quantization_configs[i].ignored_scope = _merge_ignored_scopes(
+                ignored_scope, quantization_configs[i].ignored_scope
+            )
+
+        # Pull dataset-related parameters from child configs
+        configs = quantization_configs
+        num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
+        dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
+        tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
+        processor = reduce(or_op, (processor, *(config.processor for config in configs)))
+        trust_remote_code = reduce(or_op, (trust_remote_code, *(config.trust_remote_code for config in configs)))
+
+        super().__init__(
+            ignored_scope=ignored_scope,
+            num_samples=num_samples,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            processor=processor,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
+        self.quantization_configs = quantization_configs
+        self.post_init()
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["quantization_configs"] = [config.to_dict() for config in self.quantization_configs]
+        return result
+
+    def post_init(self):
+        super().post_init()
+        for submodel_config in self.quantization_configs:
+            submodel_config.post_init()
+
+
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
     """
     Helper function to create a quantization config from a dictionary.
@@ -1376,8 +1478,11 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
         return OVMixedQuantizationConfig.from_dict(config_dict)
 
     # Check for OVPipelineQuantizationConfig
-    if "quantization_configs" in config_dict:
+    if isinstance(config_dict.get("quantization_configs", None), dict):
         return OVPipelineQuantizationConfig.from_dict(config_dict)
+    # Check for OVSequentialQuantizationConfig
+    if isinstance(config_dict.get("quantization_configs", None), (list, tuple)):
+        return OVSequentialQuantizationConfig.from_dict(config_dict)
 
     # Either OVWeightQuantizationConfig or OVQuantizationConfig
     # Try to detect the type of config based on the keys present in the dictionary
@@ -1423,3 +1528,26 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
         "OVWeightQuantizationConfig."
     )
     return wq_config
+
+
+def _merge_ignored_scopes(
+    ignored_scope_1: Union[Dict[str, List[str]], None, "nncf.IgnoredScope"],
+    ignored_scope_2: Union[Dict[str, List[str]], None, "nncf.IgnoredScope"],
+) -> Dict[str, List[str]]:
+    return_as_ignored_scope_instance = False
+    if isinstance(ignored_scope_1, nncf.IgnoredScope) and isinstance(ignored_scope_2, nncf.IgnoredScope):
+        return_as_ignored_scope_instance = True
+        ignored_scope_1 = dataclasses.asdict(ignored_scope_1)
+        ignored_scope_2 = dataclasses.asdict(ignored_scope_2)
+    elif isinstance(ignored_scope_1, nncf.IgnoredScope) or isinstance(ignored_scope_2, nncf.IgnoredScope):
+        raise ValueError("Both ignored scopes should be either dictionaries or nncf.IgnoredScope instances.")
+    if ignored_scope_1 is None:
+        return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
+    if ignored_scope_2 is None:
+        return copy.deepcopy(ignored_scope_1)
+    merged_ignored_scope = {}
+    for key in set(ignored_scope_1) | set(ignored_scope_2):
+        merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
+    if return_as_ignored_scope_instance:
+        merged_ignored_scope = nncf.IgnoredScope(**merged_ignored_scope)
+    return merged_ignored_scope

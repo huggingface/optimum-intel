@@ -97,6 +97,7 @@ except OptionalDependencyNotAvailable:
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
             "OVMixedQuantizationConfig",
+            "OVSequentialQuantizationConfig",
         ]
     )
 else:
@@ -109,6 +110,7 @@ else:
             "OVWeightQuantizationConfig",
             "OVDynamicQuantizationConfig",
             "OVMixedQuantizationConfig",
+            "OVSequentialQuantizationConfig",
         ]
     )
 

@@ -56,7 +56,6 @@ FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
-
 if is_torch_available():
     import torch
 
@@ -520,9 +519,18 @@ def main_export(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
 
+            from optimum.intel.openvino import OVSequentialQuantizationConfig
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
-            _weight_only_quantization(submodel, quantization_config)
+            quantization_configs = (
+                quantization_config.quantization_configs
+                if isinstance(quantization_config, OVSequentialQuantizationConfig)
+                else [quantization_config]
+            )
+            verify_not_optimized = True
+            for config in quantization_configs:
+                _weight_only_quantization(submodel, config, verify_not_optimized=verify_not_optimized)
+                verify_not_optimized = False
             compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
             save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
             del submodel

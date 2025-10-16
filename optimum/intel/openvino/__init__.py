@@ -39,6 +39,7 @@ from .configuration import (
     OVMixedQuantizationConfig,
     OVPipelineQuantizationConfig,
     OVQuantizationConfig,
+    OVSequentialQuantizationConfig,
     OVWeightQuantizationConfig,
 )
 

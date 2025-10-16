@@ -62,6 +62,7 @@ from .configuration import (
     OVQuantizationConfig,
     OVQuantizationConfigBase,
     OVQuantizationMethod,
+    OVSequentialQuantizationConfig,
     OVWeightQuantizationConfig,
 )
 from .modeling import OVModel, OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
@@ -1407,56 +1408,77 @@ class OVQuantizer(OptimumQuantizer):
         )
 
         for submodel_name in self.model.ov_submodels:
-            config = pipeline_quantization_config.quantization_configs.get(
+            submodel_config = pipeline_quantization_config.quantization_configs.get(
                 submodel_name, pipeline_quantization_config.default_config
             )
-            if config is None:
+            if submodel_config is None:
                 continue
             submodel = self.model.ov_submodels[submodel_name]
             nncf_dataset = calibration_dataset.get(submodel_name, None) if calibration_dataset else None
 
-            if isinstance(config, OVWeightQuantizationConfig) and config.quant_method == OVQuantizationMethod.HYBRID:
-                config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
+            submodel_configs = (
+                submodel_config.quantization_configs
+                if isinstance(submodel_config, OVSequentialQuantizationConfig)
+                else [submodel_config]
+            )
+            verify_not_optimized = True
+            for config in submodel_configs:
+                if (
+                    isinstance(config, OVWeightQuantizationConfig)
+                    and config.quant_method == OVQuantizationMethod.HYBRID
+                ):
+                    config = _get_hybrid_mixed_quantization_config(submodel, config, **kwargs)
 
-            if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
-                # For datasets built from the quantization config, override num_samples per submodel
-                config = config.clone()
-                config.num_samples = nncf_dataset.get_length()
+                if (
+                    dataset_was_built_from_config
+                    and nncf_dataset is not None
+                    and nncf_dataset.get_length() is not None
+                ):
+                    # For datasets built from the quantization config, override num_samples per submodel
+                    config = config.clone()
+                    config.num_samples = nncf_dataset.get_length()
 
-            if isinstance(config, OVWeightQuantizationConfig):
-                if config.bits == 8:
-                    # 8-bit weight only data-aware quantization is not supported
-                    nncf_dataset = None
-                # Weight only quantization is performed in-place
-                _weight_only_quantization(submodel, config, nncf_dataset, **kwargs)
-            elif isinstance(config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
-                if nncf_dataset is None:
-                    raise ValueError(
-                        f"Calibration dataset for submodel {submodel_name} is required to run quantization."
+                if isinstance(config, OVWeightQuantizationConfig):
+                    if config.bits == 8:
+                        # 8-bit weight only data-aware quantization is not supported
+                        nncf_dataset = None
+                    # Weight only quantization is performed in-place
+                    _weight_only_quantization(
+                        submodel, config, nncf_dataset, verify_not_optimized=verify_not_optimized, **kwargs
                     )
-                if isinstance(config, OVQuantizationConfig):
-                    quantized_model = _full_quantization(submodel, config, nncf_dataset, **kwargs)
-                else:
-                    quantized_model = _mixed_quantization(submodel, config, nncf_dataset, **kwargs)
+                elif isinstance(config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
+                    if nncf_dataset is None:
+                        raise ValueError(
+                            f"Calibration dataset for submodel {submodel_name} is required to run quantization."
+                        )
+                    if isinstance(config, OVQuantizationConfig):
+                        quantized_model = _full_quantization(
+                            submodel, config, nncf_dataset, verify_not_optimized=verify_not_optimized, **kwargs
+                        )
+                    else:
+                        quantized_model = _mixed_quantization(
+                            submodel, config, nncf_dataset, verify_not_optimized=verify_not_optimized, **kwargs
+                        )
 
-                # Replace the original model with the quantized model
-                if isinstance(self.model, OVModelForVisualCausalLM):
-                    # Special handling of submodels in OVModelForVisualCausalLM
-                    # TODO (nikita.savelyevv): Implement a proper fix including other model types
-                    if submodel_name == "lm_model":
-                        self.model.language_model.model = quantized_model
-                    elif submodel_name == "text_embeddings_model":
-                        self.model.language_model.text_emb_model = quantized_model
-                    elif submodel_name == "vision_embeddings_model":
-                        self.model.vision_embeddings.model = quantized_model
-                if isinstance(getattr(self.model, submodel_name), openvino.Model):
-                    setattr(self.model, submodel_name, quantized_model)
-                elif isinstance(getattr(getattr(self.model, submodel_name), "model"), openvino.Model):
-                    setattr(getattr(self.model, submodel_name), "model", quantized_model)
+                    # Replace the original model with the quantized model
+                    if isinstance(self.model, OVModelForVisualCausalLM):
+                        # Special handling of submodels in OVModelForVisualCausalLM
+                        # TODO (nikita.savelyevv): Implement a proper fix including other model types
+                        if submodel_name == "lm_model":
+                            self.model.language_model.model = quantized_model
+                        elif submodel_name == "text_embeddings_model":
+                            self.model.language_model.text_emb_model = quantized_model
+                        elif submodel_name == "vision_embeddings_model":
+                            self.model.vision_embeddings.model = quantized_model
+                    if isinstance(getattr(self.model, submodel_name), openvino.Model):
+                        setattr(self.model, submodel_name, quantized_model)
+                    elif isinstance(getattr(getattr(self.model, submodel_name), "model"), openvino.Model):
+                        setattr(getattr(self.model, submodel_name), "model", quantized_model)
+                    else:
+                        raise RuntimeError("Can't locate OpenVINO model to replace it with the quantized one.")
                 else:
-                    raise RuntimeError("Can't locate OpenVINO model to replace it with the quantized one.")
-            else:
-                raise ValueError(f"Unsupported type of quantization config: {type(config)}.")
+                    raise ValueError(f"Unsupported type of quantization config: {type(config)}.")
+                verify_not_optimized = False
 
         self.model.clear_requests()
 
@@ -1554,9 +1576,12 @@ def _weight_only_quantization(
     model: openvino.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
+    verify_not_optimized: bool = True,
     **kwargs,
 ) -> openvino.Model:
-    _verify_not_optimized(model)
+    if verify_not_optimized:
+        _verify_not_optimized(model)
+
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -1738,6 +1763,7 @@ def _mixed_quantization(
     model: openvino.Model,
     quantization_config: OVMixedQuantizationConfig,
     dataset: nncf.Dataset,
+    verify_not_optimized: bool = True,
     **kwargs,
 ) -> openvino.Model:
     """
@@ -1757,30 +1783,23 @@ def _mixed_quantization(
             The configuration containing the parameters related to quantization.
         dataset (`nncf.Dataset`):
             The dataset used for quantization.
+        verify_not_optimized (`bool`, defaults to `True`):
+            Whether to verify that the model was not already optimized.
     Returns:
         The OpenVINO Runtime model with applied quantization.
     """
 
-    def merge_ignored_scopes(
-        ignored_scope_1: Union[Dict[str, List[str]], None], ignored_scope_2: Union[Dict[str, List[str]], None]
-    ) -> Dict[str, List[str]]:
-        if ignored_scope_1 is None:
-            return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
-        if ignored_scope_2 is None:
-            return copy.deepcopy(ignored_scope_1)
-        merged_ignored_scope = {}
-        for key in set(ignored_scope_1) | set(ignored_scope_2):
-            merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
-        return merged_ignored_scope
+    compressed_model = _weight_only_quantization(
+        model,
+        quantization_config.weight_quantization_config,
+        dataset if quantization_config.weight_quantization_config.bits != 8 else None,
+        verify_not_optimized=verify_not_optimized,
+        **kwargs,
+    )
 
-    wc_config = quantization_config.weight_quantization_config.clone()
-    wc_config.ignored_scope = merge_ignored_scopes(wc_config.ignored_scope, quantization_config.ignored_scope)
-    wc_dataset = dataset if wc_config.bits != 8 else None
-    compressed_model = _weight_only_quantization(model, wc_config, wc_dataset, **kwargs)
-
-    q_config = quantization_config.full_quantization_config.clone()
-    q_config.ignored_scope = merge_ignored_scopes(q_config.ignored_scope, quantization_config.ignored_scope)
-    quantized_model = _full_quantization(compressed_model, q_config, dataset, verify_not_optimized=False, **kwargs)
+    quantized_model = _full_quantization(
+        compressed_model, quantization_config.full_quantization_config, dataset, verify_not_optimized=False, **kwargs
+    )
 
     return quantized_model
 
