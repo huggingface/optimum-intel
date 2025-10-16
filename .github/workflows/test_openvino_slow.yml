@@ -2,38 +2,42 @@ name: OpenVINO - Slow Test
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "41 1 * * *" # run every day at 1:41
   push:
     branches:
       - v*-release
   pull_request:
+    branches:
+      - main
     types:
       - opened
       - labeled
       - reopened
+      - unlabeled
       - synchronize
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
+  RUN_SLOW: true
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-slow') }}
     strategy:
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04", "windows-2022"]
-        transformers-version: ["4.36.0", "latest"]
+        transformers-version: ["4.45.0", "latest"]
         include:
-          - transformers-version: "4.40.0"
-            os: "ubuntu-22.04"
-          - transformers-version: "4.45.0"
-            os: "ubuntu-22.04"
           - transformers-version: "main"
             os: "ubuntu-22.04"
 
@@ -54,38 +58,37 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install .[openvino,tests,diffusers] transformers[testing]
-          pip uninstall -y nncf
+          pip install --upgrade pip uv
+          uv pip install .[openvino,tests,diffusers] transformers[testing]
 
       - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
         name: Install specific dependencies and versions required for older transformers
-        run: pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.*, diffusers==0.30.* transformers_stream_generator
+        run: |
+          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
+
+      - if: ${{ matrix.transformers-version == 'main' }}
+        name: Install transformers from repository
+        run: |
+          uv pip install git+https://github.com/huggingface/transformers.git
 
       - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2022' ||  matrix.transformers-version == 'main' }}
         name: Install auto-gptq, autoawq
         run: |
-          pip install auto-gptq "autoawq<0.2.8" --extra-index-url https://download.pytorch.org/whl/cpu
+          uv pip install auto-gptq "autoawq<0.2.8"
 
-      - if: ${{ matrix.transformers-version == 'main' }}
-        name: Install transformers from repository
-        run: pip install git+https://github.com/huggingface/transformers.git
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
 
       - name: Pip freeze
-        run: pip freeze
+        run: |
+          pip freeze
 
       - name: Test with Pytest (basic)
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
-      - name: Install dependencies (slow)
-        run: |
-          pip install .[nncf]
-
       - name: Test with Pytest (slow)
         run: |
           pytest tests/openvino -m "run_slow" --durations=0
-        env:
-          RUN_SLOW: 1
-          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}

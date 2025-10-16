@@ -15,28 +15,20 @@
 
 import json
 import logging
-import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
-from ...exporters import TasksManager
-from ...intel.utils.import_utils import (
-    DIFFUSERS_IMPORT_ERROR,
-    is_diffusers_available,
-    is_nncf_available,
-)
-from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-from ...utils.save_utils import maybe_load_preprocessors
-from ..base import BaseOptimumCLICommand, CommandInfo
+from optimum.commands.base import BaseOptimumCLICommand, CommandInfo
+from optimum.utils.constant import ALL_TASKS
 
 
 logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
-    from argparse import ArgumentParser, Namespace, _SubParsersAction
+    from argparse import ArgumentParser
 
 
 def parse_args_openvino(parser: "ArgumentParser"):
@@ -52,18 +44,17 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--task",
         default="auto",
         help=(
-            "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among:"
-            f" {str(TasksManager.get_all_tasks())}. For decoder models, use `xxx-with-past` to export the model using past key values in the decoder."
+            "The task to export the model for. If not specified, the task will be auto-inferred from the model's metadata or files. "
+            "For tasks that generate text, add the `xxx-with-past` suffix to export the model using past key values caching. "
+            f"Available tasks depend on the model, but are among the following list: {ALL_TASKS}."
         ),
     )
     optional_group.add_argument(
         "--framework",
         type=str,
-        choices=["pt", "tf"],
-        default=None,
-        help=(
-            "The framework to use for the export. If not provided, will attempt to use the local checkpoint's original framework or what is available in the environment."
-        ),
+        choices=["pt"],
+        default="pt",
+        help="The framework to use for the export. Defaults to 'pt' for PyTorch. ",
     )
     optional_group.add_argument(
         "--trust-remote-code",
@@ -330,27 +321,18 @@ def no_quantization_parameter_provided(args):
 class OVExportCommand(BaseOptimumCLICommand):
     COMMAND = CommandInfo(name="openvino", help="Export PyTorch models to OpenVINO IR.")
 
-    def __init__(
-        self,
-        subparsers: "_SubParsersAction",
-        args: Optional["Namespace"] = None,
-        command: Optional["CommandInfo"] = None,
-        from_defaults_factory: bool = False,
-        parser: Optional["ArgumentParser"] = None,
-    ):
-        super().__init__(
-            subparsers, args=args, command=command, from_defaults_factory=from_defaults_factory, parser=parser
-        )
-        self.args_string = " ".join(sys.argv[3:])
-
     @staticmethod
     def parse_args(parser: "ArgumentParser"):
         return parse_args_openvino(parser)
 
     def run(self):
+        from optimum.utils.save_utils import maybe_load_preprocessors
+
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
         from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
+        from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+        from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args

@@ -19,8 +19,9 @@ import numpy as np
 import openvino as ov
 import torch
 
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.openvino.modeling_base import OVBaseModel
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version
+from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
 
 
 MODEL_NAMES = {
@@ -55,7 +56,7 @@ MODEL_NAMES = {
     "dbrx": "katuni4ka/tiny-random-dbrx",
     "deberta": "hf-internal-testing/tiny-random-deberta",
     "deberta-v2": "hf-internal-testing/tiny-random-DebertaV2Model",
-    "decilm": "katuni4ka/tiny-random-decilm",
+    "decilm": "optimum-internal-testing/tiny-random-decilm",
     "deepseek": "katuni4ka/tiny-random-deepseek-v3",
     "deit": "hf-internal-testing/tiny-random-DeiTModel",
     "convnext": "hf-internal-testing/tiny-random-convnext",
@@ -64,7 +65,6 @@ MODEL_NAMES = {
     "donut": "fxmarty/tiny-doc-qa-vision-encoder-decoder",
     "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
     "detr": "hf-internal-testing/tiny-random-DetrModel",
-    "ernie4_5": "optimum-internal-testing/tiny-random-Ernie4_5ForCausalLM",
     "electra": "hf-internal-testing/tiny-random-electra",
     "esm": "hf-internal-testing/tiny-random-EsmModel",
     "exaone": "katuni4ka/tiny-random-exaone",
@@ -85,6 +85,8 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_neox_japanese": "hf-internal-testing/tiny-random-GPTNeoXJapaneseForCausalLM",
+    "gpt_oss": "trl-internal-testing/tiny-GptOssForCausalLM",
+    "gpt_oss_mxfp4": "echarlaix/tiny-random-gpt-oss-mxfp4",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "granite": "katuni4ka/tiny-random-granite",
     "granite-moe": "katuni4ka/tiny-random-granite-moe",
@@ -93,13 +95,13 @@ MODEL_NAMES = {
     "idefics3": "hf-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
     "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
-    "internvl2": "katuni4ka/tiny-random-internvl2",
+    "internvl_chat": "katuni4ka/tiny-random-internvl2",
     "jais": "katuni4ka/tiny-random-jais",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
-    "llama4": "katuni4ka/tiny-random-llama-4-8E",
+    "llama4": "hf-internal-testing/tiny-random-llama4",
     "llava": "katuni4ka/tiny-random-llava",
     "llava_next": "katuni4ka/tiny-random-llava-next",
     "llava_next_mistral": "optimum-internal-testing/tiny-random-llava-next-mistral",
@@ -115,6 +117,7 @@ MODEL_NAMES = {
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "minicpm3": "katuni4ka/tiny-random-minicpm3",
     "minicpmv": "katuni4ka/tiny-random-minicpmv-2_6",
+    "minicpmo": "rkazants/tiny-random-MiniCPM-o-2_6",
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
@@ -126,7 +129,7 @@ MODEL_NAMES = {
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "hf-internal-testing/tiny-random-MPNetModel",
     "mt5": "stas/mt5-tiny-random",
-    "nanollava": "katuni4ka/tiny-random-nanollava",
+    "llava-qwen2": "katuni4ka/tiny-random-nanollava",
     "nanollava_vision_tower": "katuni4ka/tiny-random-siglip",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "olmo": "katuni4ka/tiny-random-olmo-hf",
@@ -146,7 +149,7 @@ MODEL_NAMES = {
     "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2_moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "qwen2_vl": "katuni4ka/tiny-random-qwen2vl",
-    "qwen2_5_vl": "katuni4ka/tiny-random-qwen2.5-vl",
+    "qwen2_5_vl": "optimum-internal-testing/tiny-random-qwen2.5-vl",
     "qwen3": "katuni4ka/tiny-random-qwen3",
     "qwen3_moe": "katuni4ka/tiny-random-qwen3moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
@@ -169,7 +172,7 @@ MODEL_NAMES = {
     "siglip": "katuni4ka/tiny-random-SiglipModel",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
-    "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
+    "sew-d": "asapp/sew-d-tiny-100k-ft-ls100h",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
     "swin-window": "yujiepan/tiny-random-swin-patch4-window7-224",
     "t5": "hf-internal-testing/tiny-random-t5",
@@ -297,7 +300,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_resampler_model": 0,
         "multi_modal_projector_model": 2,
     },
-    "nanollava": {
+    "llava-qwen2": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 15,
@@ -333,6 +336,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "clip": {"model": 130},
     "mamba": {"model": 386},
     "falcon-mamba": {"model": 194},
+    "minicpmo": {
+        "lm_model": 16,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 8,
+        "resampler_model": 6,
+    },
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -455,3 +464,47 @@ def get_num_sdpa(model):
         if op.type_info.name == "ScaledDotProductAttention":
             num_sdpa += 1
     return num_sdpa
+
+
+TEST_NAME_TO_MODEL_TYPE = {
+    "aquila2": "aquila",
+    "baichuan2": "baichuan",
+    "baichuan2-13b": "baichuan",
+    "chatglm4": "chatglm",
+    "codegen2": "codegen",
+    "falcon-mamba": "falcon_mamba",
+    "falcon-40b": "falcon",
+    "gpt_oss_mxfp4": "gpt_oss",
+    "granite-moe": "granitemoe",
+    "llama_awq": "llama",
+    "llava_next_mistral": "llava_next",
+    "mistral-nemo": "mistral",
+    "mixtral_awq": "mixtral",
+    "nanollava_vision_tower": "siglip",
+    "opt125m": "opt",
+    "opt_gptq": "opt",
+    "perceiver_text": "perceiver",
+    "perceiver_vision": "perceiver",
+    "phi3-moe": "phimoe",
+    "swin-window": "swin",
+    "vit-with-attentions": "vit",
+    "vit-with-hidden-states": "vit",
+    "wav2vec2-hf": "wav2vec2",
+}
+
+
+def get_supported_model_for_library(library_name):
+    valid_model = set()
+    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
+
+    for model_type in supported_model_type:
+        if supported_model_type[model_type].get("openvino"):
+            export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+
+            min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
+            max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
+
+            if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
+                valid_model.add(model_type)
+
+    return valid_model
