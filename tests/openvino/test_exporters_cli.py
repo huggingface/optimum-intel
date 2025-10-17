@@ -23,6 +23,7 @@ from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassifi
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    OPENVINO_DEVICE,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
@@ -1236,7 +1237,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False)
+            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
             self.assertFalse("last_hidden_state" in model.output_names)
 
     def test_exporters_cli_open_clip(self):

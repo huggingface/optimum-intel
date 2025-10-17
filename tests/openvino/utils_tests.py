@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import os
+import time
 import unittest
 from contextlib import contextmanager
 from typing import Dict, Optional, Union
@@ -23,6 +25,14 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
 
+
+SEED = 42
+
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
+
+TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
+
+OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
@@ -202,13 +212,6 @@ MODEL_NAMES = {
     "ltx-video": "katuni4ka/tiny-random-ltx-video",
 }
 
-
-TENSOR_ALIAS_TO_TYPE = {
-    "pt": torch.Tensor,
-    "np": np.ndarray,
-}
-
-SEED = 42
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "bert": {"model": 68},
@@ -500,3 +503,12 @@ def get_supported_model_for_library(library_name):
                 valid_model.add(model_type)
 
     return valid_model
+
+
+class Timer(object):
+    def __enter__(self):
+        self.elapsed = time.perf_counter()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3

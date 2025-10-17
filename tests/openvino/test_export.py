@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, OPENVINO_DEVICE
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -310,7 +310,7 @@ class CustomExportModelTest(unittest.TestCase):
                 task=base_task,
             )
 
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
             self.assertIsInstance(ov_model, OVBaseModel)
             self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})
@@ -328,7 +328,7 @@ class CustomExportModelTest(unittest.TestCase):
 
         with TemporaryDirectory() as tmpdirname:
             export_from_model(model, output=tmpdirname, task="feature-extraction")
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")

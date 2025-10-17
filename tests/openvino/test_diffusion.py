@@ -28,7 +28,7 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, SEED
+from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
@@ -114,7 +114,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
+            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -123,19 +123,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
         auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for batch_size in [1, 3]:
             for height in [64, 128]:
@@ -152,7 +152,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
@@ -198,7 +198,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         ov_callback = Callback()
         auto_callback = Callback()
 
-        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if model_arch != "sana" else DiffusionPipeline
         auto_pipe = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
@@ -213,7 +213,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_shape(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
@@ -254,7 +254,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
@@ -275,7 +275,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         negative_prompt = ["This is a negative prompt"]
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         images_1 = pipeline(**inputs, negative_prompt=negative_prompt, generator=get_generator("pt", SEED)).images
         prompt = inputs.pop("prompt")
@@ -330,7 +330,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         )
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], safety_checker=safety_checker, device=OPENVINO_DEVICE
+        )
 
         self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -356,7 +358,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_and_save_pipeline_with_safety_checker(self):
         model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
         self.assertTrue(ov_pipeline.safety_checker is not None)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
         with TemporaryDirectory() as tmpdirname:
@@ -381,7 +383,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                     model_lib, model_class = config[key]
                     self.assertTrue(model_lib in ["diffusers", "transformers"])
                     self.assertFalse(model_class.startswith("OV"))
-            loaded_pipeline = self.OVMODEL_CLASS.from_pretrained(tmpdirname)
+            loaded_pipeline = self.OVMODEL_CLASS.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
             for component in ["text_encoder", "unet", "vae_encoder", "vae_decoder"]:
                 config = getattr(getattr(ov_pipeline, component), "config", None)
                 if config is not None:
@@ -398,7 +400,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     def test_height_width_properties(self, model_arch: str):
         batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True, device=OPENVINO_DEVICE
         )
 
         self.assertTrue(ov_pipeline.is_dynamic)
@@ -438,7 +440,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
         diffusers_pipeline.load_textual_inversion(ti_id)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            model_id, compile=False, safety_checker=None, device=OPENVINO_DEVICE
+        )
         ov_pipeline.load_textual_inversion(ti_id)
 
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -450,7 +454,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     def test_load_custom_weight_variant(self):
         model_id = "katuni4ka/tiny-stable-diffusion-torch-custom-variant"
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, variant="custom")
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, variant="custom")
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            model_id, compile=False, variant="custom", device=OPENVINO_DEVICE
+        )
         height, width, batch_size = 32, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
@@ -464,7 +470,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_static_shape_image_generation(self, model_arch):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False)
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False, device=OPENVINO_DEVICE)
         pipeline.reshape(batch_size=1, height=32, width=32)
         pipeline.compile()
         # generation with incompatible size
@@ -519,7 +525,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
+            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -527,14 +533,14 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for batch_size in [1, 3]:
             for height in [64, 128]:
@@ -561,7 +567,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
                 self.has_been_called = True
                 self.number_of_steps += 1
 
-        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         ov_callback = Callback()
@@ -576,7 +582,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_shape(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
 
@@ -623,7 +629,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for output_type in ["latent", "np", "pt"]:
             print(output_type)
@@ -651,7 +657,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
@@ -672,7 +678,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         )
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], safety_checker=safety_checker, device=OPENVINO_DEVICE
+        )
 
         self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -699,7 +707,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     def test_height_width_properties(self, model_arch: str):
         batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True, device=OPENVINO_DEVICE
         )
 
         self.assertTrue(ov_pipeline.is_dynamic)
@@ -736,7 +744,9 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
         diffusers_pipeline.load_textual_inversion(ti_id)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            model_id, compile=False, safety_checker=None, device=OPENVINO_DEVICE
+        )
         ov_pipeline.load_textual_inversion(ti_id)
 
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -771,7 +781,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
+            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -784,14 +794,14 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
             from diffusers import FluxFillPipeline
 
             auto_pipeline = FluxFillPipeline.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for batch_size in [1, 3]:
             for height in [64, 128]:
@@ -818,7 +828,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
                 self.has_been_called = True
                 self.number_of_steps += 1
 
-        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipe = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_pipe = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         ov_callback = Callback()
@@ -833,7 +843,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_shape(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
 
@@ -880,7 +890,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         if model_arch != "flux-fill":
             diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
         else:
@@ -914,7 +924,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_arch=model_arch)
@@ -935,7 +945,9 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         )
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], safety_checker=safety_checker, device=OPENVINO_DEVICE
+        )
 
         self.assertIsInstance(pipeline.safety_checker, StableDiffusionSafetyChecker)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -962,7 +974,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     def test_height_width_properties(self, model_arch: str):
         batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True, device=OPENVINO_DEVICE
         )
 
         self.assertTrue(ov_pipeline.is_dynamic)
@@ -1002,7 +1014,9 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
         diffusers_pipeline.load_textual_inversion(ti_id)
 
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, safety_checker=None)
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
+            model_id, compile=False, safety_checker=None, device=OPENVINO_DEVICE
+        )
         ov_pipeline.load_textual_inversion(ti_id)
 
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -1035,7 +1049,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @require_diffusers
     def test_load_vanilla_model_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
+            _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
@@ -1044,19 +1058,19 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_cls = self.AUTOMODEL_CLASS
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
         auto_pipeline = DiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
-        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = OVDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         self.assertEqual(ov_pipeline.auto_model_class, auto_pipeline.__class__)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_num_videos_per_prompt(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         for batch_size in [1, 3]:
             for height in [64, 128]:
@@ -1071,7 +1085,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     def test_compare_to_diffusers_pipeline(self, model_arch: str):
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
 
@@ -1084,7 +1098,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_shape(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
@@ -1100,7 +1114,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
@@ -1117,7 +1131,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     def test_height_width_properties(self, model_arch: str):
         batch_size, height, width, num_images_per_prompt = 2, 128, 64, 4
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
-            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True
+            MODEL_NAMES[model_arch], export=True, compile=False, dynamic_shapes=True, device=OPENVINO_DEVICE
         )
 
         self.assertTrue(ov_pipeline.is_dynamic)
@@ -1142,7 +1156,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_static_shape_generation(self, model_arch):
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False)
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False, device=OPENVINO_DEVICE)
         pipeline.reshape(batch_size=1, height=32, width=32)
         pipeline.compile()
         # generation with incompatible size
