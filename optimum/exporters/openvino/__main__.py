@@ -520,9 +520,16 @@ def main_export(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
 
+            from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
-            _weight_only_quantization(submodel, quantization_config)
+            if isinstance(quantization_config, _GPTOSSQuantizationConfig):
+                _weight_only_quantization(submodel, quantization_config.quantization_config1)
+                _weight_only_quantization(
+                    submodel, quantization_config.quantization_config2, verify_not_optimized=False
+                )
+            else:
+                _weight_only_quantization(submodel, quantization_config)
             compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
             save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
             del submodel

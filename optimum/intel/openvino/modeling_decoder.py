@@ -876,7 +876,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
+            if config.name_or_path == "openai/gpt-oss-20b":
+                default_config = None
+            else:
+                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
             quantization_config = cls._prepare_quantization_config(
                 default_config or _DEFAULT_4BIT_WQ_CONFIG, load_in_8bit
             )
