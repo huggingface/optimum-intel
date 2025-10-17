@@ -877,7 +877,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
             if config.name_or_path == "openai/gpt-oss-20b":
-                default_config = None
+                raise NotImplementedError(
+                    "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
+                    "Please export the model via optimum-cli with `--weight-format int4` argument."
+                )
             else:
                 default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
             quantization_config = cls._prepare_quantization_config(
