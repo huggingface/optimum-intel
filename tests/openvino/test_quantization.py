@@ -88,6 +88,7 @@ from utils_tests import (
     check_compression_state_per_model,
     get_supported_model_for_library,
     TEST_NAME_TO_MODEL_TYPE,
+    OPENVINO_DEVICE,
 )
 
 _TASK_TO_DATASET = {
@@ -529,7 +530,7 @@ class OVQuantizerTest(unittest.TestCase):
             else:
                 raise ValueError("Unsupported model class.")
 
-            quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(ov_model, task=task, device=OPENVINO_DEVICE)
 
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             calibration_dataset = self.get_calibration_dataset(
@@ -553,7 +554,7 @@ class OVQuantizerTest(unittest.TestCase):
                 raise ValueError("Unsupported model class.")
 
             # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
             check_optimization_not_applicable_to_optimized_model(
                 model, quantization_config=OVWeightQuantizationConfig(bits=8)
@@ -1094,7 +1095,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task, device=OPENVINO_DEVICE)
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
@@ -1106,7 +1107,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
             self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
@@ -1120,7 +1121,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task, device=OPENVINO_DEVICE)
             ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, ratio=0.8))
             quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
             model = model_cls.from_pretrained(tmp_dir)
@@ -1134,7 +1135,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
             self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
@@ -1148,7 +1149,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task, device=OPENVINO_DEVICE)
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
@@ -1160,7 +1161,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(OVWeightQuantizationConfig().to_dict(), loaded_config.quantization_config.to_dict())
             self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
@@ -1217,7 +1218,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_optimization_not_applicable_to_optimized_model(model, quantization_config)
 
     def test_stable_diffusion_with_weight_compression(self):
-        int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
+        int8_pipe = OVStableDiffusionPipeline.from_pretrained(
+            model_id=MODEL_NAMES["stable-diffusion"], export=True, device=OPENVINO_DEVICE
+        )
         quantization_config = OVWeightQuantizationConfig(bits=8, quant_method=OVQuantizationMethod.DEFAULT)
         quantizer = OVQuantizer(int8_pipe)
 
@@ -1285,7 +1288,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
             model.save_pretrained(tmp_dir)
 
-            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
             self.assertEqual(openvino_config.dtype, "int4")
             if model_id == "facebook/opt-125m":
@@ -1322,7 +1325,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quantization_config.lora_correction or False, wc_rt_info["lora_correction"].value == "True"
             )
 
-            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
             self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
@@ -1372,7 +1375,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "nncf.compress_weights", side_effect=main_export_in_stacktrace
             ) as compress_weights_patch:
                 _ = OVModelForCausalLM.from_pretrained(
-                    MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
+                    MODEL_NAMES["llama"], export=True, compile=False, use_cache=False, device=OPENVINO_DEVICE
                 )
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT8_ASYM,
@@ -1401,7 +1404,12 @@ class OVWeightCompressionTest(unittest.TestCase):
             ov_constant_shape.return_value = (2000000000,)
             with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
                 model = OVModelForCausalLM.from_pretrained(
-                    MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
+                    MODEL_NAMES["llama"],
+                    export=True,
+                    load_in_8bit=False,
+                    compile=False,
+                    use_cache=False,
+                    device=OPENVINO_DEVICE,
                 )
                 compress_weights_patch.assert_not_called()
                 self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
@@ -1427,7 +1435,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                     export=True,
                     compile=False,
                     use_cache=False,
-                    quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
+                    quantization_config=OVWeightQuantizationConfig(
+                        bits=4, sym=True, group_size=-1, ratio=0.8, device=OPENVINO_DEVICE
+                    ),
                 )
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT4_SYM,
@@ -1465,7 +1475,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
-            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
             self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
@@ -1822,9 +1832,11 @@ class OVQuantizerQATest(unittest.TestCase):
             )
 
         with TemporaryDirectory() as tmp_dir:
-            transformers_model = OVModelForQuestionAnswering.from_pretrained(model_name, export=True)
+            transformers_model = OVModelForQuestionAnswering.from_pretrained(
+                model_name, export=True, device=OPENVINO_DEVICE
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            quantizer = OVQuantizer.from_pretrained(transformers_model)
+            quantizer = OVQuantizer.from_pretrained(transformers_model, device=OPENVINO_DEVICE)
             calibration_dataset = quantizer.get_calibration_dataset(
                 "squadshifts",
                 dataset_config_name="new_wiki",
@@ -1837,7 +1849,7 @@ class OVQuantizerQATest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
 
             # Test that inference on quantized model works
-            model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
+            model = OVModelForQuestionAnswering.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             tokens = tokenizer.encode_plus(
                 "This is a sample question", "This is a sample context", add_special_tokens=True, return_tensors="pt"
             )
@@ -1845,12 +1857,12 @@ class OVQuantizerQATest(unittest.TestCase):
 
             # Test loading model a second time to catch issues with caching
             try:
-                model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
+                model = OVModelForQuestionAnswering.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             except RuntimeError:
                 self.fail("Loading BERT QA model a second time failed")
 
             # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
 
@@ -2096,7 +2108,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ov_config = OVConfig(quantization_config=quantization_config)
         with TemporaryDirectory() as tmp_dir:
             ov_config.save_pretrained(tmp_dir)
-            loaded_ov_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_ov_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
 
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)
@@ -2215,7 +2227,7 @@ class InferRequestWrapperTest(unittest.TestCase):
     @parameterized.expand(itertools.product(MODEL_NAME, APPLY_CACHING))
     def test_calibration_data_uniqueness(self, model_name, apply_caching):
         model_id = MODEL_NAMES[model_name]
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True, device=OPENVINO_DEVICE)
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
