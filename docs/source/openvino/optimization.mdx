@@ -1094,3 +1094,22 @@ model = OVModelForVisualCausalLM.from_pretrained(
     )
 )
 ```
+
+## Sequential Quantization
+With sequential quantization, you can apply multiple quantization steps one after another to further optimize the model. For example, you can first apply int4 weight-only quantization ignoring some of the layers at the first step, and then quantize the rest of the weights to int8. Below is an example of how to do this using the Python API:
+
+```python
+from optimum.intel import OVModelForCausalLM
+from optimum.intel import OVSequentialQuantizationConfig, OVWeightQuantizationConfig
+
+model_id = "openai/gpt-oss-20b"
+model = OVModelForCausalLM.from_pretrained(
+    model_id,
+    quantization_config=OVSequentialQuantizationConfig(
+        quantization_configs=[
+            OVWeightQuantizationConfig(bits=4, sym=True, group_size=32, ignored_scope={"patterns": [".*self_attn.*", ".*router.*"]}),
+            OVWeightQuantizationConfig(bits=8),
+        ]
+    )
+)
+```
