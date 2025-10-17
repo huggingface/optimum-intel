@@ -1116,6 +1116,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 OVModelForCausalLM,
                 "--task text-generation-with-past --weight-format int4",
                 _DEFAULT_4BIT_WQ_CONFIGS,
+                {"model": {"int8": 6, "int4": 6}},
+                {"model": 0},
             ),
             (
                 "clip",
@@ -1124,6 +1126,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                 OVModelForZeroShotImageClassification,
                 "--task zero-shot-image-classification --quant-mode int8",
                 _DEFAULT_INT8_FQ_CONFIGS,
+                {"model": {"int8": 65}},
+                {"model": 65},
+            ),
+            (
+                "gpt_oss_mxfp4",
+                "openai/gpt-oss-20b",
+                AutoModelForCausalLM,
+                OVModelForCausalLM,
+                "--task text-generation-with-past --weight-format int4",
+                _DEFAULT_4BIT_WQ_CONFIGS,
+                {"model": {"int8": 22, "int4": 4}},
+                {"model": 0},
             ),
         ]
     )
@@ -1135,6 +1149,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ov_model_cls,
         options,
         default_configs_collection,
+        expected_num_weight_nodes_per_model,
+        expected_fake_nodes_per_model,
     ):
         with TemporaryDirectory() as tmpdir:
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
@@ -1166,15 +1182,26 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
             model = ov_model_cls.from_pretrained(tmpdir)
+
+            check_compression_state_per_model(
+                self,
+                model.ov_submodels,
+                expected_num_weight_nodes_per_model,
+                expected_fake_nodes_per_model,
+            )
+
             rt_info = model.model.get_rt_info()
             nncf_info = rt_info["nncf"]
             model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
             default_config = {**default_configs_collection[model_id]}
-            default_config.pop("dataset", None)
+            if "quantization_configs" in default_config and isinstance(default_config["quantization_configs"], list):
+                # NNCF currently saves only the last quantization data, so we select the last quantization config here
+                default_config = default_config["quantization_configs"][-1]
+            dataset = default_config.pop("dataset", None)
+            default_config.pop("weight_only", None)
             if is_weight_compression:
                 bits = default_config.pop("bits", None)
-                self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
                 default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
                 quant_method = default_config.pop("quant_method", None)
@@ -1183,7 +1210,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 advanced_parameters = eval(model_quantization_config["advanced_parameters"].value)
                 model_quantization_config["statistics_path"] = Mock()
                 model_quantization_config["statistics_path"].value = advanced_parameters["statistics_path"]
-                default_config["statistics_path"] = f"{tmpdir}/statistics"
+                if dataset is not None:
+                    default_config["statistics_path"] = f"{tmpdir}/statistics"
             else:
                 dtype = default_config.pop("dtype", None)
                 self.assertEqual(dtype, "int8")

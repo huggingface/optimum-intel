@@ -324,7 +324,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 "ignored_scope": {
                     "patterns": [".*self_attn.*", ".*router.*"],
                 },
-                "backup_precision": "none",
             },
             {
                 "bits": 8,
@@ -1534,6 +1533,9 @@ def _merge_ignored_scopes(
     ignored_scope_1: Union[Dict[str, List[str]], None, "nncf.IgnoredScope"],
     ignored_scope_2: Union[Dict[str, List[str]], None, "nncf.IgnoredScope"],
 ) -> Dict[str, List[str]]:
+    """
+    Merges two ignored scopes provided either as dictionaries or nncf.IgnoredScope instances.
+    """
     return_as_ignored_scope_instance = False
     if isinstance(ignored_scope_1, nncf.IgnoredScope) and isinstance(ignored_scope_2, nncf.IgnoredScope):
         return_as_ignored_scope_instance = True
