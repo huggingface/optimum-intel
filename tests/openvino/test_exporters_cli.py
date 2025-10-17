@@ -1144,7 +1144,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     SUPPORTED_DEFAULT_CONFIG_TEST_CONFIGURATIONS = [
         config
         for config in DEFAULT_CONFIG_TEST_CONFIGURATIONS
-        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+        if TEST_NAME_TO_MODEL_TYPE.get(config[0], config[0]) in get_supported_model_for_library("transformers")
     ]
 
     @parameterized.expand(SUPPORTED_DEFAULT_CONFIG_TEST_CONFIGURATIONS)
@@ -1202,9 +1202,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
             default_config = {**default_configs_collection[model_id]}
-            if "quantization_configs" in default_config and isinstance(default_config["quantization_configs"], list):
-                # NNCF currently saves only the last quantization data, so we select the last quantization config here
-                default_config = default_config["quantization_configs"][-1]
+            if "quantization_config2" in default_config:
+                # For GPT-OSS use the second config as reference
+                default_config = default_config["quantization_config2"]
             dataset = default_config.pop("dataset", None)
             default_config.pop("weight_only", None)
             if is_weight_compression:
