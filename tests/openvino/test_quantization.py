@@ -1717,7 +1717,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 }
             ),
             {"model": 0},
-            {"model": {"int8": 8, "int4": 22}},
+            {"model": {"int8": 22, "int4": 8}},
         ),
     ]
 

@@ -1107,40 +1107,47 @@ class OVCLIExportTestCase(unittest.TestCase):
                 expected_fake_nodes_per_model,
             )
 
-    @parameterized.expand(
-        [
-            (
-                "falcon-40b",
-                "bigscience/bloomz-560m",
-                AutoModelForCausalLM,
-                OVModelForCausalLM,
-                "--task text-generation-with-past --weight-format int4",
-                _DEFAULT_4BIT_WQ_CONFIGS,
-                {"model": {"int8": 6, "int4": 6}},
-                {"model": 0},
-            ),
-            (
-                "clip",
-                "hf-tiny-model-private/tiny-random-CLIPModel",
-                AutoModelForZeroShotImageClassification,
-                OVModelForZeroShotImageClassification,
-                "--task zero-shot-image-classification --quant-mode int8",
-                _DEFAULT_INT8_FQ_CONFIGS,
-                {"model": {"int8": 65}},
-                {"model": 65},
-            ),
-            (
-                "gpt_oss_mxfp4",
-                "openai/gpt-oss-20b",
-                AutoModelForCausalLM,
-                OVModelForCausalLM,
-                "--task text-generation-with-past --weight-format int4",
-                _DEFAULT_4BIT_WQ_CONFIGS,
-                {"model": {"int8": 22, "int4": 4}},
-                {"model": 0},
-            ),
-        ]
-    )
+    DEFAULT_CONFIG_TEST_CONFIGURATIONS = [
+        (
+            "falcon-40b",
+            "bigscience/bloomz-560m",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int4",
+            _DEFAULT_4BIT_WQ_CONFIGS,
+            {"model": {"int8": 6, "int4": 6}},
+            {"model": 0},
+        ),
+        (
+            "clip",
+            "hf-tiny-model-private/tiny-random-CLIPModel",
+            AutoModelForZeroShotImageClassification,
+            OVModelForZeroShotImageClassification,
+            "--task zero-shot-image-classification --quant-mode int8",
+            _DEFAULT_INT8_FQ_CONFIGS,
+            {"model": {"int8": 65}},
+            {"model": 65},
+        ),
+        (
+            "gpt_oss_mxfp4",
+            "openai/gpt-oss-20b",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int4",
+            _DEFAULT_4BIT_WQ_CONFIGS,
+            {"model": {"int8": 22, "int4": 4}},
+            {"model": 0},
+        ),
+    ]
+
+    # filter models type depending on min max transformers version
+    SUPPORTED_DEFAULT_CONFIG_TEST_CONFIGURATIONS = [
+        config
+        for config in DEFAULT_CONFIG_TEST_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
+
+    @parameterized.expand(SUPPORTED_DEFAULT_CONFIG_TEST_CONFIGURATIONS)
     def test_exporters_cli_with_default_config(
         self,
         model_name,
