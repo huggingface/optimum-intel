@@ -1030,7 +1030,14 @@ class _IPEXAttention(nn.Module):
 class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, device, config) -> None:
         super().__init__(module, device, config)
-        if getattr(config, "quantization_config", None) is None:
+        # Skip concat_qkv creation for TP mode (when using DTensor)
+        is_tp_mode = (
+            type(self.q_proj.weight).__name__ == "DTensor"
+            or type(self.k_proj.weight).__name__ == "DTensor"
+            or type(self.v_proj.weight).__name__ == "DTensor"
+        )
+
+        if getattr(config, "quantization_config", None) is None and not is_tp_mode:
             concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
             bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias is not None]
             use_bias = bias_list != []
@@ -1131,11 +1138,17 @@ class _IPEXLlamaMLP(nn.Module):
         self.module_device = device
 
         if not config.compile and getattr(config, "quantization_config", None) is None:
-            # LinearAllreduce cannot use fused op LinearAdd
-            if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+            # Check if in TP mode (using DTensor)
+            is_tp_mode = (
+                type(module.down_proj.weight).__name__ == "DTensor"
+                or type(module.gate_proj.weight).__name__ == "DTensor"
+                or type(module.up_proj.weight).__name__ == "DTensor"
+            )
+
+            if not is_tp_mode:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
-            if isinstance(self.act_fn, nn.SiLU):
-                self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+                if isinstance(self.act_fn, nn.SiLU):
+                    self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):
