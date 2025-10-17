@@ -1561,9 +1561,11 @@ def _weight_only_quantization(
     model: openvino.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
+    verify_not_optimized: bool = True,
     **kwargs,
 ) -> openvino.Model:
-    _verify_not_optimized(model)
+    if verify_not_optimized:
+        _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
