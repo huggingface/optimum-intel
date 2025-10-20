@@ -723,3 +723,31 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.allclose(torch.Tensor(ov_logits), ref_logits, atol=5e-3),
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
+
+    EAGLE_DRAFT_AND_TARGET_MODELS = {
+        "AngelSlim/Qwen3-1.7B_eagle3": "Qwen/Qwen3-1.7B"
+    }
+    def test_load_and_infer_with_eagle3_model(self):
+        draft_model_id = MODEL_NAMES["eagle3"]
+        target_model_id = self.EAGLE_DRAFT_AND_TARGET_MODELS.get(draft_model_id)
+
+        ov_model = OVModelForCausalLM.from_pretrained(draft_model_id, export=True, eagle3=True, trust_remote_code=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+
+        tokenizer = AutoTokenizer.from_pretrained(target_model_id)
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        ov_outputs = ov_model(**tokens)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        is_stateful = True
+        self.assertEqual(ov_model.stateful, is_stateful)
+        if is_stateful:
+            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        del ov_model
+        gc.collect()

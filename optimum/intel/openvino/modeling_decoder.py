@@ -163,6 +163,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
         self._past_length = 0
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
+        self.is_eagle3 = kwargs.pop("eagle3", False)
         self.update_pkv_precision()
 
         # reshape with dynamic shapes is needed for decoder_with_past model to be compatible with inference
@@ -546,6 +547,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
+
+        if "hidden_states" in self.input_names:
+            if self.is_eagle3:
+                hidden_states = kwargs.get("hidden_states", None)
+                if hidden_states is None:
+                    hidden_states = np.zeros((batch_size, input_ids.shape[1], self.config.hidden_size * 3), dtype=np.float32)
+                inputs["hidden_states"] = hidden_states
 
         return inputs
 
