@@ -320,6 +320,23 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "bits": 4,
             "sym": True,
             "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "openai/gpt-oss-120b": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": True,
+            "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
             "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
         },
         "quantization_config2": {

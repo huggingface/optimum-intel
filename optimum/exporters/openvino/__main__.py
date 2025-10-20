@@ -524,6 +524,8 @@ def main_export(
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
             if isinstance(quantization_config, _GPTOSSQuantizationConfig):
+                # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
+                # selectively quantize some weights to 4 bits and some to 8 bits.
                 _weight_only_quantization(submodel, quantization_config.quantization_config1)
                 _weight_only_quantization(
                     submodel, quantization_config.quantization_config2, verify_not_optimized=False
