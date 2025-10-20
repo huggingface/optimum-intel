@@ -340,7 +340,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs["torch_dtype"] = torch_dtype
 
         variant = kwargs.pop("variant", None)
-        eagle3 = kwargs.pop("eagle3", False)
+        eagle3 = kwargs.get("eagle3", False)
 
         main_export(
             model_name_or_path=model_id,
