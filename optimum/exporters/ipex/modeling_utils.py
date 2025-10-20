@@ -1032,9 +1032,9 @@ class _IPEXLlamaAttention(_IPEXAttention):
         super().__init__(module, device, config)
         # Skip concat_qkv creation for TP mode (when using DTensor)
         is_tp_mode = (
-            type(self.q_proj.weight).__name__ == "DTensor"
-            or type(self.k_proj.weight).__name__ == "DTensor"
-            or type(self.v_proj.weight).__name__ == "DTensor"
+            hasattr(self.q_proj, "weight") and type(self.q_proj.weight).__name__ == "DTensor"
+            or hasattr(self.k_proj, "weight") and type(self.k_proj.weight).__name__ == "DTensor"
+            or hasattr(self.v_proj, "weight") and type(self.v_proj.weight).__name__ == "DTensor"
         )
 
         if getattr(config, "quantization_config", None) is None and not is_tp_mode:
