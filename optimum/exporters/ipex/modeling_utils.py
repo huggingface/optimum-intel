@@ -1140,9 +1140,9 @@ class _IPEXLlamaMLP(nn.Module):
         if not config.compile and getattr(config, "quantization_config", None) is None:
             # Check if in TP mode (using DTensor)
             is_tp_mode = (
-                type(module.down_proj.weight).__name__ == "DTensor"
-                or type(module.gate_proj.weight).__name__ == "DTensor"
-                or type(module.up_proj.weight).__name__ == "DTensor"
+                hasattr(module.down_proj, "weight") and type(module.down_proj.weight).__name__ == "DTensor"
+                or hasattr(module.gate_proj, "weight") and type(module.gate_proj.weight).__name__ == "DTensor"
+                or hasattr(module.up_proj, "weight") and type(module.up_proj.weight).__name__ == "DTensor"
             )
 
             if not is_tp_mode:
