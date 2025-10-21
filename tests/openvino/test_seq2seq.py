@@ -656,7 +656,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
-            if model_arch in ["minicpmo"]:
+            if model_arch in ["minicpmo", "minicpmv4", "minicpmv4_5"]:
                 # `generate` method for minicpmo requires tokenizer
                 tokenizer = AutoTokenizer.from_pretrained(
                     model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
@@ -837,6 +837,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
             inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            # skip the temporal_ids which makes the number of loop inconstant:
+            # https://huggingface.co/openbmb/MiniCPM-V-4_5/blob/main/resampler.py#L261
+            inputs.pop("temporal_ids", None)
             outputs = model.generate(**inputs, max_new_tokens=10)
             # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
