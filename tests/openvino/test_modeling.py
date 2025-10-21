@@ -461,7 +461,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsNone(loaded_model.ov_config.get("PERFORMANCE_HINT"))
 
         # Test specifying ov_config with throughput hint and manual cache dir
-        manual_openvino_cache_dir = loaded_model._model_save_dir / "manual_model_cache"
+        manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
         ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
         loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID, ov_config=ov_config)
 

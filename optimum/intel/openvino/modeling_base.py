@@ -889,15 +889,19 @@ class OVModelPart(OVModelHostMixin):
         self.model = model
         self.parent_model = parent_model
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.input_dtype = {
-            inputs.get_any_name(): OV_TO_PT_TYPE[inputs.get_element_type().get_type_name()]
-            for inputs in self.model.inputs
+        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+        self.input_dtypes = {
+            inputs.get_any_name(): inputs.get_element_type().get_type_name() for inputs in self.model.inputs
+        }
+        self.output_dtypes = {
+            inputs.get_any_name(): inputs.get_element_type().get_type_name() for inputs in self.model.outputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None if not self.parent_model._compile_only else self.model
+        self._compile_only = parent_model._compile_only
+        self.request = None if not self._compile_only else self.model
         self._model_name = model_name
         self.config = self.parent_model.config
-        self._model_dir = Path(model_dir or parent_model._model_save_dir)
+        self._model_dir = Path(model_dir or parent_model.model_save_dir)
 
     def compile(self):
         if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
@@ -906,7 +910,7 @@ class OVModelPart(OVModelHostMixin):
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and "GPU" in self._device
+                and "gpu" in self._device.lower()
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
@@ -945,4 +949,8 @@ class OVModelPart(OVModelHostMixin):
         raise NotImplementedError
 
     def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
         self.request = None

@@ -367,7 +367,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.is_dynamic = True
         self.config = config
         self.use_cache = kwargs.get("use_cache", True)
-        self._model_save_dir = model_save_dir
+        self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])

@@ -213,7 +213,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
         self.config = config
         self.use_cache = model_has_state(decoder)
-        self._model_save_dir = model_save_dir
+        self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = True
         self.ov_config = {} if ov_config is None else {**ov_config}
