@@ -1435,9 +1435,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     export=True,
                     compile=False,
                     use_cache=False,
-                    quantization_config=OVWeightQuantizationConfig(
-                        bits=4, sym=True, group_size=-1, ratio=0.8, device=OPENVINO_DEVICE
-                    ),
+                    quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
                 )
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT4_SYM,
