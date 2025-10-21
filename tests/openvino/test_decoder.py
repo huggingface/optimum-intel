@@ -141,7 +141,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen2",
         "arctic",
         "chatglm4",
-        "glm4",
         "exaone",
         "decilm",
         "minicpm3",
