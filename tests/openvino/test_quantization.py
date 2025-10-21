@@ -1038,7 +1038,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
-                processor=MODEL_NAMES["minicpmv"],
+                processor=MODEL_NAMES["minicpmv4"],
                 trust_remote_code=True,
             ),
             {
@@ -1059,7 +1059,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
-                processor=MODEL_NAMES["minicpmv"],
+                processor=MODEL_NAMES["minicpmv4_5"],
                 trust_remote_code=True,
             ),
             {
@@ -1095,8 +1095,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
-        (OVModelForVisualCausalLM, "minicpmv4", False),
-        (OVModelForVisualCausalLM, "minicpmv4_5", False),
+        (OVModelForVisualCausalLM, "minicpmv4", True),
+        (OVModelForVisualCausalLM, "minicpmv4_5", True),
     ]
 
     if is_transformers_version("<", "4.54.0"):
@@ -1126,7 +1126,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
+            expected = {"llava-qwen2", "phi3_v", "minicpmo", "minicpmv4", "minicpmv4_5"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
