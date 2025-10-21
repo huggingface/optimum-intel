@@ -132,7 +132,7 @@ def _save_model(
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
     model = _add_runtime_options_to_rt_info(model, runtime_options)
 
-    if 'eagle3' in config._config.model_type:
+    if getattr(getattr(config, "_config", {}), "is_eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
     save_model(model, path, compress_to_fp16)
     del model
@@ -368,6 +368,11 @@ def export_pytorch(
 
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
+        # Remove hidden_states input for other standard llama model
+        if getattr(model, "model_type", "") == "llama" and not getattr(getattr(model, "config", {}), "is_eagle3", False):
+            if 'hidden_states' in dummy_inputs.keys():
+                dummy_inputs.pop('hidden_states')
+
         device = torch.device(device)
         if device.type == "cuda" and torch.cuda.is_available():
             model.to(device)

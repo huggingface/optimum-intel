@@ -139,6 +139,7 @@ def eagle3_config(model_path: str):
             "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
             "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM"
         }
+    config['is_eagle3'] = True
     # write new config.json
     with open(new_config_file, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
@@ -555,9 +556,6 @@ def main_export(
         preprocessors = load_preprocessors(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
-
-        if eagle3:
-            model.config.model_type = model.config.model_type + '_eagle3'
 
         submodel_paths = export_from_model(
             model=model,
