@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
-import pytest
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
 from utils_tests import (
@@ -63,7 +62,6 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -443,7 +441,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
-                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+                "decoder": 52,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
@@ -733,6 +731,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 16},
             },
         ),
+        (
+            "image-text-to-text",
+            "minicpmo",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 6, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -754,7 +764,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v", "phi4mm"}
+            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
@@ -1014,8 +1024,6 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
-        if option.startswith("cb4") and is_nncf_version("<=", "2.17"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -1072,8 +1080,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
-        if quant_mode == "cb4_f8e4m3" and is_nncf_version("<=", "2.17"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "

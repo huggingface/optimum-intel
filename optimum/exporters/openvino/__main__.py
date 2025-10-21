@@ -111,7 +111,7 @@ def main_export(
     output: Union[str, Path],
     task: str = "auto",
     device: str = "cpu",
-    framework: Optional[str] = None,
+    framework: str = "pt",
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     trust_remote_code: bool = False,
     pad_token_id: Optional[int] = None,
@@ -150,9 +150,8 @@ def main_export(
             use `xxx-with-past` to export the model using past key values in the decoder.
         device (`str`, defaults to `"cpu"`):
             The device to use to do the export. Defaults to "cpu".
-        framework (`Optional[str]`, defaults to `None`):
-            The framework to use for the ONNX export (`"pt"` or `"tf"`). If not provided, will attempt to automatically detect
-            the framework for the checkpoint.
+        framework (`Optional[str]`, defaults to `pt`):
+            The framework to use for the ONNX export. Defaults to 'pt' for PyTorch.
         cache_dir (`Optional[str]`, defaults to `None`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):

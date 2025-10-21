@@ -28,12 +28,9 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    # change this to optimum-onnx==*.*.* once we release it
-    "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git",
+    "optimum-onnx==0.0.*",
     "transformers>=4.45,<4.56",
-    "datasets>=1.4.0",
     "setuptools",
-    "scipy",
 ]
 
 TESTS_REQUIRE = [
@@ -60,15 +57,17 @@ TESTS_REQUIRE = [
     "langchain-huggingface",
     "hf_xet",
     "num2words",
+    "vocos",
+    "vector_quantize_pytorch",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf>=2.16.0"],
-    "openvino": ["nncf>=2.16.0", "openvino>=2025.1.0", "openvino-tokenizers>=2025.1.0"],
-    "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46"],
-    "ipex": ["intel-extension-for-pytorch>=2.6", "transformers>4.50,<4.53", "accelerate"],
+    "nncf": ["nncf>=2.18.0"],
+    "openvino": ["nncf>=2.18.0", "openvino>=2025.1.0", "openvino-tokenizers>=2025.1.0"],
+    "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46", "datasets"],
+    "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>4.54,<4.56", "accelerate"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
