@@ -1056,7 +1056,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             statistics_path = f"{tmpdir}/statistics"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --weight-format int4 --awq "
+                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --task text-generation-with-past --weight-format int4 --awq "
                 f"--dataset wikitext2 --group-size 4 --quantization-statistics-path {statistics_path} {tmpdir}",
                 shell=True,
                 check=True,
