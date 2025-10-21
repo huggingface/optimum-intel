@@ -1032,9 +1032,12 @@ class _IPEXLlamaAttention(_IPEXAttention):
         super().__init__(module, device, config)
         # Skip concat_qkv creation for TP mode (when using DTensor)
         is_tp_mode = (
-            hasattr(self.q_proj, "weight") and type(self.q_proj.weight).__name__ == "DTensor"
-            or hasattr(self.k_proj, "weight") and type(self.k_proj.weight).__name__ == "DTensor"
-            or hasattr(self.v_proj, "weight") and type(self.v_proj.weight).__name__ == "DTensor"
+            hasattr(self.q_proj, "weight")
+            and type(self.q_proj.weight).__name__ == "DTensor"
+            or hasattr(self.k_proj, "weight")
+            and type(self.k_proj.weight).__name__ == "DTensor"
+            or hasattr(self.v_proj, "weight")
+            and type(self.v_proj.weight).__name__ == "DTensor"
         )
 
         if getattr(config, "quantization_config", None) is None and not is_tp_mode:
@@ -1140,9 +1143,12 @@ class _IPEXLlamaMLP(nn.Module):
         if not config.compile and getattr(config, "quantization_config", None) is None:
             # Check if in TP mode (using DTensor)
             is_tp_mode = (
-                hasattr(module.down_proj, "weight") and type(module.down_proj.weight).__name__ == "DTensor"
-                or hasattr(module.gate_proj, "weight") and type(module.gate_proj.weight).__name__ == "DTensor"
-                or hasattr(module.up_proj, "weight") and type(module.up_proj.weight).__name__ == "DTensor"
+                hasattr(module.down_proj, "weight")
+                and type(module.down_proj.weight).__name__ == "DTensor"
+                or hasattr(module.gate_proj, "weight")
+                and type(module.gate_proj.weight).__name__ == "DTensor"
+                or hasattr(module.up_proj, "weight")
+                and type(module.up_proj.weight).__name__ == "DTensor"
             )
 
             if not is_tp_mode:
