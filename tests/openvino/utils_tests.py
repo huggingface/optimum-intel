@@ -116,6 +116,8 @@ MODEL_NAMES = {
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "minicpm3": "katuni4ka/tiny-random-minicpm3",
     "minicpmv": "katuni4ka/tiny-random-minicpmv-2_6",
+    "minicpmv4": "snake7gun/minicpm-v-4-tiny",
+    "minicpmv4_5": "tiny-random/minicpm-v-4_5",
     "minicpmo": "rkazants/tiny-random-MiniCPM-o-2_6",
     "mistral": "echarlaix/tiny-random-mistral",
     "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
@@ -283,6 +285,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 26,
+        "resampler_model": 6,
+    },
+    "minicpmv4": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 14,
+        "resampler_model": 6,
+    },
+    "minicpmv4_5": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 14,
         "resampler_model": 6,
     },
     "llava_next_video": {

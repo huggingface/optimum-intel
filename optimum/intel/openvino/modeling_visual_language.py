@@ -2111,6 +2111,9 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             )
         inputs = processor([prompt], [image], return_tensors="pt")
         inputs.pop("image_sizes", None)
+        # skip the temporal_ids which makes the number of loop inconstant:
+        # https://huggingface.co/openbmb/MiniCPM-V-4_5/blob/main/resampler.py#L261
+        inputs.pop("temporal_ids", None)
         return inputs
 
 
