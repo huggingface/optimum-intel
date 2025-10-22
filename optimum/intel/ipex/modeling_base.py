@@ -143,6 +143,8 @@ class IPEXModel(OptimizedModel):
         self._supports_sdpa = getattr(model, "_supports_sdpa", None)
         self._supports_quantized_cache = getattr(model, "_supports_quantized_cache", None)
         self._supports_static_cache = getattr(model, "_supports_static_cache", None)
+        self._can_compile_fullgraph = getattr(model, "_can_compile_fullgraph", False)
+        self._tp_size = getattr(model, "_tp_size", None)
         self._dtype = self.model.dtype if self.model.dtype is not None else torch.float32
         self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
@@ -206,6 +208,13 @@ class IPEXModel(OptimizedModel):
     @property
     def dtype(self) -> torch.dtype:
         return self._dtype
+
+    @property
+    def tp_size(self):
+        """
+        Returns the model's tensor parallelism degree.
+        """
+        return self._tp_size
 
     @property
     def model_dtype(self):
@@ -289,7 +298,6 @@ class IPEXModelForQuestionAnswering(IPEXModel):
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
-    _can_compile_fullgraph = False
 
     def __init__(
         self,
@@ -478,7 +486,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
     export_feature = "text2text-generation"
-    _can_compile_fullgraph = False
 
     def __init__(
         self,
