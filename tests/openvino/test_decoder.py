@@ -20,7 +20,7 @@ from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, get_num_sdpa, mock_torch_cuda_is_available, patch_awq_for_inference
 
-from optimum.exporters.openvino.model_configs import DeepseekOpenVINOConfig
+from optimum.exporters.openvino.model_configs import DeepseekOpenVINOConfig,NemotronOnnxConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
@@ -166,7 +166,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
-        "bigbird_pegasus": 2,
+        "bigbird_pegasus": 2 if is_transformers_version(">=", "4.52") else 0,
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
@@ -187,8 +187,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral": 2,
         "mixtral": 2,
         "mpt": 5,
+        "nemotron": 2,
         "olmo2": 2,
-        "opt": 5 if is_transformers_version(">=", "4.46.0") else 0,
+        "opt": 5 if is_transformers_version(">=", "4.46") else 0,
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
@@ -228,6 +229,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mixtral_awq": 2,
         "gemma3_text": 2,
         "glm4": 2,
+        "helium": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
         "mamba": 0,
@@ -253,6 +255,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v2")
             if "deepseek_v3" in supported_architectures:
                 supported_architectures.remove("deepseek_v3")
+        elif is_transformers_version("<", str(NemotronOnnxConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures.remove("nemotron")
 
         untested_architectures = supported_architectures - tested_architectures
 
