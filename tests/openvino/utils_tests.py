@@ -26,7 +26,6 @@ from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
 
 
-    "zamba2": "rkazants/tiny-zamba2",
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -211,6 +210,7 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "zamba2": "rkazants/tiny-zamba2",
 }
 
 
