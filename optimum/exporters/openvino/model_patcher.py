@@ -6588,13 +6588,6 @@ def zamba2_mamba_mixer(
     )
 
     # Convolution sequence transformation
-    ssm_state = cache_params.ssm_states[self.layer_idx].clone()
-    ssm_state = ssm_state.to(hidden_states.device)
-
-    dtype = hidden_states.dtype
-    device = hidden_states.device
-    _, seq_len, _ = hidden_states.shape
-
     # reference conv state [B, D, K]
     conv_state_dec1 = cache_params.conv_states[self.layer_idx]
     conv_state_dec = torch.roll(conv_state_dec1, shifts=-1, dims=-1)
