@@ -2106,9 +2106,9 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if audio is not None:
             raise ValueError("Audio input is not supported")
         if getattr(processor, "chat_template", None) is not None:
-            _prepend_minicpm_image_tag_apply_chat_template(text, image, processor)
+            prompt = _prepend_minicpm_image_tag_apply_chat_template(text, image, processor)
         elif "MiniCPMOProcessor" == processor.__class__.__name__:
-            _prepend_minicpm_image_tag_apply_chat_template(text, image, processor.tokenizer)
+            prompt = _prepend_minicpm_image_tag_apply_chat_template(text, image, processor.tokenizer)
         else:
             prompt = (
                 f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
