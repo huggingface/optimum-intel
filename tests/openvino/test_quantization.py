@@ -29,12 +29,15 @@ import openvino as ov
 import pytest
 import numpy as np
 import torch
+from PIL import Image
 from parameterized import parameterized
 import nncf
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoTokenizer,
     AutoProcessor,
+    AutoConfig,
+    GenerationConfig,
 )
 from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
@@ -76,16 +79,19 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
     _quantization_config_from_dict,
 )
+from optimum.intel.openvino.modeling_visual_language import _OVNanoLlavaForCausalLM
 from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
     _ARCHITECTURES_TO_EXPECTED_INT8,
     check_compression_state_per_model,
+    get_supported_model_for_library,
+    TEST_NAME_TO_MODEL_TYPE,
 )
 
 _TASK_TO_DATASET = {
@@ -126,10 +132,6 @@ pattern_prefix = (
 class OVQuantizerTest(unittest.TestCase):
     maxDiff = None
 
-    SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 31, 22),
-    )
     # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq, OVStableDiffusionPipeline and OVModelForSeq2SeqLM
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -393,14 +395,14 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
-            if is_transformers_version("<=", "4.36.0")
+            if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
-                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+                "decoder": 52,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
-                if is_transformers_version("<=", "4.36.0")
+                if is_transformers_version("<=", "4.45")
                 else {"encoder": {"int8": 32}, "decoder": {"int8": 52}}
             ),
         ),
@@ -417,34 +419,28 @@ class OVQuantizerTest(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 50},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_vl",
+            OVQuantizationConfig(
+                bits=8,
+                dataset="contextual",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 13,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 14,
+            },
+            {
+                "lm_model": {"int8": 15},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
     ]
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_vl",
-                    OVQuantizationConfig(
-                        bits=8,
-                        dataset="contextual",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": 13,
-                        "text_embeddings_model": 0,
-                        "vision_embeddings_model": 0,
-                        "vision_embeddings_merger_model": 0,
-                    },
-                    {
-                        "lm_model": {"int8": 15},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
-                    },
-                ),
-            ]
-        )
 
     @staticmethod
     def get_calibration_dataset(
@@ -477,55 +473,6 @@ class OVQuantizerTest(unittest.TestCase):
                 streaming=streaming,
             )
         return calibration_dataset
-
-    @parameterized.expand(
-        [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_TORCH_MODEL, [False, True])]
-    )
-    def test_automodel_static_quantization(
-        self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
-    ):
-        model_id = MODEL_NAMES[model_name]
-        task = model_cls.export_feature
-        dataset_kwargs = {**_TASK_TO_DATASET[task]}
-        column_name = dataset_kwargs.pop("column_name")
-        file_name = "openvino_quantized_model.xml"
-
-        def preprocess_function(examples, tokenizer):
-            return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
-
-        with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.auto_model_class.from_pretrained(model_id)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-
-            ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-            calibration_dataset = self.get_calibration_dataset(
-                quantizer,
-                ov_config.quantization_config,
-                partial(preprocess_function, tokenizer=tokenizer),
-                from_dataset_instance,
-                **dataset_kwargs,
-            )
-            quantizer.quantize(
-                save_directory=tmp_dir,
-                calibration_dataset=calibration_dataset,
-                file_name=file_name,
-                ov_config=ov_config,
-            )
-            model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
-            num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_fake_nodes, num_fake_nodes)
-            self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
-
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(
         [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_OV_MODEL, [False, True])]
@@ -625,62 +572,17 @@ class OVQuantizerTest(unittest.TestCase):
         expected_fake_nodes_per_model,
         expected_num_weight_nodes_per_model,
     ):
-        if (
-            isinstance(quantization_config, dict)
-            and quantization_config.get("weight_quantization_config", {}).get("dtype") == "cb4"
-            and is_nncf_version("<=", "2.17")
-        ):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
             ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
             ov_model.save_pretrained(tmp_dir)
 
-            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM]:
-                if ov_model.decoder_with_past is None:
-                    expected_fake_nodes_per_model.pop("decoder_with_past", None)
-                    expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
+            check_model_inference(ov_model, model_id, trust_remote_code=False)
 
-                if model_cls == OVModelForSpeechSeq2Seq:
-                    input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
-                    ov_model.generate(input_features)
-                else:
-                    tokenizer = AutoTokenizer.from_pretrained(model_id)
-                    inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
-                    ov_model.generate(**inputs)
-            elif model_cls in (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM):
-                tokenizer = AutoTokenizer.from_pretrained(model_id)
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
-                tokens = tokenizer("This is a sample <mask>", return_tensors="pt")
-                ov_model(**tokens)
-            elif model_cls in (
-                OVStableDiffusionPipeline,
-                OVStableDiffusionXLPipeline,
-                OVLatentConsistencyModelPipeline,
-            ):
-                ov_model(prompt="A text-to-image prompt")
-            elif model_cls == OVSentenceTransformer:
-                ov_model.encode(["This is a sample input"])
-            elif model_cls == OVModelForZeroShotImageClassification:
-                processor = AutoProcessor.from_pretrained(model_id)
-                image = np.random.rand(224, 224, 3).astype(np.uint8)
-                inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
-                ov_model(**inputs)
-            elif model_cls == OVModelForVisualCausalLM:
-                processor = AutoProcessor.from_pretrained(model_id)
-                image = np.random.rand(224, 224, 3).astype(np.uint8)
-                inputs = ov_model.preprocess_inputs(image=image, text="This is a sample text", processor=processor)
-                ov_model(**inputs)
-            elif model_cls == OVSamModel:
-                processor = AutoProcessor.from_pretrained(model_id)
-                image = np.random.rand(224, 224, 3).astype(np.uint8)
-                inputs = processor(image, input_points=[[[0, 0]]], return_tensors="pt")
-                ov_model(**inputs)
-            else:
-                raise Exception("Unexpected model class.")
-
+            if model_cls in [OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM] and ov_model.decoder_with_past is None:
+                expected_fake_nodes_per_model.pop("decoder_with_past", None)
+                expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
             check_compression_state_per_model(
                 self,
                 ov_model.ov_submodels,
@@ -701,7 +603,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
-    LOAD_IN_4_BITS_SCOPE = [
+    TRANSFORMERS_4BIT_CONFIGURATIONS = [
         (
             OVModelForCausalLM,  # model cls
             "gpt2",  # model name
@@ -886,214 +788,212 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "llava_next",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="hessian_input_activation",
+                num_samples=1,
+                processor=MODEL_NAMES["llava_next"],
+            ),
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava-qwen2",
+            True,
+            dict(
+                bits=4,
+                group_size=8,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_variance",
+                num_samples=1,
+                processor=MODEL_NAMES["nanollava_vision_tower"],
+                tokenizer=MODEL_NAMES["llava-qwen2"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 16, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 15},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava_next_video",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="hessian_input_activation",
+                num_samples=1,
+                processor=MODEL_NAMES["llava_next_video"],
+            ),
+            {
+                "lm_model": {"int8": 6, "int4": 24},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_resampler_model": {},
+                "multi_modal_projector_model": {"int8": 2},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "minicpmv",
+            True,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                processor=MODEL_NAMES["minicpmv"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 26},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "internvl_chat",
+            True,
+            dict(
+                bits=4,
+                group_size=4,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 8, "int4": 22},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_vl",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 10},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "phi3_v",
+            True,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 4, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 7},
+                "vision_projection_model": {"int8": 2},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_5_vl",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 1},
+                "vision_embeddings_merger_model": {"int8": 12},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llama4",
+            False,
+            dict(
+                bits=4,
+                group_size=16,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+            ),
+            {
+                "lm_model": {"int8": 46, "int4": 56},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 16},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "minicpmo",
+            True,
+            dict(
+                bits=4,
+                group_size=4,
+                dataset="contextual",
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                num_samples=1,
+                processor=MODEL_NAMES["minicpmo"],
+                trust_remote_code=True,
+            ),
+            {
+                "lm_model": {"int8": 6, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
-    if is_transformers_version(">=", "4.40.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llava_next",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="hessian_input_activation",
-                        num_samples=1,
-                        processor=MODEL_NAMES["llava_next"],
-                    ),
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 9},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "nanollava",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=8,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_variance",
-                        num_samples=1,
-                        processor=MODEL_NAMES["nanollava_vision_tower"],
-                        tokenizer=MODEL_NAMES["nanollava"],
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 16, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 15},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.42.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llava_next_video",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="hessian_input_activation",
-                        num_samples=1,
-                        processor=MODEL_NAMES["llava_next_video"],
-                    ),
-                    {
-                        "lm_model": {"int8": 6, "int4": 24},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_resampler_model": {},
-                        "multi_modal_projector_model": {"int8": 2},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.45.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "minicpmv",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        processor=MODEL_NAMES["minicpmv"],
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 26},
-                        "resampler_model": {"int8": 6},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "internvl2",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=4,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 8, "int4": 22},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 11},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "phi3_v",
-                    True,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                        trust_remote_code=True,
-                    ),
-                    {
-                        "lm_model": {"int8": 4, "int4": 14},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 7},
-                        "vision_projection_model": {"int8": 2},
-                    },
-                ),
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_vl",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 10, "int4": 20},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 10},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "qwen2_5_vl",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 14, "int4": 16},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 1},
-                        "vision_embeddings_merger_model": {"int8": 12},
-                    },
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.51.0"):
-        LOAD_IN_4_BITS_SCOPE.extend(
-            [
-                (
-                    OVModelForVisualCausalLM,
-                    "llama4",
-                    False,
-                    dict(
-                        bits=4,
-                        group_size=16,
-                        dataset="contextual",
-                        ratio=0.8,
-                        sensitivity_metric="mean_activation_magnitude",
-                        num_samples=1,
-                    ),
-                    {
-                        "lm_model": {"int8": 22, "int4": 48},
-                        "text_embeddings_model": {"int8": 1},
-                        "vision_embeddings_model": {"int8": 16},
-                    },
-                ),
-            ]
-        )
+    # filter models type depending on min max transformers version
+    LOAD_IN_4_BITS_SCOPE = [
+        config
+        for config in TRANSFORMERS_4BIT_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
+    ]
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = [
         (OVModelForCausalLM, "gpt2", False),
@@ -1109,68 +1009,44 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
+        (OVModelForVisualCausalLM, "llava_next_video", False),
+        (OVModelForVisualCausalLM, "minicpmv", True),
+        (OVModelForVisualCausalLM, "qwen2_vl", False),
     ]
 
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "nanollava", True))
+    if is_transformers_version("<", "4.54.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava-qwen2", True))
 
-    if is_transformers_version(">=", "4.42.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "llava_next_video", False))
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmv", True))
-        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "qwen2_vl", False))
+    if is_transformers_version("<", "4.52.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
         (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
+        (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
+        (OVFluxPipeline, "flux", 7, 56),
+        (OVSanaPipeline, "sana", 19, 53),
     ]
-
-    if is_transformers_version(">=", "4.45.0"):
-        SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION.extend(
-            [
-                (OVStableDiffusion3Pipeline, "stable-diffusion-3", 9, 65),
-                (OVFluxPipeline, "flux", 7, 56),
-                (OVSanaPipeline, "sana", 19, 53),
-            ]
-        )
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
-    def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
-        task = model_cls.export_feature
-        model_id = MODEL_NAMES[model_name]
+    def test_filtered_architectures(cls):
+        if is_transformers_version("<", "4.49"):
+            expected = {"llama4", "qwen2_5_vl"}
+        elif is_transformers_version("<", "4.51"):
+            expected = {"llama4"}
+        elif is_transformers_version("<", "4.52"):
+            expected = set()
+        else:
+            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
 
-        with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.auto_model_class.from_pretrained(model_id)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.quantize(save_directory=tmp_dir)
-            model = model_cls.from_pretrained(tmp_dir)
-
-            _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_pt_int8, num_weight_nodes["int8"])
-
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = model(**tokens)
-            self.assertTrue("logits" in outputs)
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            original_config_as_dict = OVWeightQuantizationConfig().to_dict()
-            for k in original_config_as_dict.keys():
-                v = original_config_as_dict[k]
-                if isinstance(v, Enum):
-                    original_config_as_dict[k] = v.value
-            self.assertEqual(original_config_as_dict, loaded_config.quantization_config.to_dict())
-            self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
+        filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
+        skipped = all_model_type - filtered_model_type
+        cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -1386,13 +1262,6 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
-        if (
-            isinstance(quantization_config, dict)
-            and quantization_config.get("dtype") == "cb4"
-            and is_nncf_version("<=", "2.17")
-        ):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
-
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -1407,6 +1276,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
+            model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
+            check_model_inference(model, model_id, trust_remote_code)
+
             # At the moment the first model in the list is the only one we apply data-aware compression to
             wc_rt_info = next(iter(submodels.values())).get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
@@ -1473,7 +1345,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT8_ASYM,
                     "ratio": 1.0,
-                    "group_size": -1,
+                    "group_size": None,
                     "all_layers": None,
                     "sensitivity_metric": None,
                     "dataset": None,
@@ -1572,6 +1444,14 @@ class OVPipelineQuantizationTest(unittest.TestCase):
     PIPELINE_QUANTIZATION_SCOPE = [
         (
             OVModelForCausalLM,
+            "gpt2",
+            False,
+            dict(quantization_configs={"model": dict(bits=8, weight_only=True)}),
+            {"model": 0},
+            {"model": {"int8": 44}},
+        ),
+        (
+            OVModelForCausalLM,
             "llama",
             False,
             dict(
@@ -1652,65 +1532,84 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "prompt_encoder_mask_decoder": {"int8": 0},
             },
         ),
+        (
+            OVStableDiffusion3Pipeline,
+            "stable-diffusion-3",
+            False,
+            dict(
+                quantization_configs={
+                    "transformer": dict(
+                        dataset="conceptual_captions",
+                        num_samples=1,
+                        quant_method=OVQuantizationMethod.HYBRID,
+                    ),
+                    "vae_decoder": OVWeightQuantizationConfig(),
+                    "vae_encoder": OVWeightQuantizationConfig(),
+                    "text_encoder": OVWeightQuantizationConfig(),
+                }
+            ),
+            {
+                "transformer": 9,
+                "vae_decoder": 0,
+                "vae_encoder": 0,
+                "text_encoder": 0,
+                "text_encoder_2": 0,
+                "text_encoder_3": 0,
+            },
+            {
+                "transformer": {"int8": 65},
+                "vae_decoder": {"int8": 58},
+                "vae_encoder": {"int8": 42},
+                "text_encoder": {"int8": 30},
+                "text_encoder_2": {"int8": 0},
+                "text_encoder_3": {"int8": 0},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            True,
+            dict(
+                quantization_configs={
+                    "encoder": dict(smooth_quant_alpha=0.95),
+                    "decoder": dict(smooth_quant_alpha=0.9),
+                },
+                dataset="librispeech",
+                num_samples=1,
+                processor=MODEL_NAMES["whisper"],
+                trust_remote_code=True,
+            ),
+            {"encoder": 14, "decoder": 22},
+            {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "internvl_chat",
+            True,
+            dict(
+                quantization_configs={
+                    "lm_model": dict(bits=8, weight_only=True),
+                    "vision_embeddings_model": dict(bits=8, weight_only=False),
+                },
+                dataset="contextual",
+                num_samples=1,
+                trust_remote_code=True,
+                default_config=dict(bits=8, sym=True, weight_only=True),
+            ),
+            {
+                "lm_model": 0,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 15,
+            },
+            {
+                "lm_model": {"int8": 30},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 11},
+            },
+        ),
     ]
 
-    if is_transformers_version(">", "4.43.0"):
-        PIPELINE_QUANTIZATION_SCOPE.extend(
-            [
-                (
-                    OVStableDiffusion3Pipeline,
-                    "stable-diffusion-3",
-                    False,
-                    dict(
-                        quantization_configs={
-                            "transformer": dict(
-                                dataset="conceptual_captions",
-                                num_samples=1,
-                                quant_method=OVQuantizationMethod.HYBRID,
-                            ),
-                            "vae_decoder": OVWeightQuantizationConfig(),
-                            "vae_encoder": OVWeightQuantizationConfig(),
-                            "text_encoder": OVWeightQuantizationConfig(),
-                        }
-                    ),
-                    {
-                        "transformer": 9,
-                        "vae_decoder": 0,
-                        "vae_encoder": 0,
-                        "text_encoder": 0,
-                        "text_encoder_2": 0,
-                        "text_encoder_3": 0,
-                    },
-                    {
-                        "transformer": {"int8": 65},
-                        "vae_decoder": {"int8": 58},
-                        "vae_encoder": {"int8": 42},
-                        "text_encoder": {"int8": 30},
-                        "text_encoder_2": {"int8": 0},
-                        "text_encoder_3": {"int8": 0},
-                    },
-                ),
-                (
-                    OVModelForSpeechSeq2Seq,
-                    "whisper",
-                    True,
-                    dict(
-                        quantization_configs={
-                            "encoder": dict(smooth_quant_alpha=0.95),
-                            "decoder": dict(smooth_quant_alpha=0.9),
-                        },
-                        dataset="librispeech",
-                        num_samples=1,
-                        processor=MODEL_NAMES["whisper"],
-                        trust_remote_code=True,
-                    ),
-                    {"encoder": 14, "decoder": 22},
-                    {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
-                ),
-            ]
-        )
-
-    if is_transformers_version(">=", "4.49.0"):
+    if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.54.0"):
         PIPELINE_QUANTIZATION_SCOPE.extend(
             [
                 (
@@ -1796,14 +1695,17 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             )
             model.save_pretrained(tmp_dir)
 
-            model = model_cls.from_pretrained(tmp_dir)
+            model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
+            check_model_inference(model, model_id, trust_remote_code)
             check_compression_state_per_model(
                 self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
             )
             # Compare the quantization config with the model runtime info
             for submodel_name, submodel in model.ov_submodels.items():
                 rt_info = submodel.get_rt_info()
-                config = quantization_config.quantization_configs.get(submodel_name)
+                config = quantization_config.quantization_configs.get(
+                    submodel_name, quantization_config.default_config
+                )
                 if config is None:
                     self.assertTrue("nncf" not in rt_info)
                     continue
@@ -1824,6 +1726,9 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                     q_rt_info = rt_info["nncf"][rt_info_key]
                     config_dict = sub_config.to_nncf_dict()
                     for param_name in q_rt_info:
+                        if sub_config.num_samples is None and param_name == "subset_size":
+                            # Skip subset_size check because num_samples was not explicitly provided
+                            continue
                         rt_info_value = q_rt_info[param_name]
                         if isinstance(rt_info_value, dict):
                             # For example, ignored scope case
@@ -1856,55 +1761,25 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                             config_value = (
                                 "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
                             )
+                        if param_name == "group_size" and config_value is None:
+                            config_value = -1 if sub_config.bits == 8 else 128
 
                         if config_value is None and rt_info_value is False:
                             continue
-                        self.assertEqual(config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}")
+                        if param_name == "subset_size":
+                            self.assertGreaterEqual(
+                                rt_info_value,
+                                config_value,
+                                f"Actual subset size should not be less than the requested one.",
+                            )
+                        else:
+                            self.assertEqual(
+                                config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}"
+                            )
 
 
 class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("hf-internal-testing/tiny-random-BertForQuestionAnswering",)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
-    def test_automodel_static_quantization(self, model_name):
-        def preprocess_function(examples, tokenizer):
-            return tokenizer(
-                examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
-            )
-
-        with TemporaryDirectory() as tmp_dir:
-            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            quantizer = OVQuantizer.from_pretrained(transformers_model)
-            calibration_dataset = quantizer.get_calibration_dataset(
-                "squadshifts",
-                dataset_config_name="new_wiki",
-                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-                num_samples=10,
-                dataset_split="test",
-                revision="refs/pr/3",
-            )
-            ov_config = OVConfig(quantization_config=OVQuantizationConfig())
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
-
-            # Test that inference on quantized model works
-            model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
-            tokens = tokenizer.encode_plus(
-                "This is a sample question", "This is a sample context", add_special_tokens=True, return_tensors="pt"
-            )
-            model(**tokens, return_dict=True)
-
-            # Test loading model a second time to catch issues with caching
-            try:
-                model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
-            except RuntimeError:
-                self.fail("Loading BERT QA model a second time failed")
-
-            # Verify that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
@@ -2354,3 +2229,64 @@ def check_optimization_not_applicable_to_optimized_model(model, quantization_con
         match="Cannot apply optimization to the model because it was already optimized with the following config",
     ):
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+
+def check_model_inference(ov_model, model_id, trust_remote_code):
+    if isinstance(ov_model, (OVModelForSpeechSeq2Seq, OVModelForSeq2SeqLM)):
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=2,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        if isinstance(ov_model, OVModelForSpeechSeq2Seq):
+            input_features = torch.randn((1, ov_model.config.num_mel_bins, 3000), dtype=torch.float32)
+            generate_kwrgs = {}
+            if is_transformers_version(">=", "4.50"):
+                generate_kwrgs = {"use_model_defaults": False}
+            ov_model.generate(input_features, generation_config=gen_config, **generate_kwrgs)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            inputs = tokenizer("This is a sample <mask>", return_tensors="pt")
+            ov_model.generate(**inputs, generation_config=gen_config)
+    elif isinstance(ov_model, (OVModelForCausalLM, OVModelForFeatureExtraction, OVModelForMaskedLM)):
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokens = tokenizer("This is a sample <mask>", return_tensors="pt")
+        ov_model(**tokens)
+    elif isinstance(
+        ov_model,
+        (
+            OVStableDiffusionPipeline,
+            OVStableDiffusion3Pipeline,
+            OVStableDiffusionXLPipeline,
+            OVLatentConsistencyModelPipeline,
+        ),
+    ):
+        ov_model(prompt="A text-to-image prompt")
+    elif isinstance(ov_model, OVSentenceTransformer):
+        ov_model.encode(["This is a sample input"])
+    elif isinstance(ov_model, OVModelForZeroShotImageClassification):
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        image = np.random.rand(224, 224, 3).astype(np.uint8)
+        inputs = processor(text=["This is a sample text"], images=image, return_tensors="pt")
+        ov_model(**inputs)
+    elif isinstance(ov_model, OVModelForVisualCausalLM):
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        processor_id = config.mm_vision_tower if isinstance(ov_model, _OVNanoLlavaForCausalLM) else model_id
+        processor = AutoProcessor.from_pretrained(processor_id, trust_remote_code=trust_remote_code)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        image = Image.fromarray(np.random.rand(224, 224, 3).astype(np.uint8))
+        inputs = ov_model.preprocess_inputs(
+            image=image, text="This is a sample text", processor=processor, tokenizer=tokenizer, config=config
+        )
+        ov_model(**inputs)
+    elif isinstance(ov_model, OVSamModel):
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        image = np.random.rand(224, 224, 3).astype(np.uint8)
+        inputs = processor(image, input_points=[[[0, 0]]], return_tensors="pt")
+        ov_model(**inputs)
+    else:
+        raise Exception("Unexpected model class.")
