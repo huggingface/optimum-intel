@@ -289,6 +289,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
+    _can_compile_fullgraph = False
 
     def __init__(
         self,
@@ -477,6 +478,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
     export_feature = "text2text-generation"
+    _can_compile_fullgraph = False
 
     def __init__(
         self,
