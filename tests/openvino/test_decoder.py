@@ -25,9 +25,10 @@ from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
-
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
+
+torch.compile = lambda func: func  # Mock torch.compile to avoid compilation errors in tests
 
 SEED = 42
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -120,6 +121,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
+        if is_openvino_version(">=", "2025.3.0"):
+            SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
@@ -216,6 +219,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
+        "bitnet": 6,
     }
 
     # TODO: remove gptq/awq from here
