@@ -6796,6 +6796,7 @@ class Zamba2ModelPatcher(ModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridDynamicCache
+
         super().__init__(config, model, model_kwargs)
 
         class Zamba2HybridDynamicCacheWrap(Zamba2HybridDynamicCache):
