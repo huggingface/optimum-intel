@@ -1865,11 +1865,6 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         return generation_config, model_kwargs
 
 
-def _prepend_minicpm_image_tag_apply_chat_template(text, image, templater):
-    messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
-    return templater.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-
 class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     additional_parts = ["resampler"]
 
@@ -2090,6 +2085,11 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return vllm_embedding, attention_mask, position_ids
 
     @staticmethod
+    def image_tag_apply_chat_template(text, image, templater):
+        messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+        return templater.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+    @staticmethod
     def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
@@ -2106,9 +2106,9 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if audio is not None:
             raise ValueError("Audio input is not supported")
         if getattr(processor, "chat_template", None) is not None:
-            prompt = _prepend_minicpm_image_tag_apply_chat_template(text, image, processor)
+            prompt = _OVMiniCPMVForCausalLM.image_tag_apply_chat_template(text, image, processor)
         elif "MiniCPMOProcessor" == processor.__class__.__name__:
-            prompt = _prepend_minicpm_image_tag_apply_chat_template(text, image, processor.tokenizer)
+            prompt = _OVMiniCPMVForCausalLM.image_tag_apply_chat_template(text, image, processor.tokenizer)
         else:
             prompt = (
                 f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
