@@ -4373,7 +4373,5 @@ class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
 
-    def patch_model_for_export(
-        self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None
-    ):
+    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None):
         return Zamba2ModelPatcher(self, model, model_kwargs)
