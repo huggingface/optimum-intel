@@ -1119,14 +1119,18 @@ class OVHybridCache(MambaCache):
                     dtype=dtype,
                 )
                 self.ssm_states.append(ssm_state)
-                
+
         self.key_cache = key_cache
         if self.is_hybrid and self.key_cache is None:
-            self.key_cache = [torch.tensor([[]] * self.max_batch_size, device=device) for _ in range(config.num_hidden_layers)]
+            self.key_cache = [
+                torch.tensor([[]] * self.max_batch_size, device=device) for _ in range(config.num_hidden_layers)
+            ]
 
         self.value_cache = value_cache
         if self.is_hybrid and self.value_cache is None:
-            self.value_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
+            self.value_cache = [
+                torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)
+            ]
 
 
 @dataclass
@@ -1267,12 +1271,18 @@ class OVHybridModelForCausalLM(OVModelForCausalLM):
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
             k_values = []
-            v_values=[]
+            v_values = []
 
-        cache_params = OVHybridCache(self.config, is_hybrid=self.is_hybrid,
-                                     batch_size=input_ids.shape[0], conv_states=conv_states,
-                                     ssm_states=ssm_states, key_cache=k_values, value_cache=v_values)
-        #cache_params = None
+        cache_params = OVHybridCache(
+            self.config,
+            is_hybrid=self.is_hybrid,
+            batch_size=input_ids.shape[0],
+            conv_states=conv_states,
+            ssm_states=ssm_states,
+            key_cache=k_values,
+            value_cache=v_values,
+        )
+        # cache_params = None
         return OVHybridOutput(logits=logits, cache_params=cache_params)
 
     def _update_model_kwargs_for_generation(
