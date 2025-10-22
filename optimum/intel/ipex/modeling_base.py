@@ -320,10 +320,15 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
-            self.model_cls = get_class_from_dynamic_module(
-                self.config.auto_map["AutoModelForCausalLM"], model_save_dir
-            )
-        except AttributeError:
+            # Use model_save_dir if available, otherwise use config's name_or_path
+            pretrained_model_name_or_path = model_save_dir or getattr(self.config, "_name_or_path", None)
+            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map"):
+                self.model_cls = get_class_from_dynamic_module(
+                    self.config.auto_map["AutoModelForCausalLM"], pretrained_model_name_or_path
+                )
+            else:
+                self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
+        except (AttributeError, KeyError):
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
@@ -506,10 +511,15 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
         self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
-            self.model_cls = get_class_from_dynamic_module(
-                self.config.auto_map["AutoModelForSeq2SeqLM"], model_save_dir
-            )
-        except AttributeError:
+            # Use model_save_dir if available, otherwise use config's name_or_path
+            pretrained_model_name_or_path = model_save_dir or getattr(self.config, "_name_or_path", None)
+            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map"):
+                self.model_cls = get_class_from_dynamic_module(
+                    self.config.auto_map["AutoModelForSeq2SeqLM"], pretrained_model_name_or_path
+                )
+            else:
+                self.model_cls = get_model_class(self.config, AutoModelForSeq2SeqLM._model_mapping)
+        except (AttributeError, KeyError):
             self.model_cls = get_model_class(self.config, AutoModelForSeq2SeqLM._model_mapping)
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
