@@ -26,7 +26,6 @@ from transformers.cache_utils import DynamicCache, EncoderDecoderCache
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPooling
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
-from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridDynamicCache
 
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
@@ -6527,7 +6526,7 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 def zamba2_mamba_mixer(
     self,
     hidden_states,
-    cache_params: Optional[Zamba2HybridDynamicCache] = None,
+    cache_params=None,
     attention_mask: Optional[torch.Tensor] = None,
 ):
     def pad_tensor_by_size(input_tensor: torch.Tensor, pad_size: int):
@@ -6796,6 +6795,7 @@ class Zamba2ModelPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridDynamicCache
         super().__init__(config, model, model_kwargs)
 
         class Zamba2HybridDynamicCacheWrap(Zamba2HybridDynamicCache):
