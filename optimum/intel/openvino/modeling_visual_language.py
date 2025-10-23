@@ -2085,11 +2085,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         return vllm_embedding, attention_mask, position_ids
 
     @staticmethod
-    def image_tag_apply_chat_template(text, image, templater):
-        messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
-        return templater.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    @staticmethod
     def preprocess_inputs(
         text: str,
         image: Optional["Image"] = None,
@@ -2106,9 +2101,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if audio is not None:
             raise ValueError("Audio input is not supported")
         if getattr(processor, "chat_template", None) is not None:
-            prompt = _OVMiniCPMVForCausalLM.image_tag_apply_chat_template(text, image, processor)
-        elif "MiniCPMOProcessor" == processor.__class__.__name__:
-            prompt = _OVMiniCPMVForCausalLM.image_tag_apply_chat_template(text, image, processor.tokenizer)
+            messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+            prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         else:
             prompt = (
                 f"<|im_start|>user\n(<image>./</image>)\n{text}<|im_end|>\n<|im_start|>assistant\n"
@@ -2148,6 +2142,28 @@ class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
             attention_mask=attention_mask,
             **kwargs,
         )
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+        prompt = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor([prompt], [image], return_tensors="pt")
+        inputs.pop("image_sizes", None)
+        return inputs
 
 
 class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
