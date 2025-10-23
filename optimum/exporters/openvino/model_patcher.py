@@ -6568,7 +6568,7 @@ def zamba2_mamba_mixer(
     dtype = input_states.dtype
 
     # infer decoding mode (1.0 if seq_len == 1 else 0.0)
-    is_decoding = torch.tensor(seq_len == 1).float()
+    is_decoding = torch.tensor(seq_len == 1).to(dtype)
 
     # Gated MLP's linear projection
     input_states_prefill = (input_states * attention_mask[:, :seq_len, None]).to(dtype)
@@ -6587,6 +6587,8 @@ def zamba2_mamba_mixer(
     )
 
     # Convolution sequence transformation
+    _, seq_len, _ = hidden_states.shape
+
     # reference conv state [B, D, K]
     conv_state_dec1 = cache_params.conv_states[self.layer_idx]
     conv_state_dec = torch.roll(conv_state_dec1, shifts=-1, dims=-1)
@@ -6769,8 +6771,8 @@ def zamba2_mamba_mixer(
     y = y + D_residual
 
     # Cutting off padded chunks
-    pad_mask = torch.tensor(pad_size > 0)
-    y_new_len = y.size(1) * (1 - pad_mask.long()) + seq_len * pad_mask.long()
+    pad_mask = torch.tensor(pad_size > 0).to(torch.long)
+    y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
     y = y[:, :y_new_len]
 
     y_branch2 = y.reshape(batch_size, seq_len, -1)
