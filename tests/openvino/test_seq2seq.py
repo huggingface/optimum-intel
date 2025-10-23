@@ -628,9 +628,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         ov_model.generation_config.do_sample = False
+        # minicpmo diverges after 20 tokens
+        tokens_to_generate = 20 if model_arch == "minicpmo" else 30
         gen_config = GenerationConfig(
-            max_new_tokens=30,
-            min_new_tokens=30,
+            max_new_tokens=tokens_to_generate,
+            min_new_tokens=tokens_to_generate,
             do_sample=False,
             eos_token_id=None,
         )
