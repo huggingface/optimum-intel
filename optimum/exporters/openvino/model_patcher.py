@@ -6645,13 +6645,13 @@ def zamba2_mamba_mixer(
     # Discretize B
     # [bsz, n_groups * state_size] -> [bsz, n_groups, 1, state_size] ->
     # -> [bsz, n_groups, group to head repetition factor, state_size] -> [bsz, num_heads, state_size]
-    B_dec1 = B
-    B_dec2 = B_dec1.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
-    B_dec3 = B_dec2.reshape(batch_size, self.n_groups, -1)[..., None, :]
-    B_dec4 = B_dec3.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec3.shape[-1]).contiguous()
-    B_dec5 = B_dec4.reshape(batch_size, -1, B_dec4.shape[-1])
+    B_dec = B
+    B_dec = B_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+    B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+    B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
+    B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
     # [bsz, num_heads, head_dim, state_size]
-    dB = dt_dec[..., None] * B_dec5[..., None, :]
+    dB = dt_dec[..., None] * B_dec[..., None, :]
 
     # Discretize x into dB
     # [bsz, intermediate_size] -> [bsz, num_heads, head_dim]
@@ -6697,10 +6697,10 @@ def zamba2_mamba_mixer(
 
     hidden_states_prefill = hidden_states
     hidden_states_prefill = hidden_states_prefill.reshape(batch_size, seq_len, -1, self.head_dim).float()
-    B1 = B.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
-    C1 = C.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
-    B2 = B1.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
-    C2 = C1.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    B = B.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    C = C.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    B = B.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    C = C.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
     pad_size = (self.chunk_size - seq_len % self.chunk_size) % self.chunk_size
 
     D_residual = self.D[..., None] * pad_tensor_by_size(hidden_states_prefill, pad_size)
@@ -6711,7 +6711,7 @@ def zamba2_mamba_mixer(
 
     # Rearrange into blocks/chunks
     hidden_states_prefill, A, B, C = [
-        reshape_into_chunks(t, pad_size, self.chunk_size) for t in (hidden_states_prefill, A, B2, C2)
+        reshape_into_chunks(t, pad_size, self.chunk_size) for t in (hidden_states_prefill, A, B, C)
     ]
 
     # [bsz, -1, chunk_size, num_heads] -> [bsz, num_heads, -1, chunk_size]
