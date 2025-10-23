@@ -592,6 +592,13 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         common_inputs["hidden_states"] = {0: "batch_size", 1: "sequence_length", 2: "hidden_size"}
         return common_inputs
 
+    @property
+    def outputs(self) -> dict[str, dict[int, str]]:
+        common_outputs = super().outputs
+        # Add d2t buffer as eagle3 draft output
+        common_outputs['d2t'] = {0: "vocab_size"}
+        return common_outputs
+
 @register_in_tasks_manager(
     "gpt_oss",
     *[

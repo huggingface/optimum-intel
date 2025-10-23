@@ -366,10 +366,13 @@ def export_pytorch(
         if input_shapes is None:
             input_shapes = {}  # will use the defaults from DEFAULT_DUMMY_SHAPES
 
+        model_config = getattr(model, "config", {})
+        model_type = getattr(model_config, "model_type", "")
+
         # Check that inputs match, and order them properly
         dummy_inputs = config.generate_dummy_inputs(framework="pt", **input_shapes)
         # Remove hidden_states input for other standard llama model
-        if getattr(model, "model_type", "") == "llama" and not getattr(getattr(model, "config", {}), "is_eagle3", False):
+        if model_type == "llama" and not getattr(model_config, "is_eagle3", False):
             if 'hidden_states' in dummy_inputs.keys():
                 dummy_inputs.pop('hidden_states')
 
@@ -411,8 +414,6 @@ def export_pytorch(
         patcher.patched_forward = ts_patched_forward
 
         ts_decoder_kwargs = {}
-        model_config = getattr(model, "config", {})
-        model_type = getattr(model_config, "model_type", "")
         if allow_skip_tracing_check(library_name, model_type):
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 

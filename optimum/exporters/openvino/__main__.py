@@ -145,26 +145,7 @@ def eagle3_config(model_path: str):
         json.dump(config, f, ensure_ascii=False, indent=2)
     return os.path.abspath(new_config_file)
 
-def extract_d2t(model_path: str, output_path: str):
-    load_model_path=os.path.join(model_path, "pytorch_model.bin")
-    output_path = os.path.join(output_path, "eagle3.safetensors")
-    target_keys = ['d2t', 't2d']
-    if os.path.exists(load_model_path):
-        state_dict = torch.load(load_model_path, map_location=torch.device('cpu'))
-        extracted = {k: state_dict[k] for k in target_keys if k in state_dict.keys()}
-        save_file(extracted, output_path)
-    else:
-        load_model_path=os.path.join(model_path, "model.safetensors")
-        if os.path.exists(load_model_path):
-            state_dict = load_file(load_model_path)
-            extracted = {k: state_dict[k] for k in target_keys if k in state_dict.keys()}
-            save_file(extracted, output_path)
-
-
 def remove_config(model_path: str, ov_path: str, download_to_local: bool):
-    if os.path.exists(ov_path):
-        extract_d2t(model_path, ov_path)
-
     if not download_to_local:
         # remove the temp config
         new_config_file = os.path.join(model_path, 'config_temp.json')

@@ -18,6 +18,7 @@ import logging
 import logging as log
 import math
 import types
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -31,7 +32,7 @@ from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.modeling_utils import PreTrainedModel
 from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import can_return_tuple
+from transformers.utils import can_return_tuple, ModelOutput
 from transformers.processing_utils import Unpack
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.generation import GenerationMixin
@@ -7007,6 +7008,7 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
         self.register_buffer("d2t", d2t)
         self.register_buffer("t2d", t2d)
         self.lm_head = nn.Linear(config.hidden_size, config.draft_vocab_size, bias=False)
+        self.identity = torch.nn.Identity()
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -7145,6 +7147,14 @@ class LlamaEagle3Model(LlamaEagle3PreTrainedModel):
 
         return combined_attention_mask
 
+@dataclass
+class Eagle3Output(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[Cache] = None
+    hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[tuple[torch.FloatTensor, ...]] = None
+    d2t: Optional[torch.LongTensor] = None
 
 class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
@@ -7193,7 +7203,7 @@ class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         **kwargs: Unpack[TransformersKwargs],
-    ) -> CausalLMOutputWithPast:
+    ) -> Eagle3Output:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
@@ -7239,10 +7249,12 @@ class LlamaEagle3ForCausalLM(LlamaEagle3PreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        return CausalLMOutputWithPast(
+        d2t_out = self.model.identity(self.model.d2t)
+        return Eagle3Output(
             loss=loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            d2t=d2t_out,
         )
