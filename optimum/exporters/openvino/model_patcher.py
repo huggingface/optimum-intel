@@ -6676,9 +6676,7 @@ def zamba2_mamba_mixer(
     ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)  # Shape: [b, h, d, n]
 
     # Reshape ssm_states to merge the first two dimensions
-    ssm_states_reshaped = ssm_states_dec.view(
-        batch_size * self.num_heads, self.head_dim, self.ssm_state_size
-    )
+    ssm_states_reshaped = ssm_states_dec.view(batch_size * self.num_heads, self.head_dim, self.ssm_state_size)
     C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)  # Shape: [b*h, n, 1]
     y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
     y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
