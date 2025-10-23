@@ -1120,7 +1120,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl"}
+            expected = {"llama4", "qwen2_5_vl", "minicpmv4", "minicpmv4_5"}
         elif is_transformers_version("<", "4.51"):
             expected = {"llama4"}
         elif is_transformers_version("<", "4.52"):
