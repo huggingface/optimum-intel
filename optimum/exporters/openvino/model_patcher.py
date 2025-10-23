@@ -6590,8 +6590,8 @@ def zamba2_mamba_mixer(
     _, seq_len, _ = hidden_states.shape
 
     # reference conv state [B, D, K]
-    conv_state_dec1 = cache_params.conv_states[self.layer_idx]
-    conv_state_dec = torch.roll(conv_state_dec1, shifts=-1, dims=-1)
+    conv_state_dec = cache_params.conv_states[self.layer_idx]
+    conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
     conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
 
     hidden_states_dec = torch.sum(conv_state_dec.to(projected_states.device) * self.conv1d.weight[:, 0, :], dim=-1)
@@ -6600,16 +6600,15 @@ def zamba2_mamba_mixer(
     hidden_states_dec = self.act(hidden_states_dec).to(dtype)[:, None, ...]  # [batch, 1, intermediate_size] : decoding
 
     # prefill branch
-    hidden_states_prefill1 = hidden_states.transpose(1, 2)
+    hidden_states_prefill = hidden_states.transpose(1, 2)
     conv_state_prefill = torch.nn.functional.pad(
-        hidden_states_prefill1, (self.conv_kernel_size - hidden_states_prefill1.shape[-1], 0)
+        hidden_states_prefill, (self.conv_kernel_size - hidden_states_prefill.shape[-1], 0)
     )
 
-    hidden_states_prefill = self.act(self.conv1d(hidden_states_prefill1).transpose(1, 2))[
+    hidden_states_prefill = self.act(self.conv1d(hidden_states_prefill).transpose(1, 2))[
         :, :seq_len, :
     ]  # [batch, intermediate_size, seq_len]
     if attention_mask is not None:
-        dtype = hidden_states.dtype
         # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
         hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :, None]).to(dtype)
 
