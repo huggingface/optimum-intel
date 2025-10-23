@@ -894,7 +894,7 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, quantization_config={"bits": 4})
 ```
 
-For some models, we provide preconfigured 4-bit weight-only quantization configurations ([link](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py)) that offer a good trade-off between quality and speed. This default 4-bit configuration is applied automatically when you specify `quantization_config={"bits": 4}`.
+For some models, we provide preconfigured 4-bit weight-only quantization [configurations](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py) that offer a good trade-off between quality and speed. This default 4-bit configuration is applied automatically when you specify `quantization_config={"bits": 4}`.
 
 Or for vision-language pipelines:
 ```python
