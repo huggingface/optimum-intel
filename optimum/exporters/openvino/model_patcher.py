@@ -6523,6 +6523,10 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
 
 
+# The original implementation of this forward method can be found at:
+# https://github.com/huggingface/transformers/blob/v4.55.4/src/transformers/models/zamba2/modeling_zamba2.py#L729
+# This patch modifies `forward()` so that when traced by torch.jit, it works correctly
+# during both the prefill and decoding steps.
 def zamba2_mamba_mixer(
     self,
     hidden_states,
@@ -6567,7 +6571,7 @@ def zamba2_mamba_mixer(
     batch_size, seq_len, _ = input_states.shape
     dtype = input_states.dtype
 
-    # infer decoding mode (1.0 if seq_len == 1 else 0.0)
+    # distinguish prefill and decoding stage
     is_decoding = torch.tensor(seq_len == 1).to(dtype)
 
     # Gated MLP's linear projection
@@ -6586,7 +6590,8 @@ def zamba2_mamba_mixer(
         [d_mlp, d_mlp, self.intermediate_size, self.conv_dim, self.num_heads], dim=-1
     )
 
-    # Convolution sequence transformation
+    # 1. Convolution sequence transformation
+    # 1.1 Convolution sequence transformation for decoding step
     conv_state_dec = cache_params.conv_states[self.layer_idx]
     conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
     conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
@@ -6596,7 +6601,7 @@ def zamba2_mamba_mixer(
         hidden_states_dec += self.conv1d.bias
     hidden_states_dec = self.act(hidden_states_dec).to(dtype)[:, None, ...]  # [batch, 1, intermediate_size] : decoding
 
-    # prefill branch
+    # 1.2 Convolution sequence transformation for prefill step
     hidden_states_prefill = hidden_states.transpose(1, 2)
     conv_state_prefill = torch.nn.functional.pad(
         hidden_states_prefill, (self.conv_kernel_size - hidden_states_prefill.shape[-1], 0)
@@ -6609,6 +6614,7 @@ def zamba2_mamba_mixer(
         # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
         hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :, None]).to(dtype)
 
+    # Compute final conv state and set into the cache
     conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
     cache_params.conv_states[self.layer_idx].copy_(conv_state)
 
@@ -6622,8 +6628,11 @@ def zamba2_mamba_mixer(
         [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
         dim=-1,
     )
+
     A = -torch.exp(self.A_log.float())  # [num_heads]
 
+    # 2. SSM state
+    # 2.1 Compute SSM state for decoding step
     dt_dec = dt
     dt_dec = dt_dec.reshape(dt_dec.shape[0], -1, dt_dec.shape[-1])[:, :1, :]
     # dt - [B, 1, H], H - num_heads
@@ -6638,7 +6647,6 @@ def zamba2_mamba_mixer(
     dt_dec = torch.clamp(dt_dec, self.time_step_min)  # dt - [B, num_heads, head_dim]
 
     A_dec = A[..., None, None].expand(self.num_heads, self.head_dim, self.ssm_state_size).to(dtype=torch.float32)
-    # [bsz, num_heads, head_dim, state_size]
     dA = torch.exp(dt_dec[..., None] * A_dec)
 
     # Discretize B
@@ -6648,7 +6656,6 @@ def zamba2_mamba_mixer(
     B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
     B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
     B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
-    # [bsz, num_heads, head_dim, state_size]
     dB = dt_dec[..., None] * B_dec[..., None, :]
 
     # Discretize x into dB
@@ -6657,7 +6664,7 @@ def zamba2_mamba_mixer(
     dBx = dB * hidden_states_dec[..., None]
 
     # State calculation
-    new_ssm_state_branch1 = cache_params.ssm_states[self.layer_idx] * dA + dBx
+    new_ssm_state_dec = cache_params.ssm_states[self.layer_idx] * dA + dBx
 
     # Subsequent output
     # [bsz, n_groups * state_size] -> [bsz, num_heads, state_size]
@@ -6665,13 +6672,13 @@ def zamba2_mamba_mixer(
     C_dec = C_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
     C_dec = C_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, C_dec.shape[-1]).contiguous()
     C_dec = C_dec.reshape(batch_size, -1, C_dec.shape[-1])
-    # [bsz, num_heads, head_dim]
 
-    ssm_states_dec = new_ssm_state_branch1.to(C_dec.dtype)  # Shape: [b, h, d, n]
+    ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)  # Shape: [b, h, d, n]
+
     # Reshape ssm_states to merge the first two dimensions
     ssm_states_reshaped = ssm_states_dec.view(
         batch_size * self.num_heads, self.head_dim, self.ssm_state_size
-    )  # Shape: [b*h, d, n]
+    )
     C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)  # Shape: [b*h, n, 1]
     y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
     y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
@@ -6683,10 +6690,9 @@ def zamba2_mamba_mixer(
     y_dec = (y_dec + hidden_states_dec * D_dec).to(y_dec.dtype)
 
     # [bsz, num_heads, head_dim] -> [bsz, 1, intermediate_size]
-    y_branch1 = y_dec.reshape(batch_size, -1)[:, None, ...]
+    y_dec = y_dec.reshape(batch_size, -1)[:, None, ...]
 
-    # else-branch start
-    # begin ssd naive implementation without einsums
+    # 2.2 Compute SSM state for prefill step
     dt = torch.nn.functional.softplus(dt + self.dt_bias)
     dt = torch.clamp(dt, self.time_step_min)
 
@@ -6712,7 +6718,7 @@ def zamba2_mamba_mixer(
     A = A.permute(0, 3, 1, 2)
     A_cumsum = torch.cumsum(A, dim=-1)
 
-    # 1. Compute the output for each intra-chunk (diagonal blocks)
+    # Compute the output for each intra-chunk (diagonal blocks)
     # This is the analog of a causal mask
     L = torch.exp(segment_sum(A))
 
@@ -6720,16 +6726,17 @@ def zamba2_mamba_mixer(
     G_intermediate = C_prefill[:, :, :, None, :, :] * B_prefill[:, :, None, :, :, :]  # shape: (b, c, l, s, h, n)
     G = G_intermediate.sum(dim=-1)  # shape: (b, c, l, s, h)
 
-    # Step 2: Compute M, equivalent to applying attention mask to weights
+    # Compute M, equivalent to applying attention mask to weights
     M_intermediate = G[..., None] * L.permute(0, 2, 3, 4, 1)[..., None]
     M = M_intermediate.sum(dim=-1)
 
-    # Step 3: Compute Y_diag (apply to values)
+    # Compute Y_diag (apply to values)
     Y_diag = (M[..., None] * hidden_states_prefill[:, :, None]).sum(3)
 
     # (right term of low-rank factorization of off-diagonal blocks; B terms)
     decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)
     B_decay_contraction = B_prefill * decay_states.permute(0, 2, 3, 1)[..., None]
+
     # permute back B * decay states
     states = (
         (
@@ -6747,18 +6754,20 @@ def zamba2_mamba_mixer(
     states_permuted = states.permute(0, 2, 1, 3, 4)
     result = (decay_chunk[..., None, None] * states_permuted[:, :, None, ...]).sum(dim=2)
     new_states = result.permute(0, 2, 1, 3, 4)
-    states, new_ssm_state_branch2 = new_states[:, :-1], new_states[:, -1]
+    states, new_ssm_state_prefill = new_states[:, :-1], new_states[:, -1]
 
     # Compute state -> output conversion per chunk
     # (left term of low-rank factorization of off-diagonal blocks; C terms)
     state_decay_out = torch.exp(A_cumsum)
+
     # compute Yoff
     C_times_states = C_prefill[..., None, :] * states[:, :, None, ...]
     state_decay_out_permuted = state_decay_out.permute(0, 2, 3, 1)
     Y_off = C_times_states.sum(-1) * state_decay_out_permuted[..., None]
-    # Add output of intra-chunk and inter-chunk terms (diagonal and off-diagonal blocks)
 
+    # Add output of intra-chunk and inter-chunk terms (diagonal and off-diagonal blocks)
     y = Y_diag + Y_off
+
     # [bsz, -1, self.chunk_size, num_heads, head_dim] -> [bsz, (padded) seq_len, num_heads, head_dim]
     y = y.reshape(batch_size, -1, self.num_heads, self.head_dim)
 
@@ -6769,21 +6778,27 @@ def zamba2_mamba_mixer(
     y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
     y = y[:, :y_new_len]
 
-    y_branch2 = y.reshape(batch_size, seq_len, -1)
+    y_prefill = y.reshape(batch_size, seq_len, -1)
 
-    y = y_branch2[:, :seq_len] * (1.0 - is_decoding) + y_branch1 * is_decoding
-    ssm_state = new_ssm_state_branch2 * (1.0 - is_decoding) + new_ssm_state_branch1 * is_decoding
+    y = y_prefill[:, :seq_len] * (1.0 - is_decoding) + y_dec * is_decoding
+    ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
+
+    # Set final ssm state into the cache
     cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
 
     scan_output = self.norm(y, gate)
 
-    # 4. Final linear projection
+    # Final linear projection
     contextualized_states = self.out_proj(scan_output.to(dtype))  # [batch, seq_len, hidden_size]
 
     return contextualized_states
 
 
-# This patcher class serves for exporting Zamba2 model to OpenVINO IR
+# This patcher class serves the following purposes:
+# 1. Packs the KV-cache, conv_state, and ssm_state tensors into a Zamba2HybridDynamicCache structure
+#    for subsequent invocation of the model's `forward` method.
+# 2. Patches the Zamba2MambaMixer so that the traced `forward` function works correctly
+#    during both the prefill and decoding steps.
 class Zamba2ModelPatcher(ModelPatcher):
     def __init__(
         self,
