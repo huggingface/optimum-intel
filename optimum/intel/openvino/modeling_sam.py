@@ -2,7 +2,7 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import openvino as ov
@@ -38,7 +38,7 @@ class OVSamVisionEncoder(OVModelPart):
         super().__init__(model, parent_model, model_name=self._model_name)
 
     def forward(self, pixel_values):
-        self._compile()
+        self.compile()
         inputs = {"pixel_values": pixel_values}
         result = self.request(inputs)
         image_embeddings = result["image_embeddings"]
@@ -53,7 +53,7 @@ class OVSamPromptEncoder(OVModelPart):
         super().__init__(model, parent_model, model_name=self._model_name)
 
     def forward(self, image_embeddings, image_positional_embeddings, input_points, input_labels=None):
-        self._compile()
+        self.compile()
         inputs = {
             "image_embeddings": image_embeddings,
             "image_positional_embeddings": image_positional_embeddings,
@@ -88,7 +88,7 @@ class OVSamModel(OVBaseModel):
         **kwargs,
     ):
         self.config = config
-        self._model_save_dir = model_save_dir
+        self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
@@ -122,12 +122,12 @@ class OVSamModel(OVBaseModel):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        self.vision_encoder.clear_requests()
-        self.prompt_encoder_mask_decoder.clear_requests()
+        for component in self.components.values():
+            component.clear_requests()
 
     def compile(self):
-        self.vision_encoder._compile()
-        self.prompt_encoder_mask_decoder._compile()
+        for component in self.components.values():
+            component.compile()
 
     def _save_config(self, save_directory):
         """
@@ -145,14 +145,11 @@ class OVSamModel(OVBaseModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_models = self.ov_submodels
         dst_file_names = {
             "vision_encoder": OV_VISION_ENCODER_MODEL_NAME,
             "prompt_encoder_mask_decoder": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
         }
-
-        for name in self._ov_submodel_names:
-            model = src_models[name]
+        for name, model in self.ov_models.items():
             dst_file_name = dst_file_names[name]
             dst_path = os.path.join(save_directory, dst_file_name)
             ov.save_model(model, dst_path, compress_to_fp16=False)
@@ -305,27 +302,17 @@ class OVSamModel(OVBaseModel):
         return model
 
     @property
-    def _ov_submodel_names(self):
-        model_names = ["vision_encoder", "prompt_encoder_mask_decoder"]
-        return model_names
+    def _component_names(self) -> List[str]:
+        component_names = ["vision_encoder", "prompt_encoder_mask_decoder"]
+        return component_names
 
     @property
-    def ov_submodels(self) -> Dict[str, ov.Model]:
-        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
 
     @property
-    def vision_encoder_model(self) -> ov.Model:
-        logger.warning(
-            "Access to the `vision_encoder_model` attribute is deprecated and will be removed in optimum-intel v1.26, please use `vision_encoder.model` instead"
-        )
-        return self.vision_encoder.model
-
-    @property
-    def prompt_encoder_mask_decoder_model(self) -> ov.Model:
-        logger.warning(
-            "Access to the `prompt_encoder_mask_decoder_model` attribute is deprecated and will be removed in optimum-intel v1.26, please use `prompt_encoder_mask_decoder.model` instead"
-        )
-        return self.prompt_encoder_mask_decoder.model
+    def ov_models(self) -> Dict[str, ov.Model]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     def reshape(self, batch_size: int = -1, point_batch_size: int = -1, num_points_per_image: int = -1):
         """
@@ -364,9 +351,9 @@ class OVSamModel(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        for submodel in self.ov_submodels.values():
-            apply_moc_transformations(submodel, cf=False)
-            compress_model_transformation(submodel)
+        for ov_model in self.ov_models.values():
+            apply_moc_transformations(ov_model, cf=False)
+            compress_model_transformation(ov_model)
         return self
 
     def forward(
@@ -438,6 +425,7 @@ class OVSamModel(OVBaseModel):
 
     @property
     def is_dynamic(self):
-        return model_has_dynamic_inputs(self.vision_encoder.model) or model_has_dynamic_inputs(
-            self.prompt_encoder_mask_decoder.model
-        )
+        for ov_model in self.ov_models.values():
+            if model_has_dynamic_inputs(ov_model):
+                return True
+        return False

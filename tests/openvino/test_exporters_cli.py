@@ -1002,7 +1002,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
-            check_compression_state_per_model(self, model.ov_submodels, expected_int8)
+            check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -1041,7 +1041,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
@@ -1103,7 +1103,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
