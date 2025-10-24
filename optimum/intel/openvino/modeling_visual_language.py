@@ -2143,6 +2143,28 @@ class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
             **kwargs,
         )
 
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+        prompt = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor([prompt], [image], return_tensors="pt")
+        inputs.pop("image_sizes", None)
+        return inputs
+
 
 class _OVNanoLlavaForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
