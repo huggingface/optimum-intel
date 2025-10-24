@@ -1171,7 +1171,7 @@ class OVConfig(BaseConfig):
             dtypes = [OVConfig._get_dtype(config) for config in quantization_config.quantization_configs.values()]
             dtype = "_".join(dtypes)
         elif isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            dtype = "int4_int8"
+            dtype = "int4"
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
         return dtype
