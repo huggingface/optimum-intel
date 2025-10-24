@@ -90,7 +90,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
 
     if is_transformers_version(">=", "4.48"):
-        SUPPORTED_SSM_ARCHITECTURES +=("zamba2",)
+        SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
