@@ -76,7 +76,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -401,8 +401,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                             "Dataset is required for full quantization. Please provide it with --dataset argument."
                         )
                     if self.args.quant_mode in [
-                        "nf4_f8e4m3",
-                        "nf4_f8e5m2",
                         "cb4_f8e4m3",
                         "int4_f8e4m3",
                         "int4_f8e5m2",
