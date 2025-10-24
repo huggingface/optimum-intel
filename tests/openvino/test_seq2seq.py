@@ -14,7 +14,6 @@
 
 import copy
 import gc
-import time
 import unittest
 from tempfile import TemporaryDirectory
 
@@ -44,7 +43,7 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import MODEL_NAMES, TEST_IMAGE_URL
+from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, Timer
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
@@ -60,20 +59,6 @@ from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_visual_language import MODEL_PARTS_CLS_MAPPING, MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
-
-
-SEED = 42
-F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
-TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
-
-
-class Timer(object):
-    def __enter__(self):
-        self.elapsed = time.perf_counter()
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
 class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
@@ -107,9 +92,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ov_model = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
         ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
-            model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG
+            model_id, export=True, use_cache=False, stateful=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
@@ -169,7 +156,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a test"
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, compile=False)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, compile=False, device=OPENVINO_DEVICE)
         model.eval()
         model.half()
         model.to("cpu")
@@ -206,7 +193,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     @slow
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -230,14 +217,18 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
 
-        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE
+        )
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE
+        )
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
@@ -272,9 +263,11 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
         ov_model_stateless = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, stateful=False
+            model_id, export=True, ov_config=F32_CONFIG, stateful=False, device=OPENVINO_DEVICE
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         # whisper cache class support implemented in 4.43
@@ -342,7 +335,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id)
+        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, device=OPENVINO_DEVICE)
         processor = get_preprocessor(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
@@ -382,7 +375,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True)
+            _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn("only supports the tasks", str(context.exception))
 
@@ -391,7 +384,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     @slow
     def test_generate_utils(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        model = OVModelForVision2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
 
         data = self._get_sample_image()
@@ -406,7 +399,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
 
@@ -449,7 +442,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, compile=False)
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, compile=False, device=OPENVINO_DEVICE)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
         ov_model.reshape(1, -1)
         ov_model.compile()
@@ -582,7 +575,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         preprocessors = self.get_preprocessors(model_arch)
         set_seed(SEED)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, compile=False
+            model_id,
+            export=True,
+            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            compile=False,
+            device=OPENVINO_DEVICE,
         )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         for component_name, component in ov_model.components.items():
@@ -628,9 +625,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         ov_model.generation_config.do_sample = False
+        # minicpmo diverges after 20 tokens
+        tokens_to_generate = 20 if model_arch == "minicpmo" else 30
         gen_config = GenerationConfig(
-            max_new_tokens=30,
-            min_new_tokens=30,
+            max_new_tokens=tokens_to_generate,
+            min_new_tokens=tokens_to_generate,
             do_sample=False,
             eos_token_id=None,
         )
@@ -743,7 +742,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, device=OPENVINO_DEVICE
         )
         self.assertTrue(ov_model._support_new_processing)
         self.assertTrue(processor.patch_size is not None)
@@ -788,7 +787,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForVisualCausalLM.from_pretrained(
-            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            model_id, export=True, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS, device=OPENVINO_DEVICE
         )
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -883,11 +882,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         with TemporaryDirectory() as save_dir:
             ov_model = OVModelForVisualCausalLM.from_pretrained(
-                model_id, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                model_id,
+                compile=False,
+                trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+                device=OPENVINO_DEVICE,
             )
             ov_model.save_pretrained(save_dir)
             ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
-                save_dir, compile=False, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+                save_dir,
+                compile=False,
+                trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+                device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
@@ -944,7 +949,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         else:
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
-        ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(model_id, vocoder=vocoder_id)
+        ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE)
         ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
 
         self.assertIsInstance(ov_pipe.config, PretrainedConfig)
@@ -975,7 +980,9 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForPix2Struct.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ov_model = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
@@ -1004,7 +1011,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForPix2Struct.from_pretrained(model_id, export=True)
+        model = OVModelForPix2Struct.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         preprocessor = get_preprocessor(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
@@ -1023,14 +1030,18 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
-        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE
+        )
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE
+        )
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
