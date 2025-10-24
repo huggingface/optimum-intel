@@ -272,7 +272,7 @@ def main_export(
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
-        if is_openvino_version(">=", "2025.3.0"):
+        if is_openvino_version(">=", "2025.4.0"):
             supported_quant_methods.append("bitnet")
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"

@@ -121,7 +121,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
-        if is_openvino_version(">=", "2025.3.0"):
+        if is_openvino_version(">=", "2025.4.0"):
             SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
