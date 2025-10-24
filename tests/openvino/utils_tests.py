@@ -210,7 +210,7 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
-    "zamba2": "rkazants/tiny-zamba2",
+    "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
 }
 
 
