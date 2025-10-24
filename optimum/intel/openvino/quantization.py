@@ -23,7 +23,6 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-import datasets
 import nncf
 import numpy as np
 import openvino
@@ -360,7 +359,15 @@ class OVCalibrationDatasetBuilder:
                     streaming=dataset_metadata["streaming"],
                 )
             elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
-                dataset = datasets.Dataset.from_list([{"text": it} for it in config.dataset])
+                if not is_datasets_available():
+                    raise ValueError(
+                        DATASETS_IMPORT_ERROR.format("OVCalibrationDatasetBuilder.build_from_quantization_config")
+                    )
+
+                from datasets import Dataset
+
+                dataset = Dataset.from_list([{"text": it} for it in config.dataset])
+
             else:
                 raise ValueError(
                     "Please provide dataset as one of the accepted dataset labels or as a list of strings."
@@ -1335,7 +1342,7 @@ class OVQuantizer(OptimumQuantizer):
                 default_config = OVWeightQuantizationConfig(bits=8, sym=True)
             else:
                 default_config = quantization_config
-        else:
+        elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
             #
             # Hybrid/Full/Mixed quantization
             #
@@ -1397,7 +1404,7 @@ class OVQuantizer(OptimumQuantizer):
                     raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
 
                 default_config = quantization_config
-            elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
+            else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
         pipeline_quantization_config = (

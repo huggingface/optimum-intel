@@ -396,13 +396,6 @@ def _falcon_model_forward(
     if (input_ids is None) ^ (inputs_embeds is not None):
         raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
-    if self.gradient_checkpointing and self.training:
-        if use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-            )
-            use_cache = False
-
     if inputs_embeds is None:
         inputs_embeds = self.word_embeddings(input_ids)
 
@@ -662,10 +655,6 @@ def _qwen2_model_forward(
     if (input_ids is None) ^ (inputs_embeds is not None):
         raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
-    if self.gradient_checkpointing and self.training and use_cache:
-        logger.warning_once("`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.")
-        use_cache = False
-
     if inputs_embeds is None:
         inputs_embeds = self.embed_tokens(input_ids)
 
@@ -704,8 +693,9 @@ def _qwen2_model_forward(
     position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
 
     if past_key_values is None:
-        attention_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        past_key_values_length = 0
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask, inputs_embeds.shape[:2], inputs_embeds, past_key_values_length
         )
 
     # decoder layers
@@ -817,8 +807,9 @@ def _mistral_model_forward(
         sin = sin.reshape(-1, sin.shape[-1])
         position_embeddings = (cos.unsqueeze(1), sin.unsqueeze(1))
     if past_key_values is None:
-        attention_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        past_key_values_length = 0
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask, inputs_embeds.shape[:2], inputs_embeds, past_key_values_length
         )
 
     # decoder layers
@@ -1039,7 +1030,17 @@ class _IPEXAttention(nn.Module):
 class _IPEXLlamaAttention(_IPEXAttention):
     def __init__(self, module, device, config) -> None:
         super().__init__(module, device, config)
-        if getattr(config, "quantization_config", None) is None:
+        # Skip concat_qkv creation for TP mode (when using DTensor)
+        is_tp_mode = (
+            hasattr(self.q_proj, "weight")
+            and type(self.q_proj.weight).__name__ == "DTensor"
+            or hasattr(self.k_proj, "weight")
+            and type(self.k_proj.weight).__name__ == "DTensor"
+            or hasattr(self.v_proj, "weight")
+            and type(self.v_proj.weight).__name__ == "DTensor"
+        )
+
+        if getattr(config, "quantization_config", None) is None and not is_tp_mode:
             concat_weight = torch.concat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight]).contiguous()
             bias_list = [bias for bias in [self.q_proj.bias, self.k_proj.bias, self.v_proj.bias] if bias is not None]
             use_bias = bias_list != []
@@ -1140,11 +1141,20 @@ class _IPEXLlamaMLP(nn.Module):
         self.module_device = device
 
         if not config.compile and getattr(config, "quantization_config", None) is None:
-            # LinearAllreduce cannot use fused op LinearAdd
-            if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+            # Check if in TP mode (using DTensor)
+            is_tp_mode = (
+                hasattr(module.down_proj, "weight")
+                and type(module.down_proj.weight).__name__ == "DTensor"
+                or hasattr(module.gate_proj, "weight")
+                and type(module.gate_proj.weight).__name__ == "DTensor"
+                or hasattr(module.up_proj, "weight")
+                and type(module.up_proj.weight).__name__ == "DTensor"
+            )
+
+            if not is_tp_mode:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
-            if isinstance(self.act_fn, nn.SiLU):
-                self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+                if isinstance(self.act_fn, nn.SiLU):
+                    self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         if hasattr(self, "linear_silu_mul"):

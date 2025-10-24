@@ -38,17 +38,18 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate
+          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate datasets
 
       - name: Make documentation
         shell: bash
         run: |
           make doc BUILD_DIR=./doc-build VERSION=pr_${{ env.PR_NUMBER }}
-          mv ./doc-build/optimum.intel optimum-intel
+          cd doc-build
+          mv optimum.intel optimum-intel
           echo ${{ env.COMMIT_SHA }} > ./commit_sha
           echo ${{ env.PR_NUMBER }} > ./pr_number
 
       - uses: actions/upload-artifact@v4
         with:
           name: doc-build-artifact
-          path: optimum-intel
+          path: doc-build

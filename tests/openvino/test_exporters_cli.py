@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
-import pytest
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    OPENVINO_DEVICE,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
@@ -63,7 +63,6 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -444,7 +443,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
-                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+                "decoder": 52,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
@@ -1037,8 +1036,6 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
-        if option.startswith("cb4") and is_nncf_version("<=", "2.17"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -1070,7 +1067,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             statistics_path = f"{tmpdir}/statistics"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --weight-format int4 --awq "
+                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --task text-generation-with-past --weight-format int4 --awq "
                 f"--dataset wikitext2 --group-size 4 --quantization-statistics-path {statistics_path} {tmpdir}",
                 shell=True,
                 check=True,
@@ -1095,8 +1092,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
-        if quant_mode == "cb4_f8e4m3" and is_nncf_version("<=", "2.17"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
@@ -1253,7 +1248,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False)
+            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
             self.assertFalse("last_hidden_state" in model.output_names)
 
     def test_exporters_cli_open_clip(self):
