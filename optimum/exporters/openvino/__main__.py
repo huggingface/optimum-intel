@@ -12,16 +12,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import atexit
 import gc
 import logging
 import operator
 import warnings
+import json
+import os
+import shutil
+import tempfile
+import importlib.util
 from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
+from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
+from safetensors.torch import save_file, load_file
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
@@ -105,6 +113,57 @@ def infer_task(
                 )
     return task
 
+def eagle3_config(model_path: str):
+    config_file = os.path.join(model_path, 'config.json')
+    # rename the origin config
+    new_config_file = os.path.join(model_path, 'config_temp.json')
+    shutil.copy2(config_file, new_config_file)
+
+    # read config
+    with open(new_config_file, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    # modify config
+    if 'model_type' in config.keys():
+        org_type = config['model_type']
+        if org_type != 'llama':
+            raise ValueError(f"Currently eagle3 does not support model_type={org_type}, it only supports the conversion of llama-based draft models.")
+    # CVS-174959
+    if 'tie_word_embeddings' in config.keys():
+        if config['tie_word_embeddings']:
+            config['tie_word_embeddings'] = False
+    moduler_name = 'optimum.exporters.openvino.model_patcher'
+    spec = importlib.util.find_spec(moduler_name)
+    if spec and spec.origin:
+        moduler_path = os.path.dirname(spec.origin)
+        config['auto_map'] = {
+            "AutoModel": moduler_path + "--model_patcher.LlamaEagle3Model",
+            "AutoModelForCausalLM": moduler_path + "--model_patcher.LlamaEagle3ForCausalLM"
+        }
+    config['is_eagle3'] = True
+    # write new config.json
+    with open(new_config_file, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    return os.path.abspath(new_config_file)
+
+def remove_config(model_path: str, ov_path: str, download_to_local: bool):
+    if not download_to_local:
+        # remove the temp config
+        new_config_file = os.path.join(model_path, 'config_temp.json')
+        if os.path.exists(new_config_file):
+            os.remove(new_config_file)
+
+def download_eagle3_model(model_path: str):
+    dir_name = tempfile.mkdtemp()
+    local_dir = snapshot_download(
+        repo_id=model_path,
+        local_dir=dir_name,
+        local_dir_use_symlinks=False
+    )
+    return local_dir
+
+def clean_download(model_path: str):
+    if os.path.exists(model_path):
+        shutil.rmtree(model_path, ignore_errors=True)
 
 def main_export(
     model_name_or_path: str,
@@ -130,6 +189,7 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
+    eagle3: bool = False,
     **kwargs_shapes,
 ):
     """
@@ -187,6 +247,8 @@ def main_export(
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        eagle3 (`bool`, defaults to `False`):
+            This is needed by eagle3 draft models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 
@@ -208,6 +270,18 @@ def main_export(
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
 
+    download_to_local = False
+    if eagle3 and not os.path.isdir(model_name_or_path):
+        logger.warning("Currently eagle3 only supports local path conversion. The draft model will be downloaded to the local path.")
+        model_name_or_path = download_eagle3_model(model_name_or_path)
+        if os.path.exists(model_name_or_path):
+            download_to_local = True
+            logger.info(f"Download eagle3 draft model to local path: {model_name_or_path}")
+
+    if download_to_local:
+        # Delete temporary directory on exit
+        atexit.register(lambda: clean_download(model_name_or_path))
+
     if framework is None:
         framework = TasksManager.determine_framework(
             model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
@@ -227,6 +301,9 @@ def main_export(
                 "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
             )
             library_name = "transformers"
+
+    if eagle3 and not os.path.isdir(model_name_or_path):
+        raise ValueError("Currently eagle3 only supports local path conversion. Please download the draft model to your local path first.")
 
     original_task = task
     task = infer_task(
@@ -249,6 +326,9 @@ def main_export(
     dtype = loading_kwargs.get("torch_dtype", None)
     if isinstance(dtype, str):
         dtype = getattr(torch, dtype) if dtype != "auto" else dtype
+
+    if eagle3 and library_name == "transformers":
+        loading_kwargs['_configuration_file'] = eagle3_config(model_name_or_path)
 
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
@@ -548,6 +628,8 @@ def main_export(
             torch.cuda.is_available = orig_cuda_check
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
+        if eagle3 and library_name == "transformers":
+            remove_config(model_name_or_path, output, download_to_local)
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):

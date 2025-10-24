@@ -210,6 +210,7 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
 }
 
 
