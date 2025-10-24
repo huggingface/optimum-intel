@@ -592,6 +592,20 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
 class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
     pass
 
+@register_in_tasks_manager(
+    "exaone4",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Exaone4OpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
+
 
 @register_in_tasks_manager(
     "arcee",
