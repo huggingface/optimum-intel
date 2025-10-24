@@ -871,7 +871,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         elif model_type in SSM_MODELS:
-            init_cls = OVHybridModelForCausalLM
+            init_cls = OVModelWithMambaForCausalLM
         else:
             init_cls = cls
 
@@ -1051,7 +1051,7 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
 
 
-class OVHybridCache(MambaCache):
+class OVCacheWithMambaStates(MambaCache):
     """
     Hybrid cache for Mamba and transformer blocks
 
@@ -1134,7 +1134,7 @@ class OVHybridCache(MambaCache):
 
 
 @dataclass
-class OVHybridOutput(ModelOutput):
+class OVOutputWithMambaStates(ModelOutput):
     """
     Class for the MAMBA model outputs.
 
@@ -1154,11 +1154,11 @@ class OVHybridOutput(ModelOutput):
     """
 
     logits: Optional[torch.FloatTensor] = None
-    cache_params: Optional[OVHybridCache] = None
+    cache_params: Optional[OVCacheWithMambaStates] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class OVHybridModelForCausalLM(OVModelForCausalLM):
+class OVModelWithMambaForCausalLM(OVModelForCausalLM):
     """
     OpenVINO-based causal language model class designed to run models that include Mamba blocks.
     This model assumes a fixed-size Mamba context for sequential computation.
@@ -1195,6 +1195,11 @@ class OVHybridModelForCausalLM(OVModelForCausalLM):
         self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
         self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
 
+        if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
+            self.conv_kernel = config.conv_kernel
+        else:
+            self.conv_kernel = getattr(config, "mamba_d_conv", 4)
+
         # in case of a hybrid model, it contains KV-cache with beam_idx input
         self.is_hybrid = "beam_idx" in self.input_names
 
@@ -1227,7 +1232,7 @@ class OVHybridModelForCausalLM(OVModelForCausalLM):
 
         if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
             if cache_params is None:
-                cache_params = OVHybridCache(self.config, input_ids.shape[0])
+                cache_params = OVCacheWithMambaStates(self.config, input_ids.shape[0])
 
             ssm_cache = cache_params.ssm_states
             conv_cache = cache_params.conv_states
@@ -1273,7 +1278,7 @@ class OVHybridModelForCausalLM(OVModelForCausalLM):
             k_values = []
             v_values = []
 
-        cache_params = OVHybridCache(
+        cache_params = OVCacheWithMambaStates(
             self.config,
             is_hybrid=self.is_hybrid,
             batch_size=input_ids.shape[0],
@@ -1282,8 +1287,7 @@ class OVHybridModelForCausalLM(OVModelForCausalLM):
             key_cache=k_values,
             value_cache=v_values,
         )
-        # cache_params = None
-        return OVHybridOutput(logits=logits, cache_params=cache_params)
+        return OVOutputWithMambaStates(logits=logits, cache_params=cache_params)
 
     def _update_model_kwargs_for_generation(
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
@@ -1336,7 +1340,7 @@ class OVHybridModelForCausalLM(OVModelForCausalLM):
                 # considering padding will be applied when input length is shorter, and truncation
                 # will be applied when it is longer, so it will be equivalent to always have it match
                 # the length of `cache_params.conv_states`, which is `config.conv_kernel`
-                cache_position = torch.arange(0, self.config.mamba_d_conv, device=input_ids.device)
+                cache_position = torch.arange(0, self.conv_kernel, device=input_ids.device)
 
         if inputs_embeds is not None and cache_params is None:
             model_inputs = {"inputs_embeds": inputs_embeds}

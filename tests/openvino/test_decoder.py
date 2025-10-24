@@ -89,6 +89,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
 
+    if is_transformers_version(">=", "4.48"):
+        SUPPORTED_SSM_ARCHITECTURES +=("zamba2",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
@@ -212,6 +215,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
+        "zamba2": 2,
     }
 
     # TODO: remove gptq/awq from here
@@ -248,10 +252,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
-            from optimum.intel.openvino.modeling_decoder import OVMambaCache
+            from optimum.intel.openvino.modeling_decoder import OVCacheWithMambaStates
 
             self.assertTrue("cache_params" in ov_outputs)
-            self.assertIsInstance(ov_outputs.cache_params, OVMambaCache)
+            self.assertIsInstance(ov_outputs.cache_params, OVCacheWithMambaStates)
             is_stateful = ov_model.config.model_type not in not_stateful
             self.assertEqual(ov_model.stateful, is_stateful)
             if is_stateful:
