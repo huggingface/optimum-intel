@@ -1269,15 +1269,6 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
     def post_init(self):
         super().post_init()
 
-        if self.weight_quantization_config.dtype == "nf4" and self.full_quantization_config.dtype in [
-            "f8e4m3",
-            "f8e5m2",
-        ]:
-            logger.warning(
-                "\n`nf4_f8e4m3` and `nf4_f8e5m2` mixed precision quantization modes are deprecated and will be "
-                "removed in optimum-intel v1.26. Please use `cb4_f8e4m3` instead.\n"
-            )
-
     @staticmethod
     def _initialize_quantization_config(
         config: Union[dict, OVWeightQuantizationConfig, OVQuantizationConfig],
