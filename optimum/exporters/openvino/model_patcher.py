@@ -6600,7 +6600,9 @@ def zamba2_mamba_mixer(
         hidden_states_dec = torch.sum(conv_state_dec.to(projected_states.device) * self.conv1d.weight[:, 0, :], dim=-1)
         if self.use_conv_bias:
             hidden_states_dec += self.conv1d.bias
-        hidden_states_dec = self.act(hidden_states_dec).to(dtype)[:, None, ...]  # [batch, 1, intermediate_size] : decoding
+        hidden_states_dec = self.act(hidden_states_dec).to(dtype)[
+            :, None, ...
+        ]  # [batch, 1, intermediate_size] : decoding
 
         # 1.2 Convolution sequence transformation for prefill step
         hidden_states_prefill = hidden_states.transpose(1, 2)
