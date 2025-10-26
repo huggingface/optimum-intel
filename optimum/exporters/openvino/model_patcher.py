@@ -6592,31 +6592,35 @@ def zamba2_mamba_mixer(
 
     # 1. Convolution sequence transformation
     # 1.1 Convolution sequence transformation for decoding step
-    conv_state_dec = cache_params.conv_states[self.layer_idx]
-    conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
-    conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
+    if cache_params is not None:
+        conv_state_dec = cache_params.conv_states[self.layer_idx]
+        conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
+        conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
 
-    hidden_states_dec = torch.sum(conv_state_dec.to(projected_states.device) * self.conv1d.weight[:, 0, :], dim=-1)
-    if self.use_conv_bias:
-        hidden_states_dec += self.conv1d.bias
-    hidden_states_dec = self.act(hidden_states_dec).to(dtype)[:, None, ...]  # [batch, 1, intermediate_size] : decoding
+        hidden_states_dec = torch.sum(conv_state_dec.to(projected_states.device) * self.conv1d.weight[:, 0, :], dim=-1)
+        if self.use_conv_bias:
+            hidden_states_dec += self.conv1d.bias
+        hidden_states_dec = self.act(hidden_states_dec).to(dtype)[:, None, ...]  # [batch, 1, intermediate_size] : decoding
 
-    # 1.2 Convolution sequence transformation for prefill step
-    hidden_states_prefill = hidden_states.transpose(1, 2)
-    conv_state_prefill = torch.nn.functional.pad(
-        hidden_states_prefill, (self.conv_kernel_size - hidden_states_prefill.shape[-1], 0)
-    )
+        # 1.2 Convolution sequence transformation for prefill step
+        hidden_states_prefill = hidden_states.transpose(1, 2)
+        conv_state_prefill = torch.nn.functional.pad(
+            hidden_states_prefill, (self.conv_kernel_size - hidden_states_prefill.shape[-1], 0)
+        )
 
-    hidden_states_prefill = self.act(self.conv1d(hidden_states_prefill).transpose(1, 2))[
-        :, :seq_len, :
-    ]  # [batch, intermediate_size, seq_len]
-    if attention_mask is not None:
-        # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
-        hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :seq_len, None]).to(dtype)
+        hidden_states_prefill = self.act(self.conv1d(hidden_states_prefill).transpose(1, 2))[
+            :, :seq_len, :
+        ]  # [batch, intermediate_size, seq_len]
+        if attention_mask is not None:
+            # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
+            hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :seq_len, None]).to(dtype)
 
-    # Compute final conv state and set into the cache
-    conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
-    cache_params.conv_states[self.layer_idx].copy_(conv_state)
+        # Compute final conv state and set into the cache
+        conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
+        cache_params.conv_states[self.layer_idx].copy_(conv_state)
+    else:
+        hidden_states_prefill = self.act(self.conv1d(hidden_states.transpose(1, 2))[..., :seq_len].transpose(1, 2))
+        hidden_states_dec = hidden_states_prefill[:, :1]
 
     hidden_states_prefill, B_prefill, C_prefill = torch.split(
         hidden_states_prefill,
@@ -6633,62 +6637,63 @@ def zamba2_mamba_mixer(
 
     # 2. SSM state
     # 2.1 Compute SSM state for decoding step
-    dt_dec = dt
-    dt_dec = dt_dec.reshape(dt_dec.shape[0], -1, dt_dec.shape[-1])[:, :1, :]
-    # dt - [B, 1, H], H - num_heads
-    dt_dec = dt_dec.transpose(1, 2).expand(
-        batch_size, dt_dec.shape[-1], self.head_dim
-    )  # dt - [B, num_heads, head_dim]
-    dt_bias_dec = self.dt_bias
-    dt_bias_dec = dt_bias_dec.reshape(dt_bias_dec.shape[0], -1).expand(
-        dt_bias_dec.shape[0], self.head_dim
-    )  # dt_bias [num_heads, head_dim]
-    dt_dec = torch.nn.functional.softplus(dt_dec + dt_bias_dec)
-    dt_dec = torch.clamp(dt_dec, self.time_step_min)  # dt - [B, num_heads, head_dim]
+    if cache_params is not None:
+        dt_dec = dt
+        dt_dec = dt_dec.reshape(dt_dec.shape[0], -1, dt_dec.shape[-1])[:, :1, :]
+        # dt - [B, 1, H], H - num_heads
+        dt_dec = dt_dec.transpose(1, 2).expand(
+            batch_size, dt_dec.shape[-1], self.head_dim
+        )  # dt - [B, num_heads, head_dim]
+        dt_bias_dec = self.dt_bias
+        dt_bias_dec = dt_bias_dec.reshape(dt_bias_dec.shape[0], -1).expand(
+            dt_bias_dec.shape[0], self.head_dim
+        )  # dt_bias [num_heads, head_dim]
+        dt_dec = torch.nn.functional.softplus(dt_dec + dt_bias_dec)
+        dt_dec = torch.clamp(dt_dec, self.time_step_min)  # dt - [B, num_heads, head_dim]
 
-    A_dec = A[..., None, None].expand(self.num_heads, self.head_dim, self.ssm_state_size).to(dtype=torch.float32)
-    dA = torch.exp(dt_dec[..., None] * A_dec)
+        A_dec = A[..., None, None].expand(self.num_heads, self.head_dim, self.ssm_state_size).to(dtype=torch.float32)
+        dA = torch.exp(dt_dec[..., None] * A_dec)
 
-    # Discretize B
-    # [bsz, n_groups * state_size] -> [bsz, n_groups, 1, state_size] ->
-    # -> [bsz, n_groups, group to head repetition factor, state_size] -> [bsz, num_heads, state_size]
-    B_dec = B_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
-    B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
-    B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
-    B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
-    dB = dt_dec[..., None] * B_dec[..., None, :]
+        # Discretize B
+        # [bsz, n_groups * state_size] -> [bsz, n_groups, 1, state_size] ->
+        # -> [bsz, n_groups, group to head repetition factor, state_size] -> [bsz, num_heads, state_size]
+        B_dec = B_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
+        B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
+        dB = dt_dec[..., None] * B_dec[..., None, :]
 
-    # Discretize x into dB
-    # [bsz, intermediate_size] -> [bsz, num_heads, head_dim]
-    hidden_states_dec = hidden_states_dec.reshape(batch_size, -1, self.head_dim)
-    dBx = dB * hidden_states_dec[..., None]
+        # Discretize x into dB
+        # [bsz, intermediate_size] -> [bsz, num_heads, head_dim]
+        hidden_states_dec = hidden_states_dec.reshape(batch_size, -1, self.head_dim)
+        dBx = dB * hidden_states_dec[..., None]
 
-    # State calculation
-    new_ssm_state_dec = cache_params.ssm_states[self.layer_idx] * dA + dBx
+        # State calculation
+        new_ssm_state_dec = cache_params.ssm_states[self.layer_idx] * dA + dBx
 
-    # Subsequent output
-    # [bsz, n_groups * state_size] -> [bsz, num_heads, state_size]
-    C_dec = C_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
-    C_dec = C_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
-    C_dec = C_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, C_dec.shape[-1]).contiguous()
-    C_dec = C_dec.reshape(batch_size, -1, C_dec.shape[-1])
+        # Subsequent output
+        # [bsz, n_groups * state_size] -> [bsz, num_heads, state_size]
+        C_dec = C_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        C_dec = C_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        C_dec = C_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, C_dec.shape[-1]).contiguous()
+        C_dec = C_dec.reshape(batch_size, -1, C_dec.shape[-1])
 
-    ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)  # Shape: [b, h, d, n]
+        ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)  # Shape: [b, h, d, n]
 
-    # Reshape ssm_states to merge the first two dimensions
-    ssm_states_reshaped = ssm_states_dec.view(batch_size * self.num_heads, self.head_dim, self.ssm_state_size)
-    C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)  # Shape: [b*h, n, 1]
-    y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
-    y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
+        # Reshape ssm_states to merge the first two dimensions
+        ssm_states_reshaped = ssm_states_dec.view(batch_size * self.num_heads, self.head_dim, self.ssm_state_size)
+        C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)  # Shape: [b*h, n, 1]
+        y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
+        y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
 
-    # D skip connection
-    # [num_heads] -> [num_heads, head_dim]
-    D_dec = self.D
-    D_dec = D_dec[..., None].expand(D_dec.shape[0], self.head_dim)
-    y_dec = (y_dec + hidden_states_dec * D_dec).to(y_dec.dtype)
+        # D skip connection
+        # [num_heads] -> [num_heads, head_dim]
+        D_dec = self.D
+        D_dec = D_dec[..., None].expand(D_dec.shape[0], self.head_dim)
+        y_dec = (y_dec + hidden_states_dec * D_dec).to(y_dec.dtype)
 
-    # [bsz, num_heads, head_dim] -> [bsz, 1, intermediate_size]
-    y_dec = y_dec.reshape(batch_size, -1)[:, None, ...]
+        # [bsz, num_heads, head_dim] -> [bsz, 1, intermediate_size]
+        y_dec = y_dec.reshape(batch_size, -1)[:, None, ...]
 
     # 2.2 Compute SSM state for prefill step
     dt = torch.nn.functional.softplus(dt + self.dt_bias)
@@ -6775,14 +6780,16 @@ def zamba2_mamba_mixer(
     pad_mask = torch.tensor(pad_size > 0).to(torch.long)
     y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
     y = y[:, :y_new_len]
-
     y_prefill = y.reshape(batch_size, seq_len, -1)
 
-    y = y_prefill[:, :seq_len] * (1.0 - is_decoding) + y_dec * is_decoding
-    ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
+    if cache_params is not None:
+        y = y_prefill[:, :seq_len] * (1.0 - is_decoding) + y_dec * is_decoding
+        ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
 
-    # Set final ssm state into the cache
-    cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+        # Set final ssm state into the cache
+        cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+    else:
+        y = y_prefill
 
     scan_output = self.norm(y, gate)
 
