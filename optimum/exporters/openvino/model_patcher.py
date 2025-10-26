@@ -6612,7 +6612,7 @@ def zamba2_mamba_mixer(
     ]  # [batch, intermediate_size, seq_len]
     if attention_mask is not None:
         # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
-        hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :, None]).to(dtype)
+        hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :seq_len, None]).to(dtype)
 
     # Compute final conv state and set into the cache
     conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
