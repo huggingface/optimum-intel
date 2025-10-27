@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Dict
 from unittest.mock import Mock
 
-import pytest
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForZeroShotImageClassification, AutoProcessor, AutoTokenizer
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
+    OPENVINO_DEVICE,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
     get_num_quantized_nodes,
@@ -63,7 +63,6 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -261,18 +260,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation",
             "llama",
-            "nf4_f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
-            {
-                "model": 16,
-            },
-            {
-                "model": {"f8e4m3": 11, "nf4": 5},
-            },
-        ),
-        (
-            "text-generation",
-            "llama",
             "cb4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
             {
@@ -280,18 +267,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
             {
                 "model": {"int8": 5, "int4": 5, "f8e4m3": 16},
-            },
-        ),
-        (
-            "text-generation",
-            "llama",
-            "nf4_f8e5m2",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
-            {
-                "model": 16,
-            },
-            {
-                "model": {"f8e5m2": 11, "nf4": 5},
             },
         ),
         (
@@ -443,7 +418,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if is_transformers_version("<=", "4.45")
             else {
                 "encoder": 30,
-                "decoder": 62 if is_nncf_version("<=", "2.17") and is_openvino_version("<", "2025.3") else 52,
+                "decoder": 52,
             },
             (
                 {"encoder": {"int8": 32}, "decoder": {"int8": 52}, "decoder_with_past": {"int8": 42}}
@@ -733,6 +708,18 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 16},
             },
         ),
+        (
+            "image-text-to-text",
+            "minicpmo",
+            'int4 --group-size 4 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset contextual --num-samples 1 --trust-remote-code",
+            {
+                "lm_model": {"int8": 6, "int4": 10},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 8},
+                "resampler_model": {"int8": 6},
+            },
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -754,7 +741,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v", "phi4mm"}
+            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
@@ -991,7 +978,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
-            check_compression_state_per_model(self, model.ov_submodels, expected_int8)
+            check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -1014,8 +1001,6 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
-        if option.startswith("cb4") and is_nncf_version("<=", "2.17"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -1032,7 +1017,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
@@ -1047,7 +1032,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             statistics_path = f"{tmpdir}/statistics"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --weight-format int4 --awq "
+                f"optimum-cli export openvino --model {MODEL_NAMES['llama']} --task text-generation-with-past --weight-format int4 --awq "
                 f"--dataset wikitext2 --group-size 4 --quantization-statistics-path {statistics_path} {tmpdir}",
                 shell=True,
                 check=True,
@@ -1072,8 +1057,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
-        if quant_mode == "cb4_f8e4m3" and is_nncf_version("<=", "2.17"):
-            pytest.skip("Codebook quantization is supported starting from NNCF 2.18")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
@@ -1096,31 +1079,52 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
 
-    @parameterized.expand(
-        [
-            (
-                "falcon-40b",
-                "bigscience/bloomz-560m",
-                AutoModelForCausalLM,
-                OVModelForCausalLM,
-                "--task text-generation-with-past --weight-format int4",
-                _DEFAULT_4BIT_WQ_CONFIGS,
-            ),
-            (
-                "clip",
-                "hf-tiny-model-private/tiny-random-CLIPModel",
-                AutoModelForZeroShotImageClassification,
-                OVModelForZeroShotImageClassification,
-                "--task zero-shot-image-classification --quant-mode int8",
-                _DEFAULT_INT8_FQ_CONFIGS,
-            ),
-        ]
-    )
+    DEFAULT_CONFIG_TEST_CONFIGURATIONS = [
+        (
+            "falcon-40b",
+            "bigscience/bloomz-560m",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int4",
+            _DEFAULT_4BIT_WQ_CONFIGS,
+            {"model": {"int8": 6, "int4": 6}},
+            {"model": 0},
+        ),
+        (
+            "clip",
+            "hf-tiny-model-private/tiny-random-CLIPModel",
+            AutoModelForZeroShotImageClassification,
+            OVModelForZeroShotImageClassification,
+            "--task zero-shot-image-classification --quant-mode int8",
+            _DEFAULT_INT8_FQ_CONFIGS,
+            {"model": {"int8": 65}},
+            {"model": 65},
+        ),
+        (
+            "gpt_oss_mxfp4",
+            "openai/gpt-oss-20b",
+            AutoModelForCausalLM,
+            OVModelForCausalLM,
+            "--task text-generation-with-past --weight-format int4",
+            _DEFAULT_4BIT_WQ_CONFIGS,
+            {"model": {"int8": 22, "int4": 4}},
+            {"model": 0},
+        ),
+    ]
+
+    # filter models type depending on min max transformers version
+    SUPPORTED_DEFAULT_CONFIG_TEST_CONFIGURATIONS = [
+        config
+        for config in DEFAULT_CONFIG_TEST_CONFIGURATIONS
+        if TEST_NAME_TO_MODEL_TYPE.get(config[0], config[0]) in get_supported_model_for_library("transformers")
+    ]
+
+    @parameterized.expand(SUPPORTED_DEFAULT_CONFIG_TEST_CONFIGURATIONS)
     def test_exporters_cli_with_default_config(
         self,
         model_name,
@@ -1129,6 +1133,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ov_model_cls,
         options,
         default_configs_collection,
+        expected_num_weight_nodes_per_model,
+        expected_fake_nodes_per_model,
     ):
         with TemporaryDirectory() as tmpdir:
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
@@ -1160,15 +1166,26 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
             model = ov_model_cls.from_pretrained(tmpdir)
+
+            check_compression_state_per_model(
+                self,
+                model.ov_submodels,
+                expected_num_weight_nodes_per_model,
+                expected_fake_nodes_per_model,
+            )
+
             rt_info = model.model.get_rt_info()
             nncf_info = rt_info["nncf"]
             model_quantization_config = nncf_info["weight_compression" if is_weight_compression else "quantization"]
 
             default_config = {**default_configs_collection[model_id]}
-            default_config.pop("dataset", None)
+            if "quantization_config2" in default_config:
+                # For GPT-OSS use the second config as reference
+                default_config = default_config["quantization_config2"]
+            dataset = default_config.pop("dataset", None)
+            default_config.pop("weight_only", None)
             if is_weight_compression:
                 bits = default_config.pop("bits", None)
-                self.assertEqual(bits, 4)
                 sym = default_config.pop("sym", False)
                 default_config["mode"] = f"int{bits}_{'sym' if sym else 'asym'}"
                 quant_method = default_config.pop("quant_method", None)
@@ -1177,7 +1194,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 advanced_parameters = eval(model_quantization_config["advanced_parameters"].value)
                 model_quantization_config["statistics_path"] = Mock()
                 model_quantization_config["statistics_path"].value = advanced_parameters["statistics_path"]
-                default_config["statistics_path"] = f"{tmpdir}/statistics"
+                if dataset is not None:
+                    default_config["statistics_path"] = f"{tmpdir}/statistics"
             else:
                 dtype = default_config.pop("dtype", None)
                 self.assertEqual(dtype, "int8")
@@ -1230,7 +1248,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False)
+            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
             self.assertFalse("last_hidden_state" in model.output_names)
 
     def test_exporters_cli_open_clip(self):
