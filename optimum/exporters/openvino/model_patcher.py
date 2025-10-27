@@ -6904,7 +6904,7 @@ class Zamba2ModelPatcher(ModelPatcher):
         from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridLayer, Zamba2MambaDecoderLayer
 
         super().__exit__(exc_type, exc_value, traceback)
-        setattr(self._model, self.orig_forward_name, self.orig_forward)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         for layer in self._model.model.layers:
             if isinstance(layer, Zamba2MambaDecoderLayer):
                 mamba_layer = layer.mamba
