@@ -302,9 +302,6 @@ def main_export(
             )
             library_name = "transformers"
 
-    if eagle3 and not os.path.isdir(model_name_or_path):
-        raise ValueError("Currently eagle3 only supports local path conversion. Please download the draft model to your local path first.")
-
     original_task = task
     task = infer_task(
         task,
@@ -398,6 +395,11 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
+
+        if not trust_remote_code and eagle3:
+            logger.warning('eagle3 draft model needs `trust_remote_code=True`')
+            trust_remote_code = True
+
         if dtype == "auto":
             dtype = getattr(config, "torch_dtype")
 
