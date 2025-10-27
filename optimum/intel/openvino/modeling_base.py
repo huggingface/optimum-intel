@@ -34,7 +34,7 @@ from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available, is_transformers_version
+from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import (
     OVConfig,
@@ -57,12 +57,97 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
+class OVModelHostMixin:
+    """
+    Mixin class for models that contain OpenVINO models as submodels.
+    """
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+        """
+        Returns a dictionary of all OpenVINO models associated with this model. Keys are model names, and values are
+        either instances of `openvino.Model` or `openvino.runtime.CompiledModel`. Compiled model instances are returned
+        if the model is initialized with `compile_only=True`.
+        """
+        return {ov_model_name: getattr(self, ov_model_name) for ov_model_name in self._ov_model_names}
+
+    @property
+    def ov_submodels(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+        logger.warn(
+            "`ov_submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
+        )
+        return self.ov_models
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        """
+        List of openvino model names. Used as keys for a dictionary returned by `.ov_models` property.
+        """
+        return ["model"]
+
+    @property
+    def _component_names(self) -> List[str]:
+        """
+        List of model component names. Used as keys for a dictionary returned by `.components` property.
+        """
+        return []
+
+    @property
+    def components(self) -> Dict[str, "OVModelHostMixin"]:
+        """
+        Dictionary of model components which are instances of OVModelHostMixin.
+        """
+        return {component_name: getattr(self, component_name) for component_name in self._component_names}
+
+    def replace_ov_model(self, current_model: openvino.Model, new_model: openvino.Model):
+        """
+        Replace OpenVINO model within the model with new one. Replacement is performed by object id.
+
+        Args:
+            current_model (`openvino.Model`):
+                Current OpenVINO model to be replaced.
+            new_model (`openvino.Model`):
+                New OpenVINO model to replace the current one.
+        """
+        # Validate replacement parameters
+        if isinstance(current_model, openvino.CompiledModel):
+            raise ValueError(
+                "OpenVINO model replacement is not supported for models initialized with `compile_only=True`."
+            )
+        # Replace OpenVINO model stored inside the model
+        for ov_model_name in self.ov_models:
+            if ov_model_name in ["lm_model", "vision_embeddings_model", "text_embeddings_model"] and isinstance(
+                getattr(type(self), ov_model_name, None), property
+            ):
+                # TODO (nikita.savelyevv): Remove this check when these properties are removed
+                continue
+            if id(getattr(self, ov_model_name, None)) == id(current_model):
+                setattr(self, ov_model_name, new_model)
+        # Replace OpenVINO model stored inside components
+        for component in self.components.values():
+            component.replace_ov_model(current_model, new_model)
+        # Clear requests to force recompilation with the new model
+        self.clear_requests()
+
+    def clear_requests(self):
+        """
+        Clear model inference requests.
+        """
+        raise NotImplementedError
+
+    def compile(self):
+        """
+        Compile all OpenVINO models within the model.
+        """
+        raise NotImplementedError
+
+
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(OptimizedModel):
+class OVBaseModel(OptimizedModel, OVModelHostMixin):
     auto_model_class = None
     export_feature = None
     _supports_cache_class = False  # No loger defined/used in transformers
@@ -142,21 +227,20 @@ class OVBaseModel(OptimizedModel):
         if self.can_generate():
             self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
-            if is_transformers_version(">=", "4.44.99"):
-                # some model configs may have issues with loading without parameters initialization
-                try:
-                    misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
-                except (KeyError, TypeError):
-                    misplaced_generation_parameters = {}
-                if len(misplaced_generation_parameters) > 0:
-                    logger.warning(
-                        "Moving the following attributes in the config to the generation config: "
-                        f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
-                        "generation parameters in the model config, as opposed to in the generation config.",
-                    )
-                    for param_name, param_value in misplaced_generation_parameters.items():
-                        setattr(self.generation_config, param_name, param_value)
-                        setattr(self.config, param_name, None)
+            # some model configs may have issues with loading without parameters initialization
+            try:
+                misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            except (KeyError, TypeError):
+                misplaced_generation_parameters = {}
+            if len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(self.generation_config, param_name, param_value)
+                    setattr(self.config, param_name, None)
 
         else:
             self.generation_config = None
@@ -210,17 +294,6 @@ class OVBaseModel(OptimizedModel):
                 return torch_dtype
 
         return None
-
-    @property
-    def ov_submodels(self) -> Dict[str, openvino.Model]:
-        return {submodel_name: getattr(self, submodel_name) for submodel_name in self._ov_submodel_names}
-
-    @property
-    def _ov_submodel_names(self) -> List[str]:
-        """
-        List of openvino submodel names. Used as keys for a dictionary returned by `.ov_submodels` property.
-        """
-        return ["model"]
 
     @staticmethod
     def load_model(
@@ -804,7 +877,7 @@ class OVBaseModel(OptimizedModel):
         return None
 
 
-class OVModelPart:
+class OVModelPart(OVModelHostMixin):
     def __init__(
         self,
         model: Model,
@@ -816,24 +889,28 @@ class OVModelPart:
         self.model = model
         self.parent_model = parent_model
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.input_dtype = {
-            inputs.get_any_name(): OV_TO_PT_TYPE[inputs.get_element_type().get_type_name()]
-            for inputs in self.model.inputs
+        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+        self.input_dtypes = {
+            inputs.get_any_name(): inputs.get_element_type().get_type_name() for inputs in self.model.inputs
+        }
+        self.output_dtypes = {
+            inputs.get_any_name(): inputs.get_element_type().get_type_name() for inputs in self.model.outputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None if not self.parent_model._compile_only else self.model
+        self._compile_only = parent_model._compile_only
+        self.request = None if not self._compile_only else self.model
         self._model_name = model_name
         self.config = self.parent_model.config
-        self._model_dir = Path(model_dir or parent_model._model_save_dir)
+        self._model_dir = Path(model_dir or parent_model.model_save_dir)
 
-    def _compile(self):
+    def compile(self):
         if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
             self.request = self.model
         if self.request is None:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and "GPU" in self._device
+                and "gpu" in self._device.lower()
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
@@ -872,4 +949,8 @@ class OVModelPart:
         raise NotImplementedError
 
     def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
         self.request = None

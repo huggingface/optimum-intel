@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .. import BaseOptimumCLICommand, CommandInfo
-from .quantize import INCQuantizeCommand
+from optimum.commands.base import BaseOptimumCLICommand, CommandInfo
+from optimum.commands.neural_compressor.quantize import INCQuantizeCommand
 
 
 class INCCommand(BaseOptimumCLICommand):

@@ -64,10 +64,10 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version, is_openvino_version, is_transformers_version
+from ..utils.import_utils import is_diffusers_version, is_openvino_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
-from .modeling_base import OVBaseModel
+from .modeling_base import OVBaseModel, OVModelHostMixin
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -86,7 +86,7 @@ else:
     from diffusers.models.vae import DiagonalGaussianDistribution
 
 # Required EncoderDecoderCache object from transformers
-if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45"):
+if is_diffusers_version(">=", "0.32"):
     from diffusers import LTXPipeline
 else:
     LTXPipeline = object
@@ -283,12 +283,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.compile()
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.Model]:
-        return {name: getattr(getattr(self, name), "model") for name in self._ov_submodel_names}
-
-    @property
-    def _ov_submodel_names(self) -> List[str]:
-        submodel_name_candidates = [
+    def _component_names(self) -> List[str]:
+        component_name_candidates = [
             "unet",
             "transformer",
             "vae_decoder",
@@ -297,8 +293,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "text_encoder_2",
             "text_encoder_3",
         ]
-        submodel_names = [name for name in submodel_name_candidates if getattr(self, name) is not None]
-        return submodel_names
+        component_names = [name for name in component_name_candidates if getattr(self, name) is not None]
+        return component_names
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
+
+    @property
+    def ov_models(self) -> Dict[str, openvino.Model]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -966,8 +970,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        for submodel in self.ov_submodels.values():
-            compress_model_transformation(submodel)
+        for ov_model in self.ov_models.values():
+            compress_model_transformation(ov_model)
 
         self.clear_requests()
 
@@ -978,31 +982,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        for submodel_name in self._ov_submodel_names:
-            getattr(self, submodel_name).request = None
+        for component in self.components.values():
+            component.clear_requests()
 
     def compile(self):
-        for submodel_name in self._ov_submodel_names:
-            getattr(self, submodel_name)._compile()
+        for component in self.components.values():
+            component.compile()
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
         return cls.load_config(config_name_or_path, **kwargs)
-
-    @property
-    def components(self) -> Dict[str, Any]:
-        components = {
-            "vae": self.vae,
-            "unet": self.unet,
-            "transformer": self.transformer,
-            "text_encoder": self.text_encoder,
-            "text_encoder_2": self.text_encoder_2,
-            "text_encoder_3": self.text_encoder_2,
-            "safety_checker": self.safety_checker,
-            "image_encoder": self.image_encoder,
-        }
-        components = {k: v for k, v in components.items() if v is not None}
-        return components
 
     def __call__(self, *args, **kwargs):
         # we do this to keep numpy random states support for now
@@ -1077,7 +1066,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
 
-class OVPipelinePart(ConfigMixin, CacheMixin):
+class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
     config_name: str = CONFIG_NAME
 
     def __init__(
@@ -1118,7 +1107,14 @@ class OVPipelinePart(ConfigMixin, CacheMixin):
     def dtype(self) -> torch.dtype:
         return OV_TO_PT_TYPE[self.ov_config.get("dtype", "f32")]
 
-    def _compile(self):
+    def clear_requests(self):
+        if self.parent_pipeline._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        self.request = None
+
+    def compile(self):
         if self.request is None:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
@@ -1187,7 +1183,7 @@ class OVModelTextEncoder(OVPipelinePart):
         output_hidden_states: Optional[bool] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
         model_inputs = {"input_ids": input_ids}
 
         if "attention_mask" in self.input_names:
@@ -1237,7 +1233,7 @@ class OVModelUnet(OVPipelinePart):
         added_cond_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {
             "sample": sample,
@@ -1289,7 +1285,7 @@ class OVModelTransformer(OVPipelinePart):
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {
             "hidden_states": hidden_states,
@@ -1348,7 +1344,7 @@ class OVModelVaeEncoder(OVPipelinePart):
         generator: Optional[torch.Generator] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {"sample": sample}
 
@@ -1371,7 +1367,7 @@ class OVModelVaeEncoder(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
-    def _compile(self):
+    def compile(self):
         if (
             "GPU" in self._device
             and "INFERENCE_PRECISION_HINT" not in self.ov_config
@@ -1379,7 +1375,7 @@ class OVModelVaeEncoder(OVPipelinePart):
             and check_scale_available(self.model)
         ):
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+        super().compile()
 
 
 class OVModelVaeDecoder(OVPipelinePart):
@@ -1401,7 +1397,7 @@ class OVModelVaeDecoder(OVPipelinePart):
         generator: Optional[torch.Generator] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {"latent_sample": latent_sample}
 
@@ -1419,7 +1415,7 @@ class OVModelVaeDecoder(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
-    def _compile(self):
+    def compile(self):
         if (
             "GPU" in self._device
             and "INFERENCE_PRECISION_HINT" not in self.ov_config
@@ -1427,10 +1423,10 @@ class OVModelVaeDecoder(OVPipelinePart):
             and check_scale_available(self.model)
         ):
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+        super().compile()
 
 
-class OVModelVae:
+class OVModelVae(OVModelHostMixin):
     def __init__(self, decoder: OVModelVaeDecoder, encoder: OVModelVaeEncoder):
         self.decoder = decoder
         self.encoder = encoder
@@ -1446,6 +1442,18 @@ class OVModelVae:
             self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
         if hasattr(self.decoder.config, "latents_std_data"):
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
+
+    @property
+    def _component_names(self) -> List[str]:
+        return ["encoder", "decoder"]
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     @property
     def config(self):
@@ -1743,7 +1751,7 @@ OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
 
 OV_TEXT2VIDEO_PIPELINES_MAPPING = OrderedDict()
 
-if is_diffusers_version(">=", "0.32") and is_transformers_version(">=", "4.45.0"):
+if is_diffusers_version(">=", "0.32"):
     OV_TEXT2VIDEO_PIPELINES_MAPPING["ltx-video"] = OVLTXPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTXPipeline)
 

@@ -30,9 +30,9 @@ optimum-cli export openvino --model local_llama --task text-generation-with-past
 Check out the help for more options:
 
 ```text
-usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,tf}] [--trust-remote-code]
+usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt}] [--trust-remote-code]
                                    [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4,cb4}]
-                                   [--quant-mode {int8,f8e4m3,f8e5m2,nf4_f8e4m3,nf4_f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}]
+                                   [--quant-mode {int8,f8e4m3,f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}]
                                    [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
                                    [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
                                    [--group-size GROUP_SIZE] [--backup-precision {none,int8_sym,int8_asym}]
@@ -62,15 +62,14 @@ Optional arguments:
                         'question-answering', 'zero-shot-image-classification', 'mask-generation', 'text-generation',
                         'text-classification']. For decoder models, use 'xxx-with-past' to export the model using past
                         key values in the decoder.
-  --framework {pt,tf}   The framework to use for the export. If not provided, will attempt to use the local
-                        checkpoint's original framework or what is available in the environment.
+  --framework {pt}   The framework to use for the export. Defaults to 'pt' for PyTorch.
   --trust-remote-code   Allows to use custom code for the modeling hosted in the model repository. This option should
                         only be set for repositories you trust and in which you have read the code, as it will execute
                         on your local machine arbitrary code present in the model repository.
   --weight-format {fp32,fp16,int8,int4,mxfp4,nf4,cb4}
                         The weight format of the exported model. Option 'cb4' represents a codebook with 16
                         fixed fp8 values in E4M3 format.
-  --quant-mode {int8,f8e4m3,f8e5m2,nf4_f8e4m3,nf4_f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}
+  --quant-mode {int8,f8e4m3,f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}
                         Quantization precision mode. This is used for applying full model quantization including
                         activations.
   --library {transformers,diffusers,timm,sentence_transformers,open_clip}
@@ -281,3 +280,8 @@ export_from_model(model, output="ov_model", task="text-generation-with-past")
 ```
 
 Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
+
+## Troubleshooting
+
+Some models do not work with the latest transformers release. You may see an error message with a maximum supported version. To export these models, install a transformers version that supports the model, for example `pip install transformers==4.53.3`.
+The supported transformers versions compatible with each optimum-intel release are listed on the [Github releases page](https://github.com/huggingface/optimum-intel/releases/).

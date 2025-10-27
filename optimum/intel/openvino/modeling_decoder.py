@@ -32,6 +32,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.models.mamba.modeling_mamba import MambaCache
 from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -39,7 +40,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
+from ..utils.import_utils import compare_versions, is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
@@ -57,11 +58,6 @@ from .utils import (
     model_has_dynamic_inputs,
 )
 
-
-if is_transformers_version(">=", "4.43"):
-    from transformers.models.mamba.modeling_mamba import MambaCache
-else:
-    MambaCache = object
 
 if TYPE_CHECKING:
     try:
@@ -746,12 +742,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        if is_transformers_version(">=", "4.39.0"):
-            _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
-            generation_mode = _generation_config.get_generation_mode(assistant_model)
-        else:
-            _generation_config = generation_config or self.generation_config
-            generation_mode = self._get_generation_mode(_generation_config, assistant_model)
+        _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
+        generation_mode = _generation_config.get_generation_mode(assistant_model)
 
         is_beam_search = generation_mode in [
             GenerationMode.BEAM_SEARCH,
@@ -884,7 +876,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
+            if config.name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
+                raise NotImplementedError(
+                    "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
+                    "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
+                    "recommended quantization config will be used."
+                )
+            else:
+                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
             quantization_config = cls._prepare_quantization_config(
                 default_config or _DEFAULT_4BIT_WQ_CONFIG, load_in_8bit
             )
