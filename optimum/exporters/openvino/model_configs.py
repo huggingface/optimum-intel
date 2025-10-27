@@ -4334,11 +4334,13 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 
 
 @register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
+class Zamba2OpenVINOConfig(TextDecoderOnnxConfig):
     PAD_ATTENTION_MASK_TO_PAST = False
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.49.0"
+    _MODEL_PATCHER = Zamba2ModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -4369,6 +4371,3 @@ class Zamba2OpenVINOConfig(LlamaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
-
-    def patch_model_for_export(self, model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None):
-        return Zamba2ModelPatcher(self, model, model_kwargs)
