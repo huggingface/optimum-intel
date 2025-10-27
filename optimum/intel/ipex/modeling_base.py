@@ -184,7 +184,7 @@ class IPEXModel(OptimizedModel):
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
         if getattr(model.config, "torchscript", False):
             raise ValueError("IPEXModel is no longer support torchscript models.")
-        return cls(model, config=kwargs.pop("config", model.config), **kwargs)
+        return cls(model, config=kwargs.pop("config", model.config), model_save_dir=model_id, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
