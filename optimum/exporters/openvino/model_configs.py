@@ -4297,8 +4297,8 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         **kwargs,
     ):
         super().__init__(
-                task=task,
-                normalized_config=normalized_config,
+            task=task,
+            normalized_config=normalized_config,
         )
 
         config = normalized_config.config
