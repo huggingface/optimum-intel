@@ -1087,7 +1087,6 @@ class OVCacheWithMambaStates(MambaCache):
     def __init__(
         self,
         config: "PretrainedConfig",
-        is_hybrid: bool = False,
         batch_size: int = None,
         dtype: torch.dtype = torch.float32,
         device: Optional[Union[torch.device, str]] = None,
@@ -1103,7 +1102,6 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
         self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
         self.device = torch.device(device) if device is not None else torch.device("cpu")
-        self.is_hybrid = is_hybrid
 
         self.conv_states = conv_states
         if self.conv_states is None:
@@ -1128,16 +1126,7 @@ class OVCacheWithMambaStates(MambaCache):
                 self.ssm_states.append(ssm_state)
 
         self.key_cache = key_cache
-        if self.is_hybrid and self.key_cache is None:
-            self.key_cache = [
-                torch.tensor([[]] * self.max_batch_size, device=device) for _ in range(config.num_hidden_layers)
-            ]
-
         self.value_cache = value_cache
-        if self.is_hybrid and self.value_cache is None:
-            self.value_cache = [
-                torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)
-            ]
 
 
 @dataclass
@@ -1197,18 +1186,31 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             **kwargs,
         )
 
-        self.ssm_cache_input_names = [key for key in self.input_names if "cache_params.past.ssm" in key]
-        self.conv_cache_input_names = [key for key in self.input_names if "cache_params.past.conv" in key]
-        self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
-        self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
+        self.k_cache_names = []
+        self.v_cache_names = []
+        self.ssm_cache_names = []
+        self.conv_cache_names = []
+
+        if self.stateful:
+            for state in self.request.query_state():
+                if "cache_params.present.key" in state.name:
+                    self.k_cache_names.append(state.name)
+                elif "cache_params.present.value" in state.name:
+                    self.v_cache_names.append(state.name)
+                elif "cache_params.present.ssm" in state.name:
+                    self.ssm_cache_names.append(state.name)
+                elif "cache_params.present.conv" in state.name:
+                    self.conv_cache_names.append(state.name)
+
+        self.k_cache_names = sorted(self.k_cache_names)
+        self.v_cache_names = sorted(self.v_cache_names)
+        self.ssm_cache_names = sorted(self.ssm_cache_names)
+        self.conv_cache_names = sorted(self.conv_cache_names)
 
         if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
             self.conv_kernel = config.conv_kernel
         else:
             self.conv_kernel = getattr(config, "mamba_d_conv", 4)
-
-        # in case of a hybrid model, it contains KV-cache with beam_idx input
-        self.is_hybrid = "beam_idx" in self.input_names
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
@@ -1237,21 +1239,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs["attention_mask"] = attention_mask
 
-        if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
-            if cache_params is None:
-                cache_params = OVCacheWithMambaStates(self.config, input_ids.shape[0])
-
-            ssm_cache = cache_params.ssm_states
-            conv_cache = cache_params.conv_states
-
-            inputs.update(zip(self.ssm_cache_input_names, ssm_cache))
-            inputs.update(zip(self.conv_cache_input_names, conv_cache))
-        else:
-            if cache_params is None:
-                # this is prefill step, reset all states
-                if self.request is not None:
-                    self.request.reset_state()
-                self._past_length = 0
+        if self.stateful and cache_params is None:
+            # this is prefill step, reset all states
+            if self.request is not None:
+                self.request.reset_state()
+            self._past_length = 0
 
         # prepare beam_idx input that is required for hybrid models with both KV cache and Mamba states
         if "beam_idx" in self.input_names:
@@ -1262,37 +1254,37 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
+        ssm_states = None
+        conv_states = None
+        key_cache = None
+        value_cache = None
         if self.stateful:
             self._past_length += input_ids.shape[1]
-            ssm_states_dict = {}
-            conv_states_dict = {}
-            k_values_dict = {}
-            v_values_dict = {}
+            ssm_states = [None] * len(self.ssm_cache_names)
+            conv_states = [None] * len(self.conv_cache_names)
+            key_cache = [None] * len(self.k_cache_names)
+            value_cache = [None] * len(self.v_cache_names)
             for state in self.request.query_state():
                 if "cache_params.past.ssm" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
-                    ssm_states_dict[idx] = state.state.data
+                    ssm_states[idx] = state.state.data
                 elif "cache_params.past.conv" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
-                    conv_states_dict[idx] = state.state.data
-            ssm_states = [v for k, v in sorted(ssm_states_dict.items())]
-            conv_states = [v for k, v in sorted(conv_states_dict.items())]
-            k_values = [v for k, v in sorted(k_values_dict.items())]
-            v_values = [v for k, v in sorted(v_values_dict.items())]
-        else:
-            ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
-            conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
-            k_values = []
-            v_values = []
+                    conv_states[idx] = state.state.data
+                elif "cache_params.past.key" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    key_cache[idx] = state.state.data
+                elif "cache_params.past.value" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    value_cache[idx] = state.state.data
 
         cache_params = OVCacheWithMambaStates(
             self.config,
-            is_hybrid=self.is_hybrid,
             batch_size=input_ids.shape[0],
             conv_states=conv_states,
             ssm_states=ssm_states,
-            key_cache=k_values,
-            value_cache=v_values,
+            key_cache=key_cache,
+            value_cache=value_cache,
         )
         return OVOutputWithMambaStates(logits=logits, cache_params=cache_params)
 
