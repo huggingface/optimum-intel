@@ -4283,10 +4283,10 @@ class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
 
 class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
-    Generates dummy past_key_values inputs for Zamba2 architectures.
+    Generates dummy cache_params inputs for Zamba2 architectures.
     """
 
-    SUPPORTED_INPUT_NAMES = ("past_key_values",)
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
 
     def __init__(
         self,
@@ -4334,7 +4334,7 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 
 
 @register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class Zamba2OpenVINOConfig(TextDecoderOnnxConfig):
+class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     PAD_ATTENTION_MASK_TO_PAST = False
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
@@ -4348,18 +4348,18 @@ class Zamba2OpenVINOConfig(TextDecoderOnnxConfig):
 
         if direction == "inputs":
             decoder_sequence_name = "past_sequence_length"
-            kv_name = "past_key_values"
+            cache_name_prefix = "cache_params.past"
         else:
             decoder_sequence_name = "past_sequence_length + sequence_length"
-            kv_name = "present"
+            cache_name_prefix = "cache_params.present"
 
         for i in range(self._normalized_config.num_layers):
-            inputs_or_outputs[f"{kv_name}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
-            inputs_or_outputs[f"{kv_name}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             # [batch_size, conv_kernel_size - 1, d_model]
-            inputs_or_outputs[f"{kv_name}.conv_state.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
             # [batch_size, d_state, d_model]
-            inputs_or_outputs[f"{kv_name}.ssm_state.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

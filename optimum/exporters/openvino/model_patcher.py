@@ -6831,12 +6831,12 @@ class Zamba2ModelPatcher(ModelPatcher):
             input_ids,
             attention_mask=None,
             position_ids=None,
-            past_key_values=None,
+            cache_params=None,
         ):
             num_hidden_layers = self.real_config._config.num_hidden_layers
             use_cache = False
             wrapped_cache_params = None
-            if past_key_values is not None:
+            if cache_params is not None:
                 use_cache = True
                 conv_states = []
                 ssm_states = []
@@ -6844,17 +6844,17 @@ class Zamba2ModelPatcher(ModelPatcher):
                 value_cache = []
                 # inputs passed in an order of (key, value, conv_state, ssm_state)
                 for idx in range(num_hidden_layers):
-                    batch_size = past_key_values[4 * idx].size(0)
-                    key_cache.append(past_key_values[4 * idx])
-                    value_cache.append(past_key_values[4 * idx + 1])
-                    conv_states.append(past_key_values[4 * idx + 2])
-                    ssm_states.append(past_key_values[4 * idx + 3])
+                    batch_size = cache_params[4 * idx].size(0)
+                    key_cache.append(cache_params[4 * idx])
+                    value_cache.append(cache_params[4 * idx + 1])
+                    conv_states.append(cache_params[4 * idx + 2])
+                    ssm_states.append(cache_params[4 * idx + 3])
 
                 wrapped_cache_params = Zamba2HybridDynamicCacheWrap(
                     self.real_config._config, batch_size, conv_states, ssm_states, key_cache, value_cache
                 )
 
-            causal_lm_output = self.orig_forward(
+            causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -6881,6 +6881,8 @@ class Zamba2ModelPatcher(ModelPatcher):
             return outputs
 
         self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
 
     def __enter__(self):
         from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridLayer, Zamba2MambaDecoderLayer
