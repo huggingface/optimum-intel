@@ -87,7 +87,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
     }
 
-    if is_transformers_version(">=", "4.48"):
+    if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
