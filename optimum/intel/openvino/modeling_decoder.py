@@ -1192,7 +1192,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self.conv_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.conv" in key])
 
         self.key_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.key" in key])
-        self.value_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.value" in key])
+        self.value_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.value" in key]
+        )
         self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
         self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
 
