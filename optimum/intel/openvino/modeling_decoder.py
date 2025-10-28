@@ -1186,24 +1186,34 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             **kwargs,
         )
 
-        self.k_cache_names = []
-        self.v_cache_names = []
+        self.key_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.key" in key])
+        self.value_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.value" in key])
+        self.ssm_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.ssm" in key])
+        self.conv_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.conv" in key])
+
+        self.key_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.key" in key])
+        self.value_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.value" in key])
+        self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
+        self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
+
+        self.key_cache_names = []
+        self.value_cache_names = []
         self.ssm_cache_names = []
         self.conv_cache_names = []
 
         if self.stateful:
             for state in self.request.query_state():
                 if "cache_params.present.key" in state.name:
-                    self.k_cache_names.append(state.name)
+                    self.key_cache_names.append(state.name)
                 elif "cache_params.present.value" in state.name:
-                    self.v_cache_names.append(state.name)
+                    self.value_cache_names.append(state.name)
                 elif "cache_params.present.ssm" in state.name:
                     self.ssm_cache_names.append(state.name)
                 elif "cache_params.present.conv" in state.name:
                     self.conv_cache_names.append(state.name)
 
-        self.k_cache_names = sorted(self.k_cache_names)
-        self.v_cache_names = sorted(self.v_cache_names)
+        self.key_cache_names = sorted(self.key_cache_names)
+        self.value_cache_names = sorted(self.value_cache_names)
         self.ssm_cache_names = sorted(self.ssm_cache_names)
         self.conv_cache_names = sorted(self.conv_cache_names)
 
@@ -1244,6 +1254,19 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             if self.request is not None:
                 self.request.reset_state()
             self._past_length = 0
+        elif not self.stateful and use_cache:
+            if cache_params is None:
+                cache_params = OVCacheWithMambaStates(self.config, input_ids.shape[0])
+
+            ssm_cache = cache_params.ssm_states
+            conv_cache = cache_params.conv_states
+            key_cache = cache_params.key_cache
+            value_cache = cache_params.value_cache
+
+            inputs.update(zip(self.key_cache_input_names, key_cache))
+            inputs.update(zip(self.value_cache_input_names, value_cache))
+            inputs.update(zip(self.ssm_cache_input_names, ssm_cache))
+            inputs.update(zip(self.conv_cache_input_names, conv_cache))
 
         # prepare beam_idx input that is required for hybrid models with both KV cache and Mamba states
         if "beam_idx" in self.input_names:
@@ -1262,8 +1285,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             self._past_length += input_ids.shape[1]
             ssm_states = [None] * len(self.ssm_cache_names)
             conv_states = [None] * len(self.conv_cache_names)
-            key_cache = [None] * len(self.k_cache_names)
-            value_cache = [None] * len(self.v_cache_names)
+            key_cache = [None] * len(self.key_cache_names)
+            value_cache = [None] * len(self.value_cache_names)
             for state in self.request.query_state():
                 if "cache_params.past.ssm" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
@@ -1277,6 +1300,11 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                 elif "cache_params.past.value" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
                     value_cache[idx] = state.state.data
+        elif not self.stateful and use_cache:
+            ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
+            conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
+            key_cache = [self.request.get_tensor(key).data for key in self.key_cache_output_names]
+            value_cache = [self.request.get_tensor(key).data for key in self.value_cache_output_names]
 
         cache_params = OVCacheWithMambaStates(
             self.config,
