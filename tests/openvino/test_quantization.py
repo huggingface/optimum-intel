@@ -165,31 +165,6 @@ class OVQuantizerTest(unittest.TestCase):
             dict(
                 weight_quantization_config=dict(
                     bits=4,
-                    dtype="nf4",
-                    group_size=16,
-                    ratio=0.5,
-                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
-                ),
-                full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
-                ),
-                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
-                dataset="wikitext2",
-                num_samples=1,
-            ),
-            {
-                "model": 8,
-            },
-            {
-                "model": {"f8e4m3": 8, "nf4": 2},
-            },
-        ),
-        (
-            OVModelForCausalLM,
-            "llama",
-            dict(
-                weight_quantization_config=dict(
-                    bits=4,
                     dtype="cb4",
                     group_size=16,
                     ratio=0.5,
@@ -207,31 +182,6 @@ class OVQuantizerTest(unittest.TestCase):
             },
             {
                 "model": {"int8": 2, "int4": 2, "f8e4m3": 10},
-            },
-        ),
-        (
-            OVModelForCausalLM,
-            "llama",
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(
-                    bits=4,
-                    dtype="nf4",
-                    group_size=16,
-                    ratio=0.5,
-                    ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
-                ),
-                full_quantization_config=OVQuantizationConfig(
-                    dtype="f8e5m2", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
-                ),
-                ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
-                dataset="wikitext2",
-                num_samples=1,
-            ),
-            {
-                "model": 8,
-            },
-            {
-                "model": {"f8e5m2": 8, "nf4": 2},
             },
         ),
         (
@@ -587,7 +537,7 @@ class OVQuantizerTest(unittest.TestCase):
                 expected_num_weight_nodes_per_model.pop("decoder_with_past", None)
             check_compression_state_per_model(
                 self,
-                ov_model.ov_submodels,
+                ov_model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
@@ -1157,14 +1107,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         else:
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
-        submodels = (
-            {"text_model": model.text_model, "visual_model": model.visual_model}
-            if model_type == "open-clip"
-            else model.ov_submodels
-        )
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_ov_int8 = {k: {"int8": v} for k, v in expected_ov_int8.items()}
-        check_compression_state_per_model(self, submodels, expected_ov_int8)
+        check_compression_state_per_model(self, model.ov_models, expected_ov_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
@@ -1276,15 +1221,14 @@ class OVWeightCompressionTest(unittest.TestCase):
                 # TODO: Check that AWQ was actually applied
                 pass
 
-            submodels = model.ov_submodels
-            check_compression_state_per_model(self, submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
             check_model_inference(model, model_id, trust_remote_code)
 
             # At the moment the first model in the list is the only one we apply data-aware compression to
-            wc_rt_info = next(iter(submodels.values())).get_rt_info()["nncf"]["weight_compression"]
+            wc_rt_info = next(iter(model.ov_models.values())).get_rt_info()["nncf"]["weight_compression"]
             self.assertEqual(quantization_config.quant_method.lower() == "awq", wc_rt_info["awq"].value == "True")
             self.assertEqual(
                 quantization_config.scale_estimation or False, wc_rt_info["scale_estimation"].value == "True"
@@ -1307,7 +1251,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         _, num_weight_nodes = get_num_quantized_nodes(model)
         expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
-        check_compression_state_per_model(self, model.ov_submodels, expected_int8)
+        check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
@@ -1315,11 +1259,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             MODEL_NAMES[model_type], export=True, load_in_8bit=False, trust_remote_code=trust_remote_code
         )
 
-        submodels = (
-            [model.text_model, model.visual_model] if model_type == "open-clip" else model.ov_submodels.values()
-        )
-        for i, submodel in enumerate(submodels):
-            ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+        for i, ov_model in enumerate(model.ov_models.values()):
             _, num_weight_nodes = get_num_quantized_nodes(ov_model)
             self.assertEqual(0, num_weight_nodes["int8"])
             if "text-generation" in model.export_feature or ("image-text-to-text" in model.export_feature and i == 0):
@@ -1439,7 +1379,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
-            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
@@ -1468,7 +1408,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                     "model": dict(
                         weight_quantization_config=dict(
                             bits=4,
-                            dtype="nf4",
+                            dtype="cb4",
                             group_size=16,
                             dataset="wikitext2",
                             num_samples=1,
@@ -1485,7 +1425,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 "model": 16,
             },
             {
-                "model": {"f8e4m3": 11, "nf4": 5},
+                "model": {"f8e4m3": 16, "int4": 5, "int8": 5},
             },
         ),
         (
@@ -1702,89 +1642,90 @@ class OVPipelineQuantizationTest(unittest.TestCase):
             model = model_cls.from_pretrained(
                 model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
             )
-            model.save_pretrained(tmp_dir)
-
-            model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
-            check_model_inference(model, model_id, trust_remote_code)
-            check_compression_state_per_model(
-                self, model.ov_submodels, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
-            )
-            # Compare the quantization config with the model runtime info
-            for submodel_name, submodel in model.ov_submodels.items():
-                rt_info = submodel.get_rt_info()
-                config = quantization_config.quantization_configs.get(
-                    submodel_name, quantization_config.default_config
+            for save_load_model in [False, True]:
+                if save_load_model:
+                    model.save_pretrained(tmp_dir)
+                    model = model_cls.from_pretrained(tmp_dir, trust_remote_code=trust_remote_code)
+                check_model_inference(model, model_id, trust_remote_code)
+                check_compression_state_per_model(
+                    self, model.ov_models, expected_num_weight_nodes_per_model, expected_fake_nodes_per_model
                 )
-                if config is None:
-                    self.assertTrue("nncf" not in rt_info)
-                    continue
+                # Compare the quantization config with the model runtime info
+                for ov_model_name, ov_model in model.ov_models.items():
+                    rt_info = ov_model.get_rt_info()
+                    config = quantization_config.quantization_configs.get(
+                        ov_model_name, quantization_config.default_config
+                    )
+                    if config is None:
+                        self.assertTrue("nncf" not in rt_info)
+                        continue
 
-                if isinstance(config, OVWeightQuantizationConfig):
-                    sub_configs = [config]
-                    rt_info_keys = ["weight_compression"]
-                elif isinstance(config, OVQuantizationConfig):
-                    sub_configs = [config]
-                    rt_info_keys = ["quantization"]
-                elif isinstance(config, OVMixedQuantizationConfig):
-                    sub_configs = [config.weight_quantization_config, config.full_quantization_config]
-                    rt_info_keys = ["weight_compression", "quantization"]
-                else:
-                    raise ValueError(f"Unsupported config type: {type(config)}")
+                    if isinstance(config, OVWeightQuantizationConfig):
+                        sub_configs = [config]
+                        rt_info_keys = ["weight_compression"]
+                    elif isinstance(config, OVQuantizationConfig):
+                        sub_configs = [config]
+                        rt_info_keys = ["quantization"]
+                    elif isinstance(config, OVMixedQuantizationConfig):
+                        sub_configs = [config.weight_quantization_config, config.full_quantization_config]
+                        rt_info_keys = ["weight_compression", "quantization"]
+                    else:
+                        raise ValueError(f"Unsupported config type: {type(config)}")
 
-                for sub_config, rt_info_key in zip(sub_configs, rt_info_keys):
-                    q_rt_info = rt_info["nncf"][rt_info_key]
-                    config_dict = sub_config.to_nncf_dict()
-                    for param_name in q_rt_info:
-                        if sub_config.num_samples is None and param_name == "subset_size":
-                            # Skip subset_size check because num_samples was not explicitly provided
-                            continue
-                        rt_info_value = q_rt_info[param_name]
-                        if isinstance(rt_info_value, dict):
-                            # For example, ignored scope case
-                            rt_info_value_ = {}
-                            for k, v in rt_info_value.items():
-                                rt_info_value_[k] = eval_expression_if_possible(v.value)
-                            rt_info_value = rt_info_value_
-                        else:
-                            rt_info_value = eval_expression_if_possible(rt_info_value.value)
-
-                        if param_name not in config_dict:
-                            continue
-                        config_value = config_dict[param_name]
-                        if param_name == "advanced_parameters":
-                            from nncf.quantization.advanced_parameters import convert_to_dict_recursively
-
-                            config_value = convert_to_dict_recursively(config_value)
-                        if param_name == "ignored_scope":
-                            if sub_config.quant_method == OVQuantizationMethod.HYBRID:
-                                # For hybrid quantization ignored scope is set dynamically
-                                config_value = {"types": ["Convolution"]}
+                    for sub_config, rt_info_key in zip(sub_configs, rt_info_keys):
+                        q_rt_info = rt_info["nncf"][rt_info_key]
+                        config_dict = sub_config.to_nncf_dict()
+                        for param_name in q_rt_info:
+                            if sub_config.num_samples is None and param_name == "subset_size":
+                                # Skip subset_size check because num_samples was not explicitly provided
+                                continue
+                            rt_info_value = q_rt_info[param_name]
+                            if isinstance(rt_info_value, dict):
+                                # For example, ignored scope case
+                                rt_info_value_ = {}
+                                for k, v in rt_info_value.items():
+                                    rt_info_value_[k] = eval_expression_if_possible(v.value)
+                                rt_info_value = rt_info_value_
                             else:
-                                from nncf.openvino.rt_info import exclude_empty_fields
+                                rt_info_value = eval_expression_if_possible(rt_info_value.value)
 
-                                config_value = exclude_empty_fields(dataclasses.asdict(config_value))
-                                config_value = [] if config_value == {} else config_value
-                        if param_name == "backup_mode" and config_value is None:
-                            config_value = "int8_asym"
-                        if param_name == "sensitivity_metric" and config_value is None:
-                            config_value = (
-                                "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
-                            )
-                        if param_name == "group_size" and config_value is None:
-                            config_value = -1 if sub_config.bits == 8 else 128
+                            if param_name not in config_dict:
+                                continue
+                            config_value = config_dict[param_name]
+                            if param_name == "advanced_parameters":
+                                from nncf.quantization.advanced_parameters import convert_to_dict_recursively
 
-                        if config_value is None and rt_info_value is False:
-                            continue
-                        if param_name == "subset_size":
-                            self.assertGreaterEqual(
-                                rt_info_value,
-                                config_value,
-                                f"Actual subset size should not be less than the requested one.",
-                            )
-                        else:
-                            self.assertEqual(
-                                config_value, rt_info_value, f"Mismatch in {param_name} for {submodel_name}"
-                            )
+                                config_value = convert_to_dict_recursively(config_value)
+                            if param_name == "ignored_scope":
+                                if sub_config.quant_method == OVQuantizationMethod.HYBRID:
+                                    # For hybrid quantization ignored scope is set dynamically
+                                    config_value = {"types": ["Convolution"]}
+                                else:
+                                    from nncf.openvino.rt_info import exclude_empty_fields
+
+                                    config_value = exclude_empty_fields(dataclasses.asdict(config_value))
+                                    config_value = [] if config_value == {} else config_value
+                            if param_name == "backup_mode" and config_value is None:
+                                config_value = "int8_asym"
+                            if param_name == "sensitivity_metric" and config_value is None:
+                                config_value = (
+                                    "max_activation_variance" if sub_config.bits == 4 else "weight_quantization_error"
+                                )
+                            if param_name == "group_size" and config_value is None:
+                                config_value = -1 if sub_config.bits == 8 else 128
+
+                            if config_value is None and rt_info_value is False:
+                                continue
+                            if param_name == "subset_size":
+                                self.assertGreaterEqual(
+                                    rt_info_value,
+                                    config_value,
+                                    f"Actual subset size should not be less than the requested one.",
+                                )
+                            else:
+                                self.assertEqual(
+                                    config_value, rt_info_value, f"Mismatch in {param_name} for {ov_model_name}"
+                                )
 
 
 class OVQuantizerQATest(unittest.TestCase):
@@ -1870,7 +1811,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(
                     bits=4,
-                    dtype="nf4",
+                    dtype="cb4",
                     group_size=16,
                     ratio=0.5,
                     ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.self_attn"]},
@@ -1889,7 +1830,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                     "model1": OVQuantizationConfig(bits=8, dataset="wikitext2"),
                     "model2": OVWeightQuantizationConfig(bits=4, group_size=16),
                     "model3": OVMixedQuantizationConfig(
-                        weight_quantization_config=OVWeightQuantizationConfig(bits=4, dtype="nf4"),
+                        weight_quantization_config=OVWeightQuantizationConfig(bits=4, dtype="cb4"),
                         full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", dataset="wikitext2"),
                     ),
                 }
@@ -1973,7 +1914,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True), OVQuantizationConfig, None),
         (
             dict(
-                weight_quantization_config=dict(bits=4, dtype="nf4", group_size=16, ratio=0.5),
+                weight_quantization_config=dict(bits=4, dtype="cb4", group_size=16, ratio=0.5),
                 full_quantization_config=dict(dtype="f8e4m3"),
                 dataset="wikitext2",
                 num_samples=1,
@@ -1987,7 +1928,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                     model1=dict(bits=8, dataset="wikitext2", weight_only=False),
                     model2=dict(bits=4, group_size=16),
                     model3=dict(
-                        weight_quantization_config=dict(bits=4, dtype="nf4"),
+                        weight_quantization_config=dict(bits=4, dtype="cb4"),
                         full_quantization_config=dict(dtype="f8e4m3", dataset="wikitext2"),
                     ),
                 )

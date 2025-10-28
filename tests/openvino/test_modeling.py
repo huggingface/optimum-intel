@@ -282,8 +282,8 @@ class OVModelIntegrationTest(unittest.TestCase):
                 compile_only_model = OVModelForVisualCausalLM.from_pretrained(
                     tmpdirname, compile_only=True, device=OPENVINO_DEVICE
                 )
-                for _, submodel in compile_only_model.ov_submodels.items():
-                    self.assertIsInstance(submodel, ov.runtime.CompiledModel)
+                for ov_model in compile_only_model.ov_models.values():
+                    self.assertIsInstance(ov_model, ov.runtime.CompiledModel)
                 for component_name, component in compile_only_model.components.items():
                     self.assertIsInstance(component.model, ov.runtime.CompiledModel)
                     if component_name == "language_model":
@@ -476,7 +476,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsNone(loaded_model.ov_config.get("PERFORMANCE_HINT"))
 
         # Test specifying ov_config with throughput hint and manual cache dir
-        manual_openvino_cache_dir = loaded_model._model_save_dir / "manual_model_cache"
+        manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
         ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
         loaded_model = OVModelForFeatureExtraction.from_pretrained(
             self.OV_SAM_MODEL_ID, ov_config=ov_config, device=OPENVINO_DEVICE
@@ -506,9 +506,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
         self.assertGreaterEqual(current_num_blobs, num_blobs)
-        self.assertIsInstance(compile_only_model.vision_encoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.vision_encoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.vision_encoder.request, ov.CompiledModel)
-        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder_model, ov.CompiledModel)
+        self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
         self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
