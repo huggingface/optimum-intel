@@ -1387,3 +1387,30 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             }
         )
         return model_inputs
+
+
+class OVMambaForCausalLM(OVModelWithMambaForCausalLM):
+    def __init__(
+        self,
+        model: openvino.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            model=model,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        logger.warning(
+            "`OVMambaForCausalLM` class is deprecated and will be removed in v1.27. Please use `OVModelWithMambaForCausalLM` class instead."
+        )
