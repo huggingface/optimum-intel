@@ -1204,6 +1204,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self.conv_cache_names = []
 
         if self.stateful:
+            if not self._compile_only:
+                self.compile()
             for state in self.request.query_state():
                 if "cache_params.present.key" in state.name:
                     self.key_cache_names.append(state.name)
