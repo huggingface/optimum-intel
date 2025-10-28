@@ -6527,6 +6527,12 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 # https://github.com/huggingface/transformers/blob/v4.55.4/src/transformers/models/zamba2/modeling_zamba2.py#L729
 # This patch modifies `forward()` so that when traced by torch.jit, it works correctly
 # during both the prefill and decoding steps.
+# The patched version differs from the original in that it executes both the prefill
+# and decoding branches every time to compute and store the values of B, C, hidden states,
+# conv_state, and ssm_state in the cache.
+# The distinction between prefill and decoding modes is determined by the sequence length
+# (seq_len): 1. seq_len > 1 indicates the prefill phase;
+# seq_len = 1 indicates the decoding phase.
 def zamba2_mamba_mixer(
     self,
     hidden_states,
