@@ -414,7 +414,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVQuantizationConfig(bits=8, dataset="coco", num_samples=1),
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61,
+                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
             },
             {
                 "vision_encoder": {"int8": 75},
