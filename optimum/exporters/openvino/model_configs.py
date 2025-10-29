@@ -13,9 +13,9 @@
 #  limitations under the License.
 
 import enum
+import logging
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-import logging
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
@@ -141,6 +141,7 @@ from .model_patcher import (
     XverseModelPatcher,
     Zamba2ModelPatcher,
 )
+
 
 logger = logging.getLogger(__name__)
 
