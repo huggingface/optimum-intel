@@ -198,10 +198,6 @@ def init_model_configs():
         "AutoModelForImageTextToText",
     )
 
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
-        "image-text-to-text"
-    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
-
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["video-text-to-text"] = "AutoModelForVision2Seq"
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
