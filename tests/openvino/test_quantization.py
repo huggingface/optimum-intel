@@ -85,7 +85,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -418,7 +418,7 @@ class OVQuantizerTest(unittest.TestCase):
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50},
+                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
             },
         ),
         (
@@ -787,7 +787,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(bits=4, dataset="coco", num_samples=1, group_size=2),
             {
                 "vision_encoder": {"int8": 56, "int4": 94},
-                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94},
+                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94 if is_nncf_version("<=", "2.18") else 92},
             },
         ),
         (
