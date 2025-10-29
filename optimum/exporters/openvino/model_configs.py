@@ -4369,7 +4369,6 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
             inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
 
-
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = {

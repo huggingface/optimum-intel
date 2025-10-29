@@ -6834,11 +6834,11 @@ class Zamba2ModelPatcher(ModelPatcher):
                 self.layer_idx_mapping = {v: i for i, v in enumerate(config.hybrid_layer_ids)}
 
             def update(
-                    self,
-                    key_states: torch.Tensor,
-                    value_states: torch.Tensor,
-                    layer_idx: int,
-                    cache_kwargs: Optional[dict[str, Any]] = None,
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
             ) -> tuple[torch.Tensor, torch.Tensor]:
                 # map layer_idx to key_cache (value_cache) idx
                 layer_idx = self.layer_idx_mapping[layer_idx]
