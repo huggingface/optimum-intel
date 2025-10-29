@@ -15,6 +15,7 @@
 import enum
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+import logging
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
@@ -141,6 +142,7 @@ from .model_patcher import (
     Zamba2ModelPatcher,
 )
 
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel  # noqa: F811
@@ -4314,6 +4316,11 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.mamba_headdim = config.mamba_headdim
         self.head_dim = config.attention_head_dim
         self.hybrid_layer_ids = config.hybrid_layer_ids
+        logger.warning(
+            "The current support for the 'Zamba2' model type is experimental. "
+            "Performance is not optimal with high memory consumption. "
+            "Optimizations and improved support will be available in a future OpenVINO release."
+        )
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         past_key_values = []
