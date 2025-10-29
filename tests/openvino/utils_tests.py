@@ -337,7 +337,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 8,
         "resampler_model": 6,
     },
-    "zamba2": {"model": 392},
+    "zamba2": {"model": 44},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
