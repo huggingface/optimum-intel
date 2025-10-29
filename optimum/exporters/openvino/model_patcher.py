@@ -6856,6 +6856,14 @@ class Zamba2ModelPatcher(ModelPatcher):
                 layer_idx = self.layer_idx_mapping[layer_idx]
                 return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                # take any layer that contains cache and not empty tensor
+                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                layer_idx = self.layer_idx_mapping[layer_idx]
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
             input_ids,
