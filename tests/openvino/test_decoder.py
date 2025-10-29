@@ -217,7 +217,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arcee": 2,
         "gpt_oss": 2 if is_openvino_version(">=", "2025.4") else 0,
         "gpt_oss_mxfp4": 2 if is_openvino_version(">=", "2025.4") else 0,
-        "zamba2": 9,
+        "zamba2": 2,
     }
 
     # TODO: remove gptq/awq from here
