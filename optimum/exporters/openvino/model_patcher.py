@@ -6831,6 +6831,30 @@ class Zamba2ModelPatcher(ModelPatcher):
                 self.ssm_states = ssm_states
                 self.key_cache = key_cache
                 self.value_cache = value_cache
+                self.layer_idx_mapping = {v: i for i, v in enumerate(config.hybrid_layer_ids)}
+
+            def update(
+                    self,
+                    key_states: torch.Tensor,
+                    value_states: torch.Tensor,
+                    layer_idx: int,
+                    cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                # map layer_idx to key_cache (value_cache) idx
+                layer_idx = self.layer_idx_mapping[layer_idx]
+                # Update the cache
+                if self.key_cache[layer_idx].shape[-1] == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+                layer_idx = self.layer_idx_mapping[layer_idx]
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
@@ -6839,6 +6863,7 @@ class Zamba2ModelPatcher(ModelPatcher):
             cache_params=None,
         ):
             num_hidden_layers = self.real_config._config.num_hidden_layers
+            num_hybrid_layers = len(self.real_config._config.hybrid_layer_ids)
             use_cache = False
             wrapped_cache_params = None
             if cache_params is not None:
@@ -6847,13 +6872,16 @@ class Zamba2ModelPatcher(ModelPatcher):
                 ssm_states = []
                 key_cache = []
                 value_cache = []
-                # inputs passed in an order of (key, value, conv_state, ssm_state)
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                batch_size = cache_params[0].size(0)
                 for idx in range(num_hidden_layers):
-                    batch_size = cache_params[4 * idx].size(0)
-                    key_cache.append(cache_params[4 * idx])
-                    value_cache.append(cache_params[4 * idx + 1])
-                    conv_states.append(cache_params[4 * idx + 2])
-                    ssm_states.append(cache_params[4 * idx + 3])
+                    conv_states.append(cache_params[2 * idx])
+                    ssm_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_hybrid_layers):
+                    key_cache.append(cache_params[2 * num_hidden_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_hidden_layers + 2 * idx + 1])
 
                 wrapped_cache_params = Zamba2HybridDynamicCacheWrap(
                     self.real_config._config, batch_size, conv_states, ssm_states, key_cache, value_cache
@@ -6873,12 +6901,13 @@ class Zamba2ModelPatcher(ModelPatcher):
                 past_key_values = causal_lm_output.past_key_values
                 # unwrap Zamba2HybridDynamicCache object
                 present_key_values = []
-                # inputs passed in an order of (key, value, conv_state, ssm_state)
                 for idx in range(num_hidden_layers):
-                    present_key_values.append(past_key_values.key_cache[idx])
-                    present_key_values.append(past_key_values.value_cache[idx])
                     present_key_values.append(past_key_values.conv_states[idx])
                     present_key_values.append(past_key_values.ssm_states[idx])
+
+                for idx in range(num_hybrid_layers):
+                    present_key_values.append(past_key_values.key_cache[idx])
+                    present_key_values.append(past_key_values.value_cache[idx])
 
                 outputs["present_key_values"] = present_key_values
 
