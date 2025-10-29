@@ -6836,7 +6836,6 @@ class Zamba2ModelPatcher(ModelPatcher):
         def patched_forward(
             input_ids,
             attention_mask=None,
-            position_ids=None,
             cache_params=None,
         ):
             num_hidden_layers = self.real_config._config.num_hidden_layers
@@ -6863,7 +6862,6 @@ class Zamba2ModelPatcher(ModelPatcher):
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                position_ids=position_ids,
                 past_key_values=wrapped_cache_params,
                 use_cache=use_cache,
             )

@@ -4369,7 +4369,6 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
         common_inputs = {
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
-            "position_ids": {0: "batch_size", 1: "sequence_length"},
         }
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
