@@ -1120,7 +1120,13 @@ class OVCacheWithMambaStates(MambaCache):
         if self.conv_states is None:
             self.conv_states = []
             for _ in range(config.num_hidden_layers):
-                if self.mamba_ngroups and self.mamba_d_state and self.mamba_d_conv and self.mamba_expand and self.hidden_size:
+                if (
+                    self.mamba_ngroups
+                    and self.mamba_d_state
+                    and self.mamba_d_conv
+                    and self.mamba_expand
+                    and self.hidden_size
+                ):
                     # Mamba2 block
                     intermediate_size = int(self.mamba_expand * self.hidden_size)
                     conv_state_shape = (
@@ -1130,12 +1136,8 @@ class OVCacheWithMambaStates(MambaCache):
                     )
                 else:
                     # Mamba block
-                    conv_state_shape = (
-                        self.max_batch_size, self.intermediate_size, self.conv_kernel_size
-                    )
-                conv_state: torch.Tensor = torch.zeros(
-                    conv_state_shape, device=self.device, dtype=dtype
-                )
+                    conv_state_shape = (self.max_batch_size, self.intermediate_size, self.conv_kernel_size)
+                conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
                 self.conv_states.append(conv_state)
 
         self.ssm_states = ssm_states
@@ -1144,12 +1146,15 @@ class OVCacheWithMambaStates(MambaCache):
             for _ in range(config.num_hidden_layers):
                 if self.n_mamba_heads and self.mamba_headdim:
                     # Mamba2 block
-                    ssm_state_shape = (self.max_batch_size, self.n_mamba_heads,
-                                       self.mamba_headdim, self.ssm_state_size)
+                    ssm_state_shape = (
+                        self.max_batch_size,
+                        self.n_mamba_heads,
+                        self.mamba_headdim,
+                        self.ssm_state_size,
+                    )
                 else:
                     # Mamba block
-                    ssm_state_shape = (self.max_batch_size, self.intermediate_size,
-                                       self.ssm_state_size)
+                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
 
                 ssm_state: torch.Tensor = torch.zeros(
                     ssm_state_shape,
