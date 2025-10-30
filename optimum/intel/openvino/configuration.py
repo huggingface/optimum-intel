@@ -100,7 +100,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "Qwen/Qwen2.5-1.5B-Instruct": {
         "bits": 4,
-        "sym": False,
+        "sym": True,
         "group_size": 128,
         "ratio": 0.9,
         "dataset": "wikitext2",
@@ -140,7 +140,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "Qwen/Qwen3-8B": {
         "bits": 4,
-        "sym": False,
+        "sym": True,
         "group_size": 128,
         "ratio": 1.0,
         "dataset": "wikitext2",
@@ -233,8 +233,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "meta-llama/Meta-Llama-3.1-8B-Instruct": {
         "bits": 4,
-        "sym": False,
-        "group_size": 64,
+        "sym": True,
+        "group_size": 128,
         "ratio": 0.8,
         "quant_method": OVQuantizationMethod.AWQ,
     },
@@ -262,10 +262,41 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "microsoft/Phi-3.5-mini-instruct": {
         "bits": 4,
-        "sym": False,
-        "group_size": 64,
+        "sym": True,
+        "group_size": 128,
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "microsoft/Phi-4-reasoning": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "google/gemma-3-4b-it": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+    },
+    "Mistral-7B-Instruct-v0.2": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+    },
+    "openbmb/MiniCPM4-0.5B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+    },
+    "openbmb/MiniCPM4-8B": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
     },
     "microsoft/Phi-4-mini-instruct": {
         "bits": 4,
@@ -290,10 +321,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.8,
-        "quant_method": OVQuantizationMethod.AWQ,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1,
     },
     "microsoft/Phi-4-multimodal-instruct": {
         "quantization_configs": {
