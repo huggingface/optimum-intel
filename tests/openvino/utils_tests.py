@@ -49,7 +49,7 @@ MODEL_NAMES = {
     "baichuan2-13b": "optimum-intel-internal-testing/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "optimum-intel-internal-testing/tiny-random-bigbird_pegasus",
     "biogpt": "optimum-intel-internal-testing/tiny-random-BioGptForCausalLM",
-    "bitnet": "mvafin/tiny-bitnet",
+    "bitnet": "optimum-intel-internal-testing/tiny-random-bitnet",
     "blenderbot-small": "optimum-intel-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "optimum-intel-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "optimum-intel-internal-testing/tiny-random-BloomModel",
