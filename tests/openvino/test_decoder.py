@@ -30,6 +30,7 @@ if is_transformers_version(">=", "4.55"):
 
 torch.compile = lambda func: func  # Mock torch.compile to avoid compilation errors in tests
 
+
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
