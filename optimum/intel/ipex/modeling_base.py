@@ -143,6 +143,8 @@ class IPEXModel(OptimizedModel):
         self._supports_sdpa = getattr(model, "_supports_sdpa", None)
         self._supports_quantized_cache = getattr(model, "_supports_quantized_cache", None)
         self._supports_static_cache = getattr(model, "_supports_static_cache", None)
+        self._can_compile_fullgraph = getattr(model, "_can_compile_fullgraph", False)
+        self._tp_size = getattr(model, "_tp_size", None)
         self._dtype = self.model.dtype if self.model.dtype is not None else torch.float32
         self.use_cache = kwargs.get("use_cache", False)
         self.model_save_dir = model_save_dir
@@ -182,7 +184,7 @@ class IPEXModel(OptimizedModel):
         model = cls.auto_model_class.from_pretrained(model_id, **kwargs)
         if getattr(model.config, "torchscript", False):
             raise ValueError("IPEXModel is no longer support torchscript models.")
-        return cls(model, config=kwargs.pop("config", model.config), **kwargs)
+        return cls(model, config=kwargs.pop("config", model.config), model_save_dir=model_id, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         self.model.save_pretrained(save_directory, safe_serialization=False)
@@ -206,6 +208,13 @@ class IPEXModel(OptimizedModel):
     @property
     def dtype(self) -> torch.dtype:
         return self._dtype
+
+    @property
+    def tp_size(self):
+        """
+        Returns the model's tensor parallelism degree.
+        """
+        return self._tp_size
 
     @property
     def model_dtype(self):
@@ -311,10 +320,15 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
-            self.model_cls = get_class_from_dynamic_module(
-                self.config.auto_map["AutoModelForCausalLM"], model_save_dir
-            )
-        except AttributeError:
+            # Use model_save_dir if available, otherwise use config's name_or_path
+            pretrained_model_name_or_path = model_save_dir or getattr(self.config, "_name_or_path", None)
+            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map"):
+                self.model_cls = get_class_from_dynamic_module(
+                    self.config.auto_map["AutoModelForCausalLM"], pretrained_model_name_or_path
+                )
+            else:
+                self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
+        except (AttributeError, KeyError):
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
@@ -497,10 +511,15 @@ class IPEXModelForSeq2SeqLM(IPEXModel, GenerationMixin):
 
         self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
-            self.model_cls = get_class_from_dynamic_module(
-                self.config.auto_map["AutoModelForSeq2SeqLM"], model_save_dir
-            )
-        except AttributeError:
+            # Use model_save_dir if available, otherwise use config's name_or_path
+            pretrained_model_name_or_path = model_save_dir or getattr(self.config, "_name_or_path", None)
+            if pretrained_model_name_or_path is not None and hasattr(self.config, "auto_map"):
+                self.model_cls = get_class_from_dynamic_module(
+                    self.config.auto_map["AutoModelForSeq2SeqLM"], pretrained_model_name_or_path
+                )
+            else:
+                self.model_cls = get_model_class(self.config, AutoModelForSeq2SeqLM._model_mapping)
+        except (AttributeError, KeyError):
             self.model_cls = get_model_class(self.config, AutoModelForSeq2SeqLM._model_mapping)
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):

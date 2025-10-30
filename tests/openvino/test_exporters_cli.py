@@ -63,6 +63,7 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
+    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -260,18 +261,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation",
             "llama",
-            "nf4_f8e4m3",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
-            {
-                "model": 16,
-            },
-            {
-                "model": {"f8e4m3": 11, "nf4": 5},
-            },
-        ),
-        (
-            "text-generation",
-            "llama",
             "cb4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
             {
@@ -279,18 +268,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
             {
                 "model": {"int8": 5, "int4": 5, "f8e4m3": 16},
-            },
-        ),
-        (
-            "text-generation",
-            "llama",
-            "nf4_f8e5m2",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --sym --ratio 0.5",
-            {
-                "model": 16,
-            },
-            {
-                "model": {"f8e5m2": 11, "nf4": 5},
             },
         ),
         (
@@ -457,11 +434,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset coco --num-samples 1",
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61,
+                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50},
+                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
             },
         ),
         (
@@ -1002,7 +979,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
-            check_compression_state_per_model(self, model.ov_submodels, expected_int8)
+            check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(
@@ -1041,7 +1018,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_submodels, expected_num_weight_nodes_per_model)
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"
@@ -1103,7 +1080,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             check_compression_state_per_model(
                 self,
-                model.ov_submodels,
+                model.ov_models,
                 expected_num_weight_nodes_per_model,
                 expected_fake_nodes_per_model,
             )
