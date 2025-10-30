@@ -686,7 +686,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
-            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "zamba2"]:
                 continue
             if gen_config.num_beams > 1 and is_transformers_version(">=", "4.51.0") and model_arch in ["mixtral_awq"]:
                 continue

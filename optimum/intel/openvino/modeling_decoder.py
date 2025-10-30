@@ -1103,12 +1103,38 @@ class OVCacheWithMambaStates(MambaCache):
         self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
         self.device = torch.device(device) if device is not None else torch.device("cpu")
 
+        # Mamba 2 specific parameters
+        hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
+        self.num_hybrid_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
+        self.num_attention_heads = getattr(config, "num_attention_heads", None)
+        self.head_dim = getattr(config, "head_dim", None)
+        self.mamba_d_state = getattr(config, "mamba_d_state", None)
+        self.n_mamba_heads = getattr(config, "n_mamba_heads", None)
+        self.mamba_headdim = getattr(config, "mamba_headdim", None)
+        self.mamba_ngroups = getattr(config, "mamba_ngroups", None)
+        self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
+        self.mamba_expand = getattr(config, "mamba_expand", None)
+        self.hidden_size = getattr(config, "hidden_size", None)
+
         self.conv_states = conv_states
         if self.conv_states is None:
             self.conv_states = []
             for _ in range(config.num_hidden_layers):
+                if self.mamba_ngroups and self.mamba_d_state and self.mamba_d_conv and self.mamba_expand and self.hidden_size:
+                    # Mamba2 block
+                    intermediate_size = int(self.mamba_expand * self.hidden_size)
+                    conv_state_shape = (
+                        self.max_batch_size,
+                        intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                        self.mamba_d_conv,
+                    )
+                else:
+                    # Mamba block
+                    conv_state_shape = (
+                        self.max_batch_size, self.intermediate_size, self.conv_kernel_size
+                    )
                 conv_state: torch.Tensor = torch.zeros(
-                    self.max_batch_size, self.intermediate_size, self.conv_kernel_size, device=self.device, dtype=dtype
+                    conv_state_shape, device=self.device, dtype=dtype
                 )
                 self.conv_states.append(conv_state)
 
@@ -1116,17 +1142,49 @@ class OVCacheWithMambaStates(MambaCache):
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
             for _ in range(config.num_hidden_layers):
+                if self.n_mamba_heads and self.mamba_headdim:
+                    # Mamba2 block
+                    ssm_state_shape = (self.max_batch_size, self.n_mamba_heads,
+                                       self.mamba_headdim, self.ssm_state_size)
+                else:
+                    # Mamba block
+                    ssm_state_shape = (self.max_batch_size, self.intermediate_size,
+                                       self.ssm_state_size)
+
                 ssm_state: torch.Tensor = torch.zeros(
-                    self.max_batch_size,
-                    self.intermediate_size,
-                    self.ssm_state_size,
+                    ssm_state_shape,
                     device=self.device,
                     dtype=dtype,
                 )
                 self.ssm_states.append(ssm_state)
 
         self.key_cache = key_cache
+        if self.key_cache is None:
+            self.key_cache = []
+            for _ in range(self.num_hybrid_layers):
+                key: torch.Tensor = torch.zeros(
+                    self.max_batch_size,
+                    self.num_attention_heads,
+                    0,
+                    self.head_dim,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.key_cache.append(key)
+
         self.value_cache = value_cache
+        if self.value_cache is None:
+            self.value_cache = []
+            for _ in range(self.num_hybrid_layers):
+                value: torch.Tensor = torch.zeros(
+                    self.max_batch_size,
+                    self.num_attention_heads,
+                    0,
+                    self.head_dim,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.value_cache.append(value)
 
 
 @dataclass
