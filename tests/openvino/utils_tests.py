@@ -209,6 +209,7 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
 }
 
 
@@ -336,6 +337,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 8,
         "resampler_model": 6,
     },
+    "zamba2": {"model": 44},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
