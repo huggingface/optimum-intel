@@ -346,19 +346,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         },
     },
     "Qwen/Qwen3-30B-A3B": {
-        "quantization_config1": {
-            "bits": 4,
-            "sym": False,
-            "group_size": -1,
-            "backup_precision": None,
-        },
-        "quantization_config2": {
-            "bits": 4,
-            "sym": False,
-            "group_size": 128,
-            "all_layers": True,
-            "weight_only": True,
-        },
+        "bits": 4,
+        "sym": False,
+        "group_size": -1,
     },
 }
 
