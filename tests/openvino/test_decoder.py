@@ -89,6 +89,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
 
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
@@ -214,6 +217,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arcee": 2,
         "gpt_oss": 2 if is_openvino_version(">=", "2025.4") else 0,
         "gpt_oss_mxfp4": 2 if is_openvino_version(">=", "2025.4") else 0,
+        "zamba2": 1,
     }
 
     # TODO: remove gptq/awq from here
@@ -250,10 +254,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
-            from optimum.intel.openvino.modeling_decoder import OVMambaCache
+            from optimum.intel.openvino.modeling_decoder import OVCacheWithMambaStates
 
             self.assertTrue("cache_params" in ov_outputs)
-            self.assertIsInstance(ov_outputs.cache_params, OVMambaCache)
+            self.assertIsInstance(ov_outputs.cache_params, OVCacheWithMambaStates)
             is_stateful = ov_model.config.model_type not in not_stateful
             self.assertEqual(ov_model.stateful, is_stateful)
             if is_stateful:
@@ -682,7 +686,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
-            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "zamba2"]:
                 continue
             if gen_config.num_beams > 1 and is_transformers_version(">=", "4.51.0") and model_arch in ["mixtral_awq"]:
                 continue

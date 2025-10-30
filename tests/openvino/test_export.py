@@ -87,6 +87,9 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video": OVLTXPipeline,
     }
 
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
+
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
