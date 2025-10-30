@@ -54,6 +54,7 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install .[openvino,diffusers,tests]
+          uv pip install git+https://github.com/nikita-savelyevv/nncf.git@ns/update-group-size-fallback-logic
 
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
