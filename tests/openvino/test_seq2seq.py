@@ -595,7 +595,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             self.assertTrue(
                 torch.all(bos_token_counts == 1),
                 f"Each batch of input_ids must contain exactly one BOS token, "
-                f"but found counts: {bos_token_counts.tolist()}"
+                f"but found counts: {bos_token_counts.tolist()}",
             )
 
         transformers_inputs = copy.deepcopy(inputs)
@@ -906,6 +906,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
+
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("speecht5",)
