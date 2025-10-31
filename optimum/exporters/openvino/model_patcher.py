@@ -1493,13 +1493,10 @@ def _phi3_self_attn_sdpa_forward(
     return attn_output, None, past_key_value
 
 
-# @torch.jit.script
 def select_ext_factor(
     seq_len: torch.Tensor, max_pos_embeddings: torch.Tensor, short_factor: torch.Tensor, long_factor: torch.Tensor
 ):
-    return torch.where(
-        seq_len <= max_pos_embeddings, short_factor, long_factor
-    )  # short_factor * (seq_len <= max_pos_embeddings) + long_factor * (seq_len > max_pos_embeddings)
+    return torch.where(seq_len <= max_pos_embeddings, short_factor, long_factor)
 
 
 def long_rope(self, x, position_ids, seq_len=None):
@@ -1540,8 +1537,7 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
-
+        # currently, long RoPE can not be traced for long context support, disable it to avoid potential accuracy issues
         if is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
