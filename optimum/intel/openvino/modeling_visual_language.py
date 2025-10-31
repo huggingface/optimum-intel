@@ -280,11 +280,21 @@ class OVResampler(OVModelPart):
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
 
-    def forward(self, image_feature, pos_embed, key_padding_mask):
+    def forward(self, image_feature, pos_embed, key_padding_mask, temporal_embed=None):
         self._compile()
-        result = self.request(
-            {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
-        )[0]
+        if temporal_embed is not None:
+            result = self.request(
+                {
+                    "image_feature": image_feature,
+                    "pos_embed": pos_embed,
+                    "key_padding_mask": key_padding_mask,
+                    "temporal_embed": temporal_embed,
+                }
+            )[0]
+        else:
+            result = self.request(
+                {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
+            )[0]
         return result
 
 
@@ -759,6 +769,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         audio_embed_sizes=None,
         audio_attention_mask=None,
         input_mode=None,
+        temporal_ids=None,
         **kwargs,
     ):
         if pixel_values is None:
@@ -784,6 +795,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
+            temporal_ids=temporal_ids,
             **kwargs,
         )
         return self.language_model.forward(
@@ -896,6 +908,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
                 "input_mode": kwargs.get("input_mode"),
+                "temporal_ids": kwargs.get("temporal_ids"),
             }
         )
         return model_inputs
@@ -1898,10 +1911,16 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         max_size = self.config.vision_config.image_size // self.config.vision_config.patch_size
         self._pos_embeds = torch.from_numpy(self._get_2d_sincos_pos_embed(self.embed_dim, max_size)).float()
         self.max_size = (max_size, max_size)
+        self.max_temporal_size = 72000
 
-    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+    def get_vision_embeddings(self, pixel_values, input_ids=None, temporal_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
+        if temporal_ids is not None:
+            all_temporal_ids = []
+            for t in temporal_ids:
+                all_temporal_ids.extend(t)
+
         tgt_sizes = kwargs["tgt_sizes"]
         pixel_values_list = pixel_values
         vision_hidden_states = []
@@ -1938,7 +1957,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                     pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
                 )[0]
             )
-            vision_embedding = self.resampling(vision_embedding, tgt_sizes)
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes, all_temporal_ids)
 
             start = 0
             for pixel_value in pixel_values_list:
@@ -1954,26 +1973,61 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
 
-    def resampling(self, x, tgt_sizes):
+    def resampling(self, x, tgt_sizes, temporal_ids=None):
+        from itertools import chain
+
         bs = x.shape[0]
 
         patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
 
         self._adjust_pos_cache(tgt_sizes)
 
+        temporal_pos_emb = False
+        temporal_ids_flatten = None
+        if temporal_ids is not None:
+            # example: [[-1], [-1], [2, 6, 9]]
+            temporal_ids_flatten = list(chain.from_iterable(temporal_ids))
+            max_temporal_size = max(temporal_ids_flatten) + 1
+            if max_temporal_size > -1:
+                temporal_pos_emb = True
+            if max_temporal_size > self.max_temporal_size:
+                self._adjust_temporal_pos_cache(max_temporal_size, "cpu")
+
         max_patch_len = torch.max(patch_len)
         key_padding_mask = torch.zeros((bs, max_patch_len), dtype=torch.bool)
 
         pos_embed = []
+        pos_embed_temporal = []
         for i in range(bs):
             tgt_h, tgt_w = tgt_sizes[i]
+
+            if temporal_pos_emb:
+                if temporal_ids_flatten[i] == -1:
+                    pos_embed_temporal.append(torch.zeros(self.embed_dim, dtype=torch.float32, device="cpu"))
+                else:
+                    pos_embed_temporal.append(self.temporal_pos_embed[temporal_ids_flatten[i]].to(torch.float32))  # D
+
             pos_embed.append(self._pos_embeds[:tgt_h, :tgt_w, :].reshape((tgt_h * tgt_w, -1)))  # patches * D
             key_padding_mask[i, patch_len[i] :] = True
 
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
-        res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
+        if pos_embed_temporal:
+            temporal_embed = torch.stack(pos_embed_temporal, dim=0).unsqueeze(0)
+            res = torch.from_numpy(
+                self.resampler(
+                    image_feature=x,
+                    pos_embed=pos_embed,
+                    key_padding_mask=key_padding_mask,
+                    temporal_embed=temporal_embed,
+                )
+            )
+        else:
+            # Print shapes of all inputs to resampler
+            res = torch.from_numpy(
+                self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask)
+            )
         return res
 
     def _set_2d_pos_cache(self, max_size):
@@ -2111,9 +2165,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             )
         inputs = processor([prompt], [image], return_tensors="pt")
         inputs.pop("image_sizes", None)
-        # skip the temporal_ids which makes the number of loop inconstant:
-        # https://huggingface.co/openbmb/MiniCPM-V-4_5/blob/main/resampler.py#L261
-        inputs.pop("temporal_ids", None)
         return inputs
 
 

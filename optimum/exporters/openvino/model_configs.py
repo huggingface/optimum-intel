@@ -2512,7 +2512,7 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
 
 
 class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
+    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask", "temporal_embed")
 
     def __init__(
         self,
@@ -2548,6 +2548,9 @@ class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
 
         if input_name == "pos_embed":
             return self.random_float_tensor(shape=[self.feat_size, self.batch_size, self.hidden_size])
+
+        if input_name == "temporal_embed":
+            return self.random_float_tensor(shape=[1, self.batch_size, self.hidden_size])
 
 
 class MiniCPMVConfigBehavior(str, enum.Enum):
@@ -2601,6 +2604,7 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
                 "image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
                 "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"},
                 "key_padding_mask": {0: "batch_size", 1: "patch_size"},
+                "temporal_embed": {0: "patch_size", 1: "batch_size"},
             }
         return {}
 

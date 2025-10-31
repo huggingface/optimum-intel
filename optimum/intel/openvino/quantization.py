@@ -23,7 +23,6 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-import datasets
 import nncf
 import numpy as np
 import openvino
@@ -360,7 +359,15 @@ class OVCalibrationDatasetBuilder:
                     streaming=dataset_metadata["streaming"],
                 )
             elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
-                dataset = datasets.Dataset.from_list([{"text": it} for it in config.dataset])
+                if not is_datasets_available():
+                    raise ValueError(
+                        DATASETS_IMPORT_ERROR.format("OVCalibrationDatasetBuilder.build_from_quantization_config")
+                    )
+
+                from datasets import Dataset
+
+                dataset = Dataset.from_list([{"text": it} for it in config.dataset])
+
             else:
                 raise ValueError(
                     "Please provide dataset as one of the accepted dataset labels or as a list of strings."
@@ -1554,9 +1561,11 @@ def _weight_only_quantization(
     model: openvino.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
+    verify_not_optimized: bool = True,
     **kwargs,
 ) -> openvino.Model:
-    _verify_not_optimized(model)
+    if verify_not_optimized:
+        _verify_not_optimized(model)
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
