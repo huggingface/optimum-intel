@@ -286,7 +286,7 @@ class OVResampler(OVModelPart):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
 
     def forward(self, image_feature, pos_embed, key_padding_mask, temporal_embed=None):
-        self._compile()
+        self.compile()
         if temporal_embed is not None:
             result = self.request(
                 {
@@ -2020,7 +2020,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
         max_patch_len = torch.max(patch_len)
         key_padding_mask = torch.zeros((bs, max_patch_len), dtype=torch.bool)
-
+        
+        temporal_embed = None
         pos_embed = []
         pos_embed_temporal = []
         for i in range(bs):
@@ -2038,21 +2039,16 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
-        if pos_embed_temporal:
-            temporal_embed = torch.stack(pos_embed_temporal, dim=0).unsqueeze(0)
-            res = torch.from_numpy(
-                self.resampler(
-                    image_feature=x,
-                    pos_embed=pos_embed,
-                    key_padding_mask=key_padding_mask,
-                    temporal_embed=temporal_embed,
-                )
+
+        temporal_embed = torch.stack(pos_embed_temporal, dim=0).unsqueeze(0)
+        res = torch.from_numpy(
+            self.resampler(
+                image_feature=x,
+                pos_embed=pos_embed,
+                key_padding_mask=key_padding_mask,
+                temporal_embed=temporal_embed,
             )
-        else:
-            # Print shapes of all inputs to resampler
-            res = torch.from_numpy(
-                self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask)
-            )
+        )
         return res
 
     def _set_2d_pos_cache(self, max_size):
