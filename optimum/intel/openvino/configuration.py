@@ -345,6 +345,11 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
+    "Qwen/Qwen3-30B-A3B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": -1,
+    },
 }
 
 # Add configs for model id aliases
