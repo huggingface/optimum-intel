@@ -38,7 +38,7 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 
 
 if is_transformers_version(">=", "4.53"):
-    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
+    from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
 
 
@@ -223,11 +223,6 @@ class OVDecoderModelPatcher(ModelPatcher):
             # Although I'm not sure this is the right way to handle this, we are basically pretending that -65,504 is -inf
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of:
-            # non-stateful models on cpu and stateful models on npu
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
@@ -236,7 +231,6 @@ class OVDecoderModelPatcher(ModelPatcher):
             del self._model._update_causal_mask_original
 
         if is_transformers_version(">=", "4.53.0"):
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
 
@@ -4420,16 +4414,10 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             # to avoid overflow issues on some hardware (e.g. Intel NPU)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask_without_vmap)
 
-            # for decoder models, we use eager mask without vmap for sdpa as well
-            # to avoid a nan output issue in OpenVINO that only happens in case of:
-            # non-stateful models on cpu and stateful models on npu
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
         if is_transformers_version(">=", "4.53.0"):
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
 
@@ -4448,11 +4436,6 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
             self._model.config._orig_attn_implementation = self._model.config._attn_implementation
             self._model.config._attn_implementation = "sdpa"
 
-        if is_transformers_version(">=", "4.53"):
-            # starting from 4.53, we get unmatching outputs if we use the boolean mask
-            # TODO: This is an openvino issue (inconsistency between boolean and float masks)
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
@@ -4463,10 +4446,6 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         else:
             self._model.config._attn_implementation = self._model.config._orig_attn_implementation
             del self._model.config._orig_attn_implementation
-
-        if is_transformers_version(">=", "4.53"):
-            # remove the eager_mask_without_vmap from the ALL_MASK_ATTENTION_FUNCTIONS
-            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
 
 
 class MiniCPMModelPatcher(OVDecoderModelPatcher):
