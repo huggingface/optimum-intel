@@ -592,6 +592,7 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
 class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
     pass
 
+
 @register_in_tasks_manager(
     "exaone4",
     *[
