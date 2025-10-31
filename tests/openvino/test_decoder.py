@@ -83,6 +83,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3",
         "gemma2",
         "exaone",
+        "exaone4",
         "granite",
         "granite-moe",
     )
@@ -142,6 +143,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arctic",
         "chatglm4",
         "exaone",
+        "exaone4",
         "decilm",
         "minicpm3",
         "deepseek",
@@ -196,6 +198,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3": 2,
         "gemma2": 4,
         "exaone": 8,
+        "exaone4": 1,
         "granite": 6,
         "granite-moe": 6,
         "glm": 28,
