@@ -3526,6 +3526,10 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 
+        # switch off add_bos_token if chat template already includes it
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
 
