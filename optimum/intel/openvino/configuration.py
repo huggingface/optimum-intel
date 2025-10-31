@@ -280,7 +280,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
     },
-    "Mistral-7B-Instruct-v0.2": {
+    "mistralai/Mistral-7B-Instruct-v0.2": {
         "bits": 4,
         "sym": True,
         "group_size": 128,
