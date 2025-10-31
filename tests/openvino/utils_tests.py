@@ -15,14 +15,13 @@ import os
 import time
 import unittest
 from contextlib import contextmanager
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 
 import numpy as np
 import openvino as ov
 import torch
 
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
 
 
@@ -212,6 +211,7 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
 }
 
 
@@ -334,7 +334,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "sam": {
         "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder": 100,
+        "prompt_encoder_mask_decoder": 100 if is_nncf_version("<=", "2.18") else 98,
     },
     "speecht5": {
         "encoder": 28,
@@ -351,6 +351,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 8,
         "resampler_model": 6,
     },
+    "zamba2": {"model": 44},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -440,21 +441,20 @@ def patch_awq_for_inference(to_patch):
 
 def check_compression_state_per_model(
     test_case: unittest.TestCase,
-    models: Dict[str, Union[ov.Model, OVBaseModel]],
+    models: Dict[str, ov.Model],
     expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = {}
     actual_num_fake_nodes_per_model = {}
-    for submodel_name, submodel in models.items():
-        expected_num_weight_nodes = expected_num_weight_nodes_per_model[submodel_name]
-        ov_model = submodel if isinstance(submodel, ov.Model) else submodel.model
+    for ov_model_name, ov_model in models.items():
+        expected_num_weight_nodes = expected_num_weight_nodes_per_model[ov_model_name]
         num_fake_nodes, num_weight_nodes = get_num_quantized_nodes(ov_model)
         expected_num_weight_nodes.update(dict.fromkeys(set(num_weight_nodes) - set(expected_num_weight_nodes), 0))
 
-        actual_num_weights_per_model[submodel_name] = num_weight_nodes
-        actual_num_fake_nodes_per_model[submodel_name] = num_fake_nodes
+        actual_num_weights_per_model[ov_model_name] = num_weight_nodes
+        actual_num_fake_nodes_per_model[ov_model_name] = num_fake_nodes
 
         test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 

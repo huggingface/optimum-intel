@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import enum
+import logging
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -138,8 +139,11 @@ from .model_patcher import (
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
+    Zamba2ModelPatcher,
 )
 
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel  # noqa: F811
@@ -4292,3 +4296,107 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
 )
 class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+
+class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for Zamba2 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
+        self.ssm_state_size = config.mamba_d_state
+        self.conv_kernel_size = config.mamba_d_conv
+        self.n_mamba_heads = config.n_mamba_heads
+        self.mamba_ngroups = config.mamba_ngroups
+        self.mamba_d_state = config.mamba_d_state
+        self.mamba_headdim = config.mamba_headdim
+        self.head_dim = config.attention_head_dim
+        self.hybrid_layer_ids = config.hybrid_layer_ids
+        logger.warning(
+            "The current support for the 'Zamba2' model type is experimental. "
+            "Performance is not optimal with high memory consumption. "
+            "Optimizations and improved support will be available in a future OpenVINO release."
+        )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+        for i in range(self.num_layers):
+            conv_state_shape = (
+                self.batch_size,
+                self.intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                self.conv_kernel_size,
+            )
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(conv_state)
+            ssm_state_shape = (self.batch_size, self.n_mamba_heads, self.mamba_headdim, self.ssm_state_size)
+            ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(ssm_state)
+
+        for i in range(len(self.hybrid_layer_ids)):
+            kv_shape = (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(k)
+            past_key_values.append(v)
+
+        return past_key_values
+
+
+@register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
+    PAD_ATTENTION_MASK_TO_PAST = False
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+    _MODEL_PATCHER = Zamba2ModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        for i in range(self._normalized_config.num_layers):
+            # [batch_size, conv_kernel_size - 1, d_model]
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            # [batch_size, d_state, d_model]
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(len(self._normalized_config.hybrid_layer_ids)):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
