@@ -6461,7 +6461,6 @@ class MambaPatcher(ModelPatcher):
         # falcon-mamba model has only difference from mamba that is RMS normalization for B, C, and time-step coefficients
         if model_type == "falcon_mamba":
             from transformers.models.falcon_mamba.modeling_falcon_mamba import rms_forward
-            import inspect
 
             self.ssm_rms_normalization = rms_forward
 
