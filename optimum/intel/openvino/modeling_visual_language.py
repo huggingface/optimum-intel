@@ -1941,6 +1941,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
     def get_vision_embeddings(self, pixel_values, input_ids=None, temporal_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
+
+        all_temporal_ids = None
         if temporal_ids is not None:
             all_temporal_ids = []
             for t in temporal_ids:
@@ -2020,7 +2022,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
         max_patch_len = torch.max(patch_len)
         key_padding_mask = torch.zeros((bs, max_patch_len), dtype=torch.bool)
-        
+
         temporal_embed = None
         pos_embed = []
         pos_embed_temporal = []
@@ -2039,8 +2041,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
-
-        temporal_embed = torch.stack(pos_embed_temporal, dim=0).unsqueeze(0)
+        if temporal_pos_emb:
+            temporal_embed = torch.stack(pos_embed_temporal, dim=0).unsqueeze(0)
         res = torch.from_numpy(
             self.resampler(
                 image_feature=x,

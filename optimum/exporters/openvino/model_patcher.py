@@ -3333,13 +3333,11 @@ def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask
 
 
 def _minicpmv4_5_resampler_forward(self, image_feature, pos_embed, key_padding_mask, temporal_embed):
-    bs = image_feature.shape[0]
     image_feature = self.kv_proj(image_feature)  # B * L * D
     image_feature = self.ln_kv(image_feature).permute(1, 0, 2)  # L * B * D
-    image_feature = image_feature + pos_embed
-
-    image_feature_temporal = image_feature + temporal_embed  # [L, bs, D] + [1, bs, D]
-
+    image_feature_emb = image_feature + pos_embed
+    image_feature_temporal = image_feature_emb + temporal_embed  # [L, bs, D] + [1, bs, D]
+    bs = image_feature_temporal.shape[1]
     q = self.ln_q(self.query)  # Q * D
 
     q_bs = q.unsqueeze(1).repeat(1, bs, 1)
