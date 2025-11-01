@@ -490,7 +490,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ["gemma3", "smolvlm"]
     if is_transformers_version(">=", "4.51"):
-        SUPPORTED_ARCHITECTURES += ["llama4"]
+        SUPPORTED_ARCHITECTURES += ["llama4", "minicpmv4", "minicpmv4_5"]
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
 
@@ -499,7 +499,17 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES = set(SUPPORTED_ARCHITECTURES) - {"llava-qwen2", "phi3_v", "phi4mm"}
 
     TASK = "image-text-to-text"
-    REMOTE_CODE_MODELS = ["internvl_chat", "minicpmv", "minicpmo", "llava-qwen2", "phi3_v", "maira2", "phi4mm"]
+    REMOTE_CODE_MODELS = [
+        "internvl_chat",
+        "minicpmv",
+        "minicpmv4",
+        "minicpmv4_5",
+        "minicpmo",
+        "llava-qwen2",
+        "phi3_v",
+        "maira2",
+        "phi4mm",
+    ]
 
     IMAGE = Image.open(
         requests.get(
@@ -608,7 +618,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch not in ["minicpmv", "minicpmv4", "minicpmv4_5", "minicpmo", "internvl_chat"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -655,7 +665,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
-            if model_arch in ["minicpmo"]:
+            if model_arch in ["minicpmo", "minicpmv4", "minicpmv4_5"]:
                 # `generate` method for minicpmo requires tokenizer
                 tokenizer = AutoTokenizer.from_pretrained(
                     model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
@@ -669,7 +679,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch in ["minicpmv", "minicpmv4", "minicpmv4_5", "minicpmo", "internvl_chat"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -695,7 +705,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+            if model_arch in ["minicpmv", "minicpmv4", "minicpmv4_5", "minicpmo", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -713,7 +723,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_inputs = copy.deepcopy(inputs)
             ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat"]:
+            if model_arch in ["minicpmv", "minicpmv4", "minicpmv4_5", "minicpmo", "internvl_chat"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -836,6 +846,9 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             input_audio = self._generate_random_audio_data()
             question = "Translate this audio to French"
             inputs = model.preprocess_inputs(**preprocessors, text=question, audio=[input_audio])
+            # skip the temporal_ids which makes the number of loop inconstant:
+            # https://huggingface.co/openbmb/MiniCPM-V-4_5/blob/main/resampler.py#L261
+            inputs.pop("temporal_ids", None)
             outputs = model.generate(**inputs, max_new_tokens=10)
             # filter out original prompt becuase it may contains out of tokenizer tokens e.g. in nanollva text separator = -200
             outputs = outputs[:, inputs["input_ids"].shape[1] :]
