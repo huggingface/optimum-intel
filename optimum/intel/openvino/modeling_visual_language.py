@@ -916,7 +916,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
                 "token_type_ids": kwargs.get("token_type_ids"),
-                "pixle_attention_mask": kwargs.get("pixle_attention_mask"),
+                "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
