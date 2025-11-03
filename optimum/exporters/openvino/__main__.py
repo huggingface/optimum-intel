@@ -394,7 +394,7 @@ def main_export(
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         else:
             model = TasksManager.get_model_from_task(
-                task,
+                "text-generation" if trust_remote_code and task == "image-text-to-text" else task,
                 model_name_or_path,
                 subfolder=subfolder,
                 revision=revision,
