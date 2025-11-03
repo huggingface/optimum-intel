@@ -84,6 +84,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text2text-generation-with-past", "t5"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon-mamba"),
+        ("text-generation-with-past", "exaone4"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -128,6 +129,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mamba": 2,
         "falcon-mamba": 2,
         "qwen3": 2,
+        "exaone4": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
