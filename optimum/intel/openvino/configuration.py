@@ -737,6 +737,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
         statistics_path: Optional[str] = None,
+        group_size_fallback: Optional[str] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -768,6 +769,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.backup_precision = backup_precision
         self.dtype = dtype
         self.statistics_path = statistics_path
+        self.group_size_fallback = group_size_fallback
         self.post_init()
 
     def post_init(self):
@@ -901,6 +903,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.gptq and self.lora_correction:
             raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
+        valid_group_size_fallback_values = [e.value for e in nncf.GroupSizeFallbackMode]
+        if self.group_size_fallback not in valid_group_size_fallback_values + [None]:
+            raise ValueError(
+                f"`group_size_fallback` must be one of the following: {valid_group_size_fallback_values}, "
+                f"but found: {self.group_size_fallback}"
+            )
+
     def to_nncf_dict(self) -> Dict[str, Any]:
         """
         Returns a dictionary with the variables that are ready to use for nncf.quantize() call.
@@ -920,9 +929,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
         kwargs = self.kwargs.copy()
-        if self.statistics_path:
+        if self.statistics_path or self.group_size_fallback:
             advanced_parameters = kwargs.get("advanced_parameters", nncf.AdvancedCompressionParameters())
-            advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            if self.statistics_path:
+                advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            if self.group_size_fallback:
+                advanced_parameters = dataclasses.replace(
+                    advanced_parameters, group_size_fallback_mode=nncf.GroupSizeFallbackMode(self.group_size_fallback)
+                )
             kwargs["advanced_parameters"] = advanced_parameters
         result = {
             "mode": mode,

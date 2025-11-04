@@ -142,6 +142,19 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
+        "--group-size-fallback",
+        type=str,
+        choices=["error", "ignore", "adjust"],
+        default=None,
+        help=(
+            "Specifies how to handle operations that do not support the given group size. Possible values are: "
+            "`error`: raise an error if the given group size is not supported by a node, this is the default behavior; "
+            "`ignore`: skip nodes that cannot be compressed with the given group size; "
+            "`adjust`: adjust the group size to the maximum supported value for each problematic node, if there is no "
+            "valid value greater or equal to 32, then the node is quantized to backup precision which is int8_asym by default. "
+        ),
+    )
+    optional_group.add_argument(
         "--backup-precision",
         type=str,
         choices=["none", "int8_sym", "int8_asym"],
@@ -596,6 +609,7 @@ def prepare_wc_config(args, default_configs):
         "dtype": args.weight_format,
         "backup_precision": args.backup_precision,
         "statistics_path": args.quantization_statistics_path,
+        "group_size_fallback": args.group_size_fallback,
     }
 
 

@@ -938,6 +938,35 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            False,
+            dict(bits=4, sym=True, group_size_fallback="adjust"),
+            {"model": {"int8": 4, "int4": 20}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size_fallback="adjust",
+            ),
+            {"model": {"int8": 32}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size_fallback="ignore",
+            ),
+            {"model": {"int8": 32}},
+        ),
     ]
 
     # filter models type depending on min max transformers version

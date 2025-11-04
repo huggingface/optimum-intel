@@ -514,6 +514,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "text-generation-with-past",
+            "gpt2",
+            "int4 --sym --group-size-fallback adjust",
+            {"model": {"int8": 4, "int4": 20}},
+        ),
+        (
+            "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
