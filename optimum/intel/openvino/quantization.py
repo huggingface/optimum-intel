@@ -1146,14 +1146,14 @@ class OVQuantizer(OptimumQuantizer):
         super().__init__()
         self.model = model
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
-        self.task = task
-        if self.task is not None:
+        self._task = task
+        if self._task is not None:
             logger.warning(f"The `task` argument is ignored and will be remvoed in optimum-intel v1.27")
 
     @property
     def task(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
         logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
-        return self.task
+        return self._task
 
     @classmethod
     def from_pretrained(cls, model: OVModel, **kwargs):
