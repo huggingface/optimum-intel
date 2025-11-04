@@ -85,7 +85,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text2text-generation-with-past", "t5"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon-mamba"),
-        ("text-generation-with-past", "exaone4"),
         ("text-classification", "albert"),
         ("question-answering", "distilbert"),
         ("token-classification", "roberta"),
@@ -110,6 +109,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "zamba2"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "exaone4"),
             ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
