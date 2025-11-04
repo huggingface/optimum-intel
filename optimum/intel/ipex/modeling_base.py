@@ -246,6 +246,8 @@ class IPEXModel(OptimizedModel):
         if self.use_cache and not self._supports_cache_class and not self._add_patch:
             return False
 
+        return True
+
     def apply_torch_compile(self):
         from torch._inductor import config as inductor_config
 
