@@ -1148,7 +1148,7 @@ class OVQuantizer(OptimumQuantizer):
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
         self._task = task
         if self._task is not None:
-            logger.warning(f"The `task` argument is ignored and will be remvoed in optimum-intel v1.27")
+            logger.warning("The `task` argument is ignored and will be remvoed in optimum-intel v1.27")
 
     @property
     def task(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
