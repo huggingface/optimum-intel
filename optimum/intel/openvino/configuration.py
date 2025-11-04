@@ -27,7 +27,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available, is_nncf_version
+from ..utils.import_utils import is_nncf_available
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
@@ -819,9 +819,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
 
-        if self.dataset is None and self.quant_method == OVQuantizationMethod.AWQ and is_nncf_version("<", "2.17.0"):
-            raise ValueError("Data-free AWQ is available starting form NNCF 2.17. Please update nncf package.")
-
         if self.dtype in ["int4", "int8"]:
             bits = 4 if self.dtype == "int4" else 8
             if self.bits is not None and self.bits != bits:
@@ -919,8 +916,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         mode = self.dtype if self.dtype else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
-        if mode == "mxfp4":
-            mode = "e2m1" if is_nncf_version("<=", "2.18") else "mxfp4"
         if mode == "cb4":
             mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)

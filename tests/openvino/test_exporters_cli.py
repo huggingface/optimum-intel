@@ -63,7 +63,6 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -450,11 +449,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset coco --num-samples 1",
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
