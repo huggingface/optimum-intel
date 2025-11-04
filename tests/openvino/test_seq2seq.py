@@ -659,6 +659,17 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=self.IMAGE.resize((600, 600)))
+        if model_arch == "gemma3":
+            # validate that preprocessed input ids contain exactly one bos token
+            bos_token = preprocessors["processor"].tokenizer.vocab["<bos>"]
+            input_ids = inputs["input_ids"]
+            bos_token_counts = (input_ids == bos_token).sum(dim=1)
+            self.assertTrue(
+                torch.all(bos_token_counts == 1),
+                f"Each batch of input_ids must contain exactly one BOS token, "
+                f"but found counts: {bos_token_counts.tolist()}",
+            )
+
         transformers_inputs = copy.deepcopy(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
         # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
@@ -697,9 +708,11 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         ov_model.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
         ov_model.generation_config.do_sample = False
+        # minicpmo diverges after 20 tokens
+        tokens_to_generate = 20 if model_arch == "minicpmo" else 30
         gen_config = GenerationConfig(
-            max_new_tokens=30,
-            min_new_tokens=30,
+            max_new_tokens=tokens_to_generate,
+            min_new_tokens=tokens_to_generate,
             do_sample=False,
             eos_token_id=None,
         )

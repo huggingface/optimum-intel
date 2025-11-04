@@ -316,13 +316,39 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         },
     },
     "openai/gpt-oss-20b": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 32,
-        "ignored_scope": {
-            "patterns": [".*self_attn.*", ".*router.*"],
+        "quantization_config1": {
+            "bits": 4,
+            "sym": True,
+            "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
         },
-        "backup_precision": "none",
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "openai/gpt-oss-120b": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": True,
+            "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "Qwen/Qwen3-30B-A3B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": -1,
     },
 }
 
@@ -1149,6 +1175,8 @@ class OVConfig(BaseConfig):
         elif isinstance(quantization_config, OVPipelineQuantizationConfig):
             dtypes = [OVConfig._get_dtype(config) for config in quantization_config.quantization_configs.values()]
             dtype = "_".join(dtypes)
+        elif isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            dtype = "int4"
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
         return dtype
@@ -1246,15 +1274,6 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
     def post_init(self):
         super().post_init()
 
-        if self.weight_quantization_config.dtype == "nf4" and self.full_quantization_config.dtype in [
-            "f8e4m3",
-            "f8e5m2",
-        ]:
-            logger.warning(
-                "\n`nf4_f8e4m3` and `nf4_f8e5m2` mixed precision quantization modes are deprecated and will be "
-                "removed in optimum-intel v1.26. Please use `cb4_f8e4m3` instead.\n"
-            )
-
     @staticmethod
     def _initialize_quantization_config(
         config: Union[dict, OVWeightQuantizationConfig, OVQuantizationConfig],
@@ -1291,15 +1310,15 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
     ):
         """
         Configuration class for quantization of multimodel pipelines.
-        For each submodel in the pipeline, a separate quantization config can be provided. If the config is not provided for a
-        submodel, it won't be quantized.
+        For each OpenVINO model in the pipeline, a separate quantization config can be provided. If the config is not
+        provided for a model, it won't be quantized.
 
         Args:
             quantization_configs (Dict[str, Union[Dict, OVQuantizationConfigBase]]):
-                A dictionary where keys are submodel names and values are either dictionaries or instances of
-                `OVQuantizationConfigBase` containing quantization configurations for each submodel in the pipeline.
+                A dictionary where keys are OpenVINO model names and values are either dictionaries or instances of
+                `OVQuantizationConfigBase` containing quantization configurations for each OV model in the pipeline.
             default_config (Optional[Union[Dict, OVQuantizationConfigBase]]):
-                A default quantization configuration that will be applied to all submodels that do not have a
+                A default quantization configuration that will be applied to all OV models that do not have a
                 specific configuration provided in `quantization_configs`.
             num_samples (Optional[int]):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
@@ -1324,13 +1343,13 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         if kwargs.pop("ignored_scope", None) is not None:
             logger.warning(
                 "`ignored_scope` parameter is not supported for pipeline quantization. It will be ignored. "
-                "Please use `ignored_scope` parameter in the submodel configs instead."
+                "Please use `ignored_scope` parameter in the model configs instead."
             )
 
         quantization_configs = copy.deepcopy(quantization_configs)
-        for submodel_name, submodel_config in quantization_configs.items():
-            if isinstance(submodel_config, dict):
-                quantization_configs[submodel_name] = _quantization_config_from_dict(submodel_config)
+        for ov_model_name, ov_model_config in quantization_configs.items():
+            if isinstance(ov_model_config, dict):
+                quantization_configs[ov_model_name] = _quantization_config_from_dict(ov_model_config)
         if default_config is not None and isinstance(default_config, dict):
             default_config = _quantization_config_from_dict(default_config)
 
@@ -1362,8 +1381,38 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
 
     def post_init(self):
         super().post_init()
-        for submodel_config in self.quantization_configs.values():
-            submodel_config.post_init()
+        for ov_model_config in self.quantization_configs.values():
+            ov_model_config.post_init()
+
+
+class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
+    def __init__(
+        self,
+        quantization_config1: Union[Dict, OVWeightQuantizationConfig],
+        quantization_config2: Union[Dict, OVWeightQuantizationConfig],
+        **kwargs,
+    ):
+        """
+        Configuration class for GPT-OSS quantization.
+
+        # TODO (nikita.savelyevv): Introduce OVSequentialQuantizationConfig to support this.
+        """
+
+        if isinstance(quantization_config1, dict):
+            quantization_config1 = OVWeightQuantizationConfig.from_dict(quantization_config1)
+        self.quantization_config1 = quantization_config1
+        self.quantization_config1.post_init()
+
+        if isinstance(quantization_config2, dict):
+            quantization_config2 = OVWeightQuantizationConfig.from_dict(quantization_config2)
+        self.quantization_config2 = quantization_config2
+        self.quantization_config2.post_init()
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["quantization_config1"] = self.quantization_config1.to_dict()
+        result["quantization_config2"] = self.quantization_config2.to_dict()
+        return result
 
 
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
@@ -1378,6 +1427,10 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
     # Check for OVPipelineQuantizationConfig
     if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
+
+    # Check for GPT-OSS quantization config
+    if "quantization_config1" in config_dict and "quantization_config2" in config_dict:
+        return _GPTOSSQuantizationConfig.from_dict(config_dict)
 
     # Either OVWeightQuantizationConfig or OVQuantizationConfig
     # Try to detect the type of config based on the keys present in the dictionary
