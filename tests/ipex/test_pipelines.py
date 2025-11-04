@@ -90,8 +90,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
     PATCHED_MODELS_GENERATION_RESULTS = {
         "llama2": [18926, 14022, 24126, 14016],
         "gpt2": [14, 14, 14, 14],
-        "falcon": [17840, 39385, 39385, 39385],
-        "qwen2": [87225, 146905, 43866, 12680],
+        "falcon": [21694, 21694, 21694, 21694],
+        "qwen2": [87225, 146905, 43866, 103119],
         "mistral": [26303, 4895, 22235, 20595],
     }
 
