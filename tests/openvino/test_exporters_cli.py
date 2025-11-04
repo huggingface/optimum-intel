@@ -116,6 +116,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "exaone4"),
+                ("feature-extraction", "exaone4"),
+                ("text-classification", "exaone4"),
             ]
         )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
