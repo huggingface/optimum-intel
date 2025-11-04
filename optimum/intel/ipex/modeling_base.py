@@ -70,9 +70,9 @@ elif is_torch_version("<", "2.7"):
     _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2", "mistral")
 else:
     _COMPILE_NOT_READY_MODEL_TYPES = ("mistral",)
-
-# TODO: Remove it in the next PR.
-_COMPILE_NOT_READY_MODEL_TYPES_WITHOUT_CACHE = ("gpt2", "gpt_bigcode")
+    # It's an regresson in torch/ipex 2.8.
+    # TODO: Figure it out and fix it.
+    _COMPILE_NOT_READY_MODEL_TYPES_WITHOUT_CACHE = ("gpt2", "gpt_bigcode")
 
 
 try:
