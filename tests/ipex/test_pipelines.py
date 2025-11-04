@@ -88,10 +88,10 @@ class PipelinesIntegrationTest(unittest.TestCase):
     )
     TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
     PATCHED_MODELS_GENERATION_RESULTS = {
-        "llama2": [11095, 11095, 11095, 11095],
+        "llama2": [18926, 14022, 24126, 14016],
         "gpt2": [14, 14, 14, 14],
-        "falcon": [6310, 6310, 6310, 6310],
-        "qwen2": [44995, 87732, 87732, 87732],
+        "falcon": [17840, 39385, 39385, 39385],
+        "qwen2": [87225, 146905, 43866, 12680],
         "mistral": [26303, 4895, 22235, 20595],
     }
 

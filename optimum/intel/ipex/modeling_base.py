@@ -71,6 +71,9 @@ elif is_torch_version("<", "2.7"):
 else:
     _COMPILE_NOT_READY_MODEL_TYPES = ("mistral",)
 
+# TODO: Remove it in the next PR.
+_COMPILE_NOT_READY_MODEL_TYPES_WITHOUT_CACHE = ("gpt2", "gpt_bigcode")
+
 
 try:
     import intel_extension_for_pytorch as ipex
@@ -244,6 +247,9 @@ class IPEXModel(OptimizedModel):
             return False
 
         if self.use_cache and not self._supports_cache_class and not self._add_patch:
+            return False
+
+        if not self.use_cache and self.model.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES_WITHOUT_CACHE:
             return False
 
         return True
