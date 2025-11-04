@@ -916,7 +916,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
                 "token_type_ids": kwargs.get("token_type_ids"),
-                "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
+                "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
@@ -1850,7 +1850,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         inputs.update(tokenizer(text, return_tensors="pt"))
         return inputs
 
-    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    # internvl has issue with check  _get_non_default_parameters, as wrkaraund override _prepare_generation_config
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
