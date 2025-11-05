@@ -393,8 +393,15 @@ def main_export(
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         else:
+
+            task_model_loading = task
+            if library_name == "transformers":
+                has_remote_code = hasattr(config, "auto_map")
+                if has_remote_code and trust_remote_code and task == "image-text-to-text":
+                    task_model_loading = "text-generation"
+
             model = TasksManager.get_model_from_task(
-                "text-generation" if trust_remote_code and task == "image-text-to-text" else task,
+                task_model_loading,
                 model_name_or_path,
                 subfolder=subfolder,
                 revision=revision,
