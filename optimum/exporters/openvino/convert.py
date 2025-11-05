@@ -446,7 +446,7 @@ def export_pytorch(
                         pkv_index = list(signature.parameters.keys()).index("past_key_values")
     
                         if (
-                            pkv_index < len(args)  # pkv is in args
+                            pkv_index < len(args)  # pkv is in args 
                             and isinstance(args[pkv_index], (list, tuple))
                             and isinstance(args[pkv_index][0], (list, tuple))
                         ):
