@@ -287,19 +287,10 @@ class OVResampler(OVModelPart):
 
     def forward(self, image_feature, pos_embed, key_padding_mask, temporal_embed=None):
         self.compile()
+        inputs = {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
         if temporal_embed is not None:
-            result = self.request(
-                {
-                    "image_feature": image_feature,
-                    "pos_embed": pos_embed,
-                    "key_padding_mask": key_padding_mask,
-                    "temporal_embed": temporal_embed,
-                }
-            )[0]
-        else:
-            result = self.request(
-                {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
-            )[0]
+            inputs["temporal_embed"] = temporal_embed
+        result = self.request(inputs)[0]
         return result
 
 
@@ -1999,6 +1990,40 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             for _ in range(len(pixel_values_list)):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
+
+    def get_1d_sincos_pos_embed_from_temporal_size(self, embed_dim, pos):
+        """
+        embed_dim: output dimension for each position
+        pos: a list of positions to be encoded: size (M,)
+        out: (M, D)
+        """
+        assert embed_dim % 2 == 0
+        omega = np.arange(embed_dim // 2, dtype=np.float32)
+        omega /= embed_dim / 2.0
+        omega = 1.0 / 10000**omega  # (D/2,)
+
+        pos = pos.reshape(-1)  # (M,)
+        out = np.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
+
+        emb_sin = np.sin(out)  # (M, D/2)
+        emb_cos = np.cos(out)  # (M, D/2)
+
+        emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
+        return emb
+
+    def _set_temporal_pos_cache(self, max_temporal_size, device="cpu"):
+        temporal_size = np.arange(max_temporal_size, dtype=np.float32)
+        pos_embed = (
+            torch.from_numpy(self.get_1d_sincos_pos_embed_from_temporal_size(self.embed_dim, temporal_size))
+            .float()
+            .to(device)
+        )
+        self.temporal_pos_embed = pos_embed
+
+    def _adjust_temporal_pos_cache(self, max_temporal_size, device):
+        if max_temporal_size > self.max_temporal_size:
+            self.max_temporal_size = max_temporal_size
+            self._set_temporal_pos_cache(self.max_temporal_size, device)
 
     def resampling(self, x, tgt_sizes, temporal_ids=None):
         from itertools import chain
