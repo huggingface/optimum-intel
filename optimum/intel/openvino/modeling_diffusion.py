@@ -1452,7 +1452,7 @@ class OVModelVae(OVModelHostMixin):
         return self._component_names
 
     @property
-    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         return {name: getattr(component, "model") for name, component in self.components.items()}
 
     @property
