@@ -369,11 +369,9 @@ def main_export(
                 GPTQQuantizer.post_init_model = post_init_model
 
         has_remote_code = hasattr(config, "auto_map")
-        architectures = getattr(config, "architectures", [])
-
+        architectures = getattr(config, "architectures", None) or []
         if has_remote_code and trust_remote_code:
             architectures = [architecture for architecture in config.auto_map.keys() if "Model" in architecture]
-
             # check if all values are the same which means that we can use any modeling
             if len(architectures) > 1:
                 if len({config.auto_map[arch] for arch in architectures}) == 1:
@@ -423,6 +421,7 @@ def main_export(
         class_name = config.get("_class_name", None)
 
     try:
+        model_class = None
         if library_name == "open_clip":
             model_class = _OpenClipForZeroShotImageClassification
         elif class_name is not None:
