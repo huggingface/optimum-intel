@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import gc
+import importlib
 import logging
 import operator
 import warnings
@@ -240,6 +241,7 @@ def main_export(
         library_name=library_name,
     )
 
+    class_name = None
     do_gptq_patching = False
     do_quant_patching = False
     custom_architecture = False
@@ -365,7 +367,24 @@ def main_export(
                     return model
 
                 GPTQQuantizer.post_init_model = post_init_model
-    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+
+        has_remote_code = hasattr(config, "auto_map")
+        architectures = getattr(config, "architectures", [])
+
+        if has_remote_code and trust_remote_code:
+            architectures = [architecture for architecture in config.auto_map.keys() if "Model" in architecture]
+
+            # check if all values are the same which means that we can use any modeling
+            if len(architectures) > 1:
+                if len({config.auto_map[arch] for arch in architectures}) == 1:
+                    architectures = [architectures[0]]
+
+        if len(architectures) == 1:
+            class_name = architectures[0]
+
+    elif library_name == "diffusers":
+        from diffusers import DiffusionPipeline
+
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
             dtype = deduce_diffusers_dtype(
@@ -390,10 +409,39 @@ def main_export(
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
+        config = DiffusionPipeline.load_config(
+            model_name_or_path,
+            return_unused_kwargs=False,
+            return_commit_hash=False,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            token=token,
+            local_files_only=local_files_only,
+            revision=revision,
+            subfolder=subfolder,
+        )
+        class_name = config.get("_class_name", None)
+
     try:
         if library_name == "open_clip":
-            model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
+            model_class = _OpenClipForZeroShotImageClassification
+        elif class_name is not None:
+            model_class = getattr(importlib.import_module(library_name), class_name)
+
+        if model_class is not None:
+            model = model_class.from_pretrained(
+                model_name_or_path,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                subfolder=subfolder,
+                trust_remote_code=trust_remote_code,
+                **loading_kwargs,
+            )
         else:
+            # TODO : use SentenceTransformer and create_model to load respectively sentence-transformers / timm models
             model = TasksManager.get_model_from_task(
                 task,
                 model_name_or_path,
@@ -410,6 +458,7 @@ def main_export(
                 **loading_kwargs,
             )
 
+        TasksManager.standardize_model_attributes(model, library_name=library_name)
         needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
         if needs_pad_token_id:
