@@ -938,6 +938,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            OVModelForCausalLM,
+            "exaone4",
+            True,
+            dict(bits=4, sym=False, group_size=32, ratio=1.0), 
+            {"model": {"int8": 14, "int4": 30}},
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -971,6 +978,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version("<", "4.52.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
+
+    if is_transformers_version(">=", "4.54.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
