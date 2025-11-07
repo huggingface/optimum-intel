@@ -374,8 +374,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    #@pytest.mark.run_slow
-    #@slow
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_kwargs = {}
