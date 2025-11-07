@@ -283,15 +283,15 @@ class OVModelIntegrationTest(unittest.TestCase):
                     tmpdirname, compile_only=True, device=OPENVINO_DEVICE
                 )
                 for ov_model in compile_only_model.ov_models.values():
-                    self.assertIsInstance(ov_model, ov.runtime.CompiledModel)
+                    self.assertIsInstance(ov_model, ov.CompiledModel)
                 for component_name, component in compile_only_model.components.items():
-                    self.assertIsInstance(component.model, ov.runtime.CompiledModel)
+                    self.assertIsInstance(component.model, ov.CompiledModel)
                     if component_name == "language_model":
-                        self.assertIsInstance(component.request, ov.runtime.InferRequest)
-                        self.assertIsInstance(component.text_emb_model, ov.runtime.CompiledModel)
-                        self.assertIsInstance(component.text_emb_request, ov.runtime.CompiledModel)
+                        self.assertIsInstance(component.request, ov.InferRequest)
+                        self.assertIsInstance(component.text_emb_model, ov.CompiledModel)
+                        self.assertIsInstance(component.text_emb_request, ov.CompiledModel)
                     else:
-                        self.assertIsInstance(component.request, ov.runtime.CompiledModel)
+                        self.assertIsInstance(component.request, ov.CompiledModel)
 
                 outputs = compile_only_model(**inputs)
                 self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
