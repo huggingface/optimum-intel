@@ -95,6 +95,7 @@ from .model_patcher import (
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
+    GraniteMoeHybridModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
     Idefics3ImageEmbeddingsModelPatcher,
@@ -140,7 +141,6 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
-    GraniteMoeHybridModelPatcher,
 )
 
 
@@ -4401,7 +4401,9 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
         return common_inputs
 
 
-@register_in_tasks_manager("granitemoehybrid", *["text-generation", "text-generation-with-past"], library_name="transformers")
+@register_in_tasks_manager(
+    "granitemoehybrid", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
 class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator

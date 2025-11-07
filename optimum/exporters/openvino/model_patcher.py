@@ -6537,8 +6537,8 @@ def zamba2_mamba_mixer(
     self,
     hidden_states,
     cache_params=None,
-    #attention_mask: Optional[torch.Tensor] = None,
-    #cache_position: Optional[torch.LongTensor] = None,
+    # attention_mask: Optional[torch.Tensor] = None,
+    # cache_position: Optional[torch.LongTensor] = None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
 ):
@@ -7041,7 +7041,7 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
                 # take any layer that contains cache and not empty tensor
                 layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
                 layer_idx = self.attention_layer_idx_mapping[layer_idx]
-                #if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                # if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
                 #    return 0
                 return self.key_cache[layer_idx].shape[-2]
 
