@@ -40,12 +40,10 @@ from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_dat
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
-from optimum.exporters.tasks import TasksManager
 from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 from optimum.quantization_base import OptimumQuantizer
 from optimum.utils.logging import warn_once
 
-from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
     _nncf_version,
@@ -1152,15 +1150,20 @@ class OVQuantizer(OptimumQuantizer):
         Args:
             model (`OVModel`):
                 The [OVModel](https://huggingface.co/docs/optimum-intel/en/openvino/reference) to quantize.
-            task (`str`, defaults to None):
-                The task defining the model topology used for the ONNX export.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
         self.model = model
-        self.task = task
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
+        self._task = task
+        if self._task is not None:
+            logger.warning("The `task` argument is ignored and will be removed in optimum-intel v1.27")
+
+    @property
+    def task(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+        logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
+        return self._task
 
     @classmethod
     def from_pretrained(cls, model: OVModel, **kwargs):
@@ -1206,7 +1209,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> from optimum.intel import OVQuantizer, OVModelForCausalLM
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
-        >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
+        >>> quantizer = OVQuantizer.from_pretrained(model)
         >>> ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig())
         >>> quantizer.quantize(ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
@@ -1218,7 +1221,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
         >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
-        >>> quantizer = OVQuantizer.from_pretrained(model, task="text-classification")
+        >>> quantizer = OVQuantizer.from_pretrained(model)
         >>> ov_config = OVConfig(quantization_config=OVQuantizationConfig())
         >>> quantizer.quantize(calibration_dataset=dataset, ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
@@ -1477,22 +1480,6 @@ class OVQuantizer(OptimumQuantizer):
     def _save_pretrained(model: openvino.Model, output_path: str):
         compress_quantize_weights_transformation(model)
         openvino.save_model(model, output_path, compress_to_fp16=False)
-
-    def _set_task(self):
-        if self.task is None:
-            self.task = TasksManager.infer_task_from_model(self.model.config._name_or_path)
-            if self.task is None:
-                raise ValueError(
-                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
-                )
-
-        self.task = _TASK_ALIASES.get(self.task, self.task)
-
-        if self.task == "text2text-generation":
-            raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
-
-        if self.task == "image-to-text":
-            raise ValueError("Image2Text models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,
