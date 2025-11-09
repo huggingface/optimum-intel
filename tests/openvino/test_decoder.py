@@ -92,6 +92,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
+    if is_transformers_version(">=", "4.51.3"):
+        SUPPORTED_SSM_ARCHITECTURES += ("granite-moe-hybrid",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
@@ -201,6 +204,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "exaone": 8,
         "granite": 6,
         "granite-moe": 6,
+        "granite-moe-hybrid": 1,
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
