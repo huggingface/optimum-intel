@@ -563,8 +563,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    #@pytest.mark.run_slow
-    #@slow
+    @pytest.mark.run_slow
+    @slow
     def test_beam_search(self, model_arch):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
