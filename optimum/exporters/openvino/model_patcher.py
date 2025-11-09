@@ -6537,8 +6537,6 @@ def zamba2_mamba_mixer(
     self,
     hidden_states,
     cache_params=None,
-    # attention_mask: Optional[torch.Tensor] = None,
-    # cache_position: Optional[torch.LongTensor] = None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
 ):
@@ -6962,27 +6960,6 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
-def granite_moe_hybrid_parallel_experts(self, inputs, expert_size):
-    def dynamic_split_traceable(x, expert_size):
-        sizes = torch.tensor(expert_size)
-        indices = torch.cumsum(sizes, dim=0)
-        starts = torch.cat([torch.zeros(1, device=sizes.device, dtype=indices.dtype), indices[:-1]])
-
-        chunks = []
-        for i in range(sizes.size(0)):
-            start = starts[i]
-            end = indices[i]
-            chunks.append(x.narrow(0, start, end - start))
-        return chunks
-
-    input_list = dynamic_split_traceable(inputs, expert_size)
-    output_list = []
-    for i in range(self.num_experts):
-        output_list.append(F.linear(input_list[i], self.weight[i]))
-    results = torch.cat(output_list, dim=0)
-    return results
-
-
 class GraniteMoeHybridModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -7108,16 +7085,25 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
 
     def __enter__(self):
         def patch_sparse_moe(sparse_moe_layer):
-            sparse_moe_layer._orig_forward = sparse_moe_layer.forward
-            sparse_moe_layer.forward = types.MethodType(granite_moe_hybrid_parallel_experts, sparse_moe_layer)
+            sparse_moe_layer.router._orig_forward = sparse_moe_layer.router.forward
+            sparse_moe_layer.router.forward = types.MethodType(
+                _granite_moe_topk_gating_forward, sparse_moe_layer.router
+            )
+            sparse_moe_layer.input_linear._orig_forward = sparse_moe_layer.input_linear.forward
+            sparse_moe_layer.input_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, sparse_moe_layer.input_linear
+            )
+            sparse_moe_layer.output_linear._orig_forward = sparse_moe_layer.output_linear.forward
+            sparse_moe_layer.output_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
+            )
 
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
-                patch_sparse_moe(layer.block_sparse_moe.input_linear)
-                patch_sparse_moe(layer.block_sparse_moe.output_linear)
+                patch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
             else:
@@ -7127,14 +7113,15 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
-            sparse_moe_layer.forward = sparse_moe_layer._orig_forward
+            sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
+            sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
+            sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
-                unpatch_sparse_moe(layer.block_sparse_moe.input_linear)
-                unpatch_sparse_moe(layer.block_sparse_moe.output_linear)
+                unpatch_sparse_moe(layer.block_sparse_moe)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
             else:
