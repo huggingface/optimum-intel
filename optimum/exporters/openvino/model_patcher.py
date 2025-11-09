@@ -7115,8 +7115,9 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
         for idx, layer in enumerate(self._model.model.layers):
-            patch_sparse_moe(layer.block_sparse_moe.input_linear)
-            patch_sparse_moe(layer.block_sparse_moe.output_linear)
+            if hasattr(layer, "block_sparse_moe"):
+                patch_sparse_moe(layer.block_sparse_moe.input_linear)
+                patch_sparse_moe(layer.block_sparse_moe.output_linear)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
             else:
@@ -7131,8 +7132,9 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         for idx, layer in enumerate(self._model.model.layers):
-            unpatch_sparse_moe(layer.block_sparse_moe.input_linear)
-            unpatch_sparse_moe(layer.block_sparse_moe.output_linear)
+            if hasattr(layer, "block_sparse_moe"):
+                unpatch_sparse_moe(layer.block_sparse_moe.input_linear)
+                unpatch_sparse_moe(layer.block_sparse_moe.output_linear)
             if self.real_config._config.layers_block_type[idx] == "mamba":
                 mamba_layer = layer.mamba
             else:
