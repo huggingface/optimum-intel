@@ -140,6 +140,7 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    Lfm2ModelPatcher,
 )
 
 
@@ -4374,6 +4375,111 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
             inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
 
         for i in range(len(self._normalized_config.hybrid_layer_ids)):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+
+class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy past_key_values inputs for Lfm2 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        config = normalized_config.config
+        self.num_conv_layers = config.layer_types.count("conv")
+        self.num_atten_layers = config.layer_types.count("full_attention")
+        self.batch_size = batch_size
+        self.normalized_config = normalized_config
+        self.hidden_size = self.normalized_config.hidden_size
+        self.conv_L_cache = self.normalized_config.conv_L_cache
+        self.num_key_value_heads = self.normalized_config.num_key_value_heads
+        self.num_hidden_layers = self.normalized_config.num_hidden_layers
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+
+        for i in range(self.num_conv_layers):
+            conv_state_shape = (self.batch_size, self.hidden_size, self.conv_L_cache)
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(conv_state)
+
+        for i in range(self.num_atten_layers):
+            shape = (
+                self.batch_size,
+                self.num_key_value_heads,
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+
+            kv_shape = shape # (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(k)
+            past_key_values.append(v)
+
+        return past_key_values
+
+
+@register_in_tasks_manager(
+    "lfm2",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM2OpenVINOConfig(MambaOpenVINOConfig):
+    #TODO: check min transformers version
+    #MIN_TRANSFORMERS_VERSION = "4.49.0"
+    _MODEL_PATCHER = Lfm2ModelPatcher
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Lfm2DummyPastKeyValuesGenerator
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        self.num_conv_layers = self._normalized_config.layer_types.count("conv")
+        self.num_atten_layers = self._normalized_config.layer_types.count("full_attention")
+
+        for i in range(self.num_conv_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+
+        for i in range(self.num_atten_layers):
             inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
 
