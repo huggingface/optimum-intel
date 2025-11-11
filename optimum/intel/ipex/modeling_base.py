@@ -70,6 +70,9 @@ elif is_torch_version("<", "2.7"):
     _COMPILE_NOT_READY_MODEL_TYPES = ("llama", "falcon", "gpt2", "qwen2", "mistral")
 else:
     _COMPILE_NOT_READY_MODEL_TYPES = ("mistral",)
+    # It's an regresson in torch/ipex 2.8.
+    # TODO: Figure it out and fix it.
+    _COMPILE_NOT_READY_MODEL_TYPES_WITHOUT_CACHE = ("gpt2", "gpt_bigcode")
 
 
 try:
@@ -245,6 +248,11 @@ class IPEXModel(OptimizedModel):
 
         if self.use_cache and not self._supports_cache_class and not self._add_patch:
             return False
+
+        if not self.use_cache and self.model.config.model_type in _COMPILE_NOT_READY_MODEL_TYPES_WITHOUT_CACHE:
+            return False
+
+        return True
 
     def apply_torch_compile(self):
         from torch._inductor import config as inductor_config

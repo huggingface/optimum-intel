@@ -93,7 +93,8 @@ def infer_task(
             except KeyError as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path)
-                    if "MistralForCausalLM" in config.architectures:
+                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
                 except Exception:
                     raise KeyError(
@@ -412,8 +413,16 @@ def main_export(
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         else:
+            # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
+            # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
+            task_model_loading = task
+            if library_name == "transformers":
+                has_remote_code = hasattr(config, "auto_map")
+                if has_remote_code and trust_remote_code and task == "image-text-to-text":
+                    task_model_loading = "text-generation"
+
             model = TasksManager.get_model_from_task(
-                task,
+                task_model_loading,
                 model_name_or_path,
                 subfolder=subfolder,
                 revision=revision,

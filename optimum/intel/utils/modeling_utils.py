@@ -65,7 +65,7 @@ def get_model_device(model: torch.nn.Module) -> torch.device:
 
 def recursive_to_device(value, device):
     """
-    Recursivley move the tensor element in `value` to `device`
+    Recursively move the tensor element in `value` to `device`
     """
     if isinstance(value, (tuple, list)):
         return type(value)(recursive_to_device(v, device) for v in value)

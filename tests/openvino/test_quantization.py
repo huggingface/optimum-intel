@@ -1100,11 +1100,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model._openvino_config.quantization_config.bits, 8)
             self.assertEqual(model._openvino_config.dtype, "int8")
 
-        if model_type == "open-clip":
-            pytest.skip(reason="ticket 161043")
-        elif model_type == "t5":
-            pytest.skip(reason="ticket 160958")
-        else:
+        if model_type != "open-clip":  # ticket 161043
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
