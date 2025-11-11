@@ -87,7 +87,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "granite-moe",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba", "lfm2")
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
@@ -165,6 +165,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gptj": 5,
         "gpt_neo": 4,
         "gpt_neox": 5,
+        "lfm2": 1,
         "llama": 2,
         "marian": 2,
         "minicpm": 4,

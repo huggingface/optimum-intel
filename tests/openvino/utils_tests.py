@@ -110,6 +110,7 @@ MODEL_NAMES = {
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama4": "optimum-intel-internal-testing/tiny-random-llama4",
+    "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "llava": "optimum-intel-internal-testing/tiny-random-llava",
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
     "llava_next_mistral": "optimum-intel-internal-testing/tiny-random-llava-next-mistral",

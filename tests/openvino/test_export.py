@@ -76,6 +76,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
+        "lfm2": OVModelForCausalLM,
         "llava": OVModelForVisualCausalLM,
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
