@@ -1110,7 +1110,7 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_d_state = getattr(config, "mamba_d_state", None)
             self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
             self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
-            self.ssm_state_size = getattr(config, "mamba_d_state",  None)
+            self.ssm_state_size = getattr(config, "mamba_d_state", None)
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
 
             self.layer_types = getattr(config, "layer_types", None)
