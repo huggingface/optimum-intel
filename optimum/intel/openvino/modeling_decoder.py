@@ -545,6 +545,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
 
+        if "cache_position" in self.input_names:
+            inputs["cache_position"] = np.arange(0, getattr(self, "conv_kernel"), dtype=int)
+
         return inputs
 
     def forward(
