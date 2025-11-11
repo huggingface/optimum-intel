@@ -1098,28 +1098,50 @@ class OVCacheWithMambaStates(MambaCache):
     ):
         self.dtype = dtype
         self.max_batch_size = batch_size or max_batch_size
-        self.intermediate_size = config.intermediate_size
-        self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
-        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
         self.device = torch.device(device) if device is not None else torch.device("cpu")
+        if config.model_type == "granitemoehybrid":
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.num_attention_heads = getattr(config, "num_attention_heads", None)
+            self.hidden_size = getattr(config, "hidden_size", None)
+            self.head_dim = int(self.hidden_size / self.num_attention_heads)
+            self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
+            self.mamba_expand = getattr(config, "mamba_expand", None)
+            self.mamba_ngroups = getattr(config, "mamba_n_groups", None)
+            self.mamba_d_state = getattr(config, "mamba_d_state", None)
+            self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
+            self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
+            self.ssm_state_size = getattr(config, "mamba_d_state",  None)
+            self.mamba_headdim = getattr(config, "mamba_d_head", None)
 
-        # Mamba 2 specific parameters
-        hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
-        self.num_hybrid_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
-        self.num_attention_heads = getattr(config, "num_attention_heads", None)
-        self.head_dim = getattr(config, "head_dim", None)
-        self.mamba_d_state = getattr(config, "mamba_d_state", None)
-        self.n_mamba_heads = getattr(config, "n_mamba_heads", None)
-        self.mamba_headdim = getattr(config, "mamba_headdim", None)
-        self.mamba_ngroups = getattr(config, "mamba_ngroups", None)
-        self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
-        self.mamba_expand = getattr(config, "mamba_expand", None)
-        self.hidden_size = getattr(config, "hidden_size", None)
+            self.layer_types = getattr(config, "layer_types", None)
+            self.num_mamba_layers = self.layer_types.count("mamba")
+            self.num_attn_layers = self.layer_types.count("attention")
+        else:
+            self.intermediate_size = config.intermediate_size
+            self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
+            self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
+
+            # Mamba 2 specific parameters
+            hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
+            self.num_hybrid_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
+            self.num_attention_heads = getattr(config, "num_attention_heads", None)
+            self.head_dim = getattr(config, "head_dim", None)
+            self.mamba_d_state = getattr(config, "mamba_d_state", None)
+            self.n_mamba_heads = getattr(config, "n_mamba_heads", None)
+            self.mamba_headdim = getattr(config, "mamba_headdim", None)
+            self.mamba_ngroups = getattr(config, "mamba_ngroups", None)
+            self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
+            self.mamba_expand = getattr(config, "mamba_expand", None)
+            self.hidden_size = getattr(config, "hidden_size", None)
+
+            self.num_attn_layers = self.num_hybrid_layers
+            self.num_mamba_layers = config.num_hidden_layers
+            self.num_key_value_heads = self.num_attention_heads
 
         self.conv_states = conv_states
         if self.conv_states is None:
             self.conv_states = []
-            for _ in range(config.num_hidden_layers):
+            for _ in range(self.num_mamba_layers):
                 if (
                     self.mamba_ngroups
                     and self.mamba_d_state
@@ -1143,7 +1165,7 @@ class OVCacheWithMambaStates(MambaCache):
         self.ssm_states = ssm_states
         if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            for _ in range(config.num_hidden_layers):
+            for _ in range(self.num_mamba_layers):
                 if self.n_mamba_heads and self.mamba_headdim:
                     # Mamba2 block
                     ssm_state_shape = (
@@ -1166,10 +1188,10 @@ class OVCacheWithMambaStates(MambaCache):
         self.key_cache = key_cache
         if self.key_cache is None:
             self.key_cache = []
-            for _ in range(self.num_hybrid_layers):
+            for _ in range(self.num_attn_layers):
                 key: torch.Tensor = torch.zeros(
                     self.max_batch_size,
-                    self.num_attention_heads,
+                    self.num_key_value_heads,
                     0,
                     self.head_dim,
                     device=self.device,
@@ -1180,10 +1202,10 @@ class OVCacheWithMambaStates(MambaCache):
         self.value_cache = value_cache
         if self.value_cache is None:
             self.value_cache = []
-            for _ in range(self.num_hybrid_layers):
+            for _ in range(self.num_attn_layers):
                 value: torch.Tensor = torch.zeros(
                     self.max_batch_size,
-                    self.num_attention_heads,
+                    self.num_key_value_heads,
                     0,
                     self.head_dim,
                     device=self.device,
