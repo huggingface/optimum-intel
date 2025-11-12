@@ -585,6 +585,7 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
     library_name="transformers",
 )
 class BitnetOpenVINOConfig(LlamaOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.52.1"
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
