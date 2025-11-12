@@ -54,7 +54,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
