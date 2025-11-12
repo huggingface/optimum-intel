@@ -1305,9 +1305,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         **kwargs,
     ) -> Dict:
         if kwargs.get("past_key_values") is not None:
-            raise ValueError("`past_key_values` input is not supported for OVModelWithMambaForCausalLM")
+            raise ValueError("`past_key_values` input is not supported for `OVModelWithMambaForCausalLM`")
         if kwargs.get("position_ids") is not None:
-            raise ValueError("`position_ids` input is not supported for OVModelWithMambaForCausalLM")
+            raise ValueError("`position_ids` input is not supported for `OVModelWithMambaForCausalLM`")
 
         inputs = {"input_ids": input_ids}
         if "cache_position" in self.input_names:
