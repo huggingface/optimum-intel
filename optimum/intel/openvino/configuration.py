@@ -350,6 +350,15 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": -1,
     },
+    "inceptionai/jais-13b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "advanced_parameters": nncf.AdvancedCompressionParameters(
+            group_size_fallback_mode=nncf.GroupSizeFallbackMode.ADJUST,
+        ),
+    },
 }
 
 # Add configs for model id aliases
