@@ -123,7 +123,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
-            SUPPORTED_ARCHITECTURES += ("bitnet",)
+        SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54

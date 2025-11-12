@@ -91,7 +91,7 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
-            SUPPORTED_ARCHITECTURES += ({"bitnet": OVModelForCausalLM})
+        SUPPORTED_ARCHITECTURES += {"bitnet": OVModelForCausalLM}
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
