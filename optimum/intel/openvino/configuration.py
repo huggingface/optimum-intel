@@ -354,16 +354,18 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
 
 if is_nncf_available():
     # TODO: Remove after update to NNCF 2.19 because `group_size_fallback` argument will be added to OVWeightQuantizationConfig
-    _DEFAULT_4BIT_WQ_CONFIGS["inceptionai/jais-13b"] = (
+    _DEFAULT_4BIT_WQ_CONFIGS.update(
         {
-            "bits": 4,
-            "sym": False,
-            "group_size": 128,
-            "ratio": 1.0,
-            "advanced_parameters": nncf.AdvancedCompressionParameters(
-                group_size_fallback_mode=nncf.GroupSizeFallbackMode.ADJUST,
-            ),
-        },
+            "inceptionai/jais-13b": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+                "ratio": 1.0,
+                "advanced_parameters": nncf.AdvancedCompressionParameters(
+                    group_size_fallback_mode=nncf.GroupSizeFallbackMode.ADJUST,
+                ),
+            }
+        }
     )
 
 # Add configs for model id aliases
