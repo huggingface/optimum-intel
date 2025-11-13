@@ -29,8 +29,6 @@ from optimum.intel.utils.import_utils import is_openvino_version, is_transformer
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
-torch.compile = lambda func: func  # Mock torch.compile to avoid compilation errors in tests
-
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -226,9 +224,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bitnet": 6,
     }
 
+    def bitnet_setup(self, model_arch):
+        if model_arch == "bitnet":
+            # mock torch.compile to avoid compilation errors in tests
+            original_torch_compile = torch.compile
+            torch.compile = lambda func: func
+            # ensure restoration happens even if test fails
+            self.addCleanup(lambda: setattr(torch, "compile", original_torch_compile))
+
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        self.bitnet_setup(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
         not_stateful = []
@@ -383,6 +390,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        self.bitnet_setup(model_arch)
         set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -568,6 +576,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
+        self.bitnet_setup(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
