@@ -559,7 +559,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
             quantization_config = quantization_config.clone()
             quantization_config.quant_method = OVQuantizationMethod.HYBRID
-        compile_model = kwargs.pop("compile", False)
+        compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
             **submodels,

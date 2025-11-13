@@ -892,7 +892,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
 
         quantization_config = cls._prepare_quantization_config(config.name_or_path, quantization_config, load_in_8bit)
-        compile_model = kwargs.pop("compile", False)
+        compile_model = kwargs.pop("compile", True)
         causal_model = init_cls(
             model=model,
             config=config,

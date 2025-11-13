@@ -282,7 +282,7 @@ class OVSamModel(OVBaseModel):
             )
 
         quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
-        compile_model = kwargs.pop("compile", False)
+        compile_model = kwargs.pop("compile", True)
         model = cls(
             vision_encoder_model=vision_encoder_model,
             prompt_encoder_mask_decoder_model=prompt_encoder_model,

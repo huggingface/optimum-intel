@@ -494,7 +494,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
 
         quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
-        compile_model = kwargs.pop("compile", False)
+        compile_model = kwargs.pop("compile", True)
         model = cls(
             ov_model,
             config=config,
@@ -654,7 +654,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         from optimum.intel.openvino.quantization import OVQuantizer
 
-        quantizer = OVQuantizer(model)
+        quantizer = OVQuantizer(model, trust_remote_code=trust_remote_code)
         quantization_config_copy = quantization_config.clone()
         # TODO: remove trust_remote_code from quantization config in v1.27.0
         quantization_config_copy.trust_remote_code = trust_remote_code

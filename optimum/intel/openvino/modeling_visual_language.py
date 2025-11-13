@@ -595,7 +595,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             pass
 
         quantization_config = model_cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
-        compile_model = kwargs.pop("compile", False)
+        compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
             text_embeddings=text_embeddings,

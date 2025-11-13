@@ -532,7 +532,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 )
 
         quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
-        compile_model = kwargs.pop("compile", False)
+        compile_model = kwargs.pop("compile", True)
         model = cls(
             encoder=encoder,
             decoder=decoder,
