@@ -85,7 +85,7 @@ jobs:
       - if: ${{ matrix.nncf-version == 'nncf-develop' }}
         name: Install NNCF from main
         run: |
-          pip install git+https://github.com/openvinotoolkit/nncf.git
+          pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2190
 
       - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
