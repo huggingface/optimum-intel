@@ -224,7 +224,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bitnet": 6,
     }
 
-    def bitnet_setup(self, model_arch):
+    def mock_torch_compile(self, model_arch):
         if model_arch == "bitnet":
             # mock torch.compile to avoid compilation errors in tests
             original_torch_compile = torch.compile
@@ -235,7 +235,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        self.bitnet_setup(model_arch)
+        self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
         not_stateful = []
@@ -390,7 +390,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
-        self.bitnet_setup(model_arch)
+        self.mock_torch_compile(model_arch)
         set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -576,7 +576,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
-        self.bitnet_setup(model_arch)
+        self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
