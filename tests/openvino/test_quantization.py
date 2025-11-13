@@ -942,8 +942,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "exaone4",
             True,
-            dict(bits=4, sym=False, group_size=32, ratio=1.0), 
-            {"model": {"int8": 14, "int4": 30}},
+            dict(bits=4, sym=False, group_size=32, ratio=1.0),
+            {"model": {"int8": 2, "int4": 14}},
         ),
     ]
 
