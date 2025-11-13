@@ -505,10 +505,17 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
+            if compile_only:
+                raise ValueError(
+                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
+                )
+
             quantization_config_copy = quantization_config.clone()
             quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
+            cls._apply_quantization(model, quantization_config_copy, trust_remote_code)
+            if compile_model:
+                model.compile()
 
         return model
 
@@ -640,17 +647,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
     def _apply_quantization(
         model: "OVBaseModel",
         quantization_config: OVQuantizationConfigBase,
-        compile_only: bool,
-        compile_model: bool,
         trust_remote_code: Optional[bool] = False,
     ):
         if not is_nncf_available():
             raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
-
-        if compile_only:
-            raise ValueError(
-                "quantization is not supported with `compile_only` mode, please initialize model without this option"
-            )
 
         from optimum.intel.openvino.quantization import OVQuantizer
 
@@ -659,9 +659,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         # TODO: remove trust_remote_code from quantization config in v1.27.0
         quantization_config_copy.trust_remote_code = trust_remote_code
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
-
-        if compile_model:
-            model.compile()
 
     def _set_ov_config_parameters(self):
         if self.ov_config.get("PERFORMANCE_HINT") is None:

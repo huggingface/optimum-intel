@@ -905,11 +905,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if quantization_config:
+            if compile_only:
+                raise ValueError(
+                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
+                )
+
             quantization_config_copy = quantization_config.clone()
             quantization_config_copy.tokenizer = str(quantization_config.tokenizer or config.name_or_path)
-            cls._apply_quantization(
-                causal_model, quantization_config_copy, compile_only, compile_model, trust_remote_code
-            )
+            cls._apply_quantization(causal_model, quantization_config_copy, trust_remote_code)
+            if compile_model:
+                model.compile()
 
         return causal_model
 
