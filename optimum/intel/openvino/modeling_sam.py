@@ -294,10 +294,9 @@ class OVSamModel(OVBaseModel):
         )
 
         if quantization_config:
-            quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
+            cls._apply_quantization(
+                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 

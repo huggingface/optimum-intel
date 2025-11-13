@@ -609,10 +609,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         if quantization_config:
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
             quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
-            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
+            cls._apply_quantization(
+                model, quantization_config_copy, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 

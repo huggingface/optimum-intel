@@ -412,10 +412,8 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         )
 
         if quantization_config:
-            quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             cls._apply_quantization(
-                model, quantization_config_copy, compile_only, enable_compilation, trust_remote_code
+                model, quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
             )
 
         return model

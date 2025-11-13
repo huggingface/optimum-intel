@@ -578,7 +578,9 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     f"{ov_pipeline_class.export_feature} task."
                 )
 
-            cls._apply_quantization(ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code)
+            cls._apply_quantization(
+                ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code=trust_remote_code
+            )
 
         return ov_pipeline
 

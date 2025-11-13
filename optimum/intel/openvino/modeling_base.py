@@ -505,10 +505,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
+            cls._apply_quantization(
+                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 
@@ -642,6 +641,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config: OVQuantizationConfigBase,
         compile_only: bool,
         compile_model: bool,
+        model_name_or_path: str = None,
         trust_remote_code: Optional[bool] = False,
     ):
         if not is_nncf_available():
@@ -658,6 +658,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config_copy = quantization_config.clone()
         # TODO: remove trust_remote_code from quantization config in v1.27.0
         quantization_config_copy.trust_remote_code = trust_remote_code
+        if model_name_or_path is not None:
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_name_or_path)
+            quantization_config_copy.processor = str(quantization_config.processor or model_name_or_path)
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         if compile_model:
