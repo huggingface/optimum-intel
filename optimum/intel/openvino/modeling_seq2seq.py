@@ -444,6 +444,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         from_onnx: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
@@ -530,7 +531,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", False)
         model = cls(
             encoder=encoder,
             decoder=decoder,
@@ -542,17 +544,15 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             device=device,
             ov_config=ov_config,
             compile_only=compile_only,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if quantization_config is not None:
-            from optimum.intel import OVQuantizer
-
-            quantizer = OVQuantizer(model)
+        if quantization_config:
             quantization_config_copy = quantization_config.clone()
             quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
 
         return model
 
@@ -628,6 +628,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             compile_only=compile_only,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 

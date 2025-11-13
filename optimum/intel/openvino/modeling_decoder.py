@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import copy
 import logging
 import os
 from dataclasses import dataclass
@@ -40,13 +39,11 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions, is_nncf_available
+from ..utils.import_utils import compare_versions
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
-    _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVWeightQuantizationConfig,
-    get_default_quantization_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
@@ -839,6 +836,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         load_in_8bit: bool = False,
         compile_only: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
@@ -875,31 +873,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            if config.name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
-                raise NotImplementedError(
-                    "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
-                    "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
-                    "recommended quantization config will be used."
-                )
-            else:
-                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
-            quantization_config = cls._prepare_quantization_config(
-                default_config or _DEFAULT_4BIT_WQ_CONFIG, load_in_8bit
-            )
-            if quantization_config.dataset is not None:
-                quantization_config.trust_remote_code = kwargs.get("trust_remote_code", False)
-        else:
-            quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.bits == 4:
-                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
-                if default_config:
-                    logger.info(
-                        f"For the given model, we recommend the following `quantization_config` : {default_config}"
-                    )
-
-        enable_compilation = kwargs.pop("compile", True) and not quantization_config
-
         if generation_config is None:
             try:
                 generation_config = GenerationConfig.from_pretrained(
@@ -918,11 +891,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
+        quantization_config = cls._prepare_quantization_config(config.name_or_path, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", False)
         causal_model = init_cls(
             model=model,
             config=config,
             model_save_dir=model_cache_path.parent,
-            compile=enable_compilation,
+            compile=compile_model and not quantization_config,
             compile_only=compile_only,
             quantization_config=quantization_config,
             generation_config=generation_config,
@@ -930,22 +905,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if quantization_config:
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
-                )
-
-            if compile_only:
-                raise ValueError(
-                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
-                )
-
-            from optimum.intel.openvino.quantization import OVQuantizer
-
-            quantizer = OVQuantizer(causal_model)
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            quantization_config_copy = quantization_config.clone()
+            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or config.name_or_path)
+            cls._apply_quantization(
+                causal_model, quantization_config_copy, compile_only, compile_model, trust_remote_code
+            )
 
         return causal_model
 
