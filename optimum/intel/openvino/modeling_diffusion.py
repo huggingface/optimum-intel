@@ -572,20 +572,13 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         ov_pipeline.register_to_config(_name_or_path=name_or_path)
 
         if quantization_config:
-            if compile_only:
-                raise ValueError(
-                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
-                )
-
             if quantization_config.dataset is not None and ov_pipeline_class.export_feature != "text-to-image":
                 raise NotImplementedError(
                     f"Data-aware quantization is not supported for {cls.__name__} with "
                     f"{ov_pipeline_class.export_feature} task."
                 )
 
-            cls._apply_quantization(ov_pipeline, quantization_config, trust_remote_code)
-            if compile_model:
-                ov_pipeline.compile()
+            cls._apply_quantization(ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code)
 
         return ov_pipeline
 

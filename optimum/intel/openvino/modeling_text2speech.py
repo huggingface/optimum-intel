@@ -413,16 +413,9 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         )
 
         if quantization_config:
-            if compile_only:
-                raise ValueError(
-                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
-                )
-
             quantization_config_copy = quantization_config.clone()
             quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            cls._apply_quantization(model, quantization_config_copy, trust_remote_code)
-            if compile_model:
-                model.compile()
+            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
 
         return model
 
