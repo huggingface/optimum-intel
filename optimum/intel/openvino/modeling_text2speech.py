@@ -394,7 +394,6 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 pass
 
         quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
-        compile_model = kwargs.pop("compile", False)
         model = _OVModelForSpeechT5ForTextToSpeech(
             encoder=encoder_model,
             decoder=decoder_model,
@@ -408,14 +407,16 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             quantization_config=quantization_config,
             preprocessors=preprocessors,
             compile_only=compile_only,
-            compile=compile_model and not quantization_config,
+            compile=enable_compilation and not quantization_config,
             generation_config=generation_config,
         )
 
         if quantization_config:
             quantization_config_copy = quantization_config.clone()
             quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            cls._apply_quantization(model, quantization_config_copy, compile_only, compile_model, trust_remote_code)
+            cls._apply_quantization(
+                model, quantization_config_copy, compile_only, enable_compilation, trust_remote_code
+            )
 
         return model
 
