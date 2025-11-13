@@ -314,7 +314,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         if quantization_config is not None:
             logger.warning(
-                "Providing `quantization_config` to `load_model` is deprecated and will be removed in v1.27.0. "
+                "Providing `quantization_config` to `load_model` is deprecated and will be removed in v1.28.0. "
                 "Instead, please apply quantization after loading the model."
             )
 
