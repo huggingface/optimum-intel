@@ -710,7 +710,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             - "error": raises an error if the group size is not compatible with the weight shape (default);
             - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
-                if there is no valid value greater or equal to 32, then the node is quantized to the backup precision
+                if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
