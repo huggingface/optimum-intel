@@ -102,7 +102,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": True,
         "group_size": 128,
-        "ratio": 0.9,
+        "ratio": 1.0,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
@@ -235,7 +235,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": True,
         "group_size": 128,
-        "ratio": 0.8,
+        "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-3.2-1B-Instruct": {
