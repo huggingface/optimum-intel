@@ -168,25 +168,19 @@ class InferRequestWrapper:
         self.inference_result_mock = inference_result_mock
         self.tensor_cache = {}
         self.stateful = len(request.query_state()) > 0
-        self._reset_state_called = False
+        self.sequence_ids = [] if self.stateful else None
+        self._sequence_id = 0 if self.stateful else None
 
     def collect_inputs(self, inputs):
-        if self.stateful and not is_nncf_version("<=", "2.19"):
-            if not isinstance(inputs, dict):
-                raise NotImplementedError("Processing of non-dict inputs for stateful models is not supported.")
-            inputs = inputs.copy()
-            inputs[nncf.Dataset.RESET_STATE_KEY] = self._reset_state_called
-            self._reset_state_called = False
-
         if not self.apply_caching or not isinstance(inputs, dict):
             self.collected_inputs.append(copy.deepcopy(inputs))
+            if self.stateful:
+                self.sequence_ids.append(self._sequence_id)
+                self._sequence_id += 1
             return
 
         copied_inputs = {}
         for k, v in inputs.items():
-            if isinstance(v, bool):
-                copied_inputs[k] = v
-                continue
             data = v
             if isinstance(data, openvino.Tensor):
                 data = data.data
@@ -199,6 +193,9 @@ class InferRequestWrapper:
             if data_hash not in self.tensor_cache[k]:
                 self.tensor_cache[k][data_hash] = copy.deepcopy(v)
             copied_inputs[k] = self.tensor_cache[k][data_hash]
+        if self.stateful:
+            self.sequence_ids.append(self._sequence_id)
+            self._sequence_id += 1
         self.collected_inputs.append(copied_inputs)
 
     def __call__(self, *args, **kwargs):
@@ -237,7 +234,7 @@ class InferRequestWrapper:
 
     def reset_state(self):
         self.request.reset_state()
-        self._reset_state_called = True
+        self._sequence_id = 0
 
     def __getattr__(self, attr):
         if attr in self.__dict__:
@@ -819,13 +816,9 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for speech-to-text pipelines by inferring it on a dataset and collecting incurred inputs.
         """
 
-        collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
         for component_name, component in self.model.components.items():
-            collected_inputs[component_name] = []
             component.compile()
-            component.request = InferRequestWrapper(
-                component.request, collected_inputs[component_name], apply_caching=True
-            )
+            component.request = InferRequestWrapper(component.request, apply_caching=True)
         try:
             processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
 
@@ -838,12 +831,18 @@ class OVCalibrationDatasetBuilder:
                 sampling_rate = item["audio"]["sampling_rate"]
                 input_features = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features
                 self.model.generate(input_features)
+
+            collected_inputs: Dict[str, nncf.Dataset] = {}
+            for component_name, component in self.model.components.items():
+                nncf_dataset = (
+                    nncf.DatasetWithSeqId(component.request.collected_inputs, component.request.sequence_ids)
+                    if component.request.stateful and not is_nncf_version("<=", "2.19")
+                    else nncf.Dataset(component.request.collected_inputs)
+                )
+                collected_inputs[component_name] = nncf_dataset
         finally:
             for model in self.model.components.values():
                 model.request = model.request.request
-
-        for ov_model_name in collected_inputs:
-            collected_inputs[ov_model_name] = nncf.Dataset(collected_inputs[ov_model_name])
 
         return OVCalibrationDataset(collected_inputs)
 
@@ -857,13 +856,9 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for text-to-text pipelines by inferring it on a dataset and collecting incurred inputs.
         """
 
-        collected_inputs: Dict[str, List[Dict[str, Any]]] = {}
         for component_name, component in self.model.components.items():
-            collected_inputs[component_name] = []
             component.compile()
-            component.request = InferRequestWrapper(
-                component.request, collected_inputs[component_name], apply_caching=True
-            )
+            component.request = InferRequestWrapper(component.request, apply_caching=True)
         try:
 
             def get_tokenizer():
@@ -884,12 +879,18 @@ class OVCalibrationDatasetBuilder:
                     inputs = tokenizer(item["text"], truncation=True, max_length=seq_len, return_tensors="pt")
 
                 self.model.generate(**inputs, max_new_tokens=seq_len)
+
+            collected_inputs: Dict[str, nncf.Dataset] = {}
+            for component_name, component in self.model.components.items():
+                nncf_dataset = (
+                    nncf.DatasetWithSeqId(component.request.collected_inputs, component.request.sequence_ids)
+                    if component.request.stateful and not is_nncf_version("<=", "2.19")
+                    else nncf.Dataset(component.request.collected_inputs)
+                )
+                collected_inputs[component_name] = nncf_dataset
         finally:
             for model in self.model.components.values():
                 model.request = model.request.request
-
-        for model_name in collected_inputs:
-            collected_inputs[model_name] = nncf.Dataset(collected_inputs[model_name])
 
         return OVCalibrationDataset(collected_inputs)
 
