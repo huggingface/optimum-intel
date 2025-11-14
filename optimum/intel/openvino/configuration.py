@@ -350,23 +350,15 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": -1,
     },
+    "inceptionai/jais-13b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "group_size_fallback": "adjust",
+    },
 }
 
-if is_nncf_available():
-    # TODO: Remove after update to NNCF 2.19 because `group_size_fallback` argument will be added to OVWeightQuantizationConfig
-    _DEFAULT_4BIT_WQ_CONFIGS.update(
-        {
-            "inceptionai/jais-13b": {
-                "bits": 4,
-                "sym": False,
-                "group_size": 128,
-                "ratio": 1.0,
-                "advanced_parameters": nncf.AdvancedCompressionParameters(
-                    group_size_fallback_mode=nncf.GroupSizeFallbackMode.ADJUST,
-                ),
-            }
-        }
-    )
 
 # Add configs for model id aliases
 # The list below contains pairs of model ids: config for the second model id will be copied from the first model id.
@@ -713,6 +705,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             multiple times on the same model and dataset to avoid recomputing statistics.
             Please note that the statistics depend on the dataset, so if you change the dataset, you should also change
             the statistics path to avoid confusion.
+        group_size_fallback (`str`, *optional*):
+            Defines the behavior when the specified group size is not compatible with the weight shape. Possible values:
+            - "error": raises an error if the group size is not compatible with the weight shape (default);
+            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
+            - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
+                if there is no valid value greater or equal to 32, then the node is quantized to the backup precision
+                which is int8_asym by default.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 

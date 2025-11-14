@@ -151,7 +151,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "`error`: raise an error if the given group size is not supported by a node, this is the default behavior; "
             "`ignore`: skip nodes that cannot be compressed with the given group size; "
             "`adjust`: adjust the group size to the maximum supported value for each problematic node, if there is no "
-            "valid value greater or equal to 32, then the node is quantized to backup precision which is int8_asym by default. "
+            "valid value greater or equal to 32, then the node is quantized to the backup precision which is int8_asym by default. "
         ),
     )
     optional_group.add_argument(
