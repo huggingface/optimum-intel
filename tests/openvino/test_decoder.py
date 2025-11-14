@@ -769,3 +769,40 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.allclose(torch.Tensor(ov_logits), ref_logits, atol=5e-3),
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
+
+    def test_phi3_longrope_support(self):
+        """Test LongRoPE support for Phi3 with inputs > 4096 tokens."""
+        set_seed(SEED)
+        model_id = "optimum-intel-internal-testing/tiny-random-phi-4-mini-instruct"
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # Doublecheck that model has LongRoPE support
+        original_max_pos = getattr(transformers_model.config, "original_max_position_embeddings", None)
+        self.assertIsNotNone(
+            original_max_pos,
+            f"Model {model_id} does not have original_max_position_embeddings attribute required for LongRoPE",
+        )
+
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        # Creating model inputs with more than original max position embeddings and enough variation for varied output tokens
+        tokens = torch.as_tensor(list(tokenizer.get_vocab().values())[: original_max_pos + 50]).unsqueeze(0)
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(tokens, max_new_tokens=20)
+            ov_outputs = ov_model.generate(tokens, max_new_tokens=20)
+
+        self.assertTrue(
+            torch.equal(transformers_outputs, ov_outputs),
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE.\n"
+            f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
