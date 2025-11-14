@@ -116,8 +116,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "exaone4"),
-                ("feature-extraction", "exaone4"),
-                ("text-classification", "exaone4"),
             ]
         )
     if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):

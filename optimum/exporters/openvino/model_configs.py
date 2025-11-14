@@ -607,11 +607,8 @@ class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
 @register_in_tasks_manager(
     "exaone4",
     *[
-        "feature-extraction",
-        "feature-extraction-with-past",
         "text-generation",
         "text-generation-with-past",
-        "text-classification",
     ],
     library_name="transformers",
 )
