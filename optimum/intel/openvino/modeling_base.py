@@ -641,7 +641,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config: OVQuantizationConfigBase,
         compile_only: bool,
         compile_model: bool,
-        model_name_or_path: str = None,
+        model_name_or_path: Optional[str] = None,
         trust_remote_code: Optional[bool] = False,
     ):
         if not is_nncf_available():
