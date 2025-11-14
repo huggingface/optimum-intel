@@ -577,6 +577,19 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "bitnet",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BitnetOpenVINOConfig(LlamaOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.52.1"
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
+@register_in_tasks_manager(
     "exaone",
     *[
         "feature-extraction",
