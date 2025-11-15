@@ -78,6 +78,7 @@ MODEL_NAMES = {
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
+    "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
@@ -339,6 +340,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "resampler_model": 6,
     },
     "zamba2": {"model": 44},
+    "exaone4": {"model": 16},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
