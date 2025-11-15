@@ -996,14 +996,15 @@ class OVWeightCompressionTest(unittest.TestCase):
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
 
     def test_filtered_architectures(cls):
+        expected = set()
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl"}
-        elif is_transformers_version("<", "4.51"):
-            expected = {"llama4"}
-        elif is_transformers_version("<", "4.52"):
-            expected = set()
-        else:
-            expected = {"llava-qwen2", "phi3_v", "minicpmo", "exaone4"}
+            expected.add("qwen2_5_vl")
+        if is_transformers_version("<", "4.51"):
+            expected.add("llama4")
+        if is_transformers_version("<", "4.54"):
+            expected.add("exaone4")
+        if is_transformers_version(">=", "4.54"):
+            expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
