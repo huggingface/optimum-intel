@@ -4383,3 +4383,109 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for Zamba2 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.num_full_attn_layers = config.layer_types.count("full_attention")
+        self.num_linear_attn_layers = config.layer_types.count("linear_attention")
+        self.conv_kernel_size = config.linear_conv_kernel_dim
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.head_k_dim = config.linear_key_head_dim
+        self.head_v_dim = config.linear_value_head_dim
+        self.num_v_heads = config.linear_num_value_heads
+        self.num_k_heads = config.linear_num_key_heads
+        self.num_key_value_heads = config.num_key_value_heads
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        cache_params = []
+
+        for idx in range(self.num_linear_attn_layers):
+            # (batch_size, d_inner, d_conv)
+            d_inner = self.num_k_heads * (2 * self.head_k_dim + self.head_v_dim * self.num_v_heads // self.num_k_heads)
+            conv_state_shape = (
+                self.batch_size,
+                d_inner,
+                self.conv_kernel_size,
+            )
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(conv_state)
+            recurrent_state_shape = (self.batch_size, self.num_key_value_heads, self.head_k_dim, self.head_v_dim)
+            recurrent_state = self.random_float_tensor(recurrent_state_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(recurrent_state)
+
+        for idx in range(self.num_full_attn_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            cache_params.append(k)
+            cache_params.append(v)
+
+        return recurrent_state
+
+
+@register_in_tasks_manager(
+    "qwen3_next",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3NextDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Qwen3NextDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.57.0"
+    _MODEL_PATCHER = Zamba2ModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        for i in range(self._normalized_config.num_layers):
+            # [batch_size, conv_kernel_size - 1, d_model]
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            # [batch_size, d_state, d_model]
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(len(self._normalized_config.hybrid_layer_ids)):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
