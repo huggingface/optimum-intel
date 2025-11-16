@@ -6954,3 +6954,160 @@ class Zamba2ModelPatcher(ModelPatcher):
             else:
                 continue
             mamba_layer.forward = mamba_layer._orig_forward
+
+
+class Qwen3NextModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextDynamicCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class Qwen3NextDynamicCacheWrap(Qwen3NextDynamicCache):
+            def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
+                # Call parent constructor with all required arguments
+                super().__init__(config=config)
+
+                self.conv_states = conv_states
+                self.recurrent_states = recurrent_states
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                self.full_attn_mapping = {}
+                self.linear_attn_mapping = {}
+                full_attn_layer_idx = 0
+                linear_attn_layer_idx = 0
+                for i in range(len(config.layer_types)):
+                    if self.layer_types[i] == "full_attention":
+                        self.full_attn_mapping[i] = full_attn_layer_idx
+                        full_attn_layer_idx += 1
+                    elif self.layer_types[i] == "linear_attention":
+                        self.linear_attn_mapping[i] = linear_attn_layer_idx
+                        linear_attn_layer_idx += 1
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                # map layer_idx to key_cache (value_cache) idx
+                layer_idx = self.full_attn_mapping[layer_idx]
+                if self.key_cache[layer_idx] is None:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                """Returns the sequence length of the cached states. A layer index can be optionally passed."""
+                # take any layer that contains cache and not empty tensor
+                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                layer_idx = self.full_attn_mapping[layer_idx]
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx] is None:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+            @property
+            def has_previous_state(self):
+                """We have a previous state if the last linear (conv) layer was already updated."""
+                layer_idx = self.linear_attn_mapping[self.last_linear_layer]
+                return self.conv_states[layer_idx] is not None
+
+        # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            num_full_attn_layers = self.real_config._config.layer_types.count("full_attention")
+            num_linear_attn_layers = self.real_config._config.layer_types.count("linear_attention")
+
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                recurrent_states = []
+                key_cache = []
+                value_cache = []
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                for idx in range(num_linear_attn_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    recurrent_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_full_attn_layers):
+                    key_cache.append(cache_params[2 * num_linear_attn_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_linear_attn_layers + 2 * idx + 1])
+
+                wrapped_cache_params = Qwen3NextDynamicCacheWrap(
+                    self.real_config._config, conv_states, recurrent_states, key_cache, value_cache
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                # unwrap Zamba2HybridDynamicCache object
+                present_key_values = []
+                for idx in range(num_linear_attn_layers):
+                    present_key_values.append(past_key_values.conv_states[idx])
+                    present_key_values.append(past_key_values.recurrent_states[idx])
+
+                for idx in range(num_full_attn_layers):
+                    present_key_values.append(past_key_values.key_cache[idx])
+                    present_key_values.append(past_key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridLayer, Zamba2MambaDecoderLayer
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        #for layer in self._model.model.layers:
+        #    if isinstance(layer, Zamba2MambaDecoderLayer):
+        #        mamba_layer = layer.mamba
+        #    elif isinstance(layer, Zamba2HybridLayer):
+        #        mamba_layer = layer.mamba_decoder.mamba
+        #    else:
+        #        continue
+        #    mamba_layer._orig_forward = mamba_layer.forward
+        #    mamba_layer.forward = types.MethodType(zamba2_mamba_mixer, mamba_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridLayer, Zamba2MambaDecoderLayer
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        #for layer in self._model.model.layers:
+        #    if isinstance(layer, Zamba2MambaDecoderLayer):
+        #        mamba_layer = layer.mamba
+        #    elif isinstance(layer, Zamba2HybridLayer):
+        #        mamba_layer = layer.mamba_decoder.mamba
+        #    else:
+        #        continue
+        #    mamba_layer.forward = mamba_layer._orig_forward

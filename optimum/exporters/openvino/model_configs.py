@@ -140,6 +140,7 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
+    Qwen3NextModelPatcher,
 )
 
 
@@ -4444,7 +4445,7 @@ class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             cache_params.append(k)
             cache_params.append(v)
 
-        return recurrent_state
+        return cache_params
 
 
 @register_in_tasks_manager(
@@ -4457,7 +4458,7 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = Qwen3NextDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     MIN_TRANSFORMERS_VERSION = "4.57.0"
-    _MODEL_PATCHER = Zamba2ModelPatcher
+    _MODEL_PATCHER = Qwen3NextModelPatcher
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -4470,13 +4471,16 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
             decoder_sequence_name = "past_sequence_length + sequence_length"
             cache_name_prefix = "cache_params.present"
 
-        for i in range(self._normalized_config.num_layers):
+        self.num_full_attn_layers = self._normalized_config.layer_types.count("full_attention")
+        self.num_linear_attn_layers = self._normalized_config.layer_types.count("linear_attention")
+
+        for i in range(self.num_linear_attn_layers):
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
             # [batch_size, d_state, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
 
-        for i in range(len(self._normalized_config.hybrid_layer_ids)):
+        for i in range(self.num_full_attn_layers):
             inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
 
@@ -4489,3 +4493,32 @@ class Qwen3NextOpenVINOConfig(Qwen3OpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # need to override `generate_dummy_inputs` since mamba model has other states: ssm_states and conv_states
+        # which we separate and call them as past_ssm_states and past_conv_states
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+        if self.use_past_in_inputs:
+            input_names.extend(["cache_params"])
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                        dummy_input_gen,
+                        input_name,
+                        framework,
+                        input_shapes=kwargs,
+                    )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model ONNX config.'
+                )
+
+        return dummy_inputs
