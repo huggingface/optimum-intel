@@ -80,12 +80,12 @@ jobs:
       - if: ${{ matrix.openvino-version == 'openvino-nightly' }}
         name: Install OpenVINO Nightly
         run: |
-          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/pre-release 
 
       - if: ${{ matrix.nncf-version == 'nncf-develop' }}
         name: Install NNCF from main
         run: |
-          pip install git+https://github.com/openvinotoolkit/nncf.git
+          pip install git+https://github.com/openvinotoolkit/nncf.git@release_v2190
 
       - if: ${{ matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
