@@ -1556,23 +1556,25 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
 
-        if (
-            hasattr(self._model.model, "rotary_emb")
-            and getattr(self._model.model.rotary_emb, "rope_type", "default") == "longrope"
-        ):
-            long_inv_freq, _ = self._model.model.rotary_emb.rope_init_fn(
-                self._model.config,
-                torch.device("cpu"),
-                seq_len=self._model.config.original_max_position_embeddings + 1,
-            )
-            self._model.model.rotary_emb.long_inv_freq = long_inv_freq
-            self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
-            self._model.model.rotary_emb.forward = types.MethodType(long_rope, self._model.model.rotary_emb)
-        elif self._model.config.max_position_embeddings != getattr(
-            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
-        ):
-            self._orig_max_position_embeddings = self._model.config.max_position_embeddings
-            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
+        # Only apply longrope patches if not explicitly disabled
+        if not getattr(self, "_disable_longrope", False):
+            if (
+                hasattr(self._model.model, "rotary_emb")
+                and getattr(self._model.model.rotary_emb, "rope_type", "default") == "longrope"
+            ):
+                long_inv_freq, _ = self._model.model.rotary_emb.rope_init_fn(
+                    self._model.config,
+                    torch.device("cpu"),
+                    seq_len=self._model.config.original_max_position_embeddings + 1,
+                )
+                self._model.model.rotary_emb.long_inv_freq = long_inv_freq
+                self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
+                self._model.model.rotary_emb.forward = types.MethodType(long_rope, self._model.model.rotary_emb)
+            elif self._model.config.max_position_embeddings != getattr(
+                self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+            ):
+                self._orig_max_position_embeddings = self._model.config.max_position_embeddings
+                self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -1636,50 +1638,28 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 
 
 class PhiMoEModelPatcher(Phi3ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        # Disable longrope for Phi3-MOE
+        self._disable_longrope = True
+
     def __enter__(self):
-        # Call OVDecoderModelPatcher.__enter__() directly to skip Phi3ModelPatcher's longrope logic
-        # PhiMoE has a different rotary embedding structure, longrope is not yet supported
-        OVDecoderModelPatcher.__enter__(self)
+        super().__enter__()
 
-        if is_transformers_version("<", "4.48.0"):
-            self._model.model._orig_forward = self._model.model.forward
-            self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
-
-        # init inv_freq for torchscript tracing for PhiMoE
-        for layer in self._model.model.layers:
-            if (
-                is_torch_version(">=", "2.1.0")
-                and is_transformers_version("<", "4.48.0")
-                or not getattr(self._model, "_supports_sdpa", False)
-            ):
-                orig_self_attn_fwd = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
-                layer.self_attn._orig_forward = orig_self_attn_fwd
-
-            if (
-                hasattr(layer.self_attn, "rotary_emb")
-                and getattr(layer.self_attn.rotary_emb, "inv_freq", None) is None
-            ):
-                rotary_emb = layer.self_attn.rotary_emb
-                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
-                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
-                )
-
-        # Apply MoE-specific patching
         for layer in self._model.model.layers:
             layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
             layer.block_sparse_moe.forward = types.MethodType(
                 _phi_moe_sparse_moe_block_forward, layer.block_sparse_moe
             )
 
-        # For PhiMoE, reset max_position_embeddings if it was extended (skip longrope support for now)
-        if self._model.config.max_position_embeddings != getattr(
-            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
-        ):
-            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         for layer in self._model.model.layers:
             layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
 
