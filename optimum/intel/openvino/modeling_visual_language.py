@@ -706,7 +706,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         return model_names
 
     @property
-    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         ov_models = {}
         for ov_model_name in self._ov_model_names:
             if ov_model_name == "lm_model":

@@ -63,16 +63,16 @@ class OVModelHostMixin:
     """
 
     @property
-    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         """
         Returns a dictionary of all OpenVINO models associated with this model. Keys are model names, and values are
-        either instances of `openvino.Model` or `openvino.runtime.CompiledModel`. Compiled model instances are returned
+        either instances of `openvino.Model` or `openvino.CompiledModel`. Compiled model instances are returned
         if the model is initialized with `compile_only=True`.
         """
         return {ov_model_name: getattr(self, ov_model_name) for ov_model_name in self._ov_model_names}
 
     @property
-    def ov_submodels(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def ov_submodels(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         logger.warn(
             "`ov_submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
         )

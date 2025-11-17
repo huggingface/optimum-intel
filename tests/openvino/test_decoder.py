@@ -123,6 +123,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
         SUPPORTED_ARCHITECTURES += ("lfm2",)
 
+    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES += ("bitnet",)
+
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
@@ -222,11 +225,21 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_oss": 2 if is_openvino_version(">=", "2025.4") else 0,
         "gpt_oss_mxfp4": 2 if is_openvino_version(">=", "2025.4") else 0,
         "zamba2": 1,
+        "bitnet": 6,
     }
+
+    def mock_torch_compile(self, model_arch):
+        if model_arch == "bitnet":
+            # mock torch.compile to avoid compilation errors in tests
+            original_torch_compile = torch.compile
+            torch.compile = lambda func: func
+            # ensure restoration happens even if test fails
+            self.addCleanup(lambda: setattr(torch, "compile", original_torch_compile))
 
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
         not_stateful = []
@@ -381,6 +394,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        self.mock_torch_compile(model_arch)
         set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -566,6 +580,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
+        self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:

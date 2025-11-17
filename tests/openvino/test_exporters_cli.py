@@ -111,6 +111,14 @@ class OVCLIExportTestCase(unittest.TestCase):
                 ("text-generation-with-past", "zamba2"),
             ]
         )
+
+    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "bitnet"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
@@ -137,6 +145,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "falcon-mamba": 2,
         "qwen3": 2,
         "zamba2": 2,
+        "bitnet": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -967,6 +976,8 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
+        if model_type in ["bitnet"]:
+            self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
