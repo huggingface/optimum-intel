@@ -948,6 +948,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
 
 class OVPhi3ForCausalLM(OVModelForCausalLM):
+    # Adapted from https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/phi3/modeling_phi3.py#L493
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -964,7 +965,7 @@ class OVPhi3ForCausalLM(OVModelForCausalLM):
         # process
 
         # When the first time input length reached long and short factor switching point, enforce re-compute cache
-        # It will cause downside of slower at this single token position, however, better than current failure.
+        # The downside is slower inference at this single token position, however, this is better than wrong results
         if (
             past_key_values
             and self.config.rope_scaling

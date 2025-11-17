@@ -1499,6 +1499,7 @@ def select_ext_factor(
     return torch.where(seq_len <= max_pos_embeddings, short_factor, long_factor)
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/phi3/modeling_phi3.py#L324
 def long_rope(self, x, position_ids, seq_len=None):
     seq_len = torch.max(position_ids) + 1
     original_max_position_embeddings = (
@@ -1506,11 +1507,8 @@ def long_rope(self, x, position_ids, seq_len=None):
         if hasattr(self, "original_max_positional_embeddings")
         else self.config.original_max_position_embeddings
     )
-    max_position_embeddings = (
-        self.max_position_embeddings
-        if hasattr(self, "max_position_embeddings")
-        else self.config.max_position_embeddings
-    )
+
+    # slow down all frequencies by scale factor for long prompts that makes attention more stable, i.e. preserve model accuracy
     inv_freq = select_ext_factor(seq_len, original_max_position_embeddings, self.inv_freq, self.long_inv_freq)
 
     inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
@@ -1520,16 +1518,11 @@ def long_rope(self, x, position_ids, seq_len=None):
     # See https://github.com/huggingface/transformers/pull/29285
     device_type = x.device.type
     device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
-    freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-    emb = torch.cat((freqs, freqs), dim=-1)
-
-    scale = max_position_embeddings / original_max_position_embeddings
-    if scale <= 1.0:
-        scaling_factor = 1.0
-    else:
-        scaling_factor = math.sqrt(1 + math.log(scale) / math.log(original_max_position_embeddings))
-    cos = emb.cos() * scaling_factor
-    sin = emb.sin() * scaling_factor
+    with torch.autocast(device_type=device_type, enabled=False):  # Force float32
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
     return cos, sin
 
 
@@ -1537,7 +1530,6 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # currently, long RoPE can not be traced for long context support, disable it to avoid potential accuracy issues
         if is_transformers_version("<", "4.48.0"):
             self._model.model._orig_forward = self._model.model.forward
             self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
@@ -1579,6 +1571,7 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
         elif self._model.config.max_position_embeddings != getattr(
             self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
         ):
+            self._orig_max_position_embeddings = self._model.config.max_position_embeddings
             self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -1590,8 +1583,8 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
-        if hasattr(self._model.model, "rotary_emb") and hasattr(self._model.model.rotary_emb, "_orig_forward"):
-            self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
+        if hasattr(self, "_orig_max_position_embeddings"):
+            self._model.config.max_position_embeddings = self._orig_max_position_embeddings
 
 
 # Modified from https://github.com/huggingface/transformers/blob/v4.50.2/src/transformers/models/phimoe/modeling_phimoe.py#L756
