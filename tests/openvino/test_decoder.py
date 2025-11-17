@@ -87,7 +87,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "granite-moe",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba", "lfm2")
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
@@ -119,6 +119,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
+
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES += ("lfm2",)
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54

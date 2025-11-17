@@ -4455,8 +4455,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     library_name="transformers",
 )
 class LFM2OpenVINOConfig(MambaOpenVINOConfig):
-    #TODO: check min transformers version
-    #MIN_TRANSFORMERS_VERSION = "4.49.0"
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
     _MODEL_PATCHER = Lfm2ModelPatcher
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)

@@ -6998,7 +6998,11 @@ def lfm2_short_conv_forward_patched(
     return y
 
 
-# TODO description
+# This patcher class serves the following purposes:
+# 1. Packs the KV-cache and conv_state tensors into a Lfm2HybridConvCacheWrap structure
+#    for subsequent invocation of the model's `forward` method.
+# 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
+#    during both the prefill and decoding steps.
 class Lfm2ModelPatcher(ModelPatcher):
     def __init__(
         self,

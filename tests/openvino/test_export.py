@@ -54,7 +54,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version, is_openvino_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -76,7 +76,6 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
-        "lfm2": OVModelForCausalLM,
         "llava": OVModelForVisualCausalLM,
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
@@ -90,6 +89,9 @@ class ExportModelTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
+
+    if is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.update({"lfm2": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
