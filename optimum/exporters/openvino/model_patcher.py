@@ -7081,18 +7081,17 @@ def patched_recurrent_gated_delta_rule(
         else initial_state.to(value)
     )
 
-    for i in range(sequence_length):
-        q_t = query[:, :, i]
-        k_t = key[:, :, i]
-        v_t = value[:, :, i]
-        g_t = g[:, :, i].exp().unsqueeze(-1).unsqueeze(-1)
-        beta_t = beta[:, :, i].unsqueeze(-1)
+    q_t = query[:, :, 0]
+    k_t = key[:, :, 0]
+    v_t = value[:, :, 0]
+    g_t = g[:, :, 0].exp().unsqueeze(-1).unsqueeze(-1)
+    beta_t = beta[:, :, 0].unsqueeze(-1)
 
-        last_recurrent_state = last_recurrent_state * g_t
-        kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
-        delta = (v_t - kv_mem) * beta_t
-        last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
-        core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
+    last_recurrent_state = last_recurrent_state * g_t
+    kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
+    delta = (v_t - kv_mem) * beta_t
+    last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
+    core_attn_out[:, :, 0] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
 
     if not output_final_state:
         last_recurrent_state = None
@@ -7376,6 +7375,7 @@ class Qwen3NextModelPatcher(ModelPatcher):
             linear_attn_layer._orig_chunk_gated_delta_rule = linear_attn_layer.chunk_gated_delta_rule
             linear_attn_layer.chunk_gated_delta_rule = patched_chunk_gated_delta_rule
             linear_attn_layer._orig_recurrent_gated_delta_rule = linear_attn_layer.recurrent_gated_delta_rule
+            linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
