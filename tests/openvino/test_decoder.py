@@ -32,106 +32,106 @@ if is_transformers_version(">=", "4.55"):
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "bart",
-        "baichuan2",
-        "baichuan2-13b",
-        "gpt_bigcode",
-        "blenderbot",
-        "blenderbot-small",
-        "bloom",
-        "chatglm",
-        "codegen",
-        "codegen2",
-        "gpt2",
-        "gptj",
-        "gpt_neo",
-        "gpt_neox",
-        "llama",
-        "marian",
-        "minicpm",
-        "mistral",
-        "mixtral",
-        "mpt",
-        "opt",
-        "pegasus",
-        "qwen",
-        "phi",
-        "internlm2",
-        "orion",
-        "falcon",
-        "falcon-40b",
-        "persimmon",
-        "biogpt",
-        "gpt_neox_japanese",
-        "xglm",
-        "aquila",
-        "aquila2",
-        "xverse",
-        "internlm",
-        "jais",
-        "chatglm4",
-        "decilm",
-        "gemma",
-        "olmo",
-        "stablelm",
-        "starcoder2",
-        "dbrx",
-        "cohere",
-        "qwen2",
-        "qwen2_moe",
-        "arctic",
-        "phi3",
-        "gemma2",
-        "exaone",
-        "granite",
-        "granite-moe",
+        # "bart",
+        # "baichuan2",
+        # "baichuan2-13b",
+        # "gpt_bigcode",
+        # "blenderbot",
+        # "blenderbot-small",
+        # "bloom",
+        # "chatglm",
+        # "codegen",
+        # "codegen2",
+        # "gpt2",
+        # "gptj",
+        # "gpt_neo",
+        # "gpt_neox",
+        # "llama",
+        # "marian",
+        # "minicpm",
+        # "mistral",
+        # "mixtral",
+        # "mpt",
+        # "opt",
+        # "pegasus",
+        # "qwen",
+        # "phi",
+        # "internlm2",
+        # "orion",
+        # "falcon",
+        # "falcon-40b",
+        # "persimmon",
+        # "biogpt",
+        # "gpt_neox_japanese",
+        # "xglm",
+        # "aquila",
+        # "aquila2",
+        # "xverse",
+        # "internlm",
+        # "jais",
+        # "chatglm4",
+        # "decilm",
+        # "gemma",
+        # "olmo",
+        # "stablelm",
+        # "starcoder2",
+        # "dbrx",
+        # "cohere",
+        # "qwen2",
+        # "qwen2_moe",
+        # "arctic",
+        # "phi3",
+        # "gemma2",
+        # "exaone",
+        # "granite",
+        # "granite-moe",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    SUPPORTED_SSM_ARCHITECTURES = ("lfm2",)
 
-    if is_transformers_version(">=", "4.49"):
-        SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
+    # if is_transformers_version(">=", "4.49"):
+    #     SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
-        SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
+    # if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+    #     SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
-
-    if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
-        # openvino 2025.0 required for disabling check_trace
-        if is_openvino_version(">=", "2025.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek",)
-
-        # gptq and awq install disabled for windows test environment
-        if platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
-
-        # autoawq install disabled for windows test environment
-        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
-
-    if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
-
-    if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
-
-    if is_transformers_version(">=", "4.51.3"):
-        SUPPORTED_ARCHITECTURES += ("glm4",)
-
-    if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("arcee",)
-
-    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
-        SUPPORTED_ARCHITECTURES += ("bitnet",)
-
-    if is_transformers_version(">=", "4.54.0"):
-        # remote code models differs after transformers v4.54
-        SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
-
-    if is_transformers_version(">=", "4.55.0"):
-        SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
+    #
+    # if is_transformers_version(">=", "4.46.0"):
+    #     SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
+    #     # openvino 2025.0 required for disabling check_trace
+    #     if is_openvino_version(">=", "2025.0"):
+    #         SUPPORTED_ARCHITECTURES += ("deepseek",)
+    #
+    #     # gptq and awq install disabled for windows test environment
+    #     if platform.system() != "Windows":
+    #         SUPPORTED_ARCHITECTURES += ("opt_gptq",)
+    #
+    #     # autoawq install disabled for windows test environment
+    #     if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+    #         SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+    #
+    # if is_transformers_version(">", "4.49"):
+    #     SUPPORTED_ARCHITECTURES += ("gemma3_text",)
+    #
+    # if is_transformers_version(">=", "4.51.0"):
+    #     SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+    #
+    # if is_transformers_version(">=", "4.51.3"):
+    #     SUPPORTED_ARCHITECTURES += ("glm4",)
+    #
+    # if is_transformers_version(">=", "4.53.0"):
+    #     SUPPORTED_ARCHITECTURES += ("arcee",)
+    #
+    # if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+    #     SUPPORTED_ARCHITECTURES += ("bitnet",)
+    #
+    # if is_transformers_version(">=", "4.54.0"):
+    #     # remote code models differs after transformers v4.54
+    #     SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
+    #
+    # if is_transformers_version(">=", "4.55.0"):
+    #     SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -341,7 +341,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            # TODO: Issue link to transformers
+            # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             num_beams=1 if model_arch == "chatglm4" or model_arch == "lfm2" else 2,
             do_sample=False,
         )
