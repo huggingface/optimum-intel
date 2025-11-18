@@ -104,6 +104,7 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    Lfm2ModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -140,7 +141,6 @@ from .model_patcher import (
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
-    Lfm2ModelPatcher,
 )
 
 
@@ -4434,7 +4434,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 self.hidden_size // self.num_attention_heads,
             )
 
-            kv_shape = shape # (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
+            kv_shape = shape  # (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
             k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
             v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
             past_key_values.append(k)

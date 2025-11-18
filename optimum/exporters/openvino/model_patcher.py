@@ -6959,9 +6959,9 @@ class Zamba2ModelPatcher(ModelPatcher):
 def lfm2_short_conv_forward_patched(
     self,
     x: torch.Tensor,
-    past_key_values = None,
-    cache_position = None,
-    attention_mask = None,
+    past_key_values=None,
+    cache_position=None,
+    attention_mask=None,
 ):
     from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
 
@@ -7013,7 +7013,6 @@ class Lfm2ModelPatcher(ModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-
         from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
 
         super().__init__(config, model, model_kwargs)
@@ -7038,11 +7037,11 @@ class Lfm2ModelPatcher(ModelPatcher):
                         conv_layer_idx += 1
 
             def update(
-                    self,
-                    key_states: torch.Tensor,
-                    value_states: torch.Tensor,
-                    layer_idx: int,
-                    cache_kwargs: Optional[dict[str, Any]] = None,
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
             ) -> tuple[torch.Tensor, torch.Tensor]:
                 """
                 Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
@@ -7074,21 +7073,25 @@ class Lfm2ModelPatcher(ModelPatcher):
             def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
                 """Returns the sequence length of the cached states. A layer index can be optionally passed."""
                 # take any layer that contains cache and not empty tensor
-                layer_idx = self.first_attention_layer if self.layer_types[layer_idx] != "full_attention" else layer_idx
+                layer_idx = (
+                    self.first_attention_layer if self.layer_types[layer_idx] != "full_attention" else layer_idx
+                )
                 layer_idx = self.attention_layer_idx_mapping[layer_idx]
                 if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
                     return 0
                 return self.key_cache[layer_idx].shape[-2]
 
-        def patched_forward(input_ids: Optional[torch.LongTensor] = None,
+        def patched_forward(
+            input_ids: Optional[torch.LongTensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
-            cache_params = None,
+            cache_params=None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
             labels: Optional[torch.LongTensor] = None,
             use_cache: Optional[bool] = None,
-            cache_position = None,
-            logits_to_keep: Union[int, torch.Tensor] = 0):
+            cache_position=None,
+            logits_to_keep: Union[int, torch.Tensor] = 0,
+        ):
             use_cache = False
             wrapped_cache_params = None
             num_conv_layers = self.real_config._config.layer_types.count("conv")
@@ -7144,6 +7147,7 @@ class Lfm2ModelPatcher(ModelPatcher):
 
     def __enter__(self):
         from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -7157,6 +7161,7 @@ class Lfm2ModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 

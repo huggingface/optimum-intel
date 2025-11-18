@@ -1441,8 +1441,6 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "you are calling `prepare_inputs_for_generation` directly with `use_cache=True`"
                 )
             if cache_position[0] > 0:
-                full_context_ids = input_ids
-
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 

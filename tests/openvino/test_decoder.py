@@ -341,7 +341,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            #TODO: Issue link to transformers
+            # TODO: Issue link to transformers
             num_beams=1 if model_arch == "chatglm4" or model_arch == "lfm2" else 2,
             do_sample=False,
         )
