@@ -342,7 +342,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             max_new_tokens=30,
             min_new_tokens=30,
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-            num_beams=1 if model_arch == "chatglm4" or model_arch == "lfm2" else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2"] else 2,
             do_sample=False,
         )
 
