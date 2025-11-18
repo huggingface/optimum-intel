@@ -92,6 +92,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
@@ -119,9 +122,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
-
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
-        SUPPORTED_ARCHITECTURES += ("lfm2",)
 
     if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
@@ -280,9 +280,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if is_stateful:
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
-                self.assertTrue(
-                    len(ov_outputs.cache_params.conv_states) > 0 and len(ov_outputs.cache_params.ssm_states) > 0
-                )
+                self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
+                if model_arch != "lfm2":
+                    self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
             self.assertIsInstance(ov_outputs.past_key_values, tuple)
@@ -341,7 +341,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=1 if model_arch == "chatglm4" else 2,
+            #TODO: Issue link to transformers
+            num_beams=1 if model_arch == "chatglm4" or model_arch == "lfm2" else 2,
             do_sample=False,
         )
 

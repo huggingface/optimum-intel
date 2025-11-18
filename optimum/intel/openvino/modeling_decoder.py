@@ -1448,7 +1448,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
 
                 if self.config.model_type == "lfm2":
                     # LFM2 requires the attention mask to be the length of the full context
-                    attention_mask = torch.ones_like(full_context_ids, dtype=torch.int64)
+                    # so default mask from OVModelForCausalLM needs to be used
+                    pass
                 else:
                     # other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones

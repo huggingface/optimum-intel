@@ -6964,7 +6964,6 @@ def lfm2_short_conv_forward_patched(
     attention_mask = None,
 ):
     from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
-    layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
 
     seqlen = x.shape[1]
 
@@ -6974,23 +6973,27 @@ def lfm2_short_conv_forward_patched(
 
     Bx = B * x
 
-    conv_state_dec = past_key_values.conv_cache[layer_idx]
-    cache_position = cache_position.clamp(0, self.L_cache - 1)
-    conv_state_dec = conv_state_dec.roll(shifts=-1, dims=-1)
-    conv_state_dec[:, :, cache_position] = Bx.to(device=conv_state_dec.device, dtype=conv_state_dec.dtype)
+    if past_key_values is not None:
+        layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
+        conv_state_dec = past_key_values.conv_cache[layer_idx]
+        cache_position = cache_position.clamp(0, self.L_cache - 1)
+        conv_state_dec = conv_state_dec.roll(shifts=-1, dims=-1)
+        conv_state_dec[:, :, cache_position] = Bx.to(device=conv_state_dec.device, dtype=conv_state_dec.dtype)
 
-    conv_out_dec = torch.sum(conv_state_dec.to(Bx.device) * self.conv.weight[:, 0, :], dim=-1)
-    if self.bias:
-        conv_out_dec += self.conv.bias
-    conv_out_dec = conv_out_dec.unsqueeze(-1)
+        conv_out_dec = torch.sum(conv_state_dec.to(Bx.device) * self.conv.weight[:, 0, :], dim=-1)
+        if self.bias:
+            conv_out_dec += self.conv.bias
+        conv_out_dec = conv_out_dec.unsqueeze(-1)
 
-    conv_state_prefill = torch.nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))
-    conv_out_prefill = self.conv(Bx)[..., :seqlen]
+        conv_state_prefill = torch.nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))
+        conv_out_prefill = self.conv(Bx)[..., :seqlen]
 
-    is_decoding = torch.tensor(seqlen == 1).to(x.dtype)
-    conv_out = conv_out_dec * is_decoding + conv_out_prefill * (1.0 - is_decoding)
-    new_conv_state = conv_state_dec * is_decoding + conv_state_prefill * (1.0 - is_decoding)
-    past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+        is_decoding = torch.tensor(seqlen == 1).to(x.dtype)
+        conv_out = conv_out_dec * is_decoding + conv_out_prefill * (1.0 - is_decoding)
+        new_conv_state = conv_state_dec * is_decoding + conv_state_prefill * (1.0 - is_decoding)
+        past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+    else:
+        conv_out = self.conv(Bx)[..., :seqlen]
 
     y = C * conv_out
     y = y.transpose(-1, -2).contiguous()
