@@ -90,7 +90,7 @@ class ExportModelTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
-    if is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
         SUPPORTED_ARCHITECTURES.update({"lfm2": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
