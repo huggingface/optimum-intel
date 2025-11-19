@@ -7026,7 +7026,7 @@ class Lfm2ModelPatcher(ModelPatcher):
 
         super().__init__(config, model, model_kwargs)
 
-        # This cache wrapper class for following purposes:
+        # This cache wrapper class serves for following purposes:
         # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
         # 2. Removes the unused cache items that the source model contains.
         # For this reason cache items re-indexing is required.
