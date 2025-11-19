@@ -431,7 +431,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
-        quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
         task = infer_task(self.args.task, self.args.model, library_name=library_name)
         # in some cases automatic task detection for multimodal models gives incorrect results
         if self.args.task == "auto" and library_name == "transformers":
@@ -447,7 +446,29 @@ class OVExportCommand(BaseOptimumCLICommand):
             if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
                 task = "image-text-to-text"
 
-        if library_name == "diffusers" and quantize_with_dataset:
+        if not quantization_config:
+            # If no explicit quantization is requested, proceed to export only. That said, INT8 weight-only quantization
+            # still will be applied if the model is large enough.
+            # TODO : add input shapes
+            main_export(
+                model_name_or_path=self.args.model,
+                output=self.args.output,
+                task=self.args.task,
+                framework=self.args.framework,
+                cache_dir=self.args.cache_dir,
+                trust_remote_code=self.args.trust_remote_code,
+                pad_token_id=self.args.pad_token_id,
+                ov_config=ov_config,
+                stateful=not self.args.disable_stateful,
+                convert_tokenizer=not self.args.disable_convert_tokenizer,
+                library_name=library_name,
+                variant=self.args.variant,
+                model_kwargs=self.args.model_kwargs,
+                # **input_shapes,
+            )
+            return
+
+        if library_name == "diffusers":
             if not is_diffusers_available():
                 raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
@@ -489,21 +510,8 @@ class OVExportCommand(BaseOptimumCLICommand):
             else:
                 raise NotImplementedError(f"Quantization isn't supported for class {class_name}.")
 
-            model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
-            model.save_pretrained(self.args.output)
-            if not self.args.disable_convert_tokenizer:
-                maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
-        elif (
-            quantize_with_dataset
-            and (
-                task in ["fill-mask", "zero-shot-image-classification"]
-                or task.startswith("text-generation")
-                or task.startswith("text2text-generation")
-                or task.startswith("automatic-speech-recognition")
-                or task.startswith("feature-extraction")
-            )
-            or (task == "image-text-to-text" and quantization_config is not None)
-        ):
+            model = model_cls.from_pretrained(self.args.model, export=True, load_in_8bit=False, compile=False)
+        else:
             if task.startswith("text-generation"):
                 from optimum.intel import OVModelForCausalLM
 
@@ -541,40 +549,31 @@ class OVExportCommand(BaseOptimumCLICommand):
                     f"Unable to find a matching model class for the task={task} and library_name={library_name}."
                 )
 
-            # In this case, to apply quantization an instance of a model class is required
             model = model_cls.from_pretrained(
                 self.args.model,
                 export=True,
-                quantization_config=quantization_config,
+                compile=False,
+                load_in_8bit=False,
                 stateful=not self.args.disable_stateful,
                 trust_remote_code=self.args.trust_remote_code,
                 variant=self.args.variant,
                 cache_dir=self.args.cache_dir,
             )
-            model.save_pretrained(self.args.output)
 
+        from optimum.intel import OVConfig, OVQuantizer
+
+        OVQuantizer(model).quantize(
+            ov_config=OVConfig(quantization_config=quantization_config), save_directory=self.args.output
+        )
+
+        if library_name == "diffusers":
+            if not self.args.disable_convert_tokenizer:
+                maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
+        else:
             preprocessors = maybe_load_preprocessors(self.args.model, trust_remote_code=self.args.trust_remote_code)
             save_preprocessors(preprocessors, model.config, self.args.output, self.args.trust_remote_code)
             if not self.args.disable_convert_tokenizer:
                 maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors, task=task)
-        else:
-            # TODO : add input shapes
-            main_export(
-                model_name_or_path=self.args.model,
-                output=self.args.output,
-                task=self.args.task,
-                framework=self.args.framework,
-                cache_dir=self.args.cache_dir,
-                trust_remote_code=self.args.trust_remote_code,
-                pad_token_id=self.args.pad_token_id,
-                ov_config=ov_config,
-                stateful=not self.args.disable_stateful,
-                convert_tokenizer=not self.args.disable_convert_tokenizer,
-                library_name=library_name,
-                variant=self.args.variant,
-                model_kwargs=self.args.model_kwargs,
-                # **input_shapes,
-            )
 
 
 def prepare_wc_config(args, default_configs):

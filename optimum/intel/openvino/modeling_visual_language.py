@@ -655,12 +655,11 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         if task is None:
             task = cls.export_feature
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
+        ov_config = OVConfig(dtype="auto")
+        if load_in_8bit is None and quantization_config is None:
+            # If load_in_8bit and quantization_config are not specified then ov_config is set to None, and
+            # models larger than 1B parameters will be quantized to int8
             ov_config = None
-        else:
-            # Export in fp32 if compression won't be applied later
-            ov_config = OVConfig(dtype="fp32" if load_in_8bit is False else "auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         variant = kwargs.pop("variant", None)

@@ -781,11 +781,11 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
             compile_only = False
 
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
+        ov_config = OVConfig(dtype="auto")
+        if load_in_8bit is None and quantization_config is None:
+            # If load_in_8bit and quantization_config are not specified then ov_config is set to None, and
+            # models larger than 1B parameters will be quantized to int8
             ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
 
         variant = kwargs.pop("variant", None)
 
