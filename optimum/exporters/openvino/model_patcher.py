@@ -6956,6 +6956,15 @@ class Zamba2ModelPatcher(ModelPatcher):
             mamba_layer.forward = mamba_layer._orig_forward
 
 
+# The original implementation of this method can be found at:
+# https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/lfm2/modeling_lfm2.py#L476
+# This patch modifies `slow_forward()` so that when traced by torch.jit, it works correctly
+# during both the prefill and decoding steps.
+# The patched version differs from the original in that it executes both the prefill
+# and decoding branches every time to compute and store the correct value of conv_state in the cache.
+# The distinction between prefill and decoding modes is determined by the sequence length
+# (seq_len): 1. seq_len > 1 indicates the prefill phase;
+# seq_len = 1 indicates the decoding phase.
 def lfm2_short_conv_forward_patched(
     self,
     x: torch.Tensor,
@@ -7017,6 +7026,10 @@ class Lfm2ModelPatcher(ModelPatcher):
 
         super().__init__(config, model, model_kwargs)
 
+        # This cache wrapper class for following purposes:
+        # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
+        # 2. Removes the unused cache items that the source model contains.
+        # For this reason cache items re-indexing is required.
         class Lfm2HybridConvCacheWrap(Lfm2HybridConvCache):
             def __init__(self, config, max_batch_size: int, conv_cache, key_cache, value_cache):
                 # Call parent constructor with all required arguments
@@ -7045,19 +7058,7 @@ class Lfm2ModelPatcher(ModelPatcher):
             ) -> tuple[torch.Tensor, torch.Tensor]:
                 """
                 Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
-
-                Parameters:
-                    key_states (`torch.Tensor`):
-                        The new key states to cache.
-                    value_states (`torch.Tensor`):
-                        The new value states to cache.
-                    layer_idx (`int`):
-                        The index of the layer to cache the states for.
-                    cache_kwargs (`Dict[str, Any]`, `optional`):
-                        Additional arguments for the cache subclass. No additional arguments are used in `DynamicCache`.
-
-                Return:
-                    A tuple containing the updated key and value states.
+                Patching is required for calculating of the correct cache index.
                 """
                 # Update the cache
                 layer_idx = self.attention_layer_idx_mapping[layer_idx]
@@ -7071,7 +7072,10 @@ class Lfm2ModelPatcher(ModelPatcher):
                 return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
             def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-                """Returns the sequence length of the cached states. A layer index can be optionally passed."""
+                """
+                Returns the sequence length of the cached states. A layer index can be optionally passed.
+                Patching is required for calculating of the correct cache index.
+                """
                 # take any layer that contains cache and not empty tensor
                 layer_idx = (
                     self.first_attention_layer if self.layer_types[layer_idx] != "full_attention" else layer_idx
