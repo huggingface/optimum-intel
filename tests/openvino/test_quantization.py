@@ -938,6 +938,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            OVModelForCausalLM,
+            "lfm2",
+            False,
+            dict(bits=4, backup_precision="none", group_size=8, ratio=0.5),
+            {"model": {"int4": 12}},
+        ),
     ]
 
     # filter models type depending on min max transformers version
