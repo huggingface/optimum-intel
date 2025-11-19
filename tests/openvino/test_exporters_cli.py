@@ -103,9 +103,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
-        ("text-generation", "lfm2"),
-        ("text-generation-with-past", "lfm2"),
     ]
+
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation", "lfm2"),
+                ("text-generation-with-past", "lfm2"),
+            ]
+        )
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.extend(
