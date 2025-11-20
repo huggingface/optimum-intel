@@ -449,6 +449,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     def prepare_inputs_for_generation(self, *args, **kwargs):
         input_kwargs = self.model.prepare_inputs_for_generation(*args, **kwargs)
         if self.add_patch:
+            # Only need to change back original attention_mask when model is patched to adapt to ipex paged attn API
             input_kwargs["attention_mask"] = kwargs.get("attention_mask", None)
         return input_kwargs
 
