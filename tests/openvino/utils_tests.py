@@ -27,8 +27,7 @@ from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_versio
 
 SEED = 42
 
-# With this config, inference runs in f32 and optimizations that may influence accuracy are disabled
-F32_CONFIG = {"EXECUTION_MODE_HINT": "ACCURACY"}
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 

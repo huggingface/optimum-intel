@@ -773,7 +773,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_phi3_longrope_support(self):
         """Test LongRoPE support for Phi3 with inputs > 4096 tokens."""
         set_seed(SEED)
-        model_id = "optimum-intel-internal-testing/tiny-random-phi-4-mini-instruct"
+        model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -790,16 +790,29 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
 
+        # Test 1: input tokens exceed original_max_pos
         # Creating model inputs with more than original max position embeddings and enough variation for varied output tokens
         tokens = torch.as_tensor(list(tokenizer.get_vocab().values())[: original_max_pos + 50]).unsqueeze(0)
-
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(tokens, max_new_tokens=20)
             ov_outputs = ov_model.generate(tokens, max_new_tokens=20)
 
         self.assertTrue(
             torch.equal(transformers_outputs, ov_outputs),
-            f"OpenVINO and PyTorch outputs do not match for LongRoPE.\n"
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE test with inputs > original_max_pos.\n"
+            f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
+        )
+
+        # Test 2: generation tokens exceed original_max_pos
+        # Creating model inputs with slightly less than original max position embeddings
+        tokens = torch.as_tensor(list(tokenizer.get_vocab().values())[: original_max_pos - 50]).unsqueeze(0)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(tokens, max_new_tokens=100)
+            ov_outputs = ov_model.generate(tokens, max_new_tokens=100)
+
+        self.assertTrue(
+            torch.equal(transformers_outputs, ov_outputs),
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE test with cumulative context > max_pos.\n"
             f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
         )
 
