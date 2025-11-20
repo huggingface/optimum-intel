@@ -559,7 +559,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         """
         if trust_remote_code is not None:
             logger.warning(
-                "`trust_remote_code` parameter in OVQuantizationConfigBase is deprecated and will be removed in "
+                "`trust_remote_code` parameter in `OVQuantizationConfigBase` is deprecated and will be removed in "
                 "optimum-intel v1.27.0. Please provide `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` "
                 "or `OVQuantizer.__init__` methods instead."
             )
