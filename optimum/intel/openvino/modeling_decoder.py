@@ -1443,9 +1443,13 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
-                # models like Mamba typically do not require an attention_mask
-                # for the decoding step after the first token so use attention mask of ones
-                attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+
+                if self.config.model_type != "lfm2":
+                    # LFM2 requires the attention mask to be the length of the full context,
+                    # so default mask from OVModelForCausalLM needs to be used.
+                    # Other models like Mamba typically do not require an attention_mask
+                    # for the decoding step after the first token so use attention mask of ones.
+                    attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
 
             else:
                 # we initialize the `cache_position` to full size of `conv_states` at prefill stage
