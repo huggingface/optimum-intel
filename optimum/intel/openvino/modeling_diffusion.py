@@ -19,7 +19,6 @@ import os
 import shutil
 from abc import abstractmethod
 from collections import OrderedDict
-from copy import deepcopy
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -405,6 +404,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         # same as DiffusionPipeline.from_pretraoned, if called directly, it loads the class in the config
@@ -520,14 +520,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 kwargs[config_key] = value
 
         compile_only = kwargs.get("compile_only", False)
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
-            for name, path in models.items():
-                if name in kwargs:
-                    models[name] = kwargs.pop(name)
-                else:
-                    models[name] = cls.load_model(path, quantization_config) if path.is_file() else None
-        elif compile_only:
+        if compile_only:
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
@@ -555,40 +548,39 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                         else None
                     )
         else:
-            # why is this quantization not performed in __init__?
-            if ov_pipeline_class.export_feature != "text-to-image":
-                raise NotImplementedError(f"Quantization is not supported for {cls.__name__}")
-
-            from optimum.intel import OVQuantizer
-
             for name, path in models.items():
                 if name in kwargs:
                     models[name] = kwargs.pop(name)
                 else:
                     models[name] = cls.load_model(path) if path.is_file() else None
 
-            ov_pipeline = ov_pipeline_class(**models, **submodels, model_save_dir=model_save_dir, **kwargs)
-            # same as in DiffusionPipeline.from_pretrained, we save where the model was instantiated from
-            ov_pipeline.register_to_config(_name_or_path=config.get("_name_or_path", str(model_id)))
-
-            quantizer = OVQuantizer(ov_pipeline)
-            if isinstance(quantization_config, OVWeightQuantizationConfig):
-                hybrid_quantization_config = deepcopy(quantization_config)
-                hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
-                quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
-            else:
-                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
-
-            return ov_pipeline
+        name_or_path = config.get("_name_or_path", str(model_id))
+        quantization_config = cls._prepare_quantization_config(name_or_path, quantization_config, load_in_8bit)
+        if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
+            quantization_config = quantization_config.clone()
+            quantization_config.quant_method = OVQuantizationMethod.HYBRID
+        compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
             **submodels,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
         # same as in DiffusionPipeline.from_pretrained, we save where the model was instantiated from
-        ov_pipeline.register_to_config(_name_or_path=config.get("_name_or_path", str(model_id)))
+        ov_pipeline.register_to_config(_name_or_path=name_or_path)
+
+        if quantization_config:
+            if quantization_config.dataset is not None and ov_pipeline_class.export_feature != "text-to-image":
+                raise NotImplementedError(
+                    f"Data-aware quantization is not supported for {cls.__name__} with "
+                    f"{ov_pipeline_class.export_feature} task."
+                )
+
+            cls._apply_quantization(
+                ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code=trust_remote_code
+            )
 
         return ov_pipeline
 
