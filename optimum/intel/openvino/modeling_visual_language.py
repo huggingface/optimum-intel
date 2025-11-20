@@ -507,8 +507,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
-            trust_remote_code(`bool`, *optional*, defaults to `False`):
-                Whether or not to trust the remote code when loading a model from the Hub.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(

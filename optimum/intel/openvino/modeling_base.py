@@ -465,6 +465,8 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 Whether or not to only look at local files (i.e., do not try to download the model).
             load_in_8bit (`bool`, *optional*, defaults to `False`):
                 Whether or not to apply 8-bit weight quantization.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -600,7 +602,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
     ):
         if not isinstance(quantization_config, (dict, OVQuantizationConfigBase, type(None))):
             raise TypeError(
-                "Expected `quantization_config` to be either a dictionary, instance of OVQuantizationConfigBase object "
+                "Expected `quantization_config` to be either a dictionary, instance of `OVQuantizationConfigBase` object "
                 f"or None, got {type(quantization_config)}."
             )
 
@@ -644,6 +646,22 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         model_name_or_path: Optional[str] = None,
         trust_remote_code: Optional[bool] = False,
     ):
+        """
+        Apply quantization to the model.
+        Arguments:
+            model (`OVBaseModel`):
+                The model to quantize.
+            quantization_config (`OVQuantizationConfigBase`):
+                The quantization config to use.
+            compile_only (`bool`):
+                Whether the model was initialized with `compile_only=True`.
+            compile_model (`bool`):
+                Whether to compile the model after quantization.
+            model_name_or_path (`str`, *optional*):
+                The model name or path used to set tokenizer/processor in quantization config if they are not set.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
+        """
         if not is_nncf_available():
             raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
 

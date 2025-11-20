@@ -207,6 +207,8 @@ class OVSamModel(OVBaseModel):
                 Whether or not to apply 8-bit weight quantization.
             quantization_config(`Union[OVQuantizationConfigBase, Dict]`, *optional*, defaults to `None`):
                 Quantization configuration to apply to the model.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(
