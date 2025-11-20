@@ -515,13 +515,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         _print_compiled_model_properties(model.request)
 
     def test_auto_device_loading(self):
-        OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        model_id = MODEL_NAMES["distilbert-ov"]
         for device in ("AUTO", "AUTO:CPU"):
-            model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+            model = OVModelForSequenceClassification.from_pretrained(model_id, device=device)
             model.half()
             self.assertEqual(model._device, device)
             if device == "AUTO:CPU":
-                model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+                model = OVModelForSequenceClassification.from_pretrained(model_id, device=device)
                 message = "Model should not be loaded from cache without explicitly setting CACHE_DIR"
                 self.assertFalse(model.request.get_property("LOADED_FROM_CACHE"), message)
             del model
