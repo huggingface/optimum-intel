@@ -415,11 +415,16 @@ def export_pytorch(
                 __make_16bit_traceable(model)
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
+            conversion_extensions = getattr(patcher, "conversion_extensions", [])
+            module_extensions = getattr(patcher, "module_extensions", None)
+            if module_extensions is not None:
+                ts_decoder_kwargs["module_extensions"] = module_extensions
             ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
             ov_model = convert_model(
                 ts_decoder,
                 example_input=dummy_inputs,
                 input=[(item.shape, item.type) for item in input_info],
+                extension=conversion_extensions,
             )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
