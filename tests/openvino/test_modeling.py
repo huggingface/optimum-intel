@@ -196,10 +196,8 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand((True, False))
     def test_load_from_hub_and_save_decoder_model(self, use_cache):
-        if use_cache:
-            model_id = "optimum-intel-internal-testing/ov-tiny-random-gpt2-with-cache"
-        else:
-            model_id = "optimum-intel-internal-testing/ov-tiny-random-gpt2-without-cache"
+        model_id = MODEL_NAMES["gpt2-with-cache-ov"] if use_cache else MODEL_NAMES["gpt2-without-cache-ov"]
+
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache, device=OPENVINO_DEVICE)
