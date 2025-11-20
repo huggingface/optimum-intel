@@ -776,7 +776,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # Doublecheck that model has LongRoPE support
         original_max_pos = getattr(transformers_model.config, "original_max_position_embeddings", None)
@@ -792,7 +791,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # Test 1: input tokens exceed original_max_pos
         # Creating model inputs with more than original max position embeddings and enough variation for varied output tokens
-        tokens = torch.as_tensor(list(tokenizer.get_vocab().values())[: original_max_pos + 50]).unsqueeze(0)
+        tokens = torch.randint(high=transformers_model.config.vocab_size, size=(1, original_max_pos + 50))
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(tokens, max_new_tokens=20)
             ov_outputs = ov_model.generate(tokens, max_new_tokens=20)
@@ -805,7 +804,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # Test 2: generation tokens exceed original_max_pos
         # Creating model inputs with slightly less than original max position embeddings
-        tokens = torch.as_tensor(list(tokenizer.get_vocab().values())[: original_max_pos - 50]).unsqueeze(0)
+        tokens = torch.randint(high=transformers_model.config.vocab_size, size=(1, original_max_pos - 50))
         with torch.no_grad():
             transformers_outputs = transformers_model.generate(tokens, max_new_tokens=100)
             ov_outputs = ov_model.generate(tokens, max_new_tokens=100)
