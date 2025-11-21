@@ -1536,34 +1536,6 @@ def _phi3_longrope_forward(self, x, position_ids):
 class Phi3ModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-
-        if is_transformers_version("<", "4.48.0"):
-            self._model.model._orig_forward = self._model.model.forward
-            self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
-
-        # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
-        # init inv_freq for torchscript tracing
-        # 4.48 transformers version phi3 fixed, but issue still visible with trust_remote_true=True (trust_remote_code has _support_sdpa = False)
-        for layer in self._model.model.layers:
-            if (
-                is_torch_version(">=", "2.1.0")
-                and is_transformers_version("<", "4.48.0")
-                or not getattr(self._model, "_supports_sdpa", False)
-            ):
-                orig_self_attn_fwd = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
-                layer.self_attn._orig_forward = orig_self_attn_fwd
-
-            if (
-                hasattr(layer.self_attn, "rotary_emb")
-                and getattr(layer.self_attn.rotary_emb, "inv_freq", None) is None
-            ):
-                rotary_emb = layer.self_attn.rotary_emb
-                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
-                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
-                )
-
-        # Only apply longrope patches if not explicitly disabled
         if not getattr(self, "_disable_longrope", False):
             if (
                 hasattr(self._model.model, "rotary_emb")

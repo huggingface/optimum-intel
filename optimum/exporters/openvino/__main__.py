@@ -312,7 +312,7 @@ def main_export(
         # for avoiding confusion we disable remote code for them
         if (
             trust_remote_code
-            and model_type in {"falcon", "mpt", "phi"}
+            and model_type in {"falcon", "mpt", "phi", "phi3"}
             and ("with-past" in task or original_task == "auto")
             and not custom_export_configs
         ):
