@@ -130,6 +130,8 @@ MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4": "optimum-intel-internal-testing/tiny-random-minicpm-v-4",
+    "minicpmv4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
@@ -294,6 +296,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 26,
+        "resampler_model": 6,
+    },
+    "minicpmv4": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 14,
+        "resampler_model": 6,
+    },
+    "minicpmv4_5": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 14,
         "resampler_model": 6,
     },
     "llava_next_video": {

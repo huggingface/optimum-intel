@@ -2522,7 +2522,7 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
 
 
 class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
+    SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask", "temporal_embed")
 
     def __init__(
         self,
@@ -2559,6 +2559,9 @@ class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
         if input_name == "pos_embed":
             return self.random_float_tensor(shape=[self.feat_size, self.batch_size, self.hidden_size])
 
+        if input_name == "temporal_embed":
+            return self.random_float_tensor(shape=[1, self.batch_size, self.hidden_size])
+
 
 class MiniCPMVConfigBehavior(str, enum.Enum):
     RESAMPLER = "resampler"
@@ -2591,6 +2594,8 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
         )
         self._behavior = behavior
         self._orig_config = config
+        model_mapping = {2.6: "llama", 4.0: "qwen2", 4.5: "qwen3"}
+        self.model_type = model_mapping[self._orig_config.version]
         if self._behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMVImageInputGenerator,)
@@ -2607,11 +2612,19 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
                 "position_ids": {0: "batch_size", 1: "patch_size"},
             }
         if self._behavior == MiniCPMVConfigBehavior.RESAMPLER:
-            return {
-                "image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
-                "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"},
-                "key_padding_mask": {0: "batch_size", 1: "patch_size"},
-            }
+            if self._orig_config.version == 4.5:
+                return {
+                    "image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
+                    "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"},
+                    "key_padding_mask": {0: "batch_size", 1: "patch_size"},
+                    "temporal_embed": {0: "patch_size", 1: "batch_size"},
+                }
+            else:
+                return {
+                    "image_feature": {0: "batch_size", 1: "patch_height", 2: "patch_width"},
+                    "pos_embed": {0: "patch_size", 1: "batch_size", 2: "num_patches"},
+                    "key_padding_mask": {0: "batch_size", 1: "patch_size"},
+                }
         return {}
 
     @property
@@ -2637,10 +2650,20 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = MiniCPMVConfigBehavior(behavior)
 
         if behavior == MiniCPMVConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config(
+                self.model_type,
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
 
         if behavior == MiniCPMVConfigBehavior.LANGUAGE:
-            return get_vlm_text_generation_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_generation_config(
+                self.model_type,
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
 
         if behavior == MiniCPMVConfigBehavior.VISION_EMBEDDINGS:
             return self.__class__(

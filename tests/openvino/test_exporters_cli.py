@@ -638,6 +638,28 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "image-text-to-text",
+            "minicpmv4",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 14},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv4_5",
+            "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
+            {
+                "lm_model": {"int8": 12, "int4": 18},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 14},
+                "resampler_model": {"int8": 6},
+            },
+        ),
+        (
+            "image-text-to-text",
             "internvl_chat",
             "int4 --group-size 4 --ratio 0.8 --trust-remote-code",
             {
@@ -761,13 +783,13 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl", "phi4mm"}
+            expected = {"llama4", "qwen2_5_vl", "phi4mm", "minicpmv4", "minicpmv4_5"}
         elif is_transformers_version("<", "4.51"):
             expected = {"llama4", "phi4mm"}
         elif is_transformers_version("<", "4.52"):
             expected = set()
         else:
-            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo"}
+            expected = {"llava-qwen2", "phi3_v", "phi4mm", "minicpmo", "minicpmv4", "minicpmv4_5"}
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
