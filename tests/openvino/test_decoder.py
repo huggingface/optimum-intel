@@ -80,7 +80,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen2",
         "qwen2_moe",
         "arctic",
-        "phi3",
         "gemma2",
         "exaone",
         "granite",
@@ -107,6 +106,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # autoawq install disabled for windows test environment
         if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+
+    if is_transformers_version(">=", "4.49.0"):
+        SUPPORTED_ARCHITECTURES += ("phi3",)
 
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
@@ -772,6 +774,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_phi3_longrope_support(self):
         """Test LongRoPE support for Phi3 with inputs > 4096 tokens."""
+        if is_transformers_version("<", "4.49"):
+            self.skipTest("Incompatible transformers version: Phi3 longrope requires transformers>=4.49")
         set_seed(SEED)
         model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
 
