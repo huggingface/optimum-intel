@@ -931,6 +931,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "resampler_model": {"int8": 6},
             },
         ),
+        (
+            OVModelForCausalLM,
+            "exaone4",
+            True,
+            dict(bits=4, sym=False, group_size=32, ratio=1.0),
+            {"model": {"int8": 2, "int4": 14}},
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -965,6 +972,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version("<", "4.52.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
 
+    if is_transformers_version(">=", "4.54.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
+
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
@@ -979,14 +989,15 @@ class OVWeightCompressionTest(unittest.TestCase):
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
 
     def test_filtered_architectures(cls):
+        expected = set()
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl"}
-        elif is_transformers_version("<", "4.51"):
-            expected = {"llama4"}
-        elif is_transformers_version("<", "4.52"):
-            expected = set()
-        else:
-            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
+            expected.add("qwen2_5_vl")
+        if is_transformers_version("<", "4.51"):
+            expected.add("llama4")
+        if is_transformers_version("<", "4.54"):
+            expected.add("exaone4")
+        if is_transformers_version(">=", "4.54"):
+            expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
