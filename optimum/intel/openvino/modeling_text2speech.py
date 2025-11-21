@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import copy
 import logging
 import os
 from pathlib import Path
@@ -311,6 +310,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         device = kwargs.pop("device", "CPU")
@@ -393,11 +393,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             except Exception:
                 pass
 
-        quantization_config = OVBaseModel._prepare_quantization_config(quantization_config, load_in_8bit)
-        to_quantize = not compile_only and quantization_config is not None
-        if to_quantize:
-            enable_compilation = False
-
+        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
         model = _OVModelForSpeechT5ForTextToSpeech(
             encoder=encoder_model,
             decoder=decoder_model,
@@ -411,16 +407,14 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             quantization_config=quantization_config,
             preprocessors=preprocessors,
             compile_only=compile_only,
-            compile=enable_compilation,
+            compile=enable_compilation and not quantization_config,
             generation_config=generation_config,
         )
 
-        if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
-
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        if quantization_config:
+            cls._apply_quantization(
+                model, quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
+            )
 
         return model
 

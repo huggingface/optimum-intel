@@ -105,6 +105,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation", "lfm2"),
+                ("text-generation-with-past", "lfm2"),
+            ]
+        )
+
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -140,6 +148,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "lfm2": 0,  # Tokenizers fail to convert, ticket: CVS-176880
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,

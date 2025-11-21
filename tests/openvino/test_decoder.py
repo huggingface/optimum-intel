@@ -92,6 +92,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
@@ -170,6 +173,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gptj": 5,
         "gpt_neo": 4,
         "gpt_neox": 5,
+        "lfm2": 1,
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
@@ -279,9 +283,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if is_stateful:
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
-                self.assertTrue(
-                    len(ov_outputs.cache_params.conv_states) > 0 and len(ov_outputs.cache_params.ssm_states) > 0
-                )
+                self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
+                if model_arch != "lfm2":
+                    self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
             self.assertIsInstance(ov_outputs.past_key_values, tuple)
@@ -340,7 +344,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=1 if model_arch == "chatglm4" else 2,
+            # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
+            num_beams=1 if model_arch in ["chatglm4", "lfm2"] else 2,
             do_sample=False,
         )
 
@@ -513,13 +518,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         _print_compiled_model_properties(model.request)
 
     def test_auto_device_loading(self):
-        OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        model_id = MODEL_NAMES["distilbert-ov"]
         for device in ("AUTO", "AUTO:CPU"):
-            model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+            model = OVModelForSequenceClassification.from_pretrained(model_id, device=device)
             model.half()
             self.assertEqual(model._device, device)
             if device == "AUTO:CPU":
-                model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+                model = OVModelForSequenceClassification.from_pretrained(model_id, device=device)
                 message = "Model should not be loaded from cache without explicitly setting CACHE_DIR"
                 self.assertFalse(model.request.get_property("LOADED_FROM_CACHE"), message)
             del model
@@ -591,6 +596,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "chatglm4"]:
+            return
+
+        # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
+        if model_arch == "lfm2":
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
