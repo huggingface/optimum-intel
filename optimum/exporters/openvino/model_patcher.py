@@ -7049,7 +7049,20 @@ def patched_chunk_gated_delta_rule(
 
     core_attn_out = torch.zeros_like(value)
 
-    last_recurrent_state = self.chunked_attention_cell(
+    #core_attn_out, last_recurrent_state = self.chunked_attention_cell(
+    #    query,
+    #    key,
+    #    value,
+    #    decay_mask,
+    #    mask,
+    #    k_cumdecay,
+    #    g,
+    #    last_recurrent_state,
+    #    num_chunks
+    #)
+
+    # final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 0)
+    output_cell = self.chunked_attention_cell(
         query,
         key,
         value,
@@ -7060,6 +7073,10 @@ def patched_chunk_gated_delta_rule(
         last_recurrent_state,
         num_chunks
     )
+
+    num_elems = value.numel()
+    core_attn_out = output_cell[:num_elems].reshape(value.shape)
+    last_recurrent_state = output_cell[num_elems:].reshape(last_recurrent_state.shape)
 
     if not output_final_state:
         last_recurrent_state = None
@@ -7356,8 +7373,10 @@ class ChunkedAttentionCell(torch.nn.Module):
                 last_recurrent_state * decay_factor + update_term
             )
 
+        output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
+        return output_cell
         #return core_attn_out, last_recurrent_state
-        return last_recurrent_state
+        #return last_recurrent_state
 
 
 def convert_chunked_attention_cell(context):
@@ -7478,10 +7497,13 @@ def convert_chunked_attention_cell(context):
     core_attn_out_new = loop.get_iter_value(core_attn_out_res.output(0), -1)
     last_recurrent_state_new = loop.get_iter_value(last_recurrent_state_res.output(0), -1)
 
-    #core_attn_out_new_res = ops.result(core_attn_out_new)
-    #last_recurrent_state_new_res = ops.result(last_recurrent_state_new)
+    flatten_shape = ops.constant([-1], dtype=np.int32)
+    core_attn_out_new = ops.reshape(core_attn_out_new, flatten_shape, False)
+    last_recurrent_state_new = ops.reshape(last_recurrent_state_new, flatten_shape, False)
 
-    return [last_recurrent_state_new]
+    final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 0)
+
+    return [final_output.output(0)]
 
 
 class Qwen3NextModelPatcher(ModelPatcher):
