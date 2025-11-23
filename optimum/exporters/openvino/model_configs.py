@@ -4712,12 +4712,12 @@ class DummyQwenTransformerInputGenerator(DummyVisionInputGenerator):
             self.num_channels = normalized_config.in_channels // 4
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name in ["hidden_states"]:
+        if input_name == "hidden_states":
             shape = [self.batch_size, (self.height // 2) * (self.width // 2), self.num_channels * 4]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "img_shapes":
             import torch
-            return [torch.tensor((1, self.height // 2, self.width // 2))] * self.batch_size
+            return torch.tensor((1, self.height // 2, self.width // 2), dtype=DTYPE_MAPPER.pt(int_dtype))
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
@@ -4756,7 +4756,6 @@ class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         DummyTransformerTimestpsInputGenerator,
         DummyQwenTransformerInputGenerator,
         DummyQwenTextInputGenerator,
-        # PooledProjectionsDummyInputGenerator,
     )
 
     @property
@@ -4773,18 +4772,20 @@ class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
         return common_inputs
     
 @register_in_tasks_manager("qwen-image-decoder", *["semantic-segmentation"], library_name="diffusers")
-class QwenDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+class QwenDecoderOpenVINOConfig(LTXVaeDecoderOpenVINOConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        base_input = {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
-
+        return base_input
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "sample": {0: "batch_size", 2: "height", 3: "width"},
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
         }
+
+
 @register_in_tasks_manager(
     "vision-encoder-decoder",
     *[
