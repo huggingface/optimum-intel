@@ -7046,6 +7046,7 @@ def patched_chunk_gated_delta_rule(
     #        + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
     #    )
     num_chunks = total_sequence_length // chunk_size
+
     core_attn_out, last_recurrent_state = self.chunked_attention_cell(
         query,
         key,
@@ -7304,6 +7305,8 @@ class ChunkedAttentionCell(torch.nn.Module):
 
 def convert_chunked_attention_cell(context):
     import openvino.opset14 as ops
+    import openvino as ov
+    import numpy as np
 
     # context.get_input(0)
     query = context.get_input(0)
@@ -7314,122 +7317,114 @@ def convert_chunked_attention_cell(context):
     k_cumdecay = context.get_input(5)
     g = context.get_input(6)
     last_recurrent_state = context.get_input(7)
-    num_chunks = context.get_input(8)
+    num_chunks_param = context.get_input(8)
 
-    # ------------------------------------------------------------
-    # Create Loop node
-    # ------------------------------------------------------------
-    num_chunks = ops.convert(num_chunks, "i32")
+    # context.get_input(0)
+    #query = ops.parameter([-1, -1, -1, 64, -1], np.float32, "query")
+    #key = ops.parameter([-1, -1, -1, 64, -1], np.float32, "key")
+    #value = ops.parameter([-1, -1, -1, 64, -1], np.float32, "value")
+    #decay_mask = ops.parameter([-1, -1, -1, 64, -1], np.float32, "decay_mask")
+    #mask = ops.parameter([64, 64], bool, "mask")
+    #k_cumdecay = ops.parameter([-1, -1, -1, 64, -1], np.float32, "k_cumdecay")
+    #g = ops.parameter([-1, -1, -1, 64], np.float32, "g")
+    #last_recurrent_state = ops.parameter([-1, -1, 8, 8], np.float32, "last_recurrent_state")
+    #num_chunks_param = ops.parameter([], np.int64, "num_chunks")
+
+    value_shape = ops.shape_of(value)
+    const_zero = ops.constant(0, dtype=np.float32)
+    core_attn_out = ops.broadcast(const_zero, value_shape)
+
+    const_one_float = ops.constant(1, dtype=np.float32)
+    const_zero_float = ops.constant(0, dtype=np.float32)
+    mask_float = ops.select(mask, const_one_float, const_zero_float)
+
+    # create a body graph
+    # q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
+    # attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
+    # v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
+    # v_new = v_i - v_prime
+    # attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
+    # core_attn_out[:, :, i] = attn_inter + attn @ v_new
+    # last_recurrent_state = (
+    #        last_recurrent_state * g[:, :, i, -1, None, None].exp()
+    #        + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+    # )
+    timestep = ops.parameter([], np.int32, "timestep")
+    q_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "q_i")
+    k_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "k_i")
+    v_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "v_i")
+    decay_mask_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "decay_mask_i")
+    mask_i = ops.parameter([-1, -1], np.float32, "mask_i")
+    k_cumdecay_i_param = ops.parameter([-1, -1, 1, -1, -1], np.float32, "k_cumdecay_i")
+    last_recurrent_state_i = ops.parameter([-1, -1, -1, -1], np.float32, "last_recurrent_state_i")
+    g_i_param = ops.parameter([-1, -1, 1, -1], np.float32, "g_i")
+    core_attn_out_i = ops.parameter([-1, -1, -1, -1, -1], np.float32, "core_attn_out_i")
+
+    const_two = ops.constant(2, dtype=np.int32)
+    q_i = ops.squeeze(q_i_param, const_two)
+    k_i = ops.squeeze(k_i_param, const_two)
+    v_i = ops.squeeze(v_i_param, const_two)
+    decay_mask_i = ops.squeeze(decay_mask_i_param, const_two)
+    k_cumdecay_i = ops.squeeze(k_cumdecay_i_param, const_two)
+    g_i = ops.squeeze(g_i_param, const_two)
+
+    attn = ops.einsum([q_i, k_i], "bhwd,bhld->bhwl")
+    attn = ops.multiply(attn, decay_mask_i)
+    attn = ops.multiply(attn, mask_i)
+
+    v_prime = ops.einsum([k_cumdecay_i, last_recurrent_state_i], "bhwd,bhdl->bhwl")
+    v_new = ops.subtract(v_i, v_prime)
+
+    const_three = ops.constant(3, dtype=np.int32)
+    attn_inter = ops.einsum([ops.multiply(q_i, ops.exp(ops.unsqueeze(g_i, const_three))), last_recurrent_state_i],
+                            "bhwd,bhdl->bhwl")
+
+    update_core_attn = ops.add(attn_inter, ops.einsum([attn, v_new], "bhwd,bhdl->bhwl"))
+    update_core_attn = ops.unsqueeze(update_core_attn, const_two)
+    const_zero_int = ops.constant(0, dtype=np.int32)
+    timestep_unsq = ops.unsqueeze(timestep, const_zero_int)
+    core_attn_out_res = ops.scatter_update(core_attn_out_i, timestep_unsq, update_core_attn, const_two)
+
+    const_minus1 = ops.constant(-1, dtype=np.int32)
+    g_i_minus1 = ops.gather(g_i, const_minus1, const_two)
+    subtract_g = ops.unsqueeze(ops.exp(ops.subtract(ops.unsqueeze(g_i_minus1, const_minus1), g_i)), const_minus1)
+    update_lrs = ops.einsum([ops.multiply(k_i, subtract_g), v_new], "bhdw,bhdl->bhwl")
+    last_recurrent_state_res = ops.unsqueeze(ops.unsqueeze(g_i_minus1, const_minus1), const_minus1)
+    last_recurrent_state_res = ops.multiply(last_recurrent_state_i, ops.exp(last_recurrent_state_res))
+    last_recurrent_state_res = ops.add(last_recurrent_state_res, update_lrs)
+
+    body_cond = ops.constant([True], dtype=bool)
+
+    body_model = ov.Model([body_cond, last_recurrent_state_res, core_attn_out_res],
+                          [timestep, q_i_param, k_i_param, v_i_param, decay_mask_i_param, mask_i, k_cumdecay_i_param,
+                           last_recurrent_state_i,
+                           g_i_param, core_attn_out_i], "body_model")
+
+    num_chunks = ops.convert(num_chunks_param, "i32")
     loop = ops.loop(
         num_chunks,
         ops.constant(True, dtype="bool")
     )
+    loop.set_function(body_model)
+    loop.set_sliced_input(q_i_param, query, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(k_i_param, key, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(v_i_param, value, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(decay_mask_i_param, decay_mask, 0, 1, 1, -1, 2)
+    loop.set_invariant_input(mask_i, mask_float.output(0))
+    loop.set_sliced_input(k_cumdecay_i_param, k_cumdecay, 0, 1, 1, -1, 2)
+    loop.set_merged_input(last_recurrent_state_i, last_recurrent_state, last_recurrent_state_res.output(0))
+    loop.set_sliced_input(g_i_param, g, 0, 1, 1, -1, 2)
+    loop.set_merged_input(core_attn_out_i, core_attn_out.output(0), core_attn_out_res.output(0))
 
-    # ============================================================
-    # 1) CREATE LOOP BODY
-    # ============================================================
+    loop.set_special_body_ports([0, 0])
 
-    body = loop.body
+    core_attn_out_new = loop.get_iter_value(core_attn_out_res.output(0), -1)
+    last_recurrent_state_new = loop.get_iter_value(last_recurrent_state_res.output(0), -1)
 
-    # Loop body has two implicit parameters:
-    #   body.get_iter_value(): iteration counter i
-    #   body.get_cond_value(): loop condition
-    iter_i = body.iter_value
-    cond_in = body.cond_value
+    #core_attn_out_new_res = ops.result(core_attn_out_new)
+    #last_recurrent_state_new_res = ops.result(last_recurrent_state_new)
 
-    # ------------------------------------------------------------
-    # Create slicing for each input (slice index = iter_i)
-    # ------------------------------------------------------------
-
-    # shape info
-    # query: (B,H,T,D)
-    # slice at dim 2 => one vector per iteration
-    q_i = ops.gather_nd(query, ops.stack([ops.full_like(iter_i, 0),   # batch dim idx = ':'
-                                          ops.full_like(iter_i, 0),   # head dim idx = ':'
-                                          iter_i], axis=0), batch_dims=0)
-
-    k_i = ops.gather_nd(key, ops.stack([ops.full_like(iter_i, 0),
-                                        ops.full_like(iter_i, 0),
-                                        iter_i], axis=0), batch_dims=0)
-
-    v_i = ops.gather_nd(value, ops.stack([ops.full_like(iter_i, 0),
-                                          ops.full_like(iter_i, 0),
-                                          iter_i], axis=0), batch_dims=0)
-
-    dec_i = ops.gather_nd(decay_mask, ops.stack([ops.full_like(iter_i, 0),
-                                                 ops.full_like(iter_i, 0),
-                                                 iter_i], axis=0), batch_dims=0)
-
-    kcum_i = ops.gather_nd(k_cumdecay, ops.stack([ops.full_like(iter_i, 0),
-                                                  ops.full_like(iter_i, 0),
-                                                  iter_i], axis=0), batch_dims=0)
-
-    g_i = ops.gather_nd(g, ops.stack([ops.full_like(iter_i, 0),
-                                      ops.full_like(iter_i, 0),
-                                      iter_i], axis=0), batch_dims=0)
-
-    # Get last recurrent state (loop-carried variable)
-    last_state_in = loop.add_loop_carried_state(last_recurrent_state)
-
-    # ============================================================
-    # 2) BODY COMPUTATION (one iteration)
-    # ============================================================
-
-    # ---- attn = (q_i @ k_i.T) * dec_i ----
-    k_i_T = ops.transpose(k_i, [0, 1, 3, 2])
-    attn = ops.matmul(q_i, k_i_T)
-    attn = ops.multiply(attn, dec_i)
-
-    # masking
-    attn = ops.select(mask,
-                      ops.constant(0, attn.get_element_type()),
-                      attn)
-
-    # ---- v_prime = k_cumdecay @ last_state ----
-    v_prime = ops.matmul(kcum_i, last_state_in)
-
-    v_new = ops.subtract(v_i, v_prime)
-
-    # ---- attn_inter = (q_i * exp(g_i[...,None])) @ last_state ----
-    g_expand = ops.unsqueeze(g_i, -1)
-    g_exp = ops.exp(g_expand)
-    q_scaled = ops.multiply(q_i, g_exp)
-    attn_inter = ops.matmul(q_scaled, last_state_in)
-
-    # ---- final output for this iteration ----
-    final_attn = ops.add(attn_inter, ops.matmul(attn, v_new))
-
-    # output accumulation (via Loop's "concat outputs")
-    loop.add_concat_output(final_attn)
-
-    # ---- update last recurrent state ----
-    g_last = ops.gather(g_i, ops.constant([g_i.get_shape()[3] - 1], dtype="int64"), axis=3)
-
-    # expand dims
-    g_last_e = ops.unsqueeze(ops.unsqueeze(g_last, -1), -1)
-    decay_factor = ops.exp(g_last_e)
-
-    g_diff = ops.exp(ops.subtract(ops.unsqueeze(g_last, -1), g_i))
-    update_term = ops.matmul(
-        ops.transpose(ops.multiply(k_i, ops.unsqueeze(g_diff, -1)), [0,1,3,2]),
-        v_new
-    )
-
-    next_state = ops.add(ops.multiply(last_state_in, decay_factor), update_term)
-
-    # register updated state
-    loop.set_loop_carried_state(last_state_in, next_state)
-
-    # condition for next iteration stays True
-    body.set_conditions(ops.constant(True, dtype="bool"))
-
-    # ============================================================
-    # 3) BUILD LOOP OUTPUTS
-    # ============================================================
-    concat_attn_out = loop.get_iter_value(0)      # concatenated final_attn
-    final_state_out = loop.get_iter_value(1)      # final recurrent state
-
-    return concat_attn_out, final_state_out
+    return [core_attn_out_new, last_recurrent_state_new]
 
 
 class Qwen3NextModelPatcher(ModelPatcher):
