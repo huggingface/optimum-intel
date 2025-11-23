@@ -7047,7 +7047,9 @@ def patched_chunk_gated_delta_rule(
     #    )
     num_chunks = total_sequence_length // chunk_size
 
-    core_attn_out, last_recurrent_state = self.chunked_attention_cell(
+    core_attn_out = torch.zeros_like(value)
+
+    last_recurrent_state = self.chunked_attention_cell(
         query,
         key,
         value,
@@ -7220,11 +7222,11 @@ def qwen3_next_gated_delta_net_forward(
     )
 
     core_attn_out_dec, last_recurrent_state_dec = self.recurrent_gated_delta_rule(
-        query,
-        key,
-        value,
-        g=g,
-        beta=beta,
+        query[:, :1],
+        key[:, :1],
+        value[:, :1],
+        g=g[:, :1],
+        beta=beta[:, :1],
         initial_state=recurrent_state,
         output_final_state=cache_params is not None,
         use_qk_l2norm_in_kernel=True,
@@ -7247,6 +7249,60 @@ def qwen3_next_gated_delta_net_forward(
 
     output = self.out_proj(core_attn_out)
     return output
+
+
+def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    # router_logits: (batch * sequence_length, n_experts)
+    router_logits = self.gate(hidden_states)
+
+    routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+    routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+    if self.norm_topk_prob:
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+    # we cast back to the input dtype
+    routing_weights = routing_weights.to(hidden_states.dtype)
+
+    final_hidden_states = torch.zeros(
+        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    )
+
+    # One hot encode the selected experts to create an expert mask
+    # this will be used to easily index which expert is going to be sollicitated
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+    # Loop over all available experts in the model and perform the computation on each expert
+    is_active_expert = torch.greater(expert_mask.sum(dim=(-1, -2)), 0)
+
+    for expert_idx in range(self.num_experts):
+        is_activated = is_active_expert[expert_idx]
+        expert_layer = self.experts[expert_idx]
+        idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+
+        idx = is_activated.to(idx.dtype) * idx + torch.tensor([0]).to(idx.dtype) * (1 - is_activated.to(idx.dtype))
+        top_x = is_activated.to(top_x.dtype) * top_x + torch.tensor([0]).to(top_x.dtype) * (1 - is_activated.to(top_x.dtype))
+
+        # Index the correct hidden states and compute the expert hidden state for
+        # the current expert. We need to make sure to multiply the output hidden
+        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+        current_hidden_states = (is_activated.to(current_hidden_states.dtype) * current_hidden_states +
+                                 torch.tensor([0]).to(current_hidden_states.dtype) * (1 - is_activated.to(current_hidden_states.dtype)))
+
+        # However `index_add_` only support torch tensors for indexing so we'll use
+        # the `top_x` tensor here.
+        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+    shared_expert_output = self.shared_expert(hidden_states)
+    shared_expert_output = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+
+    final_hidden_states = final_hidden_states + shared_expert_output
+
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states, router_logits
 
 
 class ChunkedAttentionCell(torch.nn.Module):
@@ -7300,7 +7356,8 @@ class ChunkedAttentionCell(torch.nn.Module):
                 last_recurrent_state * decay_factor + update_term
             )
 
-        return core_attn_out, last_recurrent_state
+        #return core_attn_out, last_recurrent_state
+        return last_recurrent_state
 
 
 def convert_chunked_attention_cell(context):
@@ -7424,7 +7481,7 @@ def convert_chunked_attention_cell(context):
     #core_attn_out_new_res = ops.result(core_attn_out_new)
     #last_recurrent_state_new_res = ops.result(last_recurrent_state_new)
 
-    return [core_attn_out_new, last_recurrent_state_new]
+    return [last_recurrent_state_new]
 
 
 class Qwen3NextModelPatcher(ModelPatcher):
@@ -7560,6 +7617,7 @@ class Qwen3NextModelPatcher(ModelPatcher):
         self.conversion_extensions = [ConversionExtension("ChunkedAttentionCellOp", convert_chunked_attention_cell)]
 
     def __enter__(self):
+        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -7569,26 +7627,28 @@ class Qwen3NextModelPatcher(ModelPatcher):
             layer_type = self._model.model.config.layer_types[idx]
             if layer_type == "linear_attention":
                 linear_attn_layer = decoder_layer.linear_attn
-            else:
-                continue
-            linear_attn_layer._orig_forward = linear_attn_layer.forward
-            linear_attn_layer.forward = types.MethodType(qwen3_next_gated_delta_net_forward, linear_attn_layer)
-            linear_attn_layer._orig_chunk_gated_delta_rule = linear_attn_layer.chunk_gated_delta_rule
-            linear_attn_layer.chunk_gated_delta_rule = patched_chunk_gated_delta_rule
-            linear_attn_layer._orig_recurrent_gated_delta_rule = linear_attn_layer.recurrent_gated_delta_rule
-            linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
-            linear_attn_layer.chunked_attention_cell = ChunkedAttentionCell()
-            chunked_attention_cell_list.append(linear_attn_layer.chunked_attention_cell)
+                linear_attn_layer._orig_forward = linear_attn_layer.forward
+                linear_attn_layer.forward = types.MethodType(qwen3_next_gated_delta_net_forward, linear_attn_layer)
+                linear_attn_layer._orig_chunk_gated_delta_rule = linear_attn_layer.chunk_gated_delta_rule
+                linear_attn_layer.chunk_gated_delta_rule = patched_chunk_gated_delta_rule
+                linear_attn_layer._orig_recurrent_gated_delta_rule = linear_attn_layer.recurrent_gated_delta_rule
+                linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
+                linear_attn_layer.chunked_attention_cell = ChunkedAttentionCell()
+                chunked_attention_cell_list.append(linear_attn_layer.chunked_attention_cell)
+            if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
+                decoder_layer.mlp._orig_forward = decoder_layer.mlp.forward
+                decoder_layer.mlp.forward = types.MethodType(patched_qwen3_next_sparse_moe_block, decoder_layer.mlp)
 
     def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         for idx, decoder_layer in enumerate(self._model.model.layers):
             layer_type = self._model.model.config.layer_types[idx]
             if layer_type == "linear_attention":
                 linear_attn_layer = decoder_layer.linear_attn
-            else:
-                continue
-            linear_attn_layer.forward = linear_attn_layer._orig_forward
-            linear_attn_layer.chunk_gated_delta_rule = linear_attn_layer._orig_chunk_gated_delta_rule
-            linear_attn_layer.recurrent_gated_delta_rule = linear_attn_layer._orig_recurrent_gated_delta_rule
+                linear_attn_layer.forward = linear_attn_layer._orig_forward
+                linear_attn_layer.chunk_gated_delta_rule = linear_attn_layer._orig_chunk_gated_delta_rule
+                linear_attn_layer.recurrent_gated_delta_rule = linear_attn_layer._orig_recurrent_gated_delta_rule
+            if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
+                decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
