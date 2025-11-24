@@ -4434,7 +4434,9 @@ class Qwen3NextDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             )
             conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
             cache_params.append(conv_state)
-            recurrent_state_shape = (self.batch_size, self.num_key_value_heads, self.head_k_dim, self.head_v_dim)
+            #num_heads = self.num_key_value_heads * (self.num_v_heads // self.num_k_heads)
+            num_heads = self.num_v_heads
+            recurrent_state_shape = (self.batch_size, num_heads, self.head_k_dim, self.head_v_dim)
             recurrent_state = self.random_float_tensor(recurrent_state_shape, framework=framework, dtype=float_dtype)
             cache_params.append(recurrent_state)
 
