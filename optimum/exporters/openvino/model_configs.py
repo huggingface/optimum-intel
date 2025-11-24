@@ -4771,20 +4771,40 @@ class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
             common_inputs["guidance"] = {0: "batch_size"}
         return common_inputs
     
+class QwenVaeDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("sample", "latent_sample")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        num_frames: int = 2,
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
+        self.num_frames = num_frames
+        self.num_channels = normalized_config.z_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ["sample", "latent_sample"]:
+            return self.random_float_tensor(
+                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+    
 @register_in_tasks_manager("qwen-image-decoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenDecoderOpenVINOConfig(LTXVaeDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenVaeDummyInputGenerator,)
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         base_input = {
             "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
         return base_input
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
-        }
-
 
 @register_in_tasks_manager(
     "vision-encoder-decoder",
