@@ -799,7 +799,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
-            if inputs.get_any_name() in ["timestep", "guidance"]:
+            if inputs.get_any_name() in ["timestep", "guidance", "img_shapes", "txt_seq_lens"]:
                 shapes[inputs][0] = batch_size
             elif inputs.get_any_name() == "hidden_states":
                 in_channels = self.transformer.config.get("in_channels", None)
@@ -873,7 +873,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         num_images_per_prompt: int = -1,
         num_frames: int = -1,
     ):
-        is_ltx = self.__class__.__name__.startswith("OVLTX")
+        is_ltx = self.__class__.__name__.startswith("OVLTX") or self.__class__.__name__.startswith("OVQwen")
         if is_ltx:
             height = height // self.vae_spatial_compression_ratio if height > 0 else -1
             width = width // self.vae_spatial_compression_ratio if width > 0 else -1
@@ -1391,9 +1391,9 @@ class OVModelVaeEncoder(OVPipelinePart):
 class OVModelVaeDecoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
+        
         # can be missing from models exported long ago
-        if not hasattr(self.config, "scaling_factor"):
+        if not hasattr(self.config, "scaling_factor") and not hasattr(self.config, "z_dim"):
             logger.warning(
                 "The `scaling_factor` attribute is missing from the VAE decoder configuration. "
                 "Please re-export the model with newer version of optimum and diffusers."
@@ -1452,6 +1452,8 @@ class OVModelVae:
             self.latents_mean = torch.tensor(self.decoder.config.latents_mean_data)
         if hasattr(self.decoder.config, "latents_std_data"):
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
+        if hasattr(self.decoder.config, "temperal_downsample"):
+            self.temperal_downsample = torch.tensor(self.decoder.config.temperal_downsample)
 
     @property
     def config(self):
