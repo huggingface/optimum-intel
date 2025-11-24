@@ -7047,8 +7047,6 @@ def patched_chunk_gated_delta_rule(
     #    )
     num_chunks = total_sequence_length // chunk_size
 
-    core_attn_out = torch.zeros_like(value)
-
     #core_attn_out, last_recurrent_state = self.chunked_attention_cell(
     #    query,
     #    key,
@@ -7412,7 +7410,7 @@ def convert_chunked_attention_cell(context):
 
     const_one_float = ops.constant(1, dtype=np.float32)
     const_zero_float = ops.constant(0, dtype=np.float32)
-    mask_float = ops.select(mask, const_one_float, const_zero_float)
+    mask_float = ops.select(mask, const_zero_float, const_one_float)
 
     # create a body graph
     # q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
