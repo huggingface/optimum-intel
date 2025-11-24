@@ -42,7 +42,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
-from .configuration import OVWeightQuantizationConfig
+from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_DECODER_NAME,
@@ -531,7 +531,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             encoder=encoder,
@@ -549,9 +549,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
-            )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -810,6 +809,21 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         For OVModel, we don't want model_kwargs to be updated before generation.
         """
         return
+
+    def _fill_missing_model_quantization_fields(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: Optional[str] = None,
+    ) -> OVQuantizationConfigBase:
+        if model_name_or_path is not None and (
+            quantization_config.processor is None or quantization_config.tokenizer is None
+        ):
+            quantization_config = quantization_config.clone()
+            if quantization_config.processor is None:
+                quantization_config.processor = str(model_name_or_path)
+            if quantization_config.tokenizer is None:
+                quantization_config.tokenizer = str(model_name_or_path)
+        return quantization_config
 
 
 class OVEncoder(OVModelPart):

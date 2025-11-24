@@ -14,7 +14,7 @@ from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
 from ...exporters.openvino.utils import save_config
-from .configuration import OVConfig, OVQuantizationConfigBase
+from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
@@ -283,7 +283,7 @@ class OVSamModel(OVBaseModel):
                 model_save_dir,
             )
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             vision_encoder_model=vision_encoder_model,
@@ -296,9 +296,8 @@ class OVSamModel(OVBaseModel):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
-            )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -430,3 +429,13 @@ class OVSamModel(OVBaseModel):
             if model_has_dynamic_inputs(ov_model):
                 return True
         return False
+
+    def _fill_missing_model_quantization_fields(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: Optional[str] = None,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.processor is None and model_name_or_path is not None:
+            quantization_config = quantization_config.clone()
+            quantization_config.processor = str(model_name_or_path)
+        return quantization_config

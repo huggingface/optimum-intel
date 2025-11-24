@@ -150,3 +150,13 @@ class OVSentenceTransformer(OVModel):
 
     def get_model_kwargs(self):
         return []
+
+    def _fill_missing_model_quantization_fields(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: Optional[str] = None,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.tokenizer is None and model_name_or_path is not None:
+            quantization_config = quantization_config.clone()
+            quantization_config.tokenizer = str(model_name_or_path)
+        return quantization_config

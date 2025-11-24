@@ -330,7 +330,13 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
+        from ...intel.openvino.configuration import (
+            _DEFAULT_4BIT_WQ_CONFIG,
+            OVConfig,
+            _GPTOSSQuantizationConfig,
+            get_default_quantization_config,
+        )
+        from ...intel.openvino.utils import _HEAD_TO_AUTOMODELS
         from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
         from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 
@@ -446,7 +452,8 @@ class OVExportCommand(BaseOptimumCLICommand):
             if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
                 task = "image-text-to-text"
 
-        if not quantization_config:
+        # TODO: Remove a workaround for GPT-OSS quantization config when possible
+        if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
             # If no explicit quantization is requested, proceed to export only. That said, INT8 weight-only quantization
             # still will be applied if the model is large enough.
             # TODO : add input shapes
@@ -464,6 +471,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
+                quantization_config=quantization_config,  # TODO: remove together with GPT-OSS workaround
                 # **input_shapes,
             )
             return
@@ -476,95 +484,37 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             diffusers_config = DiffusionPipeline.load_config(self.args.model)
             class_name = diffusers_config.get("_class_name", None)
-
-            if class_name == "LatentConsistencyModelPipeline":
-                from optimum.intel import OVLatentConsistencyModelPipeline
-
-                model_cls = OVLatentConsistencyModelPipeline
-
-            elif class_name == "StableDiffusionXLPipeline":
-                from optimum.intel import OVStableDiffusionXLPipeline
-
-                model_cls = OVStableDiffusionXLPipeline
-            elif class_name == "StableDiffusionPipeline":
-                from optimum.intel import OVStableDiffusionPipeline
-
-                model_cls = OVStableDiffusionPipeline
-            elif class_name == "StableDiffusion3Pipeline":
-                from optimum.intel import OVStableDiffusion3Pipeline
-
-                model_cls = OVStableDiffusion3Pipeline
-            elif class_name == "FluxPipeline":
-                from optimum.intel import OVFluxPipeline
-
-                model_cls = OVFluxPipeline
-            elif class_name == "SanaPipeline":
-                from optimum.intel import OVSanaPipeline
-
-                model_cls = OVSanaPipeline
-            elif class_name == "SaneSprintPipeline":
-                from optimum.intel import OVSanaSprintPipeline
-
-                model_cls = OVSanaSprintPipeline
-
-            else:
-                raise NotImplementedError(f"Quantization isn't supported for class {class_name}.")
-
-            model = model_cls.from_pretrained(self.args.model, export=True, load_in_8bit=False, compile=False)
+            ov_class_name = f"OV{class_name}"
+            try:
+                model_cls = getattr(__import__("optimum.intel", fromlist=[ov_class_name]), ov_class_name)
+            except (AttributeError, ImportError) as e:
+                raise RuntimeError(f"Wasn't able to locate OpenVINO class for {class_name} diffusion model.") from e
         else:
-            if task.startswith("text-generation"):
-                from optimum.intel import OVModelForCausalLM
-
-                model_cls = OVModelForCausalLM
-            elif task.startswith("text2text-generation"):
-                from optimum.intel import OVModelForSeq2SeqLM
-
-                model_cls = OVModelForSeq2SeqLM
-            elif task == "image-text-to-text":
-                from optimum.intel import OVModelForVisualCausalLM
-
-                model_cls = OVModelForVisualCausalLM
-            elif "automatic-speech-recognition" in task:
-                from optimum.intel import OVModelForSpeechSeq2Seq
-
-                model_cls = OVModelForSpeechSeq2Seq
-            elif task.startswith("feature-extraction") and library_name == "transformers":
-                from ...intel import OVModelForFeatureExtraction
-
-                model_cls = OVModelForFeatureExtraction
-            elif task.startswith("feature-extraction") and library_name == "sentence_transformers":
-                from ...intel import OVSentenceTransformer
-
-                model_cls = OVSentenceTransformer
-            elif task == "fill-mask":
-                from ...intel import OVModelForMaskedLM
-
-                model_cls = OVModelForMaskedLM
-            elif task == "zero-shot-image-classification":
-                from ...intel import OVModelForZeroShotImageClassification
-
-                model_cls = OVModelForZeroShotImageClassification
-            else:
-                raise NotImplementedError(
-                    f"Unable to find a matching model class for the task={task} and library_name={library_name}."
+            if task == "auto":
+                raise ValueError(
+                    "The task could not be inferred automatically. Please provide it with --task argument."
                 )
+            try:
+                model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
+            except (AttributeError, ImportError, KeyError) as e:
+                raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {self.args.task} ({task}).") from e
 
-            model = model_cls.from_pretrained(
-                self.args.model,
-                export=True,
-                compile=False,
-                load_in_8bit=False,
-                stateful=not self.args.disable_stateful,
-                trust_remote_code=self.args.trust_remote_code,
-                variant=self.args.variant,
-                cache_dir=self.args.cache_dir,
-            )
-
-        from optimum.intel import OVConfig, OVQuantizer
-
-        OVQuantizer(model).quantize(
-            ov_config=OVConfig(quantization_config=quantization_config), save_directory=self.args.output
+        additional_model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+        model_kwargs = (self.args.model_kwargs or {}) | additional_model_kwargs
+        model = model_cls.from_pretrained(
+            self.args.model,
+            export=True,
+            compile=False,
+            load_in_8bit=False,
+            quantization_config=quantization_config,
+            stateful=not self.args.disable_stateful,
+            trust_remote_code=self.args.trust_remote_code,
+            variant=self.args.variant,
+            cache_dir=self.args.cache_dir,
+            **model_kwargs,
         )
+        model.save_pretrained(self.args.output)
 
         if library_name == "diffusers":
             if not self.args.disable_convert_tokenizer:

@@ -1097,7 +1097,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if "--library sentence_transformers" in option
                 else eval(_HEAD_TO_AUTOMODELS[task])
             )
-            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
+            model = model_cls.from_pretrained(
+                tmpdir, trust_remote_code="--trust-remote-code" in option, use_cache="with-past" in task
+            )
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task
