@@ -321,11 +321,11 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             if use_cache:
                 task = task + "-with-past"
 
-        ov_config = OVConfig(dtype="auto")
-        if load_in_8bit is None and quantization_config is None:
-            # If load_in_8bit and quantization_config are not specified then ov_config is set to None, and
-            # models larger than 1B parameters will be quantized to int8
-            ov_config = None
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_export_config = None
+        else:
+            ov_export_config = OVConfig(dtype="auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
@@ -349,7 +349,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=ov_export_config,
             stateful=stateful,
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
