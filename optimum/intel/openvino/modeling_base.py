@@ -507,8 +507,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
-            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
+            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            model._apply_quantization(
+                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
+            )
 
         return model
 
@@ -598,39 +600,30 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         model_name_or_path: str,
         quantization_config: Union[OVQuantizationConfigBase, Dict],
     ) -> Union[OVQuantizationConfigBase, Dict]:
-        quant_mode, weight_format = None, None
         if quantization_config == {"bits": 4}:
-            weight_format = "int4"
-        elif quantization_config == {"bits": 8, "weight_only": False}:
-            quant_mode = "int8"
-        if weight_format is not None or quant_mode is not None:
-            default_config = get_default_quantization_config(model_name_or_path, weight_format, quant_mode)
-            if default_config is None:
-                if weight_format == "int4":
-                    return _DEFAULT_4BIT_WQ_CONFIG
-                if quant_mode == "int8":
-                    return quantization_config
-            else:
-                if weight_format == "int4" and model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
-                    raise NotImplementedError(
-                        "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
-                        "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
-                        "recommended quantization config will be used."
-                    )
-                return default_config
-
-        # Notify user if 4-bit quantization is requested and there is a recommended config for the model
-        if (
-            isinstance(quantization_config, OVWeightQuantizationConfig)
-            and quantization_config.bits == 4
-            or isinstance(quantization_config, dict)
-            and quantization_config.get("bits", None) == 4
-        ):
-            default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
-            if default_config is not None:
-                logger.info(
-                    f"For the given model, we recommend the following `quantization_config` : {default_config}"
+            # If config is given as {"bits": 4}, use the default 4-bit quantization config
+            if model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
+                raise NotImplementedError(
+                    "Quantization with the default 4-bit config is not supported through Python API for openai/gpt-oss-20b model. "
+                    "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
+                    "recommended quantization config will be used."
                 )
+            quantization_config = (
+                get_default_quantization_config(model_name_or_path, weight_format="int4") or _DEFAULT_4BIT_WQ_CONFIG
+            )
+        else:
+            # Notify a user if 4-bit quantization is requested and there is a recommended config for the model
+            if (
+                isinstance(quantization_config, OVWeightQuantizationConfig)
+                and quantization_config.bits == 4
+                or isinstance(quantization_config, dict)
+                and quantization_config.get("bits", None) == 4
+            ):
+                default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
+                if default_config is not None:
+                    logger.info(
+                        f"For the given model, we recommend the following `quantization_config` : {default_config}"
+                    )
 
         return quantization_config
 
@@ -674,7 +667,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         # TODO: Expand to pipeline quantization config and apply default ignored scope
         if isinstance(quantization_config, dict):
             quantization_config = _quantization_config_from_dict(quantization_config)
-        quantization_config = self._preprocess_quantization_config(quantization_config, str(model_name_or_path))
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
 
         from optimum.intel.openvino.quantization import OVQuantizer
 

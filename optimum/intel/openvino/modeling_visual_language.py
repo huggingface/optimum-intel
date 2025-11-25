@@ -610,8 +610,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
-            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
+            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            model._apply_quantization(
+                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
+            )
 
         return model
 
