@@ -370,7 +370,6 @@ def main_export(
                     return model
 
                 GPTQQuantizer.post_init_model = post_init_model
-
             if do_bitnet_patching:
                 from transformers.integrations.bitnet import AutoBitLinear
 
