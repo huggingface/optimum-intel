@@ -4783,7 +4783,7 @@ class QwenVaeDummyInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"],
         height: int = DEFAULT_DUMMY_SHAPES["height"],
-        num_frames: int = 2,
+        num_frames: int = 1,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
