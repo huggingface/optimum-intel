@@ -1474,11 +1474,11 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.clear_requests()
 
+        self.model._openvino_config = OVConfig(quantization_config=quantization_config)
+        self.model._set_ov_config_parameters()
         if save_directory is not None:
             save_directory = Path(save_directory)
             save_directory.mkdir(parents=True, exist_ok=True)
-            self.model._openvino_config = OVConfig(quantization_config=quantization_config)
-            self.model._set_ov_config_parameters()
             self.model.save_pretrained(save_directory)
 
     @staticmethod
