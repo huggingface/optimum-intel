@@ -948,7 +948,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         return
 
-    def _fill_missing_model_quantization_fields(
+    def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: Optional[str] = None,

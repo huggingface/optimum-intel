@@ -634,7 +634,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         return quantization_config
 
-    def _fill_missing_model_quantization_fields(
+    def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: Optional[str] = None,
@@ -674,7 +674,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         # TODO: Expand to pipeline quantization config and apply default ignored scope
         if isinstance(quantization_config, dict):
             quantization_config = _quantization_config_from_dict(quantization_config)
-        quantization_config = self._fill_missing_model_quantization_fields(quantization_config, model_name_or_path)
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
 
         from optimum.intel.openvino.quantization import OVQuantizer
 

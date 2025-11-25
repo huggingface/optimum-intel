@@ -1086,7 +1086,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
         if task in ["automatic-speech-recognition", "text-generation"]:
-            self.skipTest("Skipping. Reason: ticket 177157 / issue #1528. ")
+            self.skipTest("Skipping. Reason: ticket 177157 / issue #1528.")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "

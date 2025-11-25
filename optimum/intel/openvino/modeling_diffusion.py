@@ -709,7 +709,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             return -1
         return batch_size.get_length()
 
-    def _fill_missing_model_quantization_fields(
+    def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: Optional[str] = None,

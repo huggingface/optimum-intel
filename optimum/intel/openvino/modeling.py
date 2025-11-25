@@ -413,7 +413,7 @@ class OVModelForFeatureExtraction(OVModel):
         else:
             return super()._from_pretrained(model_id, config, *args, **kwargs)
 
-    def _fill_missing_model_quantization_fields(
+    def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: Optional[str] = None,
@@ -488,7 +488,7 @@ class OVModelForMaskedLM(OVModel):
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return MaskedLMOutput(logits=logits)
 
-    def _fill_missing_model_quantization_fields(
+    def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: Optional[str] = None,
@@ -1020,7 +1020,7 @@ class OVModelForZeroShotImageClassification(OVModel):
             image_embeds=image_embeds,
         )
 
-    def _fill_missing_model_quantization_fields(
+    def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: Optional[str] = None,
