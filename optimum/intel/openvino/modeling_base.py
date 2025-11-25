@@ -600,6 +600,14 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         model_name_or_path: str,
         quantization_config: Union[OVQuantizationConfigBase, Dict],
     ) -> Union[OVQuantizationConfigBase, Dict]:
+        """
+        Tries to match the given model name or path to a recommended quantization config if available.
+        Arguments:
+            model_name_or_path (`str`):
+                The model name or path.
+            quantization_config (`OVQuantizationConfigBase` or `Dict`):
+                The quantization config to resolve.
+        """
         if quantization_config == {"bits": 4}:
             # If config is given as {"bits": 4}, use the default 4-bit quantization config
             if model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
@@ -632,6 +640,15 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config: OVQuantizationConfigBase,
         model_name_or_path: str,
     ) -> OVQuantizationConfigBase:
+        """
+        Preprocess quantization config before applying quantization.
+        Usually sets tokenizer/processor in quantization config if they are not already set.
+        Arguments:
+            quantization_config (`OVQuantizationConfigBase`):
+                The quantization config to preprocess.
+            model_name_or_path (`str`):
+                The model name or path.
+        """
         return quantization_config
 
     def _apply_quantization(
