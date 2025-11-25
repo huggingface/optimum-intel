@@ -537,6 +537,7 @@ def main_export(
                         )
                         break
             else:
+                # TODO: Remove this case when the workaround for GPT-OSS is removed
                 quantization_config = ov_config.quantization_config
             if quantization_config is None:
                 del submodel
