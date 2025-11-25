@@ -326,15 +326,13 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import infer_task, main_export
+        from ...exporters.openvino.__main__ import main_export
         from ...intel.openvino.configuration import (
             _DEFAULT_4BIT_WQ_CONFIG,
             OVConfig,
-            _GPTOSSQuantizationConfig,
             get_default_quantization_config,
         )
-        from ...intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
-        from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+        from ...intel.utils.import_utils import is_nncf_available
         from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 
         if self.args.library is None:
@@ -433,100 +431,23 @@ class OVExportCommand(BaseOptimumCLICommand):
                         quantization_config = prepare_q_config(self.args)
             ov_config = OVConfig(quantization_config=quantization_config)
 
-        task = infer_task(self.args.task, self.args.model, library_name=library_name)
-        # in some cases automatic task detection for multimodal models gives incorrect results
-        if self.args.task == "auto" and library_name == "transformers":
-            from transformers import AutoConfig
-
-            from ...exporters.openvino.utils import MULTI_MODAL_TEXT_GENERATION_MODELS
-
-            config = AutoConfig.from_pretrained(
-                self.args.model,
-                cache_dir=self.args.cache_dir,
-                trust_remote_code=self.args.trust_remote_code,
-            )
-            if getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS:
-                task = "image-text-to-text"
-
-        quantization_config = ov_config.quantization_config if ov_config else None
-        # TODO: Remove a workaround for GPT-OSS when possible
-        apply_quantization = quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
-        temp_dir = TemporaryDirectory() if apply_quantization else None
-        try:
-            # If no explicit quantization is requested, proceed to export only. That said, INT8 weight-only quantization
-            # still will be applied if the model is large enough.
-            ov_config = OVConfig() if apply_quantization else ov_config
-            main_export_output = Path(temp_dir.name) if apply_quantization else self.args.output
-
-            # TODO : add input shapes
-            main_export(
-                model_name_or_path=self.args.model,
-                output=main_export_output,
-                task=self.args.task,
-                framework=self.args.framework,
-                cache_dir=self.args.cache_dir,
-                trust_remote_code=self.args.trust_remote_code,
-                pad_token_id=self.args.pad_token_id,
-                ov_config=ov_config,
-                stateful=not self.args.disable_stateful,
-                convert_tokenizer=not self.args.disable_convert_tokenizer,
-                library_name=library_name,
-                variant=self.args.variant,
-                model_kwargs=self.args.model_kwargs,
-                # **input_shapes,
-            )
-
-            if not apply_quantization:
-                return
-
-            # TODO: move the logic below inside main_export()
-            if library_name == "diffusers":
-                if not is_diffusers_available():
-                    raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
-
-                from diffusers import DiffusionPipeline
-
-                diffusers_config = DiffusionPipeline.load_config(self.args.model)
-                class_name = diffusers_config.get("_class_name", None)
-                ov_class_name = f"OV{class_name}"
-                try:
-                    model_cls = getattr(__import__("optimum.intel", fromlist=[ov_class_name]), ov_class_name)
-                except (AttributeError, ImportError) as e:
-                    raise RuntimeError(
-                        f"Wasn't able to locate OpenVINO class for {class_name} diffusion model."
-                    ) from e
-            else:
-                try:
-                    model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-                    if model_cls_name == "OVModelForFeatureExtraction" and library_name == "sentence_transformers":
-                        model_cls_name = "OVSentenceTransformer"
-                    model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
-                except (AttributeError, ImportError, KeyError) as e:
-                    raise RuntimeError(
-                        f"Wasn't able to locate OpenVINO class for task {self.args.task} ({task})."
-                    ) from e
-
-            additional_model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            model_kwargs = (self.args.model_kwargs or {}) | additional_model_kwargs
-            model = model_cls.from_pretrained(
-                main_export_output,
-                compile=False,
-                trust_remote_code=self.args.trust_remote_code,
-                cache_dir=self.args.cache_dir,
-                **model_kwargs,
-            )
-
-            model._apply_quantization(
-                quantization_config,
-                compile_only=False,
-                compile_model=False,
-                model_name_or_path=self.args.model,
-                trust_remote_code=self.args.trust_remote_code,
-            )
-            model.save_pretrained(self.args.output)
-        finally:
-            if temp_dir is not None:
-                temp_dir.cleanup()
+        # TODO : add input shapes
+        main_export(
+            model_name_or_path=self.args.model,
+            output=self.args.output,
+            task=self.args.task,
+            framework=self.args.framework,
+            cache_dir=self.args.cache_dir,
+            trust_remote_code=self.args.trust_remote_code,
+            pad_token_id=self.args.pad_token_id,
+            ov_config=ov_config,
+            stateful=not self.args.disable_stateful,
+            convert_tokenizer=not self.args.disable_convert_tokenizer,
+            library_name=library_name,
+            variant=self.args.variant,
+            model_kwargs=self.args.model_kwargs,
+            # **input_shapes,
+        )
 
 
 def prepare_wc_config(args, default_configs):
