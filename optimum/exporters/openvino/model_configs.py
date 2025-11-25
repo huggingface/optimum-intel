@@ -2320,6 +2320,7 @@ class T5EncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
 
 
 @register_in_tasks_manager("gemma2-text-encoder", *["feature-extraction"], library_name="diffusers")
+@register_in_tasks_manager("qwen2_5_vl_text", *["feature-extraction"], library_name="diffusers")
 class Gemma2TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3678,55 +3679,55 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
     
-@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text"], library_name="diffusers")
-class Qwen2_5_VLTextEncoderOpenVINOConfig(Qwen2_5_VLOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.49.0"
+# @register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text", "feature-extraction"], library_name="diffusers")
+# class Qwen2_5_VLTextEncoderOpenVINOConfig(Qwen2_5_VLOpenVINOConfig):
+#     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
-    def with_behavior(
-        self,
-        behavior: Union[str, Qwen2VLConfigBehavior],
-    ):
-        """
-        Creates a config for different behaviour.
-        Args:
-            behavior ([`ConfigBehavior`]):
-                The behavior to use for the new instance.
-        """
-        if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
-            behavior = Qwen2VLConfigBehavior(behavior)
+#     def with_behavior(
+#         self,
+#         behavior: Union[str, Qwen2VLConfigBehavior],
+#     ):
+#         """
+#         Creates a config for different behaviour.
+#         Args:
+#             behavior ([`ConfigBehavior`]):
+#                 The behavior to use for the new instance.
+#         """
+#         if isinstance(behavior, str) and not isinstance(behavior, Qwen2VLConfigBehavior):
+#             behavior = Qwen2VLConfigBehavior(behavior)
 
-        if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
+#         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
+#             return get_vlm_text_embeddings_config("qwen2", self._orig_config, self.int_dtype, self.float_dtype)
 
-        if behavior == Qwen2VLConfigBehavior.LANGUAGE:
-            export_config_class = TasksManager._SUPPORTED_MODEL_TYPE["qwen2"]["openvino"]["feature-extraction"]
-            export_config = export_config_class(
-                self._orig_config,
-                use_past=True,
-                use_past_in_inputs=True,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-            )
-            return export_config
+#         if behavior == Qwen2VLConfigBehavior.LANGUAGE:
+#             export_config_class = TasksManager._SUPPORTED_MODEL_TYPE["qwen2"]["openvino"]["feature-extraction"]
+#             export_config = export_config_class(
+#                 self._orig_config,
+#                 use_past=True,
+#                 use_past_in_inputs=True,
+#                 int_dtype=self.int_dtype,
+#                 float_dtype=self.float_dtype,
+#             )
+#             return export_config
 
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
-        if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
-            return self.__class__(
-                self._orig_config,
-                task=self.task,
-                int_dtype=self.int_dtype,
-                float_dtype=self.float_dtype,
-                behavior=behavior,
-                preprocessors=self._preprocessors,
-            )
+#         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS:
+#             return self.__class__(
+#                 self._orig_config,
+#                 task=self.task,
+#                 int_dtype=self.int_dtype,
+#                 float_dtype=self.float_dtype,
+#                 behavior=behavior,
+#                 preprocessors=self._preprocessors,
+#             )
+#         if behavior == Qwen2VLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+#             return self.__class__(
+#                 self._orig_config,
+#                 task=self.task,
+#                 int_dtype=self.int_dtype,
+#                 float_dtype=self.float_dtype,
+#                 behavior=behavior,
+#                 preprocessors=self._preprocessors,
+#             )
 
 
 @register_in_tasks_manager(

@@ -1491,7 +1491,18 @@ def get_qwen_image_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     # Text encoder
     text_encoder = getattr(pipeline, "text_encoder", None)
     if text_encoder is not None:
-        _, models_for_export, _  = _get_multi_modal_submodels_and_export_configs(model=text_encoder, task="image-text-to-text", library_name="diffusers", int_dtype=int_dtype, float_dtype=float_dtype)
+        text_encoder.config.output_hidden_states = True
+        text_encoder_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=text_encoder,
+            exporter=exporter,
+            library_name="diffusers",
+            task="feature-extraction",
+            model_type="qwen2_5_vl_text",
+        )
+        text_encoder_export_config = text_encoder_config_constructor(
+            pipeline.text_encoder.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["text_encoder"] = (text_encoder, text_encoder_export_config)
     transformer = pipeline.transformer
     transformer.config.text_encoder_projection_dim = transformer.config.joint_attention_dim
     transformer.config.requires_aesthetics_score = getattr(pipeline.config, "requires_aesthetics_score", False)
