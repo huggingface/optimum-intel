@@ -433,9 +433,9 @@ class OVSamModel(OVBaseModel):
     def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
     ) -> OVQuantizationConfigBase:
-        if quantization_config.processor is None and model_name_or_path is not None:
+        if quantization_config.processor is None:
             quantization_config = quantization_config.clone()
-            quantization_config.processor = str(model_name_or_path)
+            quantization_config.processor = model_name_or_path
         return quantization_config

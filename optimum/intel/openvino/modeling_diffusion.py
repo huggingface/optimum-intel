@@ -712,7 +712,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
     ) -> OVQuantizationConfigBase:
         if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
             quantization_config = quantization_config.clone()

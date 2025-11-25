@@ -637,7 +637,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
     def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
     ) -> OVQuantizationConfigBase:
         return quantization_config
 
@@ -646,7 +646,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config: Union[Dict, OVQuantizationConfigBase],
         compile_only: bool,
         compile_model: bool,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
         trust_remote_code: Optional[bool] = False,
     ):
         """
@@ -658,7 +658,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 Whether the model was initialized with `compile_only=True`.
             compile_model (`bool`):
                 Whether to compile the model after quantization.
-            model_name_or_path (`str`, *optional*):
+            model_name_or_path (`str`):
                 The model name or path used to set tokenizer/processor in quantization config if they are not set.
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
@@ -674,7 +674,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         # TODO: Expand to pipeline quantization config and apply default ignored scope
         if isinstance(quantization_config, dict):
             quantization_config = _quantization_config_from_dict(quantization_config)
-        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
+        quantization_config = self._preprocess_quantization_config(quantization_config, str(model_name_or_path))
 
         from optimum.intel.openvino.quantization import OVQuantizer
 

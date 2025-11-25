@@ -813,16 +813,16 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def _preprocess_quantization_config(
         self,
         quantization_config: OVQuantizationConfigBase,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
     ) -> OVQuantizationConfigBase:
         if model_name_or_path is not None and (
             quantization_config.processor is None or quantization_config.tokenizer is None
         ):
             quantization_config = quantization_config.clone()
             if quantization_config.processor is None:
-                quantization_config.processor = str(model_name_or_path)
+                quantization_config.processor = model_name_or_path
             if quantization_config.tokenizer is None:
-                quantization_config.tokenizer = str(model_name_or_path)
+                quantization_config.tokenizer = model_name_or_path
         return quantization_config
 
 
