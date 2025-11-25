@@ -598,10 +598,16 @@ def _apply_general_quantization(
     trust_remote_code: bool = False,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ):
+    """
+    Apply quantization with a general quantization config to the exported model and save it to disk.
+    """
     from ...intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
     from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 
     def _merge_move(src: Path, dest: Path):
+        """
+        Move src to dest. If dest exists and is a directory, merge src into dest recursively.
+        """
         if src.is_dir():
             if dest.exists():
                 assert dest.is_dir(), "Destination must be a directory as well"
@@ -617,6 +623,7 @@ def _apply_general_quantization(
                 dest.unlink()
             src.rename(dest)
 
+    # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
         if not is_diffusers_available():
             raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
@@ -639,6 +646,7 @@ def _apply_general_quantization(
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
 
+    # Step 2. Load the exported model
     additional_model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
     model = model_cls.from_pretrained(
         output,
@@ -648,7 +656,9 @@ def _apply_general_quantization(
         **((model_kwargs or {}) | additional_model_kwargs),
     )
 
+    # Step 3. Apply quantization
     with TemporaryDirectory() as tmpdir:
+        # Save quantize model to a temporary directory to avoid conflicts when reading and writing from the same directory
         model._apply_quantization(
             quantization_config,
             compile_only=False,
@@ -661,6 +671,7 @@ def _apply_general_quantization(
         del model
         gc.collect()
 
+        # Move quantized model to the output directory
         output.mkdir(parents=True, exist_ok=True)
         for item in Path(tmpdir).iterdir():
             dest = output / item.name
@@ -668,7 +679,10 @@ def _apply_general_quantization(
 
 
 def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
-    # TODO: Refactor the code below the following way:
+    """
+    Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+    """
+    # TODO: Refactor the code below in the following way:
     #   1. Introduce OVBaseModel.ov_model_paths attribute that will return list of paths to all ov_models
     #   2. Create a OVPipelineQuantizationConfig based on each submodel size
     #   3. Run _apply_general_quantization() with the created quantization config
