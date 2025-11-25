@@ -460,8 +460,6 @@ def main_export(
                 **loading_kwargs,
             )
         else:
-
-
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
             task_model_loading = task
