@@ -275,8 +275,11 @@ def main_export(
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
+        if is_openvino_version(">=", "2025.4.0"):
+            supported_quant_methods.append("bitnet")
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
+        do_bitnet_patching = quant_method == "bitnet"
 
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
@@ -368,6 +371,23 @@ def main_export(
 
                 GPTQQuantizer.post_init_model = post_init_model
 
+            if do_bitnet_patching:
+                from transformers.integrations.bitnet import AutoBitLinear
+
+                orig_load_hook = AutoBitLinear.load_hook
+
+                # rewrite load hook to save original weight
+                def bitnet_load_hook(self, state_dict, prefix, *args, **kwargs):
+                    if (prefix + "weight") in state_dict and state_dict[prefix + "weight"].dtype != self.weight.dtype:
+                        self.original_weight = state_dict[prefix + "weight"]
+                        w_shape = self.original_weight.shape
+                        state_dict[prefix + "weight"] = torch.empty(
+                            (w_shape[0] * 4, w_shape[1]), dtype=self.weight.dtype, device="meta"
+                        )
+                    return state_dict
+
+                AutoBitLinear.load_hook = bitnet_load_hook
+
         has_remote_code = hasattr(config, "auto_map")
         architectures = getattr(config, "architectures", None) or []
         if has_remote_code and trust_remote_code:
@@ -440,9 +460,19 @@ def main_export(
                 **loading_kwargs,
             )
         else:
+
+
+            # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
+            # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
+            task_model_loading = task
+            if library_name == "transformers":
+                has_remote_code = hasattr(config, "auto_map")
+                if has_remote_code and trust_remote_code and task == "image-text-to-text":
+                    task_model_loading = "text-generation"
+
             # TODO : use SentenceTransformer and create_model to load respectively sentence-transformers / timm models
             model = TasksManager.get_model_from_task(
-                task,
+                task_model_loading,
                 model_name_or_path,
                 subfolder=subfolder,
                 revision=revision,
@@ -597,6 +627,8 @@ def main_export(
             torch.cuda.is_available = orig_cuda_check
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
+            if do_bitnet_patching:
+                AutoBitLinear.load_hook = orig_load_hook
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):

@@ -6954,3 +6954,224 @@ class Zamba2ModelPatcher(ModelPatcher):
             else:
                 continue
             mamba_layer.forward = mamba_layer._orig_forward
+
+
+# The original implementation of this method can be found at:
+# https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/lfm2/modeling_lfm2.py#L476
+# This patch modifies `slow_forward()` so that when traced by torch.jit, it works correctly
+# during both the prefill and decoding steps.
+# The patched version differs from the original in that it executes both the prefill
+# and decoding branches every time to compute and store the correct value of conv_state in the cache.
+# The distinction between prefill and decoding modes is determined by the sequence length
+# (seq_len): 1. seq_len > 1 indicates the prefill phase;
+# seq_len = 1 indicates the decoding phase.
+def lfm2_short_conv_forward_patched(
+    self,
+    x: torch.Tensor,
+    past_key_values=None,
+    cache_position=None,
+    attention_mask=None,
+):
+    from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
+
+    seqlen = x.shape[1]
+
+    x = apply_mask_to_padding_states(x, attention_mask)
+    BCx = self.in_proj(x).transpose(-1, -2)
+    B, C, x = BCx.chunk(3, dim=-2)
+
+    Bx = B * x
+
+    if past_key_values is not None:
+        layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
+        conv_state_dec = past_key_values.conv_cache[layer_idx]
+        cache_position = cache_position.clamp(0, self.L_cache - 1)
+        conv_state_dec = conv_state_dec.roll(shifts=-1, dims=-1)
+        conv_state_dec[:, :, cache_position] = Bx.to(device=conv_state_dec.device, dtype=conv_state_dec.dtype)
+
+        conv_out_dec = torch.sum(conv_state_dec.to(Bx.device) * self.conv.weight[:, 0, :], dim=-1)
+        if self.bias:
+            conv_out_dec += self.conv.bias
+        conv_out_dec = conv_out_dec.unsqueeze(-1)
+
+        conv_state_prefill = torch.nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))
+        conv_out_prefill = self.conv(Bx)[..., :seqlen]
+
+        is_decoding = torch.tensor(seqlen == 1).to(x.dtype)
+        conv_out = conv_out_dec * is_decoding + conv_out_prefill * (1.0 - is_decoding)
+        new_conv_state = conv_state_dec * is_decoding + conv_state_prefill * (1.0 - is_decoding)
+        past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+    else:
+        conv_out = self.conv(Bx)[..., :seqlen]
+
+    y = C * conv_out
+    y = y.transpose(-1, -2).contiguous()
+    y = self.out_proj(y)
+    return y
+
+
+# This patcher class serves the following purposes:
+# 1. Packs the KV-cache and conv_state tensors into a Lfm2HybridConvCacheWrap structure
+#    for subsequent invocation of the model's `forward` method.
+# 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
+#    during both the prefill and decoding steps.
+class Lfm2ModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+
+        super().__init__(config, model, model_kwargs)
+
+        # This cache wrapper class serves for following purposes:
+        # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
+        # 2. Removes the unused cache items that the source model contains.
+        # For this reason cache items re-indexing is required.
+        class Lfm2HybridConvCacheWrap(Lfm2HybridConvCache):
+            def __init__(self, config, max_batch_size: int, conv_cache, key_cache, value_cache):
+                # Call parent constructor with all required arguments
+                super().__init__(config=config, max_batch_size=max_batch_size)
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                self.conv_cache = conv_cache
+                self.conv_layer_idx_mapping = {}
+                self.attention_layer_idx_mapping = {}
+                conv_layer_idx = 0
+                attention_layer_idx = 0
+                for i in range(config.num_hidden_layers):
+                    if config.layer_types[i] == "full_attention":
+                        self.attention_layer_idx_mapping[i] = attention_layer_idx
+                        attention_layer_idx += 1
+                    elif config.layer_types[i] == "conv":
+                        self.conv_layer_idx_mapping[i] = conv_layer_idx
+                        conv_layer_idx += 1
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                """
+                Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
+                Patching is required for calculating of the correct cache index.
+                """
+                # Update the cache
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                if self.key_cache[layer_idx].numel() == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                """
+                Returns the sequence length of the cached states. A layer index can be optionally passed.
+                Patching is required for calculating of the correct cache index.
+                """
+                # take any layer that contains cache and not empty tensor
+                layer_idx = (
+                    self.first_attention_layer if self.layer_types[layer_idx] != "full_attention" else layer_idx
+                )
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        def patched_forward(
+            input_ids: Optional[torch.LongTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            cache_params=None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            labels: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            cache_position=None,
+            logits_to_keep: Union[int, torch.Tensor] = 0,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            num_conv_layers = self.real_config._config.layer_types.count("conv")
+            num_atten_layers = self.real_config._config.layer_types.count("full_attention")
+            if cache_params is not None:
+                use_cache = True
+                conv_cache = []
+                key_cache = []
+                value_cache = []
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                batch_size = cache_params[0].size(0)
+
+                for idx in range(num_conv_layers):
+                    conv_cache.append(cache_params[idx])
+
+                for idx in range(num_atten_layers):
+                    key_cache.append(cache_params[num_conv_layers + idx * 2])
+                    value_cache.append(cache_params[num_conv_layers + idx * 2 + 1])
+
+                wrapped_cache_params = Lfm2HybridConvCacheWrap(
+                    self.real_config._config, batch_size, conv_cache, key_cache, value_cache
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                key_values = causal_lm_output.past_key_values
+                # unwrap Lfm2HybridDynamicCache object
+                present_key_values = []
+                for idx in range(num_conv_layers):
+                    present_key_values.append(key_values.conv_cache[idx])
+
+                for idx in range(num_atten_layers):
+                    present_key_values.append(key_values.key_cache[idx])
+                    present_key_values.append(key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+                conv_layer = layer.conv
+            else:
+                continue
+            conv_layer._orig_forward = conv_layer.slow_forward
+            conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+                conv_layer = layer.conv
+            else:
+                continue
+            conv_layer.slow_forward = conv_layer._orig_forward
