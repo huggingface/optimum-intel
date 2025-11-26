@@ -146,6 +146,8 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3MoeModelPatcher,
     QwenModelPatcher,
+    QwenTransfromerModelPatcher,
+    QwenVAEPatcher,
     SAMModelPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
@@ -4772,6 +4774,12 @@ class QwenTransformerOpenVINOConfig(SD3TransformerOpenVINOConfig):
             common_inputs["guidance"] = {0: "batch_size"}
         return common_inputs
     
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> ModelPatcher:
+        # OpenVINO can not handle complex data in this model
+        return QwenTransfromerModelPatcher(self, model, model_kwargs=model_kwargs)
+    
 class QwenVaeDummyInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("sample", "latent_sample")
 
@@ -4799,6 +4807,9 @@ class QwenVaeDummyInputGenerator(DummyVisionInputGenerator):
     
 @register_in_tasks_manager("qwen-image-decoder", *["semantic-segmentation"], library_name="diffusers")
 class QwenDecoderOpenVINOConfig(LTXVaeDecoderOpenVINOConfig):
+    _MODEL_PATCHER = QwenVAEPatcher
+    
+    # OpenVINO can not support torch.nn.Upsample with nearest-exact interpolation
     DUMMY_INPUT_GENERATOR_CLASSES = (QwenVaeDummyInputGenerator,)
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

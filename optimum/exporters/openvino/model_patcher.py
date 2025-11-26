@@ -6756,3 +6756,327 @@ class SAMModelPatcher(ModelPatcher):
                         return {"iou_scores": iou_predictions, "pred_masks": low_res_masks}
 
         self.patched_forward = patched_forward
+
+class QwenVAEPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for up_block in self._model.decoder.up_blocks:
+            if up_block.upsamplers is not None:
+                for upsampler in up_block.upsamplers:
+                    for layer in upsampler.resample:
+                        if isinstance(layer, torch.nn.Upsample):
+                            if layer.mode != 'nearest':
+                                layer._original_mode = layer.mode
+                                layer.mode = 'nearest'
+                
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for up_block in self._model.decoder.up_blocks:
+            if up_block.upsamplers is not None:
+                for upsampler in up_block.upsamplers:
+                    for layer in upsampler.resample:
+                        if isinstance(layer, torch.nn.Upsample) and hasattr(layer, '_original_mode'):
+                            layer.mode = layer._original_mode
+            
+       
+class QwenEmbedRope(torch.nn.Module):
+    def __init__(self, theta: int, axes_dim: List[int], scale_rope=False):
+        super().__init__()
+        self.theta = theta
+        self.axes_dim = axes_dim
+        self.scale_rope = scale_rope
+        
+        pos_index = torch.arange(4096)
+        neg_index = torch.arange(4096).flip(0) * -1 - 1
+        
+        # 生成复数频率 (dim//2 维度)
+        pos_freqs_half_complex = torch.cat(
+            [
+                self.rope_params(pos_index, self.axes_dim[0], self.theta),
+                self.rope_params(pos_index, self.axes_dim[1], self.theta),
+                self.rope_params(pos_index, self.axes_dim[2], self.theta),
+            ],
+            dim=1,
+        )
+        neg_freqs_half_complex = torch.cat(
+            [
+                self.rope_params(neg_index, self.axes_dim[0], self.theta),
+                self.rope_params(neg_index, self.axes_dim[1], self.theta),
+                self.rope_params(neg_index, self.axes_dim[2], self.theta),
+            ],
+            dim=1,
+        )
+        
+        pos_freqs_half_cos = pos_freqs_half_complex.real  # [4096, 64]
+        pos_freqs_half_sin = pos_freqs_half_complex.imag  # [4096, 64]
+        neg_freqs_half_cos = neg_freqs_half_complex.real
+        neg_freqs_half_sin = neg_freqs_half_complex.imag
+        
+        pos_freqs_cos = torch.repeat_interleave(pos_freqs_half_cos, 2, dim=1)  # [4096, 128]
+        pos_freqs_sin = torch.repeat_interleave(pos_freqs_half_sin, 2, dim=1)  # [4096, 128]
+        neg_freqs_cos = torch.repeat_interleave(neg_freqs_half_cos, 2, dim=1)
+        neg_freqs_sin = torch.repeat_interleave(neg_freqs_half_sin, 2, dim=1)
+        
+        self.register_buffer('pos_freqs_cos', pos_freqs_cos, persistent=False)
+        self.register_buffer('pos_freqs_sin', pos_freqs_sin, persistent=False)
+        self.register_buffer('neg_freqs_cos', neg_freqs_cos, persistent=False)
+        self.register_buffer('neg_freqs_sin', neg_freqs_sin, persistent=False)
+        
+        self.rope_cache = {}
+
+    def rope_params(self, index, dim, theta=10000):
+        """
+        Args:
+            index: [0, 1, 2, 3] 1D Tensor representing the position index of the token
+        
+        Note: Generates dim//2 frequencies as RoPE applies rotation in pairs.
+        Returns complex tensor that will be converted to cos/sin for use_real=True mode.
+        """
+        assert dim % 2 == 0
+        # Generate dim//2 frequencies for RoPE (applied to dimension pairs)
+        freqs = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
+        freqs = torch.polar(torch.ones_like(freqs), freqs)
+        return freqs
+    
+    def forward(self, video_fhw, txt_seq_lens, device):
+        
+        if isinstance(video_fhw, list):
+            video_fhw = video_fhw[0]
+        if not isinstance(video_fhw, list):
+            video_fhw = [video_fhw]
+
+        vid_freqs = []
+        max_vid_index = 0
+        for idx, fhw in enumerate(video_fhw):
+            frame, height, width = fhw
+            # 直接计算,返回 (cos, sin) 元组
+            video_freq = self._compute_video_freqs(frame, height, width, idx)
+            vid_freqs.append(video_freq)
+
+            if self.scale_rope:
+                max_vid_index = torch.maximum(torch.tensor(height // 2, device=device), 
+                                             torch.tensor(width // 2, device=device))
+                max_vid_index = torch.maximum(max_vid_index, torch.tensor(max_vid_index, device=device))
+            else:
+                max_vid_index = torch.maximum(torch.tensor(height, device=device), 
+                                             torch.tensor(width, device=device))
+                max_vid_index = torch.maximum(max_vid_index, torch.tensor(max_vid_index, device=device))
+
+        max_len = torch.tensor(txt_seq_lens, device=device).max()
+        
+        txt_freqs_cos = self.pos_freqs_cos[max_vid_index : max_vid_index + max_len, ...]
+        txt_freqs_sin = self.pos_freqs_sin[max_vid_index : max_vid_index + max_len, ...]
+        vid_freqs_cos = torch.cat([f[0] for f in vid_freqs], dim=0)
+        vid_freqs_sin = torch.cat([f[1] for f in vid_freqs], dim=0)
+
+        return (vid_freqs_cos, vid_freqs_sin), (txt_freqs_cos, txt_freqs_sin)
+
+    def _compute_video_freqs(self, frame, height, width, idx=0):
+        """
+        Compute video frequencies, returns (cos, sin) tuple
+        
+        Returns:
+            Tuple of (cos_freqs, sin_freqs), each of shape [seq_lens, D]
+        """
+        seq_lens = frame * height * width
+        
+        freqs_pos_cos = self.pos_freqs_cos.split(self.axes_dim, dim=1)
+        freqs_pos_sin = self.pos_freqs_sin.split(self.axes_dim, dim=1)
+        freqs_neg_cos = self.neg_freqs_cos.split(self.axes_dim, dim=1)
+        freqs_neg_sin = self.neg_freqs_sin.split(self.axes_dim, dim=1)
+
+        freqs_frame_cos = freqs_pos_cos[0][idx : idx + frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+        freqs_frame_sin = freqs_pos_sin[0][idx : idx + frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+        
+        if self.scale_rope:
+            freqs_height_cos = torch.cat([freqs_neg_cos[1][-(height - height // 2) :], freqs_pos_cos[1][: height // 2]], dim=0)
+            freqs_height_cos = freqs_height_cos.view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_height_sin = torch.cat([freqs_neg_sin[1][-(height - height // 2) :], freqs_pos_sin[1][: height // 2]], dim=0)
+            freqs_height_sin = freqs_height_sin.view(1, height, 1, -1).expand(frame, height, width, -1)
+            
+            freqs_width_cos = torch.cat([freqs_neg_cos[2][-(width - width // 2) :], freqs_pos_cos[2][: width // 2]], dim=0)
+            freqs_width_cos = freqs_width_cos.view(1, 1, width, -1).expand(frame, height, width, -1)
+            freqs_width_sin = torch.cat([freqs_neg_sin[2][-(width - width // 2) :], freqs_pos_sin[2][: width // 2]], dim=0)
+            freqs_width_sin = freqs_width_sin.view(1, 1, width, -1).expand(frame, height, width, -1)
+        else:
+            freqs_height_cos = freqs_pos_cos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
+            freqs_height_sin = freqs_pos_sin[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
+            
+            freqs_width_cos = freqs_pos_cos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+            freqs_width_sin = freqs_pos_sin[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+
+        freqs_cos = torch.cat([freqs_frame_cos, freqs_height_cos, freqs_width_cos], dim=-1).reshape(seq_lens, -1)
+        freqs_sin = torch.cat([freqs_frame_sin, freqs_height_sin, freqs_width_sin], dim=-1).reshape(seq_lens, -1)
+        
+        return freqs_cos.contiguous(), freqs_sin.contiguous()
+    
+def apply_rotary_emb_qwen(
+    x: torch.Tensor,
+    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]],
+    use_real: bool = True,
+    use_real_unbind_dim: int = -1,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
+    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
+    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
+    tensors contain rotary embeddings and are returned as real tensors.
+
+    Args:
+        x (`torch.Tensor`):
+            Query or key tensor to apply rotary embeddings. [B, S, H, D] xk (torch.Tensor): Key tensor to apply
+        freqs_cis (`Tuple[torch.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
+    """
+    if use_real:
+        cos, sin = freqs_cis  # [S, D]
+        # Reshape for broadcasting: [S, D] → [1, S, 1, D] to match x shape [B, S, H, D]
+        cos = cos[None, :, None, :]
+        sin = sin[None, :, None, :]
+        cos, sin = cos.to(x.device), sin.to(x.device)
+
+        if use_real_unbind_dim == -1:
+            # Used for flux, cogvideox, hunyuan-dit
+            x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
+            x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
+        elif use_real_unbind_dim == -2:
+            # Used for Stable Audio, OmniGen, CogView4 and Cosmos
+            x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
+            x_rotated = torch.cat([-x_imag, x_real], dim=-1)
+        else:
+            raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
+
+        out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
+
+        return out
+    else:
+        x_rotated = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+        # print(f"freqs_cis type: {type(freqs_cis)}, freqs_cis tensor type: {freqs_cis.type()}")
+        freqs_cis = freqs_cis.unsqueeze(1)
+        
+        x_out = torch.view_as_real(x_rotated * freqs_cis).flatten(3)
+
+        return x_out.type_as(x)
+           
+class QwenDoubleStreamAttnProcessor2_0:
+    """
+    Attention processor for Qwen double-stream architecture, matching DoubleStreamLayerMegatron logic. This processor
+    implements joint attention computation where text and image streams are processed together.
+    """
+
+    _attention_backend = None
+    from diffusers.models.attention_processor import Attention
+
+    def __init__(self):
+        if not hasattr(F, "scaled_dot_product_attention"):
+            raise ImportError(
+                "QwenDoubleStreamAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0."
+            )
+
+    def __call__(
+        self,
+        attn: Attention,
+        hidden_states: torch.FloatTensor,  # Image stream
+        encoder_hidden_states: torch.FloatTensor = None,  # Text stream
+        encoder_hidden_states_mask: torch.FloatTensor = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        image_rotary_emb: Optional[torch.Tensor] = None,
+    ) -> torch.FloatTensor:
+        if encoder_hidden_states is None:
+            raise ValueError("QwenDoubleStreamAttnProcessor2_0 requires encoder_hidden_states (text stream)")
+
+        seq_txt = encoder_hidden_states.shape[1]
+
+        # Compute QKV for image stream (sample projections)
+        img_query = attn.to_q(hidden_states)
+        img_key = attn.to_k(hidden_states)
+        img_value = attn.to_v(hidden_states)
+
+        # Compute QKV for text stream (context projections)
+        txt_query = attn.add_q_proj(encoder_hidden_states)
+        txt_key = attn.add_k_proj(encoder_hidden_states)
+        txt_value = attn.add_v_proj(encoder_hidden_states)
+
+        # Reshape for multi-head attention
+        img_query = img_query.unflatten(-1, (attn.heads, -1))
+        img_key = img_key.unflatten(-1, (attn.heads, -1))
+        img_value = img_value.unflatten(-1, (attn.heads, -1))
+
+        txt_query = txt_query.unflatten(-1, (attn.heads, -1))
+        txt_key = txt_key.unflatten(-1, (attn.heads, -1))
+        txt_value = txt_value.unflatten(-1, (attn.heads, -1))
+
+        # Apply QK normalization
+        if attn.norm_q is not None:
+            img_query = attn.norm_q(img_query)
+        if attn.norm_k is not None:
+            img_key = attn.norm_k(img_key)
+        if attn.norm_added_q is not None:
+            txt_query = attn.norm_added_q(txt_query)
+        if attn.norm_added_k is not None:
+            txt_key = attn.norm_added_k(txt_key)
+
+        if image_rotary_emb is not None:
+            img_freqs, txt_freqs = image_rotary_emb
+            img_query = apply_rotary_emb_qwen(img_query, img_freqs, use_real=True)
+            img_key = apply_rotary_emb_qwen(img_key, img_freqs, use_real=True)
+            txt_query = apply_rotary_emb_qwen(txt_query, txt_freqs, use_real=True)
+            txt_key = apply_rotary_emb_qwen(txt_key, txt_freqs, use_real=True)
+
+        # Concatenate for joint attention
+        # Order: [text, image]
+        joint_query = torch.cat([txt_query, img_query], dim=1)
+        joint_key = torch.cat([txt_key, img_key], dim=1)
+        joint_value = torch.cat([txt_value, img_value], dim=1)
+        from diffusers.models.attention_dispatch import dispatch_attention_fn
+
+        # Compute joint attention
+        joint_hidden_states = dispatch_attention_fn(
+            joint_query,
+            joint_key,
+            joint_value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+            backend=self._attention_backend,
+        )
+
+        # Reshape back
+        joint_hidden_states = joint_hidden_states.flatten(2, 3)
+        joint_hidden_states = joint_hidden_states.to(joint_query.dtype)
+
+        # Split attention outputs back
+        txt_attn_output = joint_hidden_states[:, :seq_txt, :]  # Text part
+        img_attn_output = joint_hidden_states[:, seq_txt:, :]  # Image part
+
+        # Apply output projections
+        img_attn_output = attn.to_out[0](img_attn_output)
+        if len(attn.to_out) > 1:
+            img_attn_output = attn.to_out[1](img_attn_output)  # dropout
+
+        txt_attn_output = attn.to_add_out(txt_attn_output)
+
+        return img_attn_output, txt_attn_output
+
+class QwenTransfromerModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        self._model._org_pos_embed = self._model.pos_embed
+        self._model._org_pos_embed = self._model.pos_embed
+        theta = getattr(self._model.pos_embed, 'theta', 10000)
+        axes_dim = getattr(self._model.pos_embed, 'axes_dim', [16, 56, 56])
+        scale_rope = getattr(self._model.pos_embed, 'scale_rope', False)
+        self._model.pos_embed = QwenEmbedRope(theta=theta, axes_dim=axes_dim, scale_rope=scale_rope)
+        for layer in self._model.transformer_blocks:
+            layer.attn._orig_processor = layer.attn.processor
+            layer.attn.processor = QwenDoubleStreamAttnProcessor2_0()
+
+        
+        
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.pos_embed = self._model._org_pos_embed
+        for layer in self._model.transformer_blocks:
+            layer.attn.processor = layer.attn._orig_processor
