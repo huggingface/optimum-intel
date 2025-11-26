@@ -20,8 +20,8 @@ from utils_tests import (
     patch_awq_for_inference,
 )
 
-from optimum.exporters.openvino.model_configs import DeepseekOpenVINOConfig
 from optimum.exporters.onnx.model_configs import NemotronOnnxConfig
+from optimum.exporters.openvino.model_configs import DeepseekOpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
