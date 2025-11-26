@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, OPENVINO_DEVICE
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -54,7 +54,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_openvino_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -86,6 +86,12 @@ class ExportModelTest(unittest.TestCase):
         "flux": OVFluxPipeline,
         "ltx-video": OVLTXPipeline,
     }
+
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.update({"lfm2": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -310,7 +316,7 @@ class CustomExportModelTest(unittest.TestCase):
                 task=base_task,
             )
 
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
             self.assertIsInstance(ov_model, OVBaseModel)
             self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})
@@ -328,7 +334,7 @@ class CustomExportModelTest(unittest.TestCase):
 
         with TemporaryDirectory() as tmpdirname:
             export_from_model(model, output=tmpdirname, task="feature-extraction")
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")

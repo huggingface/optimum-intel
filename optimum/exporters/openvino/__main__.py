@@ -26,8 +26,8 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, Pro
 from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
@@ -93,7 +93,8 @@ def infer_task(
             except KeyError as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path)
-                    if "MistralForCausalLM" in config.architectures:
+                    with_past_arch_list = ["MistralForCausalLM", "Zamba2ForCausalLM"]
+                    if any(arch in config.architectures for arch in with_past_arch_list):
                         task = "text-generation-with-past"
                 except Exception:
                     raise KeyError(
@@ -111,7 +112,7 @@ def main_export(
     output: Union[str, Path],
     task: str = "auto",
     device: str = "cpu",
-    framework: Optional[str] = None,
+    framework: str = "pt",
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     trust_remote_code: bool = False,
     pad_token_id: Optional[int] = None,
@@ -150,9 +151,8 @@ def main_export(
             use `xxx-with-past` to export the model using past key values in the decoder.
         device (`str`, defaults to `"cpu"`):
             The device to use to do the export. Defaults to "cpu".
-        framework (`Optional[str]`, defaults to `None`):
-            The framework to use for the ONNX export (`"pt"` or `"tf"`). If not provided, will attempt to automatically detect
-            the framework for the checkpoint.
+        framework (`Optional[str]`, defaults to `pt`):
+            The framework to use for the ONNX export. Defaults to 'pt' for PyTorch.
         cache_dir (`Optional[str]`, defaults to `None`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
@@ -273,8 +273,11 @@ def main_export(
         supported_quant_methods = ["gptq"]
         if is_openvino_version(">=", "2024.6.0"):
             supported_quant_methods.append("awq")
+        if is_openvino_version(">=", "2025.4.0"):
+            supported_quant_methods.append("bitnet")
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
+        do_bitnet_patching = quant_method == "bitnet"
 
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
@@ -365,6 +368,22 @@ def main_export(
                     return model
 
                 GPTQQuantizer.post_init_model = post_init_model
+            if do_bitnet_patching:
+                from transformers.integrations.bitnet import AutoBitLinear
+
+                orig_load_hook = AutoBitLinear.load_hook
+
+                # rewrite load hook to save original weight
+                def bitnet_load_hook(self, state_dict, prefix, *args, **kwargs):
+                    if (prefix + "weight") in state_dict and state_dict[prefix + "weight"].dtype != self.weight.dtype:
+                        self.original_weight = state_dict[prefix + "weight"]
+                        w_shape = self.original_weight.shape
+                        state_dict[prefix + "weight"] = torch.empty(
+                            (w_shape[0] * 4, w_shape[1]), dtype=self.weight.dtype, device="meta"
+                        )
+                    return state_dict
+
+                AutoBitLinear.load_hook = bitnet_load_hook
     elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
@@ -394,8 +413,16 @@ def main_export(
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
         else:
+            # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
+            # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
+            task_model_loading = task
+            if library_name == "transformers":
+                has_remote_code = hasattr(config, "auto_map")
+                if has_remote_code and trust_remote_code and task == "image-text-to-text":
+                    task_model_loading = "text-generation"
+
             model = TasksManager.get_model_from_task(
-                task,
+                task_model_loading,
                 model_name_or_path,
                 subfolder=subfolder,
                 revision=revision,
@@ -521,9 +548,18 @@ def main_export(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
 
+            from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
-            _weight_only_quantization(submodel, quantization_config)
+            if isinstance(quantization_config, _GPTOSSQuantizationConfig):
+                # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
+                # selectively quantize some weights to 4 bits and some to 8 bits.
+                _weight_only_quantization(submodel, quantization_config.quantization_config1)
+                _weight_only_quantization(
+                    submodel, quantization_config.quantization_config2, verify_not_optimized=False
+                )
+            else:
+                _weight_only_quantization(submodel, quantization_config)
             compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
             save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
             del submodel
@@ -540,6 +576,8 @@ def main_export(
             torch.cuda.is_available = orig_cuda_check
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
+            if do_bitnet_patching:
+                AutoBitLinear.load_hook = orig_load_hook
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):

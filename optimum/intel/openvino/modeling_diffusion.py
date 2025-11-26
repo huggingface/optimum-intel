@@ -19,7 +19,6 @@ import os
 import shutil
 from abc import abstractmethod
 from collections import OrderedDict
-from copy import deepcopy
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -67,8 +66,7 @@ from ...exporters.openvino import main_export
 from ..utils.import_utils import is_diffusers_version, is_openvino_version
 from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
-from .modeling_base import OVBaseModel
-from .modeling_visual_language import OVModelForVisualCausalLM
+from .modeling_base import OVBaseModel, OVModelHostMixin
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_PT_TYPE,
@@ -289,12 +287,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             self.compile()
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.Model]:
-        return {name: getattr(getattr(self, name), "model") for name in self._ov_submodel_names}
-
-    @property
-    def _ov_submodel_names(self) -> List[str]:
-        submodel_name_candidates = [
+    def _component_names(self) -> List[str]:
+        component_name_candidates = [
             "unet",
             "transformer",
             "vae_decoder",
@@ -303,8 +297,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "text_encoder_2",
             "text_encoder_3",
         ]
-        submodel_names = [name for name in submodel_name_candidates if getattr(self, name) is not None]
-        return submodel_names
+        component_names = [name for name in component_name_candidates if getattr(self, name) is not None]
+        return component_names
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
+
+    @property
+    def ov_models(self) -> Dict[str, openvino.Model]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -407,6 +409,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         # same as DiffusionPipeline.from_pretraoned, if called directly, it loads the class in the config
@@ -522,14 +525,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 kwargs[config_key] = value
 
         compile_only = kwargs.get("compile_only", False)
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
-            for name, path in models.items():
-                if name in kwargs:
-                    models[name] = kwargs.pop(name)
-                else:
-                    models[name] = cls.load_model(path, quantization_config) if path.is_file() else None
-        elif compile_only:
+        if compile_only:
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
@@ -557,40 +553,39 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                         else None
                     )
         else:
-            # why is this quantization not performed in __init__?
-            if ov_pipeline_class.export_feature != "text-to-image":
-                raise NotImplementedError(f"Quantization is not supported for {cls.__name__}")
-
-            from optimum.intel import OVQuantizer
-
             for name, path in models.items():
                 if name in kwargs:
                     models[name] = kwargs.pop(name)
                 else:
                     models[name] = cls.load_model(path) if path.is_file() else None
 
-            ov_pipeline = ov_pipeline_class(**models, **submodels, model_save_dir=model_save_dir, **kwargs)
-            # same as in DiffusionPipeline.from_pretrained, we save where the model was instantiated from
-            ov_pipeline.register_to_config(_name_or_path=config.get("_name_or_path", str(model_id)))
-
-            quantizer = OVQuantizer(ov_pipeline)
-            if isinstance(quantization_config, OVWeightQuantizationConfig):
-                hybrid_quantization_config = deepcopy(quantization_config)
-                hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
-                quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
-            else:
-                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
-
-            return ov_pipeline
+        name_or_path = config.get("_name_or_path", str(model_id))
+        quantization_config = cls._prepare_quantization_config(name_or_path, quantization_config, load_in_8bit)
+        if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
+            quantization_config = quantization_config.clone()
+            quantization_config.quant_method = OVQuantizationMethod.HYBRID
+        compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
             **submodels,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
         # same as in DiffusionPipeline.from_pretrained, we save where the model was instantiated from
-        ov_pipeline.register_to_config(_name_or_path=config.get("_name_or_path", str(model_id)))
+        ov_pipeline.register_to_config(_name_or_path=name_or_path)
+
+        if quantization_config:
+            if quantization_config.dataset is not None and ov_pipeline_class.export_feature != "text-to-image":
+                raise NotImplementedError(
+                    f"Data-aware quantization is not supported for {cls.__name__} with "
+                    f"{ov_pipeline_class.export_feature} task."
+                )
+
+            cls._apply_quantization(
+                ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code=trust_remote_code
+            )
 
         return ov_pipeline
 
@@ -972,8 +967,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                 "`half()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        for submodel in self.ov_submodels.values():
-            compress_model_transformation(submodel)
+        for ov_model in self.ov_models.values():
+            compress_model_transformation(ov_model)
 
         self.clear_requests()
 
@@ -984,31 +979,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
-        for submodel_name in self._ov_submodel_names:
-            getattr(self, submodel_name).request = None
+        for component in self.components.values():
+            component.clear_requests()
 
     def compile(self):
-        for submodel_name in self._ov_submodel_names:
-            getattr(self, submodel_name)._compile()
+        for component in self.components.values():
+            component.compile()
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
         return cls.load_config(config_name_or_path, **kwargs)
-
-    @property
-    def components(self) -> Dict[str, Any]:
-        components = {
-            "vae": self.vae,
-            "unet": self.unet,
-            "transformer": self.transformer,
-            "text_encoder": self.text_encoder,
-            "text_encoder_2": self.text_encoder_2,
-            "text_encoder_3": self.text_encoder_2,
-            "safety_checker": self.safety_checker,
-            "image_encoder": self.image_encoder,
-        }
-        components = {k: v for k, v in components.items() if v is not None}
-        return components
 
     def __call__(self, *args, **kwargs):
         # we do this to keep numpy random states support for now
@@ -1083,7 +1063,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
 
-class OVPipelinePart(ConfigMixin, CacheMixin):
+class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
     config_name: str = CONFIG_NAME
 
     def __init__(
@@ -1124,7 +1104,14 @@ class OVPipelinePart(ConfigMixin, CacheMixin):
     def dtype(self) -> torch.dtype:
         return OV_TO_PT_TYPE[self.ov_config.get("dtype", "f32")]
 
-    def _compile(self):
+    def clear_requests(self):
+        if self.parent_pipeline._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
+        self.request = None
+
+    def compile(self):
         if self.request is None:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
@@ -1193,7 +1180,7 @@ class OVModelTextEncoder(OVPipelinePart):
         output_hidden_states: Optional[bool] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
         model_inputs = {"input_ids": input_ids}
 
         if "attention_mask" in self.input_names:
@@ -1242,7 +1229,7 @@ class OVModelUnet(OVPipelinePart):
         added_cond_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {
             "sample": sample,
@@ -1297,7 +1284,7 @@ class OVModelTransformer(OVPipelinePart):
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {
             "hidden_states": hidden_states,
@@ -1364,7 +1351,7 @@ class OVModelVaeEncoder(OVPipelinePart):
         generator: Optional[torch.Generator] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {"sample": sample}
 
@@ -1387,7 +1374,7 @@ class OVModelVaeEncoder(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
-    def _compile(self):
+    def compile(self):
         if (
             "GPU" in self._device
             and "INFERENCE_PRECISION_HINT" not in self.ov_config
@@ -1395,7 +1382,7 @@ class OVModelVaeEncoder(OVPipelinePart):
             and check_scale_available(self.model)
         ):
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+        super().compile()
 
 
 class OVModelVaeDecoder(OVPipelinePart):
@@ -1417,7 +1404,7 @@ class OVModelVaeDecoder(OVPipelinePart):
         generator: Optional[torch.Generator] = None,
         return_dict: bool = False,
     ):
-        self._compile()
+        self.compile()
 
         model_inputs = {"latent_sample": latent_sample}
 
@@ -1435,7 +1422,7 @@ class OVModelVaeDecoder(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
-    def _compile(self):
+    def compile(self):
         if (
             "GPU" in self._device
             and "INFERENCE_PRECISION_HINT" not in self.ov_config
@@ -1443,10 +1430,10 @@ class OVModelVaeDecoder(OVPipelinePart):
             and check_scale_available(self.model)
         ):
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+        super().compile()
 
 
-class OVModelVae:
+class OVModelVae(OVModelHostMixin):
     def __init__(self, decoder: OVModelVaeDecoder, encoder: OVModelVaeEncoder):
         self.decoder = decoder
         self.encoder = encoder
@@ -1464,6 +1451,18 @@ class OVModelVae:
             self.latents_std = torch.tensor(self.decoder.config.latents_std_data)
         if hasattr(self.decoder.config, "temperal_downsample"):
             self.temperal_downsample = torch.tensor(self.decoder.config.temperal_downsample)
+
+    @property
+    def _component_names(self) -> List[str]:
+        return ["encoder", "decoder"]
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     @property
     def config(self):
