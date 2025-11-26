@@ -201,6 +201,7 @@ def main_export(
     """
     from optimum.exporters.openvino.convert import export_from_model
 
+    from ...intel.openvino.configuration import _GPTOSSQuantizationConfig
     from ...intel.openvino.utils import TemporaryDirectory
 
     if use_auth_token is not None:
@@ -412,9 +413,19 @@ def main_export(
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
-    original_output = Path(output)
-    temporary_directory = TemporaryDirectory()
-    output = Path(temporary_directory.name)
+    temporary_directory = None
+    original_output = None
+    # TODO: Remove GPT-OSS workaround when possible
+    quantization_config = None if ov_config is None else ov_config.quantization_config
+    is_generic_quantization = quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
+    if is_generic_quantization:
+        # In case generic quantization will be applied, export to a temporary directory first. This is to avoid confusion
+        # in the case when quantization fails and an intermediate floating point model ends up at the target location.
+        original_output = Path(output)
+        temporary_directory = TemporaryDirectory()
+        output = Path(temporary_directory.name)
+    else:
+        output = Path(output)
     try:
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
@@ -515,12 +526,8 @@ def main_export(
         del model
         gc.collect()
 
-        from ...intel.openvino.configuration import _GPTOSSQuantizationConfig
-
-        quantization_config = None if ov_config is None else ov_config.quantization_config
-        # TODO: Remove GPT-OSS workaround when possible
-        if quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_general_quantization(
+        if is_generic_quantization:
+            _apply_generic_quantization(
                 model_name_or_path=model_name_or_path,
                 original_task=original_task,
                 task=task,
@@ -535,9 +542,10 @@ def main_export(
             # Apply int8_asym weight-only quantization to models larger than 1B parameters
             _apply_model_size_based_quantization(submodel_paths, ov_config, output)
 
-        # Move exported model to the original output directory
-        original_output.mkdir(parents=True, exist_ok=True)
-        _merge_move(output, original_output)
+        if original_output is not None:
+            # Move exported model to the original output directory
+            original_output.mkdir(parents=True, exist_ok=True)
+            _merge_move(output, original_output)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -546,7 +554,8 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
-        temporary_directory.cleanup()
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
@@ -592,7 +601,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
         logger.warning("Tokenizer won't be converted.")
 
 
-def _apply_general_quantization(
+def _apply_generic_quantization(
     model_name_or_path: str,
     original_task: str,
     task: str,
