@@ -201,6 +201,8 @@ def main_export(
     """
     from optimum.exporters.openvino.convert import export_from_model
 
+    from ...intel.openvino.utils import TemporaryDirectory
+
     if use_auth_token is not None:
         warnings.warn(
             "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
@@ -410,6 +412,9 @@ def main_export(
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
+    original_output = Path(output)
+    temporary_directory = TemporaryDirectory()
+    output = Path(temporary_directory.name)
     try:
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
@@ -487,7 +492,6 @@ def main_export(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
 
-        output = Path(output)
         submodel_paths = export_from_model(
             model=model,
             output=output,
@@ -530,10 +534,10 @@ def main_export(
         else:
             # Apply int8_asym weight-only quantization to models larger than 1B parameters
             _apply_model_size_based_quantization(submodel_paths, ov_config, output)
-    except BaseException as e:
-        if output.exists():
-            shutil.rmtree(output)
-        raise e
+
+        # Move exported model to the original output directory
+        original_output.mkdir(parents=True, exist_ok=True)
+        _merge_move(output, original_output)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -542,6 +546,7 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+        temporary_directory.cleanup()
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
@@ -603,25 +608,6 @@ def _apply_general_quantization(
     """
     from ...intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
     from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
-
-    def _merge_move(src: Path, dest: Path):
-        """
-        Move src to dest. If dest exists and is a directory, merge src into dest recursively.
-        """
-        if src.is_dir():
-            if dest.exists():
-                assert dest.is_dir(), "Destination must be a directory as well"
-                # Merge children recursively
-                for child in src.iterdir():
-                    _merge_move(child, dest / child.name)
-            else:
-                # Can just rename whole directory
-                src.rename(dest)
-        else:
-            assert not dest.exists() or dest.is_file(), "If destination file exists, it must be a file as well"
-            if dest.exists():
-                dest.unlink()
-            src.rename(dest)
 
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
@@ -744,3 +730,47 @@ def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "
         submodel_path.with_suffix(".bin").unlink()
         compressed_submodel_path.rename(submodel_path)
         compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
+
+
+def _merge_move(src: Path, dest: Path):
+    """
+    Move src to dest.
+
+    - If src is a directory:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a directory: merge src into dest recursively.
+        - If dest is a file: replace file with src directory (delete file, then rename).
+
+    - If src is a file:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a file: overwrite file (delete dest, then rename).
+        - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
+    """
+    dest_exists = dest.exists()
+    dest_is_dir = dest_exists and dest.is_dir()
+    if src.is_dir():
+        if not dest_exists:
+            # No conflict: just rename
+            src.rename(dest)
+        elif dest_is_dir:
+            # Merge src into dest recursively
+            for child in src.iterdir():
+                _merge_move(child, dest / child.name)
+            # Remove src once empty
+            src.rmdir()
+        else:
+            # dest exists and is a file: replace file with directory
+            dest.unlink()
+            src.rename(dest)
+    else:
+        if not dest_exists:
+            # No conflict: just rename
+            src.rename(dest)
+        elif dest_is_dir:
+            # Replace directory (recursively) with file
+            shutil.rmtree(dest)
+            src.rename(dest)
+        else:
+            # dest is a file: overwrite
+            dest.unlink()
+            src.rename(dest)
