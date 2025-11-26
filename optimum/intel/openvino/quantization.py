@@ -1582,7 +1582,7 @@ class OVQuantizer(OptimumQuantizer):
         if is_onnx:
             # Load and save the compressed model
             model = core.read_model(onnx_path)
-            # Model required second saving for appling weights compression transformations
+            # Model required second saving for applying weights compression transformations
             self._save_pretrained(model, output_path)
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
             if not save_onnx_model:
