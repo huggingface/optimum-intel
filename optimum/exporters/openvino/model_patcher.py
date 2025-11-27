@@ -41,7 +41,7 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
-if is_transformers_version("<", "4.56"):
+if is_transformers_version(">=", "4.56"):
     from transformers.cache_utils import DynamicLayer
 
 
@@ -250,7 +250,7 @@ class OVDecoderModelPatcher(ModelPatcher):
             # non-stateful models on cpu and stateful models on npu
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
-        if is_transformers_version(">=", "4.56.0"):
+        if is_transformers_version(">=", "4.56"):
             self.original_dynamic_layer_update = DynamicLayer.update
             DynamicLayer.update = patched_dynamic_layer_update
 
@@ -261,11 +261,11 @@ class OVDecoderModelPatcher(ModelPatcher):
             self._model._update_causal_mask = self._model._update_causal_mask_original
             del self._model._update_causal_mask_original
 
-        if is_transformers_version(">=", "4.53.0"):
+        if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
-        if is_transformers_version(">=", "4.56.0"):
+        if is_transformers_version(">=", "4.56"):
             DynamicLayer.update = self.original_dynamic_layer_update
             DynamicLayer.lazy_initialization = self.original_lazy_initialization
 
@@ -4455,18 +4455,18 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             # non-stateful models on cpu and stateful models on npu
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
-        if is_transformers_version(">=", "4.56.0"):
+        if is_transformers_version(">=", "4.56"):
             self.original_dynamic_layer_update = DynamicLayer.update
             DynamicLayer.update = patched_dynamic_layer_update
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53.0"):
+        if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
-        if is_transformers_version(">=", "4.56.0"):
+        if is_transformers_version(">=", "4.56"):
             DynamicLayer.update = self.original_dynamic_layer_update
 
 

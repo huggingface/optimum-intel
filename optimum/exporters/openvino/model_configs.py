@@ -4035,10 +4035,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             if self.variant == "with-past" and self.use_past_in_inputs:
                 self.add_past_key_values(common_inputs, direction="inputs")
         elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
-            common_inputs["raw_spectrogram"] = {
-                0: "n_spectrums",
-                1: "batch_size",
-            }
+            common_inputs["raw_spectrogram"] = {0: "n_spectrums", 1: "batch_size"}
         elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
             common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums"}
         else:
