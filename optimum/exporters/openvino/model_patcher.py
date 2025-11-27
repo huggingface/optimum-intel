@@ -267,7 +267,6 @@ class OVDecoderModelPatcher(ModelPatcher):
 
         if is_transformers_version(">=", "4.56"):
             DynamicLayer.update = self.original_dynamic_layer_update
-            DynamicLayer.lazy_initialization = self.original_lazy_initialization
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
