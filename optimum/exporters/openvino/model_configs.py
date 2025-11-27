@@ -33,7 +33,6 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     GPT2OnnxConfig,
-    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
@@ -42,7 +41,6 @@ from optimum.exporters.onnx.model_configs import (
     MarianOnnxConfig,
     MistralOnnxConfig,
     MPTOnnxConfig,
-    OPTOnnxConfig,
     PegasusOnnxConfig,
     PhiOnnxConfig,
     SpeechT5OnnxConfig,
@@ -902,35 +900,6 @@ class BioGPTOpenVINOConfig(
     TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOnnxConfig
 ):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    _MODEL_PATCHER = OVDecoderModelPatcher
-
-
-@register_in_tasks_manager(
-    "gpt_bigcode",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "text-generation",
-        "text-generation-with-past",
-        "text-classification",
-    ],
-)
-class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
-    _MODEL_PATCHER = OVDecoderModelPatcher
-
-
-@register_in_tasks_manager(
-    "opt",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "text-generation",
-        "text-generation-with-past",
-        "text-classification",
-    ],
-    library_name="transformers",
-)
-class OPTOpenVINOConfig(OPTOnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
