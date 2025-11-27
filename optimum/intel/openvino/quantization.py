@@ -171,10 +171,9 @@ class InferRequestWrapper:
         self._reset_state_called = False
 
     def collect_inputs(self, inputs):
-        if self.stateful and not is_nncf_version("<=", "2.19"):
-            if not isinstance(inputs, dict):
-                raise NotImplementedError("Processing of non-dict inputs for stateful models is not supported.")
-            inputs = inputs.copy()
+        if self.stateful and isinstance(inputs, dict) and not is_nncf_version("<=", "2.19"):
+            # In order to reflect the state resetting during NNCF calibration, we add a special key to the input dict.
+            inputs = inputs.copy()  # shallow copy on purpose
             inputs[nncf.Dataset.RESET_STATE_KEY] = self._reset_state_called
             self._reset_state_called = False
 
