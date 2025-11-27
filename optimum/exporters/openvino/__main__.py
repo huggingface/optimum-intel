@@ -653,7 +653,7 @@ def _apply_generic_quantization(
 
     # Step 3. Apply quantization
     with TemporaryDirectory() as tmpdir:
-        # Save quantize model to a temporary directory to avoid conflicts when reading and writing from the same directory
+        # Save quantized model to a temporary directory to avoid conflicts when reading and writing from the same directory
         model._apply_quantization(
             quantization_config,
             compile_only=False,
