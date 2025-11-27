@@ -2324,18 +2324,20 @@ class PersimmonModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        for layer in self._model.model.layers:
-            if is_torch_version(">=", "2.1.0"):
-                orig_self_attn_fwd = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
-                layer.self_attn._orig_forward = orig_self_attn_fwd
+        if is_transformers_version("<", "4.56"):
+            for layer in self._model.model.layers:
+                if is_torch_version(">=", "2.1.0"):
+                    orig_self_attn_fwd = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
+                    layer.self_attn._orig_forward = orig_self_attn_fwd
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        for layer in self._model.model.layers:
-            if hasattr(layer.self_attn, "_orig_forward"):
-                layer.self_attn.forward = layer.self_attn._orig_forward
+        if is_transformers_version("<", "4.56"):
+            for layer in self._model.model.layers:
+                if hasattr(layer.self_attn, "_orig_forward"):
+                    layer.self_attn.forward = layer.self_attn._orig_forward
 
 
 def _jais_attn_forward(
@@ -5097,47 +5099,49 @@ def modulewise_unpatch(model, module_cls):
 class BlenderbotModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
-        modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
+            modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
-        modulewise_unpatch(self._model, BlenderbotAttention)
+            modulewise_unpatch(self._model, BlenderbotAttention)
 
 
 class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
-        from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
-
-        modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
+            modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
-        from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
-
-        modulewise_unpatch(self._model, BlenderbotSmallAttention)
+            modulewise_unpatch(self._model, BlenderbotSmallAttention)
 
 
 class PegasusModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
-        from transformers.models.pegasus.modeling_pegasus import PegasusAttention
-
-        modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
+            modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
-        from transformers.models.pegasus.modeling_pegasus import PegasusAttention
-
-        modulewise_unpatch(self._model, PegasusAttention)
+            modulewise_unpatch(self._model, PegasusAttention)
 
 
 # Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L596
@@ -5206,14 +5210,14 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
 class MarianModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.56"):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_patch(self._model, MarianAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.56"):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_unpatch(self._model, MarianAttention)
