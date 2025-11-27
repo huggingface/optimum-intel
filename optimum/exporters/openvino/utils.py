@@ -14,6 +14,7 @@
 
 import inspect
 import logging
+import re
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -118,6 +119,71 @@ def _get_input_info(
         info = InputInfo(name=name, shape=shape, type=type, example=example)
         input_info.append(info)
     return input_info
+
+
+def _get_dynamic_shapes_info(
+    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+) -> List[InputInfo]:
+    import torch
+
+    sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+    inputs = config.ordered_inputs(model)
+    input_info = {}
+    signature = set(sig.parameters)
+
+    name_to_symbol = {}
+
+    for name, named_dims in inputs.items():
+        info = {}
+        for idx, dim_name in named_dims.items():
+            if dim_name in name_to_symbol:
+                symbol = name_to_symbol[dim_name]
+            else:
+                symbol = torch.export.Dim.DYNAMIC
+                name_to_symbol[dim_name] = symbol
+            info[idx] = symbol
+        if name in signature:
+            input_info[name] = info
+        else:
+            pattern = r"^([a-zA-Z_]+)\.(\d+)\.(key|value)$"
+            match = re.match(pattern, name)
+
+            if match:
+                prefix, number, key_or_value = match.groups()
+                number = int(number)
+                assert prefix in signature
+                if prefix not in input_info:
+                    input_info[prefix] = []
+                if key_or_value == "key":
+                    assert len(input_info[prefix]) == number
+                    input_info[prefix].append((info,))
+                else:
+                    input_info[prefix][number] += (info,)
+    return input_info
+
+
+def _normalize_element(elem: Any, dtype: Any) -> Any:
+    import torch
+    if isinstance(elem, torch.Tensor):
+        return elem.to(dtype) if elem.dtype.is_floating_point else elem
+    if isinstance(elem, (list, tuple)):
+        return type(elem)(_normalize_element(e, dtype) for e in elem)
+    if isinstance(elem, dict):
+        return {k: _normalize_element(v, dtype) for k, v in elem.items()}
+    return elem
+
+
+def _normalize_dummy_inputs(dummy_inputs: Dict[str, Any], dtype: Any) -> Dict[str, Any]:
+    new_dummy = {}
+    for name, value in dummy_inputs.items():
+        new_dummy[name] = _normalize_element(value, dtype)
+    return new_dummy
+
+
+def get_model_dtype(model):
+    for param in model.parameters():
+        return param.dtype
+    return getattr(model, "dtype", torch.float32)
 
 
 def remove_none_from_dummy_inputs(dummy_inputs: Dict[str, Any]):
