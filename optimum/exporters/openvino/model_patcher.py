@@ -41,6 +41,8 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+if is_transformers_version("<", "4.56"):
+    from transformers.cache_utils import DynamicLayer
 
 
 if TYPE_CHECKING:
@@ -59,6 +61,7 @@ for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
         "tril",
         "norm",
         "unfold",
+        "movedim",
         "rms_norm",
         "repeat_interleave",
         "scaled_dot_product_attention",
@@ -216,7 +219,8 @@ def patched_dynamic_layer_update(
     if self.keys is None:
         self.keys = key_states
         self.values = value_states
-        self.device, self.dtype = key_states.device, key_states.dtype
+        self.device = key_states.device
+        self.dtype = key_states.dtype
         self.is_initialized = True
     else:
         self.keys = torch.cat([self.keys, key_states], dim=-2)
@@ -247,8 +251,6 @@ class OVDecoderModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
         if is_transformers_version(">=", "4.56.0"):
-            from transformers.cache_utils import DynamicLayer
-
             self.original_dynamic_layer_update = DynamicLayer.update
             DynamicLayer.update = patched_dynamic_layer_update
 
@@ -264,9 +266,8 @@ class OVDecoderModelPatcher(ModelPatcher):
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
         if is_transformers_version(">=", "4.56.0"):
-            from transformers.cache_utils import DynamicLayer
-
             DynamicLayer.update = self.original_dynamic_layer_update
+            DynamicLayer.lazy_initialization = self.original_lazy_initialization
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -4454,12 +4455,19 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             # non-stateful models on cpu and stateful models on npu
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
+        if is_transformers_version(">=", "4.56.0"):
+            self.original_dynamic_layer_update = DynamicLayer.update
+            DynamicLayer.update = patched_dynamic_layer_update
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
         if is_transformers_version(">=", "4.53.0"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
+
+        if is_transformers_version(">=", "4.56.0"):
+            DynamicLayer.update = self.original_dynamic_layer_update
 
 
 class SanaTextEncoderModelPatcher(ModelPatcher):

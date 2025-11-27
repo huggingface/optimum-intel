@@ -43,7 +43,7 @@ MODEL_NAMES = {
     "bge": "optimum-intel-internal-testing/bge-small-en-v1.5",
     "beit": "optimum-intel-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "optimum-intel-internal-testing/tiny-random-bert",
-    "bart": "optimum-intel-internal-testing/tiny-random-bart",
+    "bart": "hf-internal-testing/tiny-random-BartModel",
     "baichuan2": "optimum-intel-internal-testing/tiny-random-baichuan2",
     "baichuan2-13b": "optimum-intel-internal-testing/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "optimum-intel-internal-testing/tiny-random-bigbird_pegasus",
