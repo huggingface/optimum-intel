@@ -54,7 +54,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mpt",
         "opt",
         "pegasus",
-        "qwen",
         "phi",
         "internlm2",
         "orion",
@@ -132,6 +131,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
+
+    if is_transformers_version("<", "4.56.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen",)
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (

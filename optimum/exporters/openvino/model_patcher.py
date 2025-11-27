@@ -31,6 +31,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
+    gpt_oss_forward,
     override_arguments,
     sdpa_mask_without_vmap,
 )
@@ -7203,3 +7204,22 @@ class Lfm2ModelPatcher(ModelPatcher):
             else:
                 continue
             conv_layer.slow_forward = conv_layer._orig_forward
+
+
+class GptOssModelPatcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if is_transformers_version(">=", "4.55.0"):
+            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
+            self.original_gpt_oss_forward = GptOssExperts.forward
+            GptOssExperts.forward = gpt_oss_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if is_transformers_version(">=", "4.55.0"):
+            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
+            GptOssExperts.forward = self.original_gpt_oss_forward
