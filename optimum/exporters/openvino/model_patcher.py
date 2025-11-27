@@ -208,24 +208,6 @@ def eager_mask_without_vmap(*args, **kwargs) -> Optional[torch.Tensor]:
     return mask
 
 
-def patched_dynamic_layer_update(
-    self,
-    key_states: torch.Tensor,
-    value_states: torch.Tensor,
-    cache_kwargs: Optional[dict[str, Any]] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if self.keys is None:
-        self.keys = key_states
-        self.values = value_states
-        self.device = key_states.device
-        self.dtype = key_states.dtype
-        self.is_initialized = True
-    else:
-        self.keys = torch.cat([self.keys, key_states], dim=-2)
-        self.values = torch.cat([self.values, value_states], dim=-2)
-    return self.keys, self.values
-
-
 class OVDecoderModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
