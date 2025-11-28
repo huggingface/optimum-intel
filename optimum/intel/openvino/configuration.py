@@ -364,7 +364,16 @@ if is_nncf_available():
                 "advanced_parameters": nncf.AdvancedCompressionParameters(
                     group_size_fallback_mode=nncf.GroupSizeFallbackMode.ADJUST,
                 ),
-            }
+            },
+            "HuggingFaceTB/SmolVLM2-256M-Video-Instruct": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 128,
+                "ratio": 1.0,
+                "advanced_parameters": nncf.AdvancedCompressionParameters(
+                    group_size_fallback_mode=nncf.GroupSizeFallbackMode.ADJUST,
+                ),
+            },
         }
     )
 
