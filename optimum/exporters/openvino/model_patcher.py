@@ -5400,7 +5400,7 @@ def speecht5_decoder_layer_forward(
 class OVSpeechT5ModelPatcher(ModelPatcher):
     def __enter__(self):
         if self.real_config._behavior != "vocoder":
-            setattr(self._model, self.orig_forward_name, self.patched_forward)
+            super().__enter__()
         if self.real_config._behavior == "decoder":
             self._model.speecht5.decoder.prenet.__orig_forward = self._model.speecht5.decoder.prenet.forward
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
@@ -5415,7 +5415,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.real_config._behavior != "vocoder":
-            setattr(self._model, self.orig_forward_name, self.orig_forward)
+            super().__exit__(exc_type, exc_value, traceback)
         if self.real_config._behavior == "decoder":
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
                 self._model.speecht5.decoder.prenet.__orig_forward, self._model.speecht5.decoder.prenet
@@ -5464,12 +5464,9 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             encoder_attention_mask=None,
             past_key_values=None,
         ):
-            return_legacy_cache = False
-
             if past_key_values is not None:
-                only_self_cache = [cache_item[:2] for cache_item in past_key_values]
-                past_key_values = only_self_cache
-                return_legacy_cache = True
+                past_key_values = [cache_item[:2] for cache_item in past_key_values]
+                past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5480,7 +5477,6 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Run the decoder layers on the last element of the prenet output.
             decoder_out = model.speecht5.decoder.wrapped_decoder(
                 hidden_states=decoder_hidden_states[:, -1:],
-                attention_mask=None,
                 encoder_hidden_states=encoder_hidden_states[0],
                 encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
@@ -5488,10 +5484,6 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
                 output_attentions=output_cross_attentions,
                 return_dict=True,
             )
-
-            # if output_cross_attentions:
-            #    cross_attentions.append(torch.cat(decoder_out.cross_attentions, dim=0))
-
             last_decoder_output = decoder_out.last_hidden_state.squeeze(1)
 
             # Predict the new mel spectrum for this step in the sequence.
@@ -5504,9 +5496,9 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Predict the probability that this is the stop token.
             prob = torch.sigmoid(model.speech_decoder_postnet.prob_out(last_decoder_output))
 
-            if return_legacy_cache:
-                only_self_cache = [cache_item[:2] for cache_item in decoder_out.past_key_values]
-                past_key_values = only_self_cache
+            past_key_values = decoder_out.past_key_values
+            if past_key_values is not None:
+                past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
 
             result = {
                 "output_sequence_out": output_sequence_out,
