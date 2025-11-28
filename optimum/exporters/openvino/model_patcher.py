@@ -5477,7 +5477,8 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
         ):
             if past_key_values is not None:
                 past_key_values = [cache_item[:2] for cache_item in past_key_values]
-                past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+                if is_transformers_version(">=", "4.56"):
+                    past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5509,7 +5510,10 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
 
             past_key_values = decoder_out.past_key_values
             if past_key_values is not None:
-                past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
+                if isinstance(past_key_values, EncoderDecoderCache):
+                    past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
+                else:
+                    past_key_values = [cache_item[:2] for cache_item in past_key_values]
 
             result = {
                 "output_sequence_out": output_sequence_out,
