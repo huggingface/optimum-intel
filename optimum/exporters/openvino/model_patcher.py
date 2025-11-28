@@ -3452,7 +3452,7 @@ def _minicpmv_siglip_transformer_forward(
     patch_attention_mask = patch_attention_mask.view(batch_size, -1)
     attention_mask = (
         _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
-        if not self._use_flash_attention_2
+        if not getattr(self, "_use_flash_attention_2", False)
         else patch_attention_mask
     )
 
@@ -4352,15 +4352,6 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
     ):
         super().__init__(config, model, model_kwargs)
 
-        # sometimes the use_cache is not properly set in the model config
-        if self.real_config.use_past:
-            if hasattr(model.config, "decoder"):
-                model.config.decoder.use_cache = True
-            if hasattr(model.config, "text_config"):
-                model.config.text_config.use_cache = True
-            if model.config.model_type == "vision-encoder-decoder" and model.config.decoder.model_type == "trocr":
-                model.decoder.model.decoder.config.use_cache = True
-
         # re-use the patched forward method from the parent class
         self.super_patched_forward = self.patched_forward
 
@@ -4370,49 +4361,38 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
 
             # with statful decoder, we always return the self attn only, cross attn is part of the state
-            pkv = None
             if (
                 getattr(self.real_config, "stateful", False)
                 and self.real_config._behavior == "decoder"
                 and "past_key_values" in signature.parameters
             ):
-                pkv_argument_index = list(signature.parameters.keys()).index("past_key_values")
+                pkv = None
+                pkv_arg_index = list(signature.parameters.keys()).index("past_key_values")
 
                 if "past_key_values" in kwargs:
                     pkv = kwargs["past_key_values"]
-                elif len(args) > pkv_argument_index:
-                    pkv = args[pkv_argument_index]
-
-                if isinstance(pkv, EncoderDecoderCache):
-                    pkv = pkv.to_legacy_cache()
+                elif len(args) > pkv_arg_index:
+                    pkv = args[pkv_arg_index]
 
                 if pkv is not None:
-                    self_attn = [cache_item[:2] for cache_item in pkv]
-                    pkv = EncoderDecoderCache.from_legacy_cache(self_attn)
+                    if isinstance(pkv, EncoderDecoderCache):
+                        pkv = pkv.self_attention_cache.to_legacy_cache()
+                    else:
+                        pkv = [pkv_item[:2] for pkv_item in pkv]
+                    pkv = EncoderDecoderCache.from_legacy_cache(pkv)
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
-                    elif len(args) > pkv_argument_index:
-                        args[pkv_argument_index] = pkv
+                    elif len(args) > pkv_arg_index:
+                        args[pkv_arg_index] = pkv
 
             outputs = self.super_patched_forward(*args, **kwargs)
 
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
-            if isinstance(outputs.get("past_key_values"), EncoderDecoderCache):
+            if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
                 outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
 
-            # we still need to filter out cross attention in the case of non-stateful decoder
-            filtered_outputs = {}
-            for name, value in outputs.items():
-                if (
-                    self.real_config._behavior == "decoder"
-                    and self.real_config.use_past_in_inputs
-                    and name.startswith("past_key_values")
-                ):
-                    filtered_outputs[name] = tuple([v[:2] for v in value])
-                else:
-                    filtered_outputs[name] = value
-            return filtered_outputs
+            return outputs
 
         self.patched_forward = patched_forward
 
@@ -4707,15 +4687,12 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
             # avoiding passing the attention_mask, which is equivalent to attending to the full sequence
             if not torch.any(~patch_attention_mask):
                 patch_attention_mask = None
-            elif not self._use_flash_attention_2:
+            elif not getattr(self, "_use_flash_attention_2", False):
                 patch_attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
 
             encoder_outputs = self.encoder(
                 inputs_embeds=hidden_states,
                 attention_mask=patch_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
             )
 
             last_hidden_state = encoder_outputs[0]
@@ -5985,11 +5962,17 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
         def get_image_embeddings(self, pixel_values):
-            image_features = self.get_image_features(
-                pixel_values=pixel_values,
-                vision_feature_layer=self.config.vision_config.vision_feature_layer,
-                vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
-            )
+            if is_transformers_version("<", "4.56"):
+                image_features = self.get_image_features(
+                    pixel_values=pixel_values,
+                    vision_feature_layer=self.config.vision_config.vision_feature_layer,
+                    vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+                )
+            else:
+                image_features = self.get_image_features(
+                    pixel_values=pixel_values,
+                    vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+                )
             vision_flat = image_features.view(-1, image_features.size(-1))
             projected_vision_flat = self.multi_modal_projector(vision_flat)
             return projected_vision_flat
@@ -6054,11 +6037,13 @@ def llama4_attn_forward(
     hidden_states: torch.Tensor,
     position_embeddings: Tuple[torch.Tensor, torch.Tensor],
     attention_mask: Optional[torch.Tensor],
-    past_key_value=None,
+    past_key_value: Optional[tuple[tuple[torch.Tensor]]] = None,
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.llama4.modeling_llama4 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
+
+    past_key_value = past_key_value or kwargs.get("past_key_values")
 
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -6080,7 +6065,7 @@ def llama4_attn_forward(
     # Use temperature tuning from https://arxiv.org/abs/2501.19399) to NoROPE layers
     if self.attn_temperature_tuning and not self.use_rope:
         attn_scales = (
-            torch.log(torch.floor((cache_position.float() + 1.0) / self.floor_scale) + 1.0) * self.attn_scale + 1.0
+            torch.log1p(torch.floor((cache_position.float() + 1.0) / self.floor_scale)) * self.attn_scale + 1.0
         )
         attn_scales = attn_scales.view((1, input_shape[-1], 1, 1)).expand((*input_shape, 1, 1))  # batch size > 1
         query_states = (query_states * attn_scales).to(query_states.dtype)
@@ -6144,7 +6129,7 @@ def llama4_moe_forward(self, hidden_states):
         index=router_indices,
     ).to(hidden_states.device)
     # we gather inputs corresponding to each expert based on the router indices
-    routed_in = routed_in * router_scores.reshape(-1, 1)
+    routed_in = routed_in * router_scores.transpose(0, 1).reshape(-1, 1)
     routed_out = self.experts(routed_in)
     out = self.shared_expert(hidden_states)
     # now that we finished expert computation -> we scatter add because we gathered previously
