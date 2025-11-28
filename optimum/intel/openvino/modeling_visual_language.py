@@ -233,6 +233,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
+
 class OVVisionEmbedding(OVModelPart):
     _model_name = "vision_embeddings"
 

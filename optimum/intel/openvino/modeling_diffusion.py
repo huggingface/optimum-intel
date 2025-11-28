@@ -1716,8 +1716,6 @@ class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, Qw
     auto_model_class = QwenImagePipeline
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # self.text_encoder = OVModelForVisualCausalLM.from_pretrained(self.model_save_dir, device=self._device)
-
 
 
 SUPPORTED_OV_PIPELINES = [

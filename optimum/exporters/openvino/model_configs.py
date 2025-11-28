@@ -3310,11 +3310,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager(
-    "qwen2_vl",
-    *["image-text-to-text", "feature-extraction"],
-    library_name="transformers",
-)
+@register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3367,16 +3363,10 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
             return vision_emb_merger
 
         if behavior == Qwen2VLConfigBehavior.TEXT_EMBEDDINGS:
-            if hasattr(model, "model"):
-                text_embedding = (
-                    model.model.embed_tokens
-                    if hasattr(model.model, "embed_tokens")
-                    else model.language_model.embed_tokens
-                )
-            else:
-                text_embedding = (
-                    model.embed_tokens if hasattr(model, "embed_tokens") else model.language_model.embed_tokens
-                )
+            text_embedding = (
+                model.model.embed_tokens if hasattr(model.model, "embed_tokens") else model.language_model.embed_tokens
+            )
+            text_embedding.config = model.config
             return text_embedding
 
     def with_behavior(
@@ -3451,11 +3441,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager(
-    "qwen2_5_vl",
-    *["image-text-to-text", "feature-extraction"],
-    library_name="transformers",
-)
+@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
