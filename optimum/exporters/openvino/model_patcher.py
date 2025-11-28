@@ -7302,19 +7302,19 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     #gate_projs = torch.stack(gate_projs, dim=0)
 
     down_projs = torch.concat(
-        tuple(self.experts[i].down_proj.weight.unsqueeze(0)
+        tuple(self.experts[i].down_proj.weight.float().unsqueeze(0)
               for i in range(num_experts)),
         dim=0
     )
 
     gate_projs = torch.concat(
-        tuple(self.experts[i].gate_proj.weight.unsqueeze(0)
+        tuple(self.experts[i].gate_proj.weight.float().unsqueeze(0)
               for i in range(num_experts)),
         dim=0
     )
 
     up_projs = torch.concat(
-        tuple(self.experts[i].up_proj.weight.unsqueeze(0)
+        tuple(self.experts[i].up_proj.weight.float().unsqueeze(0)
               for i in range(num_experts)),
         dim=0
     )
