@@ -73,7 +73,7 @@ MODEL_NAMES = {
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
     "distilbert": "optimum-intel-internal-testing/tiny-random-distilbert",
     "distilbert-ov": "optimum-intel-internal-testing/ov-tiny-random-distilbert",
-    "donut": "optimum-intel-internal-testing/tiny-doc-qa-vision-encoder-decoder",
+    "donut": "optimum-internal-testing/tiny-random-VisionEncoderDecoderModel-donut",
     "donut-swin": "optimum-intel-internal-testing/tiny-random-DonutSwinModel",
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
