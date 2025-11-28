@@ -1179,7 +1179,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning("The `task` argument is ignored and will be removed in optimum-intel v1.27")
 
     @property
-    def task(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
+    def task(self) -> str:
         logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
         return self._task
 
