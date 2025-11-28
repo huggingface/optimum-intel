@@ -120,6 +120,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "exaone4"),
+            ]
+        )
     if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -153,6 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "falcon-mamba": 2,
         "qwen3": 2,
         "zamba2": 2,
+        "exaone4": 2,
         "bitnet": 2,
     }
 
