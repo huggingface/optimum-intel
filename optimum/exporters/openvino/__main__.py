@@ -45,6 +45,7 @@ from .utils import (
     clear_class_registry,
     deduce_diffusers_dtype,
     load_preprocessors,
+    patch_qwenvl_configs,
 )
 
 
@@ -280,6 +281,10 @@ def main_export(
         do_bitnet_patching = quant_method == "bitnet"
 
         model_type = config.model_type
+        if model_type.startswith("qwen2") and model_type.endswith("vl_text"):
+            patch_qwenvl_configs()
+            model_type = config.model_type
+
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
             if custom_export_configs is None:
