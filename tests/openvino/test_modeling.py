@@ -235,7 +235,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         if is_transformers_version(">=", "4.51"):
             model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
-            processor = get_preprocessor(model_id)
+            processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
             image = Image.open(
                 requests.get(

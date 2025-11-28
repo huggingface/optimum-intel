@@ -39,7 +39,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot",
         "blenderbot-small",
         "bloom",
-        "chatglm",
         "codegen",
         "codegen2",
         "gpt2",
@@ -54,7 +53,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mpt",
         "opt",
         "pegasus",
-        "qwen",
         "phi",
         "internlm2",
         "orion",
@@ -69,7 +67,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
-        "chatglm4",
         "decilm",
         "gemma",
         "olmo",
@@ -108,7 +105,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("opt_gptq",)
 
         # autoawq install disabled for windows test environment
-        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+        if (
+            platform.system() != "Windows"
+            and is_openvino_version(">=", "2024.6.0")
+            and is_transformers_version("<", "4.56.0")
+        ):
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     if is_transformers_version(">", "4.49"):
@@ -132,6 +133,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
+
+    if is_transformers_version("<", "4.56.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
