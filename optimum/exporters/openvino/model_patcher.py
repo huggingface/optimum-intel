@@ -7286,38 +7286,256 @@ def patched_qwen3_next_sparse_moe_block(self, hidden_states: torch.Tensor) -> to
     # One hot encode the selected experts to create an expert mask
     # this will be used to easily index which expert is going to be sollicitated
     expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+    expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+
+    num_experts = self.num_experts
+    #down_projs = []
+    #gate_projs = []
+    #up_projs = []
+    #for idx in range(num_experts):
+    #    down_projs.append(self.experts[idx].down_proj.weight)
+    #    gate_projs.append(self.experts[idx].gate_proj.weight)
+    #    up_projs.append(self.experts[idx].up_proj.weight)
+
+    #down_projs = torch.stack(down_projs, dim=0)
+    #up_projs = torch.stack(up_projs, dim=0)
+    #gate_projs = torch.stack(gate_projs, dim=0)
+
+    down_projs = torch.concat(
+        tuple(self.experts[i].down_proj.weight.unsqueeze(0)
+              for i in range(num_experts)),
+        dim=0
+    )
+
+    gate_projs = torch.concat(
+        tuple(self.experts[i].gate_proj.weight.unsqueeze(0)
+              for i in range(num_experts)),
+        dim=0
+    )
+
+    up_projs = torch.concat(
+        tuple(self.experts[i].up_proj.weight.unsqueeze(0)
+              for i in range(num_experts)),
+        dim=0
+    )
+
+    #down_projs = torch.zeros((4, 32, 16), dtype=torch.float32)
+    #up_projs = torch.zeros((4, 16, 32), dtype=torch.float32)
+    #gate_projs = torch.zeros((4, 16, 32), dtype=torch.float32)
+
+    final_hidden_states_res = self.moe_cell(
+        expert_hit,
+        expert_mask,
+        hidden_states,
+        down_projs,
+        up_projs,
+        gate_projs,
+        routing_weights,
+        final_hidden_states,
+    )
 
     # Loop over all available experts in the model and perform the computation on each expert
-    is_active_expert = torch.greater(expert_mask.sum(dim=(-1, -2)), 0)
+    #is_active_expert = torch.greater(expert_mask.sum(dim=(-1, -2)), 0)
 
-    for expert_idx in range(self.num_experts):
-        is_activated = is_active_expert[expert_idx]
-        expert_layer = self.experts[expert_idx]
-        idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+    #for expert_idx in range(self.num_experts):
+    #    is_activated = is_active_expert[expert_idx]
+    #    expert_layer = self.experts[expert_idx]
+    #    idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
 
-        idx = is_activated.to(idx.dtype) * idx + torch.tensor([0]).to(idx.dtype) * (1 - is_activated.to(idx.dtype))
-        top_x = is_activated.to(top_x.dtype) * top_x + torch.tensor([0]).to(top_x.dtype) * (1 - is_activated.to(top_x.dtype))
+    #    idx = is_activated.to(idx.dtype) * idx + torch.tensor([0]).to(idx.dtype) * (1 - is_activated.to(idx.dtype))
+    #    top_x = is_activated.to(top_x.dtype) * top_x + torch.tensor([0]).to(top_x.dtype) * (1 - is_activated.to(top_x.dtype))
 
-        # Index the correct hidden states and compute the expert hidden state for
-        # the current expert. We need to make sure to multiply the output hidden
-        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+    #    # Index the correct hidden states and compute the expert hidden state for
+    #    # the current expert. We need to make sure to multiply the output hidden
+    #    # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+    #    current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+    #    current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
 
-        current_hidden_states = (is_activated.to(current_hidden_states.dtype) * current_hidden_states +
-                                 torch.tensor([0]).to(current_hidden_states.dtype) * (1 - is_activated.to(current_hidden_states.dtype)))
+    #    current_hidden_states = (is_activated.to(current_hidden_states.dtype) * current_hidden_states +
+    #                             torch.tensor([0]).to(current_hidden_states.dtype) * (1 - is_activated.to(current_hidden_states.dtype)))
 
-        # However `index_add_` only support torch tensors for indexing so we'll use
-        # the `top_x` tensor here.
-        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+    #    # However `index_add_` only support torch tensors for indexing so we'll use
+    #    # the `top_x` tensor here.
+    #    final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
 
     shared_expert_output = self.shared_expert(hidden_states)
     shared_expert_output = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
 
-    final_hidden_states = final_hidden_states + shared_expert_output
+    final_hidden_states_res = final_hidden_states_res + shared_expert_output
 
-    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-    return final_hidden_states, router_logits
+    final_hidden_states_res = final_hidden_states_res.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states_res, router_logits
+
+
+class LoopBasedMoECell(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(
+        self,
+        expert_hit,
+        expert_mask,
+        hidden_states,
+        down_projs,
+        up_projs,
+        gate_projs,
+        routing_weights,
+        final_hidden_states,
+    ):
+
+        _, hidden_dim = hidden_states.shape
+        final_hidden_states_res = final_hidden_states.clone()
+
+        for expert_idx in expert_hit:
+            #expert_layer = self.experts[expert_idx]
+            idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
+
+            # Index the correct hidden states and compute the expert hidden state for
+            # the current expert. We need to make sure to multiply the output hidden
+            # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+            #current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+            # down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+            act_fn_res = torch.nn.functional.silu(torch.nn.functional.linear(current_state, gate_projs[expert_idx[0]]))
+            up_proj_res = torch.nn.functional.linear(current_state, up_projs[expert_idx[0]])
+            current_hidden_states = act_fn_res * up_proj_res
+            current_hidden_states = torch.nn.functional.linear(current_hidden_states, down_projs[expert_idx[0]])
+            current_hidden_states = current_hidden_states * routing_weights[top_x, idx, None]
+
+            # However `index_add_` only support torch tensors for indexing so we'll use
+            # the `top_x` tensor here.
+            final_hidden_states_res.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+
+        return final_hidden_states_res
+
+def convert_moe_cell(context):
+    import openvino.opset15 as ops
+    import openvino as ov
+    import numpy as np
+
+    idx_param = ops.parameter([], np.int32, "idx_param")
+    expert_hit_param = ops.parameter([-1], np.int32, "expert_hit_param")
+    expert_mask_param = ops.parameter([-1, -1, -1], np.int64, "expert_mask_param")
+    hidden_states_param = ops.parameter([-1, -1], np.float32, "hidden_states_param")
+    gate_projs_param = ops.parameter([-1, -1, -1], np.float32, "gate_projs_param")
+    up_projs_param = ops.parameter([-1, -1, -1], np.float32, "up_projs_param")
+    down_projs_param = ops.parameter([-1, -1, -1], np.float32, "down_projs_param")
+    routing_weights_param = ops.parameter([-1, -1], np.float32, "routing_weights_param")
+    final_hidden_states_param = ops.parameter([-1, -1], np.float32, "final_hidden_states_param")
+
+    #batch_size, hidden_dim = hidden_states_param.shape
+    hidden_states_shape = ops.shape_of(hidden_states_param)
+    const_zero = ops.constant(0, dtype=np.int32)
+    const_one = ops.constant([1], dtype=np.int32)
+    hidden_dim = ops.gather(hidden_states_shape, const_one, const_zero)
+
+    expert_idx = ops.gather(expert_hit_param, idx_param, const_zero)
+    shape1d = ops.constant([1], dtype=np.int32)
+    scalar_shape = ops.constant([], dtype=np.int32)
+    expert_idx = ops.reshape(expert_idx, shape1d, False)
+    expert_idx_scalar = ops.reshape(expert_idx, scalar_shape, False)
+
+    expert_mask = ops.gather(expert_mask_param, expert_idx_scalar, const_zero)
+    non_zeros = ops.non_zero(expert_mask)
+
+    split_axis = ops.constant(0, dtype=np.int32)
+    split_res = ops.split(non_zeros, split_axis, 2)
+    #idx = ops.squeeze(split_res.output(0), const_zero)
+    top_x = ops.squeeze(split_res.output(1), const_zero)
+    transpose_order = ops.constant([1, 0], dtype=np.int32)
+    top_x_idx = ops.transpose(non_zeros, transpose_order)
+
+    # current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+    current_state = ops.gather(hidden_states_param, top_x, const_zero)
+    current_state = ops.unsqueeze(current_state, const_zero)
+    const_minus1 = ops.constant([-1], dtype=np.int64)
+    new_shape = ops.concat([const_minus1, hidden_dim], 0)
+    current_state = ops.reshape(current_state, new_shape, False)
+
+    # #act_fn_res = torch.nn.functional.silu(torch.nn.functional.linear(current_state, gate_projs[expert_idx[0]]))
+    gate_proj = ops.gather(gate_projs_param, expert_idx, const_zero)
+    gate_proj = ops.squeeze(gate_proj, const_zero)
+    act_fn_res = ops.matmul(current_state, gate_proj, False, True)
+    act_fn_res = ops.multiply(ops.sigmoid(act_fn_res), act_fn_res)
+
+    # up_proj_res = torch.nn.functional.linear(current_state, up_projs[expert_idx[0]])
+    up_proj = ops.gather(up_projs_param, expert_idx, const_zero)
+    up_proj = ops.squeeze(up_proj, const_zero)
+    up_proj_res = ops.matmul(current_state, up_proj, False, True)
+
+    # current_hidden_states = act_fn_res * up_proj_res
+    current_hidden_states = ops.multiply(act_fn_res, up_proj_res)
+    current_hidden_states = act_fn_res
+
+    # current_hidden_states = torch.nn.functional.linear(current_hidden_states, down_projs[expert_idx[0]])
+    down_proj = ops.gather(down_projs_param, expert_idx, const_zero)
+    down_proj = ops.squeeze(down_proj, const_zero)
+    current_hidden_states = ops.matmul(current_hidden_states, down_proj, False, True)
+
+    # current_hidden_states = current_hidden_states * routing_weights[top_x, idx, None]
+    # routing_weights[top_x, idx, None]
+    #routing_weights = ops.gather(routing_weights_param, top_x, const_zero)
+    #routing_weights = ops.gather(routing_weights, idx, const_zero)
+    #routing_weights = ops.unsqueeze(routing_weights, const_zero)
+    routing_weights = ops.gather_nd(routing_weights_param, top_x_idx)
+    routing_weights = ops.unsqueeze(routing_weights, const_one)
+    current_hidden_states = ops.multiply(current_hidden_states, routing_weights)
+
+    #current_hidden_states = current_state
+
+    # final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+    top_x = ops.unsqueeze(top_x, const_one)
+    #current_hidden_states = ops.reshape(current_hidden_states, new_shape, False)
+
+    final_hidden_states_res = ops.scatter_nd_update(final_hidden_states_param,
+                                                top_x, current_hidden_states, "sum")
+
+    body_cond = ops.constant([True], dtype=bool)
+
+    body_model = ov.Model([body_cond, final_hidden_states_res],
+                          [idx_param, expert_hit_param, expert_mask_param, hidden_states_param,
+                           gate_projs_param, up_projs_param, down_projs_param,
+                           routing_weights_param, final_hidden_states_param],
+                          "body_model")
+
+    # context.get_input(0)
+    expert_hit = context.get_input(0)
+    expert_mask_main = context.get_input(1)
+    hidden_states = context.get_input(2)
+    down_projs = context.get_input(3)
+    up_projs = context.get_input(4)
+    gate_projs = context.get_input(5)
+    routing_weights = context.get_input(6)
+    final_hidden_states = context.get_input(7)
+
+    # flatten expert_hit
+    flatten_shape = ops.constant([-1], dtype=np.int32)
+    expert_hit = ops.reshape(expert_hit, flatten_shape, False)
+
+    num_active_experts = ops.shape_of(expert_hit, "i32")
+    const_zero = ops.constant(0, dtype=np.int32)
+    num_active_experts = ops.gather(num_active_experts, const_zero, const_zero)
+
+    loop = ops.loop(
+        num_active_experts,
+        ops.constant(True, dtype="bool")
+    )
+
+    loop.set_function(body_model)
+    loop.set_invariant_input(expert_hit_param, expert_hit.output(0))
+    loop.set_invariant_input(expert_mask_param, expert_mask_main)
+    loop.set_invariant_input(hidden_states_param, hidden_states)
+    loop.set_invariant_input(gate_projs_param, gate_projs)
+    loop.set_invariant_input(up_projs_param, up_projs)
+    loop.set_invariant_input(down_projs_param, down_projs)
+    loop.set_invariant_input(routing_weights_param, routing_weights)
+    loop.set_merged_input(final_hidden_states_param, final_hidden_states, final_hidden_states_res.output(0))
+
+    loop.set_special_body_ports([0, 0])
+
+    final_hidden_states = loop.get_iter_value(final_hidden_states_res.output(0), -1)
+
+    return [final_hidden_states]
 
 
 class ChunkedAttentionCell(torch.nn.Module):
@@ -7373,8 +7591,6 @@ class ChunkedAttentionCell(torch.nn.Module):
 
         output_cell = torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
         return output_cell
-        #return core_attn_out, last_recurrent_state
-        #return last_recurrent_state
 
 
 def convert_chunked_attention_cell(context):
@@ -7633,8 +7849,12 @@ class Qwen3NextModelPatcher(ModelPatcher):
 
         self.module_extensions = {
             ChunkedAttentionCell: ModuleExtension(ChunkedAttentionCell, "ChunkedAttentionCellOp"),
+            LoopBasedMoECell: ModuleExtension(LoopBasedMoECell, "LoopBasedMoECellOp"),
         }
-        self.conversion_extensions = [ConversionExtension("ChunkedAttentionCellOp", convert_chunked_attention_cell)]
+        self.conversion_extensions = [
+            ConversionExtension("ChunkedAttentionCellOp", convert_chunked_attention_cell),
+            ConversionExtension("LoopBasedMoECellOp", convert_moe_cell),
+        ]
 
     def __enter__(self):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
@@ -7658,6 +7878,7 @@ class Qwen3NextModelPatcher(ModelPatcher):
             if isinstance(decoder_layer.mlp, Qwen3NextSparseMoeBlock):
                 decoder_layer.mlp._orig_forward = decoder_layer.mlp.forward
                 decoder_layer.mlp.forward = types.MethodType(patched_qwen3_next_sparse_moe_block, decoder_layer.mlp)
+                decoder_layer.mlp.moe_cell = LoopBasedMoECell()
 
     def __exit__(self, exc_type, exc_value, traceback):
         from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextSparseMoeBlock
