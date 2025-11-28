@@ -281,7 +281,8 @@ def main_export(
         do_bitnet_patching = quant_method == "bitnet"
 
         model_type = config.model_type
-        if model_type.startswith("qwen2") and model_type.endswith("vl_text"):
+
+        if is_transformers_version(">=", "4.56") and model_type in {"qwen2_vl", "qwen2_5_vl"}:
             patch_qwenvl_configs()
             model_type = config.model_type
 
