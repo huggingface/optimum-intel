@@ -4392,7 +4392,18 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
                 outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
 
-            return outputs
+            # we still need to filter out cross attention in the case of non-stateful decoder
+            filtered_outputs = {}
+            for name, value in outputs.items():
+                if (
+                    self.real_config._behavior == "decoder"
+                    and self.real_config.use_past_in_inputs
+                    and name.startswith("past_key_values")
+                ):
+                    filtered_outputs[name] = tuple([v[:2] for v in value])
+                else:
+                    filtered_outputs[name] = value
+            return filtered_outputs
 
         self.patched_forward = patched_forward
 
