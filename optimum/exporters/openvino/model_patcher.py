@@ -3323,6 +3323,27 @@ def _minicpmv_resampler_forward(self, image_feature, pos_embed, key_padding_mask
 
     out = self.attn(q_bs, image_feature + pos_embed, image_feature, key_padding_mask=key_padding_mask)[
         0
+    ]  # Q * B * D  # L * B * D +  L * B * Dpos_embed
+    #  out: Q * B * D
+    x = out.permute(1, 0, 2)  # B * Q * D
+
+    x = self.ln_post(x)
+    x = x @ self.proj
+    return x
+
+
+def _minicpmv4_5_resampler_forward(self, image_feature, pos_embed, key_padding_mask, temporal_embed):
+    image_feature = self.kv_proj(image_feature)  # B * L * D
+    image_feature = self.ln_kv(image_feature).permute(1, 0, 2)  # L * B * D
+    image_feature_emb = image_feature + pos_embed
+    image_feature_temporal = image_feature_emb + temporal_embed  # [L, bs, D] + [1, bs, D]
+    bs = image_feature_temporal.shape[1]
+    q = self.ln_q(self.query)  # Q * D
+
+    q_bs = q.unsqueeze(1).repeat(1, bs, 1)
+
+    out = self.attn(q_bs, image_feature_temporal, image_feature, key_padding_mask=key_padding_mask)[
+        0
     ]  # Q * B * D  # L * B * D +  L * B * D
     #  out: Q * B * D
     x = out.permute(1, 0, 2)  # B * Q * D
@@ -3482,7 +3503,10 @@ class MiniCPMVResamplerModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(_minicpmv_resampler_forward, model)
+        has_temporal_ids = "temporal_ids" in inspect.signature(model.__orig_forward).parameters
+        model.forward = types.MethodType(
+            _minicpmv4_5_resampler_forward if has_temporal_ids else _minicpmv_resampler_forward, model
+        )
 
         super().__init__(config, model, model_kwargs)
 
