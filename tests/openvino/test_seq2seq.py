@@ -259,24 +259,10 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         return audio_data
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_compare_to_transformers(self, model_arch):
+    def test_compare_to_transformers_yo(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
-        )
-        ov_model_stateless = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, stateful=False, device=OPENVINO_DEVICE
-        )
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
-        # whisper cache class support implemented in 4.43
-        expected_stateful = True
-        self.assertEqual(ov_model.decoder.stateful, expected_stateful)
-        self.assertEqual(model_has_state(ov_model.decoder.model), expected_stateful)
-        check_with_past_available = self.assertIsNone if expected_stateful else self.assertIsNotNone
-        check_with_past_available(ov_model.decoder_with_past)
-
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
         pt_features = processor.feature_extractor(data, return_tensors="pt")
@@ -285,21 +271,6 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
         with torch.no_grad():
             transformers_outputs = transformers_model(**pt_features, **decoder_inputs)
-
-        for input_type in ["pt", "np"]:
-            features = processor.feature_extractor(data, return_tensors=input_type)
-
-            if input_type == "np":
-                decoder_inputs = {"decoder_input_ids": np.ones((1, 1), dtype=np.int64) * decoder_start_token_id}
-
-            ov_outputs = ov_model(**features, **decoder_inputs)
-            ov_stateless_outputs = ov_model_stateless(**features, **decoder_inputs)
-            self.assertIn("logits", ov_outputs)
-            # Compare tensor outputs
-            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
-            self.assertTrue(
-                torch.allclose(torch.Tensor(ov_stateless_outputs.logits), transformers_outputs.logits, atol=1e-3)
-            )
 
         generate_kwrgs = {}
         if is_transformers_version(">=", "4.50"):
@@ -312,21 +283,33 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             do_sample=False,
             eos_token_id=None,
         )
-
         set_seed(SEED)
         generated_tokens = transformers_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
-        set_seed(SEED)
-        ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
-        set_seed(SEED)
-        ov_stateless_generated_tokens = ov_model_stateless.generate(
-            **pt_features, generation_config=gen_config, **generate_kwrgs
-        )
-
-        self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
-        self.assertTrue(torch.equal(generated_tokens, ov_stateless_generated_tokens))
-
         del transformers_model
-        del ov_model
+
+        for use_cache, stateful in ((True, True), (True, False), (False, False)):
+            ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+                model_id, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, use_cache=use_cache, stateful=stateful
+            )
+            self.assertIsInstance(ov_model.config, PretrainedConfig)
+            # whisper cache class support implemented in 4.43
+            self.assertEqual(ov_model.decoder.stateful, stateful)
+            self.assertEqual(model_has_state(ov_model.decoder.model), stateful)
+            check_with_past_available = self.assertIsNotNone if use_cache and not stateful else self.assertIsNone
+            check_with_past_available(ov_model.decoder_with_past)
+
+            for input_type in ["pt", "np"]:
+                features = processor.feature_extractor(data, return_tensors=input_type)
+                if input_type == "np":
+                    decoder_inputs = {"decoder_input_ids": np.ones((1, 1), dtype=np.int64) * decoder_start_token_id}
+                ov_outputs = ov_model(**features, **decoder_inputs)
+                self.assertIn("logits", ov_outputs)
+                # Compare tensor outputs
+                self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+            set_seed(SEED)
+            ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
+            self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
+            del ov_model
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
