@@ -1531,6 +1531,8 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
     def test_compare_output_attentions(self, model_arch):
+        if is_openvino_version(">=", "2025.4"):
+            self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
