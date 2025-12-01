@@ -279,6 +279,14 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=json.loads,
         help=("Any kwargs passed to the model forward, or used to customize the export for a given model."),
     )
+    optional_group.add_argument(
+        "--use-torch-export",
+        action="store_true",
+        default=None,
+        help=(
+            "Use torch.export() for scripting of PyTorch models."
+        ),
+    )
 
 
 def no_compression_parameter_provided(args):
@@ -574,6 +582,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 variant=self.args.variant,
                 model_kwargs=self.args.model_kwargs,
+                use_torch_export=self.args.use_torch_export,
                 # **input_shapes,
             )
 
