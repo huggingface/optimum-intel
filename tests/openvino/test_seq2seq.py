@@ -305,7 +305,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
                 ov_outputs = ov_model(**features, **decoder_inputs)
                 self.assertIn("logits", ov_outputs)
                 # Compare tensor outputs
-                self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+                self.assertTrue(
+                    torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3)
+                )
             set_seed(SEED)
             ov_generated_tokens = ov_model.generate(**pt_features, generation_config=gen_config, **generate_kwrgs)
             self.assertTrue(torch.equal(generated_tokens, ov_generated_tokens))
