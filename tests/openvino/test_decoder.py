@@ -21,7 +21,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.onnx.model_configs import NemotronOnnxConfig
-from optimum.exporters.openvino.model_configs import DeepseekOpenVINOConfig
+from optimum.exporters.openvino.model_configs import BitnetOpenVINOConfig, DeepseekOpenVINOConfig, LFM2OpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
@@ -268,6 +268,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 supported_architectures.remove("deepseek_v3")
         elif is_transformers_version("<", str(NemotronOnnxConfig.MIN_TRANSFORMERS_VERSION)):
             supported_architectures.remove("nemotron")
+        elif is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures.remove("bitnet")
+
+        elif is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures.remove("lfm2")
 
         untested_architectures = supported_architectures - tested_architectures
 
