@@ -654,10 +654,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_configs = [
             beam_search_gen_config,
             beam_sample_gen_config,
-            constrained_beam_search_gen_config,
+            # group_beam_search_gen_config,
+            # constrained_beam_search_gen_config,
         ]
         if is_transformers_version("<", "4.57.0"):
-            gen_configs.append(group_beam_search_gen_config)
+            # currently broken in transformers == 4.57.*
+            gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
 
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
