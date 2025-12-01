@@ -41,6 +41,8 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+if is_transformers_version(">=", "4.56"):
+    import transformers.masking_utils
 
 
 if TYPE_CHECKING:
@@ -5969,7 +5971,7 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
         def get_image_embeddings(self, pixel_values):
-            if is_transformers_version("<", "4.56"):
+            if is_transformers_version("<", "4.57"):
                 image_features = self.get_image_features(
                     pixel_values=pixel_values,
                     vision_feature_layer=self.config.vision_config.vision_feature_layer,
@@ -6045,12 +6047,13 @@ def llama4_attn_forward(
     position_embeddings: Tuple[torch.Tensor, torch.Tensor],
     attention_mask: Optional[torch.Tensor],
     past_key_value: Optional[tuple[tuple[torch.Tensor]]] = None,
+    past_key_values: Optional[tuple[tuple[torch.Tensor]]] = None,
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.llama4.modeling_llama4 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
 
-    past_key_value = past_key_value or kwargs.get("past_key_values")
+    past_key_value = past_key_value or past_key_values
 
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -6087,10 +6090,7 @@ def llama4_attn_forward(
 
     attention_interface = eager_attention_forward
     if self.config._attn_implementation != "eager":
-        if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
-            attention_interface = eager_attention_forward
-        else:
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
     attn_output, attn_weights = attention_interface(
         self,
@@ -6149,6 +6149,7 @@ def llama4_moe_forward(self, hidden_states):
 class Llama4TextModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
+
         self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
         self._model.model.rotary_emb.forward = types.MethodType(llama4_rope_forward, self._model.model.rotary_emb)
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
@@ -6158,13 +6159,24 @@ class Llama4TextModelPatcher(ModelPatcher):
             layer.self_attn._orig_forward = layer.self_attn.forward
             layer.self_attn.forward = types.MethodType(llama4_attn_forward, layer.self_attn)
 
+        if is_transformers_version(">=", "4.56"):
+            # openvino is not able to trace through the new chunked_overlay with left_padding
+            self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
+            transformers.masking_utils.chunked_overlay = (
+                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            )
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
             if layer.is_moe_layer and is_transformers_version("<", "4.54"):
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+        if is_transformers_version(">=", "4.56"):
+            transformers.masking_utils.chunked_overlay = self.original_chunked_overlay
 
 
 # Vectorized implementation of ConvSequenceTransform to avoid if-else branching

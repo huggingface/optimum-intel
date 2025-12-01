@@ -590,9 +590,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 bits=4,
                 sym=False,
                 group_size=32,
-                ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
+                ignored_scope={
+                    "names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]
+                    if is_transformers_version("<", "4.57")
+                    else []
+                },
             ),
-            {"model": {"int8": 4, "int4": 38}},
+            {"model": {"int8": 4, "int4": 38 if is_transformers_version("<", "4.57") else 40}},
         ),
         (
             OVModelForCausalLM,
@@ -906,7 +910,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 46, "int4": 56},
+                "lm_model": {
+                    "int8": 46 if is_transformers_version("<", "4.57") else 48,
+                    "int4": 56 if is_transformers_version("<", "4.57") else 54,
+                },
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 16},
             },
