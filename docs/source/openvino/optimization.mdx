@@ -144,7 +144,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode cb4_f8e4m3 --dataset wikitext2 ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -155,7 +155,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForCausalLM.from_pretrained(\'TinyLlama/TinyLlama-1.1B-Chat-v1.0\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'cb4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -202,7 +202,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVWeightQuantizationConfig(bits=4, dataset=\'contextual\')).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -226,7 +226,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\', trust_remote_code=True)).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForVisualCausalLM.from_pretrained(\'OpenGVLab/InternVL2-1B\', trust_remote_code=True, quantization_config=OVQuantizationConfig(bits=8, dataset=\'contextual\')).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -416,7 +416,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino -m microsoft/codebert-base --quant-mode cb4_f8e4m3 --dataset wikitext2 ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -427,7 +427,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForFeatureExtraction.from_pretrained(\'microsoft/codebert-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'cb4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -509,7 +509,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino --library sentence_transformers -m sentence-transformers/all-mpnet-base-v2 --quant-mode cb4_f8e4m3 --dataset wikitext2 ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -520,7 +520,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVSentenceTransformer.from_pretrained(\'sentence-transformers/all-mpnet-base-v2\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'cb4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -602,7 +602,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino -m FacebookAI/roberta-base --quant-mode cb4_f8e4m3 --dataset wikitext2 ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -613,7 +613,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForMaskedLM.from_pretrained(\'FacebookAI/roberta-base\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'cb4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\'))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -665,13 +665,13 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
-                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m google-t5/t5-small --quant-mode nf4_f8e4m3 --dataset wikitext2 --smooth-quant-alpha -1 ./save_dir')">
+                    onclick="navigator.clipboard.writeText('optimum-cli export openvino -m google-t5/t5-small --quant-mode cb4_f8e4m3 --dataset wikitext2 --smooth-quant-alpha -1 ./save_dir')">
                     ✅
                 </button>
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button
-                    onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\', smooth_quant_alpha=-1))).save_pretrained(\'save_dir\')')">
+                    onclick="navigator.clipboard.writeText('OVModelForSeq2SeqLM.from_pretrained(\'google-t5/t5-small\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'cb4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'wikitext2\', smooth_quant_alpha=-1))).save_pretrained(\'save_dir\')')">
                     ✅
                 </button>
             </td>
@@ -748,7 +748,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode nf4_f8e4m3 --dataset conceptual_captions ./save_dir');
+                    navigator.clipboard.writeText('optimum-cli export openvino -m openai/clip-vit-base-patch16 --quant-mode cb4_f8e4m3 --dataset conceptual_captions ./save_dir');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -759,7 +759,7 @@ Click on a ✅ to copy the command/code for the corresponding optimization case.
             </td>
             <td style="text-align: center; vertical-align: middle;">
                 <button onclick="
-                    navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'nf4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'conceptual_captions\'))).save_pretrained(\'save_dir\')');
+                    navigator.clipboard.writeText('OVModelForZeroShotImageClassification.from_pretrained(\'openai/clip-vit-base-patch16\', quantization_config=OVMixedQuantizationConfig(OVWeightQuantizationConfig(bits=4, dtype=\'cb4\'), OVQuantizationConfig(dtype=\'f8e4m3\', dataset=\'conceptual_captions\'))).save_pretrained(\'save_dir\')');
                     let m=document.getElementById('copyMsg');
                     m.style.display='block';
                     clearTimeout(window._copyTimeout);
@@ -889,23 +889,26 @@ If quantization_config is not provided, model will be exported in 8 bits by defa
 4-bit weight quantization can be achieved in a similar way:
 
 ```python
-from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
+from optimum.intel import OVModelForCausalLM
 
-quantization_config = OVWeightQuantizationConfig(bits=4)
-model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+model = OVModelForCausalLM.from_pretrained(model_id, quantization_config={"bits": 4})
 ```
+
+For some models, we provide preconfigured 4-bit weight-only quantization [configurations](https://github.com/huggingface/optimum-intel/blob/main/optimum/intel/openvino/configuration.py) that offer a good trade-off between quality and speed. This default 4-bit configuration is applied automatically when you specify `quantization_config={"bits": 4}`.
 
 Or for vision-language pipelines:
 ```python
 model = OVModelForVisualCausalLM.from_pretrained(
     "llava-hf/llava-v1.6-mistral-7b-hf",
-    quantization_config=quantization_config
+    quantization_config={"bits": 4}
 )
 ```
 
 You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
 
 ```python
+from optimum.intel import OVWeightQuantizationConfig
+
 quantization_config = OVWeightQuantizationConfig(
     bits=4,
     sym=False,
@@ -1019,8 +1022,8 @@ With this, encoder, decoder and decoder-with-past models of the Whisper pipeline
 Traditional optimization methods like post-training 8-bit quantization do not work well for Stable Diffusion (SD) models and can lead to poor generation results. On the other hand, weight compression does not improve performance significantly when applied to Stable Diffusion models, as the size of activations is comparable to weights.
 The U-Net component takes up most of the overall execution time of the pipeline. Thus, optimizing just this one component can bring substantial benefits in terms of inference speed while keeping acceptable accuracy without fine-tuning. Quantizing the rest of the diffusion pipeline does not significantly improve inference performance but could potentially lead to substantial accuracy degradation.
 Therefore, the proposal is to apply quantization in *hybrid mode* for the U-Net model and weight-only quantization for the rest of the pipeline components :
-* U-Net : quantization applied on both the weights and activations 
-* The text encoder, VAE encoder / decoder : quantization applied on the weights 
+* U-Net : quantization applied on both the weights and activations
+* The text encoder, VAE encoder / decoder : quantization applied on the weights
 
 The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and activations of other layers, facilitating accuracy preservation post-optimization while reducing the model size.
 
@@ -1054,7 +1057,7 @@ When running this kind of optimization through Python API, `OVMixedQuantizationC
 model = OVModelForCausalLM.from_pretrained(
     'TinyLlama/TinyLlama-1.1B-Chat-v1.0',
     quantization_config=OVMixedQuantizationConfig(
-        weight_quantization_config=OVWeightQuantizationConfig(bits=4, dtype='nf4'),
+        weight_quantization_config=OVWeightQuantizationConfig(bits=4, dtype='cb4'),
         full_quantization_config=OVQuantizationConfig(dtype='f8e4m3', dataset='wikitext2')
     )
 )
@@ -1063,7 +1066,7 @@ model = OVModelForCausalLM.from_pretrained(
 To apply mixed quantization through CLI, the `--quant-mode` argument should be used. For example:
 
 ```bash
-optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode nf4_f8e4m3 --dataset wikitext2 ./save_dir
+optimum-cli export openvino -m TinyLlama/TinyLlama-1.1B-Chat-v1.0 --quant-mode cb4_f8e4m3 --dataset wikitext2 ./save_dir
 ```
 
 Don't forget to provide a dataset since it is required for the calibration procedure during full quantization.
@@ -1090,7 +1093,6 @@ model = OVModelForVisualCausalLM.from_pretrained(
             "text_embeddings_model": OVWeightQuantizationConfig(bits=8),
         },
         dataset="contextual",
-        trust_remote_code=True,
     )
 )
 ```

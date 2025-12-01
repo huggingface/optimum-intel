@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import openvino
 import openvino as ov
 import torch
 from huggingface_hub import hf_hub_download
@@ -25,6 +26,7 @@ from transformers import (
     PreTrainedTokenizer,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino import main_export
@@ -54,12 +56,7 @@ else:
 
 if TYPE_CHECKING:
     from PIL.Image import Image
-
-    if is_transformers_version(">=", "4.42.0"):
-        from transformers.image_utils import VideoInput
-    else:
-        VideoInput = List[Image]
-
+    from transformers.image_utils import VideoInput
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +102,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return ["model", "text_emb_model"]
 
     def compile(self):
         if self.request is None:
@@ -255,7 +256,7 @@ class OVVisionEmbedding(OVModelPart):
             self._main_input = "pixel_values"
 
     def forward(self, pixel_values, **kwargs):
-        self._compile()
+        self.compile()
         inputs = {self._main_input: pixel_values}
         if len(self.input_names) > 1:
             for name in self.input_names:
@@ -285,7 +286,7 @@ class OVResampler(OVModelPart):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
 
     def forward(self, image_feature, pos_embed, key_padding_mask):
-        self._compile()
+        self.compile()
         result = self.request(
             {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
         )[0]
@@ -296,7 +297,7 @@ class OVVisionProjection(OVModelPart):
     _model_name = "vision_projection"
 
     def forward(self, img_features):
-        self._compile()
+        self.compile()
         return self.request(img_features)[0]
 
 
@@ -312,7 +313,7 @@ class OVAudioEmbeddings(OVModelPart):
     _model_name = "audio_embeddings"
 
     def forward(self, audio_signal):
-        self._compile()
+        self.compile()
         return self.request(audio_signal)[0]
 
 
@@ -320,7 +321,7 @@ class OVAudioEncoder(OVModelPart):
     _model_name = "audio_encoder"
 
     def forward(self, audio_feature, audio_mask):
-        self._compile()
+        self.compile()
         return self.request({"audio_feature": audio_feature, "audio_mask": audio_mask})[0]
 
 
@@ -366,13 +367,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self.is_dynamic = True
         self.config = config
         self.use_cache = kwargs.get("use_cache", True)
-        self._model_save_dir = model_save_dir
+        self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.lm_model = language_model
-        self.text_embeddings_model = text_embeddings
-        self.vision_embeddings_model = vision_embeddings
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
@@ -387,8 +385,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
         self.language_model = OVModelWithEmbedForCausalLM(
-            self.lm_model,
-            self.text_embeddings_model,
+            language_model,
+            text_embeddings,
             config=config,
             device=device,
             ov_config=ov_config,
@@ -397,7 +395,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             compile=self._compile_only or enable_compilation,
             compile_only=self._compile_only,
         )
-        self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
+        self.vision_embeddings = OVVisionEmbedding(vision_embeddings, self)
         for part in self.additional_parts:
             model_part = getattr(self, f"{part}_model", None)
             if model_part is not None:
@@ -417,15 +415,12 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        for _, component in self.components.items():
+        for component in self.components.values():
             component.clear_requests()
 
     def compile(self):
-        for _, component in self.components.items():
-            if isinstance(component, OVModelPart):
-                component._compile()
-            else:
-                component.compile()
+        for component in self.components.values():
+            component.compile()
 
     def _save_config(self, save_directory):
         """
@@ -443,19 +438,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_models = self.ov_submodels
         dst_file_names = {
             "lm_model": OV_LANGUAGE_MODEL_NAME,
             "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
             "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
         }
-        for name in self._ov_submodel_names:
-            if name not in dst_file_names:
-                dst_file_names[name] = f"openvino_{name}.xml"
 
-        for name in self._ov_submodel_names:
-            model = src_models[name]
-            dst_file_name = dst_file_names[name]
+        for name, model in self.ov_models.items():
+            dst_file_name = dst_file_names.get(name, f"openvino_{name}.xml")
             dst_path = os.path.join(save_directory, dst_file_name)
             ov.save_model(model, dst_path, compress_to_fp16=False)
 
@@ -481,6 +471,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -516,6 +507,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -603,11 +596,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        to_quantize = not compile_only and quantization_config is not None
-        if to_quantize:
-            kwargs["compile"] = False
-
+        quantization_config = model_cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -615,17 +605,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
-
+        if quantization_config:
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
             quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            cls._apply_quantization(
+                model, quantization_config_copy, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 
@@ -697,26 +687,58 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             use_cache=use_cache,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 
     @property
-    def _component_names(self):
+    def _component_names(self) -> List[str]:
         base_components = ["language_model", "vision_embeddings"]
-        additional_components = [part for part in self.additional_parts if getattr(self, part, None) is not None]
+        additional_components = [part for part in self.additional_parts if hasattr(self, part)]
         return base_components + additional_components
 
     @property
-    def components(self):
-        return {component_name: getattr(self, component_name) for component_name in self._component_names}
-
-    @property
-    def _ov_submodel_names(self):
+    def _ov_model_names(self):
+        # TODO (nikita.savelyevv): Consider deprecating `lm_model` in favor of `language_model`
         model_names = ["lm_model", "text_embeddings_model", "vision_embeddings_model"]
         for part in self.additional_parts:
-            if getattr(self, part, None) is not None:
+            if hasattr(self, part):
                 model_names.append(part + "_model")
         return model_names
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
+        ov_models = {}
+        for ov_model_name in self._ov_model_names:
+            if ov_model_name == "lm_model":
+                ov_model = self.language_model.model
+            elif ov_model_name == "text_embeddings_model":
+                ov_model = self.language_model.text_emb_model
+            else:
+                ov_model = getattr(self, ov_model_name.replace("_model", "")).model
+            ov_models[ov_model_name] = ov_model
+        return ov_models
+
+    @property
+    def lm_model(self) -> ov.Model:
+        logger.warn(
+            "`lm_model` property is deprecated and will be removed in v1.27. Please use `.language_model.model` instead."
+        )
+        return self.language_model.model
+
+    @property
+    def text_embeddings_model(self) -> ov.Model:
+        logger.warn(
+            "`text_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.language_model.text_emb_model` instead."
+        )
+        return self.language_model.text_emb_model
+
+    @property
+    def vision_embeddings_model(self) -> ov.Model:
+        logger.warn(
+            "`vision_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.vision_embeddings.model` instead."
+        )
+        return self.vision_embeddings.model
 
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
@@ -726,9 +748,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        for submodel in self.ov_submodels.values():
-            apply_moc_transformations(submodel, cf=False)
-            compress_model_transformation(submodel)
+        for ov_model in self.ov_models.values():
+            apply_moc_transformations(ov_model, cf=False)
+            compress_model_transformation(ov_model)
         return self
 
     def to(self, device):
@@ -895,7 +917,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
                 "token_type_ids": kwargs.get("token_type_ids"),
-                "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
+                "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
@@ -922,6 +944,14 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         Preprocess input instruction and an image.
         """
+
+    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
@@ -1821,7 +1851,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         inputs.update(tokenizer(text, return_tensors="pt"))
         return inputs
 
-    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    # internvl has issue with check  _get_non_default_parameters, as wrkaraund override _prepare_generation_config
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
@@ -2105,6 +2135,58 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 if image is not None
                 else text
             )
+        inputs = processor([prompt], [image], return_tensors="pt")
+        inputs.pop("image_sizes", None)
+        return inputs
+
+
+class _OVMiniCPMOForCausalLM(_OVMiniCPMVForCausalLM):
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        image_sizes=None,
+        attention_mask=None,
+        audio_bounds=None,
+        spk_bounds=None,
+        audio_features=None,
+        audio_feature_lens=None,
+        **kwargs,
+    ):
+        # Audio modality is not supported for MiniCPMO
+        if audio_features is not None and len(audio_features) > 0:
+            raise ValueError("Audio input is not supported for MiniCPMO")
+
+        return super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("Video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
+        prompt = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = processor([prompt], [image], return_tensors="pt")
         inputs.pop("image_sizes", None)
         return inputs
@@ -2517,19 +2599,9 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         self.rope_deltas = None  # cache rope_deltas here
-
-        if is_transformers_version(">=", "4.45.0"):
-            from transformers.models.qwen2_vl.modeling_qwen2_vl import (
-                VisionRotaryEmbedding,
-            )
-
-            self._rotary_pos_emb = VisionRotaryEmbedding(
-                self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
-            )
-        else:
-            raise ValueError(
-                f"Initialization model for {self.config.model_type} required at least transformers >= 4.45"
-            )
+        self._rotary_pos_emb = VisionRotaryEmbedding(
+            self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
+        )
 
     def prepare_inputs_for_generation(
         self,
@@ -3455,7 +3527,16 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 
+        # switch off add_bos_token if chat template already includes it
+        orig_add_bos_token = processor.tokenizer.add_bos_token
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+
+        # recover add_bos_token flag in tokenizer
+        processor.tokenizer.add_bos_token = orig_add_bos_token
+
         return inputs
 
     def _update_model_kwargs_for_generation(
@@ -3570,9 +3651,14 @@ class _OVIdefics3ForCausalLM(OVModelForVisualCausalLM):
         for batch_idx, p_attn_mask in enumerate(patch_attention_mask):
             nb_patches_h = p_attn_mask[:, 0].sum()
             nb_patches_w = p_attn_mask[0].sum()
-
-            fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
-            fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+            if is_transformers_version("<", "4.55"):
+                fractional_coords_h = torch.arange(0, 1 - 1e-6, 1 / nb_patches_h)
+                fractional_coords_w = torch.arange(0, 1 - 1e-6, 1 / nb_patches_w)
+            else:
+                h_indices = torch.arange(nb_patches_h, device=pixel_values.device, dtype=pixel_values.dtype)
+                w_indices = torch.arange(nb_patches_w, device=pixel_values.device, dtype=pixel_values.dtype)
+                fractional_coords_h = h_indices / nb_patches_h * (1 - 1e-6)
+                fractional_coords_w = w_indices / nb_patches_w * (1 - 1e-6)
 
             bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
             bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
@@ -4356,4 +4442,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,
+    "minicpmo": _OVMiniCPMOForCausalLM,
 }

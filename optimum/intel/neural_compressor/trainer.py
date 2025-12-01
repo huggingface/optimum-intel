@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 # Integrations must be imported before ML frameworks:
 # isort: off
 from transformers.integrations import hp_params
-from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint
 
 # isort: on
 
@@ -77,16 +77,11 @@ if is_accelerate_available():
     from accelerate import __version__ as accelerate_version
     from accelerate import skip_first_batches
 
-    if version.parse(accelerate_version) > version.parse("0.20.3"):
-        pass
     DATA_SAMPLERS = [RandomSampler]
     if version.parse(accelerate_version) > version.parse("0.23.0"):
         from accelerate.data_loader import SeedableRandomSampler
 
         DATA_SAMPLERS += [SeedableRandomSampler]
-
-    if is_deepspeed_available():
-        pass
 
 
 if is_apex_available():

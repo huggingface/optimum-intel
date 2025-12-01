@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
           cache-dependency-path: "kit/package-lock.json"
 
       - name: Set up Python
@@ -51,7 +51,7 @@ jobs:
         run: |
           pip install --upgrade pip uv
           uv pip install git+https://github.com/huggingface/doc-builder
-          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate
+          uv pip install .[quality] nncf openvino neural-compressor[pt]>3.4 diffusers accelerate datasets
 
       - name: Make documentation
         shell: bash
