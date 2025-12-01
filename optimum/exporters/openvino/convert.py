@@ -389,7 +389,7 @@ def export_pytorch(
         # To handle it, additional wrapper on patcher forward applied.
         # model.config.torchscript = True can not be used for patching, because it overrides return_dict to False
         patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
-        patched_forward = patcher.orig_forward
+        patched_forward = patcher.patched_forward
         dummy_input_keys = list(dummy_inputs.keys())
 
         @functools.wraps(patched_forward)
