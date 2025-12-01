@@ -654,9 +654,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_configs = [
             beam_search_gen_config,
             beam_sample_gen_config,
-            group_beam_search_gen_config,
             constrained_beam_search_gen_config,
         ]
+        if is_transformers_version("<", "4.57.0"):
+            gen_configs.append(group_beam_search_gen_config)
+
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE, **model_kwargs
