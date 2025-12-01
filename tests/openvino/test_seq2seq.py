@@ -259,7 +259,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         return audio_data
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_compare_to_transformers_yo(self, model_arch):
+    def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
