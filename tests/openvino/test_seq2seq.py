@@ -663,7 +663,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             transformers_model.generation_config.cache_implementation = None
             from transformers.cache_utils import DynamicCache
 
-            additional_inputs = {"past_key_values": DynamicCache(config=transformers_model.config)}
+            additional_inputs = {"past_key_values": DynamicCache()}
 
         if model_arch == "llama4":
             transformers_inputs["past_key_values"] = DynamicCache()
