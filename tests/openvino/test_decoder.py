@@ -128,6 +128,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES += ("exaone4",)
         SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
 
     if is_transformers_version(">=", "4.55.0"):
@@ -151,6 +152,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arctic",
         "chatglm4",
         "exaone",
+        "exaone4",
         "decilm",
         "minicpm3",
         "deepseek",
@@ -206,6 +208,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3": 2,
         "gemma2": 4,
         "exaone": 8,
+        "exaone4": 1,
         "granite": 6,
         "granite-moe": 6,
         "glm": 28,
