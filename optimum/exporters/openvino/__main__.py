@@ -200,9 +200,8 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
-
-    from ...intel.openvino.configuration import _GPTOSSQuantizationConfig
-    from ...intel.openvino.utils import TemporaryDirectory
+    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
+    from optimum.intel.openvino.utils import TemporaryDirectory
 
     if use_auth_token is not None:
         warnings.warn(
@@ -420,7 +419,7 @@ def main_export(
     is_generic_quantization = quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
     if is_generic_quantization:
         # In case generic quantization will be applied, export to a temporary directory first. This is to avoid confusion
-        # in the case when quantization fails and an intermediate floating point model ends up at the target location.
+        # in the case when quantization unexpectedly fails and an intermediate floating point model ends up at the target location.
         original_output = Path(output)
         temporary_directory = TemporaryDirectory()
         output = Path(temporary_directory.name)
@@ -527,6 +526,8 @@ def main_export(
         gc.collect()
 
         if is_generic_quantization:
+            # With generic quantization approach, a model first will be loaded with a corresponding OVModel class,
+            # then quantization will be applied and finally quantized model will be saved to disk.
             _apply_generic_quantization(
                 model_name_or_path=model_name_or_path,
                 original_task=original_task,
@@ -635,7 +636,7 @@ def _apply_generic_quantization(
     else:
         try:
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
-            if model_cls_name == "OVModelForFeatureExtraction" and library_name == "sentence_transformers":
+            if library_name == "sentence_transformers":
                 model_cls_name = "OVSentenceTransformer"
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
@@ -719,9 +720,8 @@ def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "
         if not is_nncf_available():
             raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
 
+        from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
         from optimum.intel.openvino.quantization import _weight_only_quantization
-
-        from ...intel.openvino.configuration import _GPTOSSQuantizationConfig
 
         if isinstance(quantization_config, _GPTOSSQuantizationConfig):
             # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
