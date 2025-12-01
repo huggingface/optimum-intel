@@ -170,6 +170,7 @@ class OVSamModel(OVBaseModel):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVQuantizationConfigBase, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -206,6 +207,8 @@ class OVSamModel(OVBaseModel):
                 Whether or not to apply 8-bit weight quantization.
             quantization_config(`Union[OVQuantizationConfigBase, Dict]`, *optional*, defaults to `None`):
                 Quantization configuration to apply to the model.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -280,24 +283,22 @@ class OVSamModel(OVBaseModel):
                 model_save_dir,
             )
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", True)
         model = cls(
             vision_encoder_model=vision_encoder_model,
             prompt_encoder_mask_decoder_model=prompt_encoder_model,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if quantization_config is not None:
-            from optimum.intel import OVQuantizer
-
-            quantizer = OVQuantizer(model)
-            quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        if quantization_config:
+            cls._apply_quantization(
+                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 

@@ -442,7 +442,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                                 "quantization. It will be ignored."
                             )
                         quantization_config = prepare_q_config(self.args)
-            quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
@@ -622,5 +621,4 @@ def prepare_q_config(args):
         "dataset": args.dataset,
         "num_samples": args.num_samples,
         "smooth_quant_alpha": args.smooth_quant_alpha,
-        "trust_remote_code": args.trust_remote_code,
     }

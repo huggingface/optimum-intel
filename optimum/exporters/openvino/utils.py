@@ -237,7 +237,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "minicpmo",
 ]
 
-SSM_MODELS = ["mamba", "falcon_mamba", "zamba2"]
+SSM_MODELS = ["mamba", "falcon_mamba", "zamba2", "lfm2"]
 
 
 def save_config(config, save_dir):
