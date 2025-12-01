@@ -910,10 +910,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {
-                    "int8": 46 if is_transformers_version("<", "4.57") else 48,
-                    "int4": 56 if is_transformers_version("<", "4.57") else 54,
-                },
+                "lm_model": {"int8": 46, "int4": 56},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 16},
             },
