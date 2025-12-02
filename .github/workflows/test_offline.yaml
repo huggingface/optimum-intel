@@ -14,8 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UV_TORCH_BACKEND: cpu
-  UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
 
 jobs:
@@ -29,12 +27,11 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: 3.9
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip uv
-          uv pip install .[openvino,diffusers,tests]
+          pip install .[tests,openvino]
 
       - name: Test
         run: |
