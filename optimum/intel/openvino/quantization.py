@@ -165,14 +165,29 @@ class InferRequestWrapper:
         self.apply_caching = apply_caching
         self.inference_result_mock = inference_result_mock
         self.tensor_cache = {}
+        self.stateful = len(request.query_state()) > 0
+        self._reset_state_called = False
 
     def collect_inputs(self, inputs):
+        if self.stateful:
+            if isinstance(inputs, dict) and is_nncf_version(">", "2.19"):
+                from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
+
+                # To reflect the state resetting during NNCF calibration, we add a special key to the input dict
+                # Shallow copying is done on purpose shallow copy on purpose: we only need to add a key to the top-level dict
+                inputs = inputs.copy()
+                inputs[NNCF_DATASET_RESET_STATE_KEY] = self._reset_state_called
+            self._reset_state_called = False
+
         if not self.apply_caching or not isinstance(inputs, dict):
             self.collected_inputs.append(copy.deepcopy(inputs))
             return
 
         copied_inputs = {}
         for k, v in inputs.items():
+            if isinstance(v, bool):
+                copied_inputs[k] = v
+                continue
             data = v
             if isinstance(data, openvino.Tensor):
                 data = data.data
@@ -220,6 +235,10 @@ class InferRequestWrapper:
 
     def get_tensor(self, name: str):
         return Tensor(self.request.results[name])
+
+    def reset_state(self):
+        self.request.reset_state()
+        self._reset_state_called = True
 
     def __getattr__(self, attr):
         if attr in self.__dict__:
