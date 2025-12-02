@@ -291,7 +291,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
         ),
         (
-            "text-generation-with-past",
+            "text-generation",
             "llama",
             "cb4_f8e4m3",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code --ratio 0.5",
@@ -315,7 +315,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             },
         ),
         (
-            "text-generation-with-past",
+            "text-generation",
             "llama",
             "int4_f8e5m2",
             "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
@@ -1092,8 +1092,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         expected_fake_nodes_per_model: Dict[str, int],
         expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     ):
-        if task in ["automatic-speech-recognition", "text-generation"]:
-            self.skipTest("Skipping. Reason: ticket 177157 / issue #1528.")
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --task {task} --model {MODEL_NAMES[model_type]} "
