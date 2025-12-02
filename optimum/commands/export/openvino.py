@@ -76,7 +76,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -401,8 +401,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                             "Dataset is required for full quantization. Please provide it with --dataset argument."
                         )
                     if self.args.quant_mode in [
-                        "nf4_f8e4m3",
-                        "nf4_f8e5m2",
                         "cb4_f8e4m3",
                         "int4_f8e4m3",
                         "int4_f8e5m2",
@@ -430,7 +428,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                                 "quantization. It will be ignored."
                             )
                         quantization_config = prepare_q_config(self.args)
-            quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
@@ -609,5 +606,4 @@ def prepare_q_config(args):
         "dataset": args.dataset,
         "num_samples": args.num_samples,
         "smooth_quant_alpha": args.smooth_quant_alpha,
-        "trust_remote_code": args.trust_remote_code,
     }

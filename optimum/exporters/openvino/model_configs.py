@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import enum
+import logging
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -94,6 +95,7 @@ from .model_patcher import (
     GptJModelPatcher,
     GptNeoModelPatcher,
     GptNeoxModelPatcher,
+    GptOssModelPatcher,
     GraniteMoEModelPatcher,
     IBertModelPatcher,
     Idefics3ImageEmbeddingsModelPatcher,
@@ -103,6 +105,7 @@ from .model_patcher import (
     InternVL2ChatLangModelPatcher,
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
+    Lfm2ModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -138,8 +141,11 @@ from .model_patcher import (
     QwenModelPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
+    Zamba2ModelPatcher,
 )
 
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel  # noqa: F811
@@ -197,12 +203,6 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
-
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS[
-        "image-text-to-text"
-    ] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["text-generation"]
-
-    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["video-text-to-text"] = "AutoModelForVision2Seq"
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -437,6 +437,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ChatGLM2DummyPastKeyValuesGenerator
     _MODEL_PATCHER = ChatGLMModelPatcher
+    MAX_TRANSFORMERS_VERSION = "4.55.4"
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -576,6 +577,20 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
     MIN_TRANSFORMERS_VERSION = "4.55.1"
+    _MODEL_PATCHER = GptOssModelPatcher
+
+
+@register_in_tasks_manager(
+    "bitnet",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BitnetOpenVINOConfig(LlamaOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.52.1"
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -591,6 +606,18 @@ class GptOssOpenVINOConfig(LlamaOpenVINOConfig):
 )
 class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "exaone4",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class Exaone4OpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
 
 
 @register_in_tasks_manager(
@@ -644,6 +671,7 @@ class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("qwen", *["text-generation", "text-generation-with-past"])
 class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
+    MAX_TRANSFORMERS_VERSION = "4.55.4"
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
@@ -747,6 +775,7 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager("olmo", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -882,9 +911,8 @@ class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class BioGPTOpenVINOConfig(
     TextDecoderWithPositionIdsOnnxConfig if is_transformers_version(">=", "4.52.0") else TextDecoderOnnxConfig
 ):
-    # BioGPT does not require position_ids input.
-    DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -954,6 +982,7 @@ class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_attention_heads="attention_heads", hidden_size="d_model"
     )
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -1694,9 +1723,7 @@ class LlavaNextVideoConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager(
-    "llava_next_video", *["image-text-to-text", "video-text-to-text"], library_name="transformers"
-)
+@register_in_tasks_manager("llava_next_video", *["image-text-to-text"], library_name="transformers")
 class LlavaNextVideoOpenVINOConfig(LlavaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.42.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in LlavaNextVideoConfigBehavior]
@@ -3297,11 +3324,7 @@ class Qwen2VLConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
 
 
-@register_in_tasks_manager(
-    "qwen2_vl",
-    *["image-text-to-text", "video-text-to-text"],
-    library_name="transformers",
-)
+@register_in_tasks_manager("qwen2_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Qwen2VLConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3432,11 +3455,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
         return {}
 
 
-@register_in_tasks_manager(
-    "qwen2_5_vl",
-    *["image-text-to-text", "video-text-to-text"],
-    library_name="transformers",
-)
+@register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
@@ -3510,66 +3529,6 @@ class GraniteOpenVINOConfig(LlamaOpenVINOConfig):
 class GraniteMoEOpenVINOConfig(LlamaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.45.0"
     _MODEL_PATCHER = GraniteMoEModelPatcher
-
-
-# TODO: remove and replace with GPTBigCodeDummyPastKeyValuesGenerator when optimum >= v2
-class GPTBigCodeDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        random_sequence_length_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            task=task,
-            normalized_config=normalized_config,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            random_batch_size_range=random_batch_size_range,
-            random_sequence_length_range=random_sequence_length_range,
-            **kwargs,
-        )
-        self.multi_query = normalized_config.multi_query
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if is_transformers_version("<", "4.54"):
-            if self.multi_query:
-                shape = (
-                    self.batch_size,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads * 2,
-                )
-            else:
-                shape = (
-                    self.batch_size,
-                    self.num_attention_heads,
-                    self.sequence_length,
-                    self.hidden_size // self.num_attention_heads * 2,
-                )
-            pkv = [
-                self.random_float_tensor(shape, framework=framework, dtype=float_dtype) for _ in range(self.num_layers)
-            ]
-
-        else:
-            shape = (
-                self.batch_size,
-                self.num_attention_heads if not self.multi_query else 1,
-                self.sequence_length,
-                self.hidden_size // self.num_attention_heads,
-            )
-            pkv = [
-                (
-                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
-                )
-                for _ in range(self.num_layers)
-            ]
-
-        return pkv
 
 
 @register_in_tasks_manager(
@@ -3780,7 +3739,7 @@ class DummyVisionPositionIdsInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
-@register_in_tasks_manager("idefics3", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("idefics3", *["image-text-to-text"], library_name="transformers")
 class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyVisionPositionIdsInputGenerator)
     MIN_TRANSFORMERS_VERSION = "4.46.0"
@@ -3839,7 +3798,7 @@ class Idefics3OpenVINOConfig(BaseVLMOpenVINOConfig):
             return text_embedding
 
 
-@register_in_tasks_manager("smolvlm", *["image-text-to-text", "video-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("smolvlm", *["image-text-to-text"], library_name="transformers")
 class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
 
@@ -4030,10 +3989,7 @@ class SpeechT5OpenVINOConfig(SpeechT5OnnxConfig):
             if self.variant == "with-past" and self.use_past_in_inputs:
                 self.add_past_key_values(common_inputs, direction="inputs")
         elif self._behavior is SpeechT5ConfigBehavior.POSTNET:
-            common_inputs["raw_spectrogram"] = {
-                0: "n_spectrums",
-                1: "batch_size",
-            }
+            common_inputs["raw_spectrogram"] = {0: "n_spectrums", 1: "batch_size"}
         elif self._behavior is SpeechT5ConfigBehavior.VOCODER:
             common_inputs["spectrogram"] = {0: "batch_size", 1: "n_spectrums"}
         else:
@@ -4297,3 +4253,211 @@ class DinoV3OpenVINOConfig(VisionOnnxConfig):
 )
 class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+
+class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for Zamba2 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
+        self.ssm_state_size = config.mamba_d_state
+        self.conv_kernel_size = config.mamba_d_conv
+        self.n_mamba_heads = config.n_mamba_heads
+        self.mamba_ngroups = config.mamba_ngroups
+        self.mamba_d_state = config.mamba_d_state
+        self.mamba_headdim = config.mamba_headdim
+        self.head_dim = config.attention_head_dim
+        self.hybrid_layer_ids = config.hybrid_layer_ids
+        logger.warning(
+            "The current support for the 'Zamba2' model type is experimental. "
+            "Performance is not optimal with high memory consumption. "
+            "Optimizations and improved support will be available in a future OpenVINO release."
+        )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+        for i in range(self.num_layers):
+            conv_state_shape = (
+                self.batch_size,
+                self.intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                self.conv_kernel_size,
+            )
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(conv_state)
+            ssm_state_shape = (self.batch_size, self.n_mamba_heads, self.mamba_headdim, self.ssm_state_size)
+            ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(ssm_state)
+
+        for i in range(len(self.hybrid_layer_ids)):
+            kv_shape = (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(k)
+            past_key_values.append(v)
+
+        return past_key_values
+
+
+@register_in_tasks_manager("zamba2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
+    PAD_ATTENTION_MASK_TO_PAST = False
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Zamba2DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Zamba2DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
+    _MODEL_PATCHER = Zamba2ModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        for i in range(self._normalized_config.num_layers):
+            # [batch_size, conv_kernel_size - 1, d_model]
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            # [batch_size, d_state, d_model]
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(len(self._normalized_config.hybrid_layer_ids)):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+
+class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy past_key_values inputs for Lfm2 architectures.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        config = normalized_config.config
+        self.num_conv_layers = config.layer_types.count("conv")
+        self.num_atten_layers = config.layer_types.count("full_attention")
+        self.batch_size = batch_size
+        self.normalized_config = normalized_config
+        self.hidden_size = self.normalized_config.hidden_size
+        self.conv_L_cache = self.normalized_config.conv_L_cache
+        self.num_key_value_heads = self.normalized_config.num_key_value_heads
+        self.num_hidden_layers = self.normalized_config.num_hidden_layers
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+
+        for i in range(self.num_conv_layers):
+            conv_state_shape = (self.batch_size, self.hidden_size, self.conv_L_cache)
+            conv_state = self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(conv_state)
+
+        for i in range(self.num_atten_layers):
+            shape = (
+                self.batch_size,
+                self.num_key_value_heads,
+                self.sequence_length,
+                self.hidden_size // self.num_attention_heads,
+            )
+
+            kv_shape = shape  # (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
+            k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
+            past_key_values.append(k)
+            past_key_values.append(v)
+
+        return past_key_values
+
+
+@register_in_tasks_manager(
+    "lfm2",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM2OpenVINOConfig(MambaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
+    _MODEL_PATCHER = Lfm2ModelPatcher
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Lfm2DummyPastKeyValuesGenerator
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        self.num_conv_layers = self._normalized_config.layer_types.count("conv")
+        self.num_atten_layers = self._normalized_config.layer_types.count("full_attention")
+
+        for i in range(self.num_conv_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+
+        for i in range(self.num_atten_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs

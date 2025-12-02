@@ -31,6 +31,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.model_patcher import (
     UNSUPPORTED_OPS_PATCHING_SPEC,
     ModelPatcher,
+    gpt_oss_forward,
     override_arguments,
     sdpa_mask_without_vmap,
 )
@@ -40,6 +41,8 @@ from optimum.intel.utils.import_utils import is_diffusers_version, is_torch_vers
 if is_transformers_version(">=", "4.53"):
     from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS, eager_mask, sdpa_mask
     from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock
+if is_transformers_version(">=", "4.56"):
+    import transformers.masking_utils
 
 
 if TYPE_CHECKING:
@@ -58,6 +61,7 @@ for idx, spec in enumerate(UNSUPPORTED_OPS_PATCHING_SPEC):
         "tril",
         "norm",
         "unfold",
+        "movedim",
         "rms_norm",
         "repeat_interleave",
         "scaled_dot_product_attention",
@@ -117,7 +121,7 @@ def _update_causal_mask_patched(
 
     dtype, device = input_tensor.dtype, input_tensor.device
     # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # using minimum from dtype with larger bandwidth (float32) may lead to overflow
     # during execution on platforms with default lower precision (bfloat16, float16)
     min_dtype = torch.finfo(torch.float16).min
 
@@ -235,7 +239,7 @@ class OVDecoderModelPatcher(ModelPatcher):
             self._model._update_causal_mask = self._model._update_causal_mask_original
             del self._model._update_causal_mask_original
 
-        if is_transformers_version(">=", "4.53.0"):
+        if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
@@ -2097,7 +2101,7 @@ def _dbrx_update_causal_mask(
 
     dtype, device = input_tensor.dtype, input_tensor.device
     # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # using minimum from dtype with larger bandwidth (float32) may lead to overflow
     # during execution on platforms with default lower precision (bfloat16, float16)
     min_dtype = torch.finfo(torch.float16).min
     sequence_length = input_tensor.shape[1]
@@ -2295,18 +2299,20 @@ class PersimmonModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        for layer in self._model.model.layers:
-            if is_torch_version(">=", "2.1.0"):
-                orig_self_attn_fwd = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
-                layer.self_attn._orig_forward = orig_self_attn_fwd
+        if is_transformers_version("<", "4.56"):
+            for layer in self._model.model.layers:
+                if is_torch_version(">=", "2.1.0"):
+                    orig_self_attn_fwd = layer.self_attn.forward
+                    layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
+                    layer.self_attn._orig_forward = orig_self_attn_fwd
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        for layer in self._model.model.layers:
-            if hasattr(layer.self_attn, "_orig_forward"):
-                layer.self_attn.forward = layer.self_attn._orig_forward
+        if is_transformers_version("<", "4.56"):
+            for layer in self._model.model.layers:
+                if hasattr(layer.self_attn, "_orig_forward"):
+                    layer.self_attn.forward = layer.self_attn._orig_forward
 
 
 def _jais_attn_forward(
@@ -3448,7 +3454,7 @@ def _minicpmv_siglip_transformer_forward(
     patch_attention_mask = patch_attention_mask.view(batch_size, -1)
     attention_mask = (
         _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
-        if not self._use_flash_attention_2
+        if not getattr(self, "_use_flash_attention_2", False)
         else patch_attention_mask
     )
 
@@ -4348,15 +4354,6 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
     ):
         super().__init__(config, model, model_kwargs)
 
-        # sometimes the use_cache is not properly set in the model config
-        if self.real_config.use_past:
-            if hasattr(model.config, "decoder"):
-                model.config.decoder.use_cache = True
-            if hasattr(model.config, "text_config"):
-                model.config.text_config.use_cache = True
-            if model.config.model_type == "vision-encoder-decoder" and model.config.decoder.model_type == "trocr":
-                model.decoder.model.decoder.config.use_cache = True
-
         # re-use the patched forward method from the parent class
         self.super_patched_forward = self.patched_forward
 
@@ -4366,35 +4363,35 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
             args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
 
             # with statful decoder, we always return the self attn only, cross attn is part of the state
-            pkv = None
             if (
                 getattr(self.real_config, "stateful", False)
                 and self.real_config._behavior == "decoder"
                 and "past_key_values" in signature.parameters
             ):
-                pkv_argument_index = list(signature.parameters.keys()).index("past_key_values")
+                pkv = None
+                pkv_arg_index = list(signature.parameters.keys()).index("past_key_values")
 
                 if "past_key_values" in kwargs:
                     pkv = kwargs["past_key_values"]
-                elif len(args) > pkv_argument_index:
-                    pkv = args[pkv_argument_index]
-
-                if isinstance(pkv, EncoderDecoderCache):
-                    pkv = pkv.to_legacy_cache()
+                elif len(args) > pkv_arg_index:
+                    pkv = args[pkv_arg_index]
 
                 if pkv is not None:
-                    self_attn = [cache_item[:2] for cache_item in pkv]
-                    pkv = EncoderDecoderCache.from_legacy_cache(self_attn)
+                    if isinstance(pkv, EncoderDecoderCache):
+                        pkv = pkv.self_attention_cache.to_legacy_cache()
+                    else:
+                        pkv = [pkv_item[:2] for pkv_item in pkv]
+                    pkv = EncoderDecoderCache.from_legacy_cache(pkv)
 
                     if "past_key_values" in kwargs:
                         kwargs["past_key_values"] = pkv
-                    elif len(args) > pkv_argument_index:
-                        args[pkv_argument_index] = pkv
+                    elif len(args) > pkv_arg_index:
+                        args[pkv_arg_index] = pkv
 
             outputs = self.super_patched_forward(*args, **kwargs)
 
             # the optimum-onnx seq2seq model patcher only converts to tuple starting from 4.48
-            if isinstance(outputs.get("past_key_values"), EncoderDecoderCache):
+            if isinstance(outputs.get("past_key_values"), (DynamicCache, EncoderDecoderCache)):
                 outputs["past_key_values"] = outputs["past_key_values"].to_legacy_cache()
 
             # we still need to filter out cross attention in the case of non-stateful decoder
@@ -4428,7 +4425,7 @@ class OVSeq2SeqModelPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if is_transformers_version(">=", "4.53.0"):
+        if is_transformers_version(">=", "4.53"):
             ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
             ALL_MASK_ATTENTION_FUNCTIONS.register("eager", eager_mask)
 
@@ -4703,15 +4700,12 @@ class Idefics3ImageEmbeddingsModelPatcher(ModelPatcher):
             # avoiding passing the attention_mask, which is equivalent to attending to the full sequence
             if not torch.any(~patch_attention_mask):
                 patch_attention_mask = None
-            elif not self._use_flash_attention_2:
+            elif not getattr(self, "_use_flash_attention_2", False):
                 patch_attention_mask = _prepare_4d_attention_mask(patch_attention_mask, hidden_states.dtype)
 
             encoder_outputs = self.encoder(
                 inputs_embeds=hidden_states,
                 attention_mask=patch_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
             )
 
             last_hidden_state = encoder_outputs[0]
@@ -5061,47 +5055,49 @@ def modulewise_unpatch(model, module_cls):
 class BlenderbotModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
-        modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
+            modulewise_patch(self._model, BlenderbotAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot.modeling_blenderbot import BlenderbotAttention
 
-        modulewise_unpatch(self._model, BlenderbotAttention)
+            modulewise_unpatch(self._model, BlenderbotAttention)
 
 
 class BlenderbotSmallModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
-        from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
-
-        modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
+            modulewise_patch(self._model, BlenderbotSmallAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
 
-        from transformers.models.blenderbot_small.modeling_blenderbot_small import BlenderbotSmallAttention
-
-        modulewise_unpatch(self._model, BlenderbotSmallAttention)
+            modulewise_unpatch(self._model, BlenderbotSmallAttention)
 
 
 class PegasusModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
-        from transformers.models.pegasus.modeling_pegasus import PegasusAttention
-
-        modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
+            modulewise_patch(self._model, PegasusAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if is_transformers_version("<", "4.56"):
+            from transformers.models.pegasus.modeling_pegasus import PegasusAttention
 
-        from transformers.models.pegasus.modeling_pegasus import PegasusAttention
-
-        modulewise_unpatch(self._model, PegasusAttention)
+            modulewise_unpatch(self._model, PegasusAttention)
 
 
 # Copied from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L596
@@ -5170,14 +5166,14 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
 class MarianModelPatcher(OVSeq2SeqModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.56"):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_patch(self._model, MarianAttention, _blenderbot_attn_forward)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if is_transformers_version(">=", "4.49.0"):
+        if is_transformers_version(">=", "4.49.0") and is_transformers_version("<", "4.56"):
             from transformers.models.marian.modeling_marian import MarianAttention
 
             modulewise_unpatch(self._model, MarianAttention)
@@ -5417,7 +5413,7 @@ def speecht5_decoder_layer_forward(
 class OVSpeechT5ModelPatcher(ModelPatcher):
     def __enter__(self):
         if self.real_config._behavior != "vocoder":
-            setattr(self._model, self.orig_forward_name, self.patched_forward)
+            super().__enter__()
         if self.real_config._behavior == "decoder":
             self._model.speecht5.decoder.prenet.__orig_forward = self._model.speecht5.decoder.prenet.forward
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
@@ -5432,7 +5428,7 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.real_config._behavior != "vocoder":
-            setattr(self._model, self.orig_forward_name, self.orig_forward)
+            super().__exit__(exc_type, exc_value, traceback)
         if self.real_config._behavior == "decoder":
             self._model.speecht5.decoder.prenet.forward = types.MethodType(
                 self._model.speecht5.decoder.prenet.__orig_forward, self._model.speecht5.decoder.prenet
@@ -5481,12 +5477,10 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             encoder_attention_mask=None,
             past_key_values=None,
         ):
-            return_legacy_cache = False
-
             if past_key_values is not None:
-                only_self_cache = [cache_item[:2] for cache_item in past_key_values]
-                past_key_values = only_self_cache
-                return_legacy_cache = True
+                past_key_values = [cache_item[:2] for cache_item in past_key_values]
+                if is_transformers_version(">=", "4.56"):
+                    past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
 
             output_sequence = inputs_embeds
             output_cross_attentions = False
@@ -5497,7 +5491,6 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Run the decoder layers on the last element of the prenet output.
             decoder_out = model.speecht5.decoder.wrapped_decoder(
                 hidden_states=decoder_hidden_states[:, -1:],
-                attention_mask=None,
                 encoder_hidden_states=encoder_hidden_states[0],
                 encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
@@ -5505,10 +5498,6 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
                 output_attentions=output_cross_attentions,
                 return_dict=True,
             )
-
-            # if output_cross_attentions:
-            #    cross_attentions.append(torch.cat(decoder_out.cross_attentions, dim=0))
-
             last_decoder_output = decoder_out.last_hidden_state.squeeze(1)
 
             # Predict the new mel spectrum for this step in the sequence.
@@ -5521,9 +5510,12 @@ class OVSpeechT5ModelPatcher(ModelPatcher):
             # Predict the probability that this is the stop token.
             prob = torch.sigmoid(model.speech_decoder_postnet.prob_out(last_decoder_output))
 
-            if return_legacy_cache:
-                only_self_cache = [cache_item[:2] for cache_item in decoder_out.past_key_values]
-                past_key_values = only_self_cache
+            past_key_values = decoder_out.past_key_values
+            if past_key_values is not None:
+                if isinstance(past_key_values, EncoderDecoderCache):
+                    past_key_values = past_key_values.self_attention_cache.to_legacy_cache()
+                else:
+                    past_key_values = [cache_item[:2] for cache_item in past_key_values]
 
             result = {
                 "output_sequence_out": output_sequence_out,
@@ -5979,11 +5971,17 @@ class Llama4ImageEmbeddingsModelPatcher(ModelPatcher):
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.0/src/transformers/models/llama4/modeling_llama4.py#L1732-L1741
         def get_image_embeddings(self, pixel_values):
-            image_features = self.get_image_features(
-                pixel_values=pixel_values,
-                vision_feature_layer=self.config.vision_config.vision_feature_layer,
-                vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
-            )
+            if is_transformers_version("<", "4.57"):
+                image_features = self.get_image_features(
+                    pixel_values=pixel_values,
+                    vision_feature_layer=self.config.vision_config.vision_feature_layer,
+                    vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+                )
+            else:
+                image_features = self.get_image_features(
+                    pixel_values=pixel_values,
+                    vision_feature_select_strategy=self.config.vision_config.vision_feature_select_strategy,
+                )
             vision_flat = image_features.view(-1, image_features.size(-1))
             projected_vision_flat = self.multi_modal_projector(vision_flat)
             return projected_vision_flat
@@ -6048,11 +6046,14 @@ def llama4_attn_forward(
     hidden_states: torch.Tensor,
     position_embeddings: Tuple[torch.Tensor, torch.Tensor],
     attention_mask: Optional[torch.Tensor],
-    past_key_value=None,
+    past_key_value: Optional[tuple[tuple[torch.Tensor]]] = None,
+    past_key_values: Optional[tuple[tuple[torch.Tensor]]] = None,
     cache_position: Optional[torch.LongTensor] = None,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.llama4.modeling_llama4 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
+
+    past_key_value = past_key_value or past_key_values
 
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -6074,7 +6075,7 @@ def llama4_attn_forward(
     # Use temperature tuning from https://arxiv.org/abs/2501.19399) to NoROPE layers
     if self.attn_temperature_tuning and not self.use_rope:
         attn_scales = (
-            torch.log(torch.floor((cache_position.float() + 1.0) / self.floor_scale) + 1.0) * self.attn_scale + 1.0
+            torch.log1p(torch.floor((cache_position.float() + 1.0) / self.floor_scale)) * self.attn_scale + 1.0
         )
         attn_scales = attn_scales.view((1, input_shape[-1], 1, 1)).expand((*input_shape, 1, 1))  # batch size > 1
         query_states = (query_states * attn_scales).to(query_states.dtype)
@@ -6089,10 +6090,7 @@ def llama4_attn_forward(
 
     attention_interface = eager_attention_forward
     if self.config._attn_implementation != "eager":
-        if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
-            attention_interface = eager_attention_forward
-        else:
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
     attn_output, attn_weights = attention_interface(
         self,
@@ -6138,7 +6136,7 @@ def llama4_moe_forward(self, hidden_states):
         index=router_indices,
     ).to(hidden_states.device)
     # we gather inputs corresponding to each expert based on the router indices
-    routed_in = routed_in * router_scores.reshape(-1, 1)
+    routed_in = routed_in * router_scores.transpose(0, 1).reshape(-1, 1)
     routed_out = self.experts(routed_in)
     out = self.shared_expert(hidden_states)
     # now that we finished expert computation -> we scatter add because we gathered previously
@@ -6151,6 +6149,7 @@ def llama4_moe_forward(self, hidden_states):
 class Llama4TextModelPatcher(ModelPatcher):
     def __enter__(self):
         super().__enter__()
+
         self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
         self._model.model.rotary_emb.forward = types.MethodType(llama4_rope_forward, self._model.model.rotary_emb)
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
@@ -6160,13 +6159,24 @@ class Llama4TextModelPatcher(ModelPatcher):
             layer.self_attn._orig_forward = layer.self_attn.forward
             layer.self_attn.forward = types.MethodType(llama4_attn_forward, layer.self_attn)
 
+        if is_transformers_version(">=", "4.56"):
+            # openvino is not able to trace through the new chunked_overlay with left_padding
+            self.original_chunked_overlay = transformers.masking_utils.chunked_overlay
+            transformers.masking_utils.chunked_overlay = (
+                lambda chunk_size, left_padding: transformers.masking_utils._legacy_chunked_overlay(chunk_size)
+            )
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         self._model.model.rotary_emb.forward = self._model.model.rotary_emb._orig_forward
         for layer in self._model.model.layers[: self._model.model.config.num_hidden_layers]:
             if layer.is_moe_layer and is_transformers_version("<", "4.54"):
                 layer.feed_forward.forward = layer.feed_forward._orig_forward
             layer.self_attn.forward = layer.self_attn._orig_forward
+
+        if is_transformers_version(">=", "4.56"):
+            transformers.masking_utils.chunked_overlay = self.original_chunked_overlay
 
 
 # Vectorized implementation of ConvSequenceTransform to avoid if-else branching
@@ -6521,3 +6531,676 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
 
         if is_transformers_version(">=", "4.53"):
             Qwen3MoeSparseMoeBlock.forward = self.original_moe_forward
+
+
+# The original implementation of this forward method can be found at:
+# https://github.com/huggingface/transformers/blob/v4.55.4/src/transformers/models/zamba2/modeling_zamba2.py#L729
+# This patch modifies `forward()` so that when traced by torch.jit, it works correctly
+# during both the prefill and decoding steps.
+# The patched version differs from the original in that it executes both the prefill
+# and decoding branches every time to compute and store the values of B, C, hidden states,
+# conv_state, and ssm_state in the cache.
+# The distinction between prefill and decoding modes is determined by the sequence length
+# (seq_len): 1. seq_len > 1 indicates the prefill phase;
+# seq_len = 1 indicates the decoding phase.
+def zamba2_mamba_mixer(
+    self,
+    hidden_states,
+    cache_params=None,
+    attention_mask: Optional[torch.Tensor] = None,
+):
+    def pad_tensor_by_size(input_tensor: torch.Tensor, pad_size: int):
+        pad_shape = (0, 0, 0, 0, 0, pad_size, 0, 0) if len(input_tensor.shape) == 4 else (0, 0, 0, pad_size, 0, 0)
+        return torch.nn.functional.pad(input_tensor, pad_shape, mode="constant", value=0)
+
+    def reshape_into_chunks(input_tensor, pad_size, chunk_size):
+        # [bsz, seq_len, ...] -> [bsz, seq_len multiple of chunk_size, ...]
+        input_tensor = pad_tensor_by_size(input_tensor, pad_size)
+        if len(input_tensor.shape) == 3:
+            # [bsz, seq_len multiple of chunk_size, num_heads] -> [bsz, -1, chunk_size, num_heads]
+            return input_tensor.reshape(input_tensor.shape[0], -1, chunk_size, input_tensor.shape[2])
+        else:
+            # [bsz, seq_len multiple of chunk_size, num_heads, head_dim or state_size] -> [bsz, -1, chunk_size, num_heads, head_dim or state_size]
+            return input_tensor.reshape(
+                input_tensor.shape[0], -1, chunk_size, input_tensor.shape[2], input_tensor.shape[3]
+            )
+
+    def segment_sum(input_tensor):
+        chunk_size = input_tensor.size(-1)
+        # 1. expand input tensor to have an additional dimension and repeat along that dimension
+        # [..., chunk_size] -> [..., chunk_size, chunk_size]
+        input_tensor = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
+        # 2. create a lower triangular mask with the diagonal set to 0 to 0 out elements above diag
+        mask = torch.tril(
+            torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1
+        )
+        input_tensor = input_tensor.masked_fill(~mask, 0)
+        # 3. compute actual cumsum
+        tensor_segsum = torch.cumsum(input_tensor, dim=-2)
+        # 4. apply mask to keep only the lower triangular part of the cumulative sum result (incl diagonal this time)
+        mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0)
+        tensor_segsum = tensor_segsum.masked_fill(~mask, -torch.inf)
+        return tensor_segsum
+
+    input_states = hidden_states
+
+    batch_size, seq_len, _ = input_states.shape
+    dtype = input_states.dtype
+
+    # distinguish prefill and decoding stage
+    is_decoding = torch.tensor(seq_len == 1).to(dtype)
+
+    # Gated MLP's linear projection
+    input_states_prefill = (input_states * attention_mask[:, :seq_len, None]).to(dtype)
+    input_states_dec = input_states
+    input_states = input_states_dec * is_decoding + input_states_prefill * (1.0 - is_decoding)
+    projected_states = self.in_proj(input_states)
+
+    d_mlp = (
+        projected_states.shape[-1]
+        - 2 * self.intermediate_size
+        - 2 * self.n_groups * self.ssm_state_size
+        - self.num_heads
+    ) // 2
+    _, _, gate, hidden_states, dt = projected_states.split(
+        [d_mlp, d_mlp, self.intermediate_size, self.conv_dim, self.num_heads], dim=-1
+    )
+
+    # 1. Convolution sequence transformation
+    # 1.1 Convolution sequence transformation for decoding step
+    if cache_params is not None:
+        conv_state_dec = cache_params.conv_states[self.layer_idx]
+        conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
+        conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
+
+        hidden_states_dec = torch.sum(conv_state_dec.to(projected_states.device) * self.conv1d.weight[:, 0, :], dim=-1)
+        if self.use_conv_bias:
+            hidden_states_dec += self.conv1d.bias
+        hidden_states_dec = self.act(hidden_states_dec).to(dtype)[
+            :, None, ...
+        ]  # [batch, 1, intermediate_size] : decoding
+
+        # 1.2 Convolution sequence transformation for prefill step
+        hidden_states_prefill = hidden_states.transpose(1, 2)
+        conv_state_prefill = torch.nn.functional.pad(
+            hidden_states_prefill, (self.conv_kernel_size - hidden_states_prefill.shape[-1], 0)
+        )
+
+        hidden_states_prefill = self.act(self.conv1d(hidden_states_prefill).transpose(1, 2))[
+            :, :seq_len, :
+        ]  # [batch, intermediate_size, seq_len]
+        if attention_mask is not None:
+            # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
+            hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :, None]).to(dtype)
+
+        # Compute final conv state and set into the cache
+        conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
+        cache_params.conv_states[self.layer_idx].copy_(conv_state)
+    else:
+        hidden_states_prefill = self.act(self.conv1d(hidden_states.transpose(1, 2))[..., :seq_len].transpose(1, 2))
+        hidden_states_dec = hidden_states_prefill[:, :1]
+
+    hidden_states_prefill, B_prefill, C_prefill = torch.split(
+        hidden_states_prefill,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+    hidden_states_dec, B_dec, C_dec = torch.split(
+        hidden_states_dec,
+        [self.intermediate_size, self.n_groups * self.ssm_state_size, self.n_groups * self.ssm_state_size],
+        dim=-1,
+    )
+
+    A = -torch.exp(self.A_log.float())  # [num_heads]
+
+    # 2. SSM state
+    # 2.1 Compute SSM state for decoding step
+    if cache_params is not None:
+        dt_dec = dt
+        dt_dec = dt_dec.reshape(dt_dec.shape[0], -1, dt_dec.shape[-1])[:, :1, :]
+        # dt - [B, 1, H], H - num_heads
+        dt_dec = dt_dec.transpose(1, 2).expand(
+            batch_size, dt_dec.shape[-1], self.head_dim
+        )  # dt - [B, num_heads, head_dim]
+        dt_bias_dec = self.dt_bias
+        dt_bias_dec = dt_bias_dec.reshape(dt_bias_dec.shape[0], -1).expand(
+            dt_bias_dec.shape[0], self.head_dim
+        )  # dt_bias [num_heads, head_dim]
+        dt_dec = torch.nn.functional.softplus(dt_dec + dt_bias_dec)
+        dt_dec = torch.clamp(dt_dec, self.time_step_min)  # dt - [B, num_heads, head_dim]
+
+        A_dec = A[..., None, None].expand(self.num_heads, self.head_dim, self.ssm_state_size).to(dtype=torch.float32)
+        dA = torch.exp(dt_dec[..., None] * A_dec)
+
+        # Discretize B
+        # [bsz, n_groups * state_size] -> [bsz, n_groups, 1, state_size] ->
+        # -> [bsz, n_groups, group to head repetition factor, state_size] -> [bsz, num_heads, state_size]
+        B_dec = B_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        B_dec = B_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        B_dec = B_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, B_dec.shape[-1]).contiguous()
+        B_dec = B_dec.reshape(batch_size, -1, B_dec.shape[-1])
+        dB = dt_dec[..., None] * B_dec[..., None, :]
+
+        # Discretize x into dB
+        # [bsz, intermediate_size] -> [bsz, num_heads, head_dim]
+        hidden_states_dec = hidden_states_dec.reshape(batch_size, -1, self.head_dim)
+        dBx = dB * hidden_states_dec[..., None]
+
+        # State calculation
+        new_ssm_state_dec = cache_params.ssm_states[self.layer_idx] * dA + dBx
+
+        # Subsequent output
+        # [bsz, n_groups * state_size] -> [bsz, num_heads, state_size]
+        C_dec = C_dec.reshape(batch_size, -1)[:, : self.n_groups * self.ssm_state_size]
+        C_dec = C_dec.reshape(batch_size, self.n_groups, -1)[..., None, :]
+        C_dec = C_dec.expand(batch_size, self.n_groups, self.num_heads // self.n_groups, C_dec.shape[-1]).contiguous()
+        C_dec = C_dec.reshape(batch_size, -1, C_dec.shape[-1])
+
+        ssm_states_dec = new_ssm_state_dec.to(C_dec.dtype)  # Shape: [b, h, d, n]
+
+        # Reshape ssm_states to merge the first two dimensions
+        ssm_states_reshaped = ssm_states_dec.view(batch_size * self.num_heads, self.head_dim, self.ssm_state_size)
+        C_reshaped = C_dec.view(batch_size * self.num_heads, self.ssm_state_size, 1)  # Shape: [b*h, n, 1]
+        y_dec = torch.bmm(ssm_states_reshaped, C_reshaped)
+        y_dec = y_dec.view(batch_size, self.num_heads, self.head_dim)
+
+        # D skip connection
+        # [num_heads] -> [num_heads, head_dim]
+        D_dec = self.D
+        D_dec = D_dec[..., None].expand(D_dec.shape[0], self.head_dim)
+        y_dec = (y_dec + hidden_states_dec * D_dec).to(y_dec.dtype)
+
+        # [bsz, num_heads, head_dim] -> [bsz, 1, intermediate_size]
+        y_dec = y_dec.reshape(batch_size, -1)[:, None, ...]
+
+    # 2.2 Compute SSM state for prefill step
+    dt = torch.nn.functional.softplus(dt + self.dt_bias)
+    dt = torch.clamp(dt, self.time_step_min)
+
+    hidden_states_prefill = hidden_states_prefill.reshape(batch_size, seq_len, -1, self.head_dim).float()
+    B_prefill = B_prefill.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    C_prefill = C_prefill.reshape(batch_size, seq_len, -1, self.ssm_state_size).float()
+    B_prefill = B_prefill.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    C_prefill = C_prefill.repeat_interleave(self.num_heads // self.n_groups, dim=2, output_size=self.num_heads)
+    pad_size = (self.chunk_size - seq_len % self.chunk_size) % self.chunk_size
+
+    D_residual = self.D[..., None] * pad_tensor_by_size(hidden_states_prefill, pad_size)
+
+    # Discretize x and A
+    hidden_states_prefill = hidden_states_prefill * dt[..., None]
+    A = A.to(hidden_states_prefill.dtype) * dt
+
+    # Rearrange into blocks/chunks
+    hidden_states_prefill, A, B_prefill, C_prefill = [
+        reshape_into_chunks(t, pad_size, self.chunk_size) for t in (hidden_states_prefill, A, B_prefill, C_prefill)
+    ]
+
+    # [bsz, -1, chunk_size, num_heads] -> [bsz, num_heads, -1, chunk_size]
+    A = A.permute(0, 3, 1, 2)
+    A_cumsum = torch.cumsum(A, dim=-1)
+
+    # Compute the output for each intra-chunk (diagonal blocks)
+    # This is the analog of a causal mask
+    L = torch.exp(segment_sum(A))
+
+    # First, contraction of C and B to get G (attention-weights like)
+    G_intermediate = C_prefill[:, :, :, None, :, :] * B_prefill[:, :, None, :, :, :]  # shape: (b, c, l, s, h, n)
+    G = G_intermediate.sum(dim=-1)  # shape: (b, c, l, s, h)
+
+    # Compute M, equivalent to applying attention mask to weights
+    M_intermediate = G[..., None] * L.permute(0, 2, 3, 4, 1)[..., None]
+    M = M_intermediate.sum(dim=-1)
+
+    # Compute Y_diag (apply to values)
+    Y_diag = (M[..., None] * hidden_states_prefill[:, :, None]).sum(3)
+
+    # (right term of low-rank factorization of off-diagonal blocks; B terms)
+    decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)
+    B_decay_contraction = B_prefill * decay_states.permute(0, 2, 3, 1)[..., None]
+
+    # permute back B * decay states
+    states = (
+        (
+            B_decay_contraction.permute(0, 1, 3, 2, 4)[..., None]
+            * hidden_states_prefill.permute(0, 1, 3, 2, 4)[..., None, :]
+        )
+        .sum(dim=3)
+        .permute(0, 1, 2, 4, 3)
+    )
+    previous_states = torch.zeros_like(states[:, :1])
+
+    states = torch.cat([previous_states, states], dim=1)
+    decay_chunk = torch.exp(segment_sum(torch.nn.functional.pad(A_cumsum[:, :, :, -1], (1, 0))))
+
+    states_permuted = states.permute(0, 2, 1, 3, 4)
+    result = (decay_chunk[..., None, None] * states_permuted[:, :, None, ...]).sum(dim=2)
+    new_states = result.permute(0, 2, 1, 3, 4)
+    states, new_ssm_state_prefill = new_states[:, :-1], new_states[:, -1]
+
+    # Compute state -> output conversion per chunk
+    # (left term of low-rank factorization of off-diagonal blocks; C terms)
+    state_decay_out = torch.exp(A_cumsum)
+
+    # compute Yoff
+    C_times_states = C_prefill[..., None, :] * states[:, :, None, ...]
+    state_decay_out_permuted = state_decay_out.permute(0, 2, 3, 1)
+    Y_off = C_times_states.sum(-1) * state_decay_out_permuted[..., None]
+
+    # Add output of intra-chunk and inter-chunk terms (diagonal and off-diagonal blocks)
+    y = Y_diag + Y_off
+
+    # [bsz, -1, self.chunk_size, num_heads, head_dim] -> [bsz, (padded) seq_len, num_heads, head_dim]
+    y = y.reshape(batch_size, -1, self.num_heads, self.head_dim)
+
+    y = y + D_residual
+
+    # Cutting off padded chunks
+    pad_mask = torch.tensor(pad_size > 0).to(torch.long)
+    y_new_len = y.size(1) * (1 - pad_mask) + seq_len * pad_mask
+    y = y[:, :y_new_len]
+    y_prefill = y.reshape(batch_size, seq_len, -1)
+
+    if cache_params is not None:
+        y = y_prefill[:, :seq_len] * (1.0 - is_decoding) + y_dec * is_decoding
+        ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
+
+        # Set final ssm state into the cache
+        cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+    else:
+        y = y_prefill
+
+    scan_output = self.norm(y, gate)
+
+    # Final linear projection
+    contextualized_states = self.out_proj(scan_output.to(dtype))  # [batch, seq_len, hidden_size]
+
+    return contextualized_states
+
+
+# This patcher class serves the following purposes:
+# 1. Packs the KV-cache, conv_state, and ssm_state tensors into a Zamba2HybridDynamicCache structure
+#    for subsequent invocation of the model's `forward` method.
+# 2. Patches the Zamba2MambaMixer so that the traced `forward` function works correctly
+#    during both the prefill and decoding steps.
+class Zamba2ModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridDynamicCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class Zamba2HybridDynamicCacheWrap(Zamba2HybridDynamicCache):
+            def __init__(self, config, batch_size: int, conv_states, ssm_states, key_cache, value_cache):
+                # Call parent constructor with all required arguments
+                super().__init__(config=config, batch_size=batch_size)
+                self.conv_states = conv_states
+                self.ssm_states = ssm_states
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                self.layer_idx_mapping = {v: i for i, v in enumerate(config.hybrid_layer_ids)}
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                # map layer_idx to key_cache (value_cache) idx
+                layer_idx = self.layer_idx_mapping[layer_idx]
+                # Update the cache
+                if self.key_cache[layer_idx].shape[-1] == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+                layer_idx = self.layer_idx_mapping[layer_idx]
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                # take any layer that contains cache and not empty tensor
+                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                layer_idx = self.layer_idx_mapping[layer_idx]
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            num_hidden_layers = self.real_config._config.num_hidden_layers
+            num_hybrid_layers = len(self.real_config._config.hybrid_layer_ids)
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                ssm_states = []
+                key_cache = []
+                value_cache = []
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                batch_size = cache_params[0].size(0)
+                for idx in range(num_hidden_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    ssm_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_hybrid_layers):
+                    key_cache.append(cache_params[2 * num_hidden_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_hidden_layers + 2 * idx + 1])
+
+                wrapped_cache_params = Zamba2HybridDynamicCacheWrap(
+                    self.real_config._config, batch_size, conv_states, ssm_states, key_cache, value_cache
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                # unwrap Zamba2HybridDynamicCache object
+                present_key_values = []
+                for idx in range(num_hidden_layers):
+                    present_key_values.append(past_key_values.conv_states[idx])
+                    present_key_values.append(past_key_values.ssm_states[idx])
+
+                for idx in range(num_hybrid_layers):
+                    present_key_values.append(past_key_values.key_cache[idx])
+                    present_key_values.append(past_key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridLayer, Zamba2MambaDecoderLayer
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if isinstance(layer, Zamba2MambaDecoderLayer):
+                mamba_layer = layer.mamba
+            elif isinstance(layer, Zamba2HybridLayer):
+                mamba_layer = layer.mamba_decoder.mamba
+            else:
+                continue
+            mamba_layer._orig_forward = mamba_layer.forward
+            mamba_layer.forward = types.MethodType(zamba2_mamba_mixer, mamba_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.zamba2.modeling_zamba2 import Zamba2HybridLayer, Zamba2MambaDecoderLayer
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for layer in self._model.model.layers:
+            if isinstance(layer, Zamba2MambaDecoderLayer):
+                mamba_layer = layer.mamba
+            elif isinstance(layer, Zamba2HybridLayer):
+                mamba_layer = layer.mamba_decoder.mamba
+            else:
+                continue
+            mamba_layer.forward = mamba_layer._orig_forward
+
+
+# The original implementation of this method can be found at:
+# https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/lfm2/modeling_lfm2.py#L476
+# This patch modifies `slow_forward()` so that when traced by torch.jit, it works correctly
+# during both the prefill and decoding steps.
+# The patched version differs from the original in that it executes both the prefill
+# and decoding branches every time to compute and store the correct value of conv_state in the cache.
+# The distinction between prefill and decoding modes is determined by the sequence length
+# (seq_len): 1. seq_len > 1 indicates the prefill phase;
+# seq_len = 1 indicates the decoding phase.
+def lfm2_short_conv_forward_patched(
+    self,
+    x: torch.Tensor,
+    past_key_values=None,
+    cache_position=None,
+    attention_mask=None,
+):
+    from transformers.models.lfm2.modeling_lfm2 import apply_mask_to_padding_states
+
+    seqlen = x.shape[1]
+
+    x = apply_mask_to_padding_states(x, attention_mask)
+    BCx = self.in_proj(x).transpose(-1, -2)
+    B, C, x = BCx.chunk(3, dim=-2)
+
+    Bx = B * x
+
+    if past_key_values is not None:
+        layer_idx = past_key_values.conv_layer_idx_mapping[self.layer_idx]
+        conv_state_dec = past_key_values.conv_cache[layer_idx]
+        cache_position = cache_position.clamp(0, self.L_cache - 1)
+        conv_state_dec = conv_state_dec.roll(shifts=-1, dims=-1)
+        conv_state_dec[:, :, cache_position] = Bx.to(device=conv_state_dec.device, dtype=conv_state_dec.dtype)
+
+        conv_out_dec = torch.sum(conv_state_dec.to(Bx.device) * self.conv.weight[:, 0, :], dim=-1)
+        if self.bias:
+            conv_out_dec += self.conv.bias
+        conv_out_dec = conv_out_dec.unsqueeze(-1)
+
+        conv_state_prefill = torch.nn.functional.pad(Bx, (self.L_cache - Bx.shape[-1], 0))
+        conv_out_prefill = self.conv(Bx)[..., :seqlen]
+
+        is_decoding = torch.tensor(seqlen == 1).to(x.dtype)
+        conv_out = conv_out_dec * is_decoding + conv_out_prefill * (1.0 - is_decoding)
+        new_conv_state = conv_state_dec * is_decoding + conv_state_prefill * (1.0 - is_decoding)
+        past_key_values.conv_cache[layer_idx].copy_(new_conv_state)
+    else:
+        conv_out = self.conv(Bx)[..., :seqlen]
+
+    y = C * conv_out
+    y = y.transpose(-1, -2).contiguous()
+    y = self.out_proj(y)
+    return y
+
+
+# This patcher class serves the following purposes:
+# 1. Packs the KV-cache and conv_state tensors into a Lfm2HybridConvCacheWrap structure
+#    for subsequent invocation of the model's `forward` method.
+# 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
+#    during both the prefill and decoding steps.
+class Lfm2ModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+
+        super().__init__(config, model, model_kwargs)
+
+        # This cache wrapper class serves for following purposes:
+        # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
+        # 2. Removes the unused cache items that the source model contains.
+        # For this reason cache items re-indexing is required.
+        class Lfm2HybridConvCacheWrap(Lfm2HybridConvCache):
+            def __init__(self, config, max_batch_size: int, conv_cache, key_cache, value_cache):
+                # Call parent constructor with all required arguments
+                super().__init__(config=config, max_batch_size=max_batch_size)
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                self.conv_cache = conv_cache
+                self.conv_layer_idx_mapping = {}
+                self.attention_layer_idx_mapping = {}
+                conv_layer_idx = 0
+                attention_layer_idx = 0
+                for i in range(config.num_hidden_layers):
+                    if config.layer_types[i] == "full_attention":
+                        self.attention_layer_idx_mapping[i] = attention_layer_idx
+                        attention_layer_idx += 1
+                    elif config.layer_types[i] == "conv":
+                        self.conv_layer_idx_mapping[i] = conv_layer_idx
+                        conv_layer_idx += 1
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                """
+                Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
+                Patching is required for calculating of the correct cache index.
+                """
+                # Update the cache
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                if self.key_cache[layer_idx].numel() == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                """
+                Returns the sequence length of the cached states. A layer index can be optionally passed.
+                Patching is required for calculating of the correct cache index.
+                """
+                # take any layer that contains cache and not empty tensor
+                layer_idx = (
+                    self.first_attention_layer if self.layer_types[layer_idx] != "full_attention" else layer_idx
+                )
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        def patched_forward(
+            input_ids: Optional[torch.LongTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            cache_params=None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            labels: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            cache_position=None,
+            logits_to_keep: Union[int, torch.Tensor] = 0,
+        ):
+            use_cache = False
+            wrapped_cache_params = None
+            num_conv_layers = self.real_config._config.layer_types.count("conv")
+            num_atten_layers = self.real_config._config.layer_types.count("full_attention")
+            if cache_params is not None:
+                use_cache = True
+                conv_cache = []
+                key_cache = []
+                value_cache = []
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                batch_size = cache_params[0].size(0)
+
+                for idx in range(num_conv_layers):
+                    conv_cache.append(cache_params[idx])
+
+                for idx in range(num_atten_layers):
+                    key_cache.append(cache_params[num_conv_layers + idx * 2])
+                    value_cache.append(cache_params[num_conv_layers + idx * 2 + 1])
+
+                wrapped_cache_params = Lfm2HybridConvCacheWrap(
+                    self.real_config._config, batch_size, conv_cache, key_cache, value_cache
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                key_values = causal_lm_output.past_key_values
+                # unwrap Lfm2HybridDynamicCache object
+                present_key_values = []
+                for idx in range(num_conv_layers):
+                    present_key_values.append(key_values.conv_cache[idx])
+
+                for idx in range(num_atten_layers):
+                    present_key_values.append(key_values.key_cache[idx])
+                    present_key_values.append(key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+                conv_layer = layer.conv
+            else:
+                continue
+            conv_layer._orig_forward = conv_layer.slow_forward
+            conv_layer.slow_forward = types.MethodType(lfm2_short_conv_forward_patched, conv_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        for layer in self._model.model.layers:
+            if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
+                conv_layer = layer.conv
+            else:
+                continue
+            conv_layer.slow_forward = conv_layer._orig_forward
+
+
+class GptOssModelPatcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if is_transformers_version(">=", "4.55.0"):
+            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
+            self.original_gpt_oss_forward = GptOssExperts.forward
+            GptOssExperts.forward = gpt_oss_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if is_transformers_version(">=", "4.55.0"):
+            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
+            GptOssExperts.forward = self.original_gpt_oss_forward

@@ -4,20 +4,20 @@ import os
 import platform
 import unittest
 
-import numpy as np
 import pytest
 import torch
 from parameterized import parameterized
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    GenerationConfig,
-    PretrainedConfig,
-    pipeline,
-    set_seed,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, PretrainedConfig, pipeline, set_seed
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES, get_num_sdpa, mock_torch_cuda_is_available, patch_awq_for_inference
+from utils_tests import (
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    get_num_sdpa,
+    mock_torch_cuda_is_available,
+    patch_awq_for_inference,
+)
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
@@ -29,10 +29,6 @@ from optimum.intel.utils.import_utils import is_openvino_version, is_transformer
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
-SEED = 42
-F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
-TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
-
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
@@ -43,7 +39,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot",
         "blenderbot-small",
         "bloom",
-        "chatglm",
         "codegen",
         "codegen2",
         "gpt2",
@@ -58,7 +53,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mpt",
         "opt",
         "pegasus",
-        "qwen",
         "phi",
         "internlm2",
         "orion",
@@ -73,7 +67,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
-        "chatglm4",
         "decilm",
         "gemma",
         "olmo",
@@ -93,6 +86,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
 
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
+
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
+
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
@@ -106,7 +105,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             SUPPORTED_ARCHITECTURES += ("opt_gptq",)
 
         # autoawq install disabled for windows test environment
-        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+        if (
+            platform.system() != "Windows"
+            and is_openvino_version(">=", "2024.6.0")
+            and is_transformers_version("<", "4.56.0")
+        ):
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     if is_transformers_version(">", "4.49"):
@@ -121,12 +124,19 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
+    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES += ("bitnet",)
+
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
+        SUPPORTED_ARCHITECTURES += ("exaone4",)
         SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
+
+    if is_transformers_version("<", "4.56.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -146,6 +156,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arctic",
         "chatglm4",
         "exaone",
+        "exaone4",
         "decilm",
         "minicpm3",
         "deepseek",
@@ -166,6 +177,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gptj": 5,
         "gpt_neo": 4,
         "gpt_neox": 5,
+        "lfm2": 1,
         "llama": 2,
         "marian": 2,
         "minicpm": 4,
@@ -200,6 +212,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3": 2,
         "gemma2": 4,
         "exaone": 8,
+        "exaone4": 1,
         "granite": 6,
         "granite-moe": 6,
         "glm": 28,
@@ -216,11 +229,24 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
+        "gpt_oss": 2 if is_openvino_version(">=", "2025.4") else 0,
+        "gpt_oss_mxfp4": 2 if is_openvino_version(">=", "2025.4") else 0,
+        "zamba2": 1,
+        "bitnet": 6,
     }
+
+    def mock_torch_compile(self, model_arch):
+        if model_arch == "bitnet":
+            # mock torch.compile to avoid compilation errors in tests
+            original_torch_compile = torch.compile
+            torch.compile = lambda func: func
+            # ensure restoration happens even if test fails
+            self.addCleanup(lambda: setattr(torch, "compile", original_torch_compile))
 
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
+        self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
 
         not_stateful = []
@@ -240,7 +266,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "gemma2":
             model_kwargs["attn_implementation"] = "sdpa"
 
-        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, **model_kwargs
+        )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -250,18 +278,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         if model_arch in self.SUPPORTED_SSM_ARCHITECTURES:
-            from optimum.intel.openvino.modeling_decoder import OVMambaCache
+            from optimum.intel.openvino.modeling_decoder import OVCacheWithMambaStates
 
             self.assertTrue("cache_params" in ov_outputs)
-            self.assertIsInstance(ov_outputs.cache_params, OVMambaCache)
+            self.assertIsInstance(ov_outputs.cache_params, OVCacheWithMambaStates)
             is_stateful = ov_model.config.model_type not in not_stateful
             self.assertEqual(ov_model.stateful, is_stateful)
             if is_stateful:
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
-                self.assertTrue(
-                    len(ov_outputs.cache_params.conv_states) > 0 and len(ov_outputs.cache_params.ssm_states) > 0
-                )
+                self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
+                if model_arch != "lfm2":
+                    self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
             self.assertIsInstance(ov_outputs.past_key_values, tuple)
@@ -320,7 +348,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_config = GenerationConfig(
             max_new_tokens=30,
             min_new_tokens=30,
-            num_beams=1 if model_arch == "chatglm4" else 2,
+            # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
+            num_beams=1 if model_arch in ["chatglm4", "lfm2"] else 2,
             do_sample=False,
         )
 
@@ -373,6 +402,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        self.mock_torch_compile(model_arch)
         set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -388,7 +418,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             additional_args["use_model_defaults"] = False
 
         set_seed(SEED)
-        model = OVModelForCausalLM.from_pretrained(model_id, use_cache=True, compile=False, **model_kwargs)
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, use_cache=True, compile=False, device=OPENVINO_DEVICE, **model_kwargs
+        )
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
@@ -428,7 +460,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_model_and_decoder_same_device(self):
         model_id = MODEL_NAMES["gpt2"]
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
         model.to("TEST")
         self.assertEqual(model._device, "TEST")
         # Verify that request is being reset
@@ -441,13 +473,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
-        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
+        model_with_pkv = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=True, stateful=False, device=OPENVINO_DEVICE
+        )
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
         del model_with_pkv
 
-        model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE
+        )
         outputs_model_without_pkv = model_without_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
@@ -457,7 +493,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
 
-        model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+        model_stateful = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE
+        )
         outputs_model_stateful = model_stateful.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
@@ -475,20 +513,22 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # test setting OPENVINO_LOG_LEVEL to 3, which calls _print_compiled_model_properties
         openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
         os.environ["OPENVINO_LOG_LEVEL"] = "3"
-        model = OVModelForSequenceClassification.from_pretrained(MODEL_NAMES["bert"], export=True)
+        model = OVModelForSequenceClassification.from_pretrained(
+            MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE
+        )
         if openvino_log_level is not None:
             os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
         # test calling function directly
         _print_compiled_model_properties(model.request)
 
     def test_auto_device_loading(self):
-        OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        model_id = MODEL_NAMES["distilbert-ov"]
         for device in ("AUTO", "AUTO:CPU"):
-            model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+            model = OVModelForSequenceClassification.from_pretrained(model_id, device=device)
             model.half()
             self.assertEqual(model._device, device)
             if device == "AUTO:CPU":
-                model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+                model = OVModelForSequenceClassification.from_pretrained(model_id, device=device)
                 message = "Model should not be loaded from cache without explicitly setting CACHE_DIR"
                 self.assertFalse(model.request.get_property("LOADED_FROM_CACHE"), message)
             del model
@@ -496,7 +536,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask(self):
         model_id = MODEL_NAMES["gpt2"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, stateful=False, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(
+            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -519,7 +561,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, stateful=False, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(
+            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -544,6 +588,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_beam_search(self, model_arch):
+        self.mock_torch_compile(model_arch)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
@@ -555,6 +600,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
         if model_arch in ["qwen", "chatglm", "chatglm4"]:
+            return
+
+        # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
+        if model_arch == "lfm2":
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
@@ -608,16 +657,20 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_configs = [
             beam_search_gen_config,
             beam_sample_gen_config,
-            group_beam_search_gen_config,
-            constrained_beam_search_gen_config,
+            # group_beam_search_gen_config,
+            # constrained_beam_search_gen_config,
         ]
+        if is_transformers_version("<", "4.57.0"):
+            # currently broken in transformers == 4.57.*
+            gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
+
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=True, **model_kwargs
+            model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE, **model_kwargs
         )
         set_seed(SEED)
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=False, **model_kwargs
+            model_id, export=True, use_cache=True, stateful=False, device=OPENVINO_DEVICE, **model_kwargs
         )
         if "awq" in model_arch or "gptq" in model_arch:
             # infer in FP32
@@ -668,7 +721,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             additional_inputs["use_model_defaults"] = False
 
         for gen_config in gen_configs:
-            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "zamba2"]:
                 continue
             if gen_config.num_beams > 1 and is_transformers_version(">=", "4.51.0") and model_arch in ["mixtral_awq"]:
                 continue
@@ -728,7 +781,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             torch_dtypes.append("bfloat16")
 
         for dtype in torch_dtypes:
-            ov_model = OVModelForCausalLM.from_pretrained(model_id=model_id, export=True, torch_dtype=dtype)
+            ov_model = OVModelForCausalLM.from_pretrained(
+                model_id=model_id, export=True, torch_dtype=dtype, device=OPENVINO_DEVICE
+            )
             ov_logits = ov_model(**test_input).logits
             self.assertTrue(
                 torch.allclose(torch.Tensor(ov_logits), ref_logits, atol=5e-3),
