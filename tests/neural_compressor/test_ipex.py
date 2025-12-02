@@ -41,7 +41,7 @@ from optimum.intel import (
     INCQuantizer,
     INCSeq2SeqTrainer,
 )
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""

@@ -15,7 +15,6 @@ concurrency:
 
 env:
   TRANSFORMERS_IS_CI: true
-  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -33,13 +32,13 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install torch==${{ matrix.torch-version }} torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install .[tests,neural-compressor] intel-extension-for-pytorch==${{ matrix.torch-version }} diffusers==0.32.2
+          pip install .[tests,neural-compressor] intel-extension-for-pytorch==${{ matrix.torch-version }} "diffusers<0.33.0" "peft<0.18.0"
 
       - name: Assert versions
         run: |
@@ -49,4 +48,3 @@ jobs:
       - name: Test with Pytest
         run: |
           pytest tests/neural_compressor
-

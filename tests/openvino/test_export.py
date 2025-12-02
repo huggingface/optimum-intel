@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, OPENVINO_DEVICE
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -54,7 +54,7 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_transformers_version
+from optimum.intel.utils.import_utils import _transformers_version, is_openvino_version, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -80,10 +80,20 @@ class ExportModelTest(unittest.TestCase):
         "sam": OVSamModel,
         "speecht5": OVModelForTextToSpeechSeq2Seq,
         "clip": OVModelForZeroShotImageClassification,
+        "mamba": OVModelForCausalLM,
+        "falcon-mamba": OVModelForCausalLM,
+        "stable-diffusion-3": OVStableDiffusion3Pipeline,
+        "flux": OVFluxPipeline,
+        "ltx-video": OVLTXPipeline,
     }
 
-    if is_transformers_version(">=", "4.39"):
-        SUPPORTED_ARCHITECTURES.update({"mamba": OVModelForCausalLM, "falcon-mamba": OVModelForCausalLM})
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
+
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM})
+        if is_openvino_version(">=", "2025.4.0"):
+            SUPPORTED_ARCHITECTURES.update({"lfm2": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
@@ -92,11 +102,6 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
-
-    if is_transformers_version(">=", "4.45"):
-        SUPPORTED_ARCHITECTURES.update(
-            {"stable-diffusion-3": OVStableDiffusion3Pipeline, "flux": OVFluxPipeline, "ltx-video": OVLTXPipeline}
-        )
 
     if is_transformers_version(">=", "4.51"):
         SUPPORTED_ARCHITECTURES.update({"qwen3": OVModelForFeatureExtraction})
@@ -316,7 +321,7 @@ class CustomExportModelTest(unittest.TestCase):
                 task=base_task,
             )
 
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
             self.assertIsInstance(ov_model, OVBaseModel)
             self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})
@@ -334,7 +339,7 @@ class CustomExportModelTest(unittest.TestCase):
 
         with TemporaryDirectory() as tmpdirname:
             export_from_model(model, output=tmpdirname, task="feature-extraction")
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
