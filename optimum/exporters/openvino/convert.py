@@ -698,7 +698,7 @@ def export_from_model(
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
 
     else:
-        # save the subcomponent configuration
+        # save    the subcomponent configuration
         for model_name in models_and_export_configs:
             subcomponent = models_and_export_configs[model_name][0]
             if hasattr(subcomponent, "save_config"):
