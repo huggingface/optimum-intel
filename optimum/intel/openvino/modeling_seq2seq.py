@@ -958,7 +958,6 @@ class OVDecoder(OVModelPart):
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         self._past_length += input_ids.shape[1]
-
         out_past_key_values = ((),)
 
         if not self.stateful:
@@ -985,7 +984,7 @@ class OVDecoder(OVModelPart):
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
     def _get_past_length(self, past_key_values=None):
-        if past_key_values is None:
+        if not past_key_values:
             return 0
         if self.stateful:
             return self._past_length
@@ -1321,7 +1320,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # input_stride = self.model.encoder.conv1.stride[0] * self.model.encoder.conv2.stride[0]
     model = DummyWhisperModel()
 
-    # Adopeted for stateful support from https://github.com/huggingface/transformers/blob/main/src/transformers/models/whisper/modeling_whisper.py#L1810
+    # Adapted for stateful support from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/whisper/modeling_whisper.py#L1810
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,
