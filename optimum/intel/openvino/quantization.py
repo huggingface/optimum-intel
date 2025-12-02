@@ -655,7 +655,7 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset(nncf.Dataset(collected_inputs))
 
     def _prepare_causal_lm_calibration_data(
-        self, config: OVQuantizationConfigBase, seqlen: int = 32
+        self, config: OVQuantizationConfigBase, seqlen: Optional[int] = None
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for causal language models. Relies on `optimum.gptq.data` module.
@@ -671,7 +671,22 @@ class OVCalibrationDatasetBuilder:
             if config.dataset == "auto":
                 generated_data = nncf.data.generate_text_data(self.model, tokenizer, dataset_size=nsamples)
                 calibration_dataset = [tokenizer(text, return_tensors="pt") for text in generated_data]
+            elif config.dataset == "gsm8k":
+                seqlen = seqlen or 256
+                dataset = self.load_dataset(
+                    "openai/gsm8k",
+                    dataset_config_name="main",
+                    dataset_split="train",
+                    num_samples=nsamples,
+                    preprocess_function=lambda x: {"text": f"Question: {x['question']}\nAnswer: {x['answer']}"},
+                    preprocess_batch=False,
+                )
+                calibration_dataset = [
+                    tokenizer(text, return_tensors="pt", truncation=True, max_length=seqlen)
+                    for text in dataset["text"]
+                ]
             else:
+                seqlen = seqlen or 32
                 calibration_dataset = get_dataset(config.dataset, tokenizer, seqlen=seqlen, nsamples=nsamples)
         elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config.dataset[:nsamples]]

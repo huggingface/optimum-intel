@@ -150,7 +150,7 @@ _HEAD_TO_AUTOMODELS = {
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
-PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto"}
+PREDEFINED_CAUSAL_LANGUAGE_DATASETS = {"wikitext2", "c4", "c4-new", "auto", "gsm8k"}
 
 PREDEFINED_LANGUAGE_DATASETS = {
     "wikitext2": {"id": "wikitext", "name": "wikitext-2-raw-v1", "split": "train", "streaming": False},
