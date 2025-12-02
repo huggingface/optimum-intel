@@ -6182,9 +6182,7 @@ class ConvSequenceTransform(torch.nn.Module):
     def forward(self, hidden_states, cache_position, conv_state):
         # Pad the input
         is_prefill = cache_position.shape[0] == self.conv_kernel_size
-        pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (
-            is_prefill
-        )
+        pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (is_prefill)
         new_conv_state = torch.nn.functional.pad(hidden_states, (pad_value, 0))
 
         # Update convolutional state
@@ -6207,7 +6205,7 @@ class ConvSequenceTransform(torch.nn.Module):
 
         # Select the correct result
         is_prefill = torch.tensor(is_prefill, dtype=hidden_states.dtype)
-        hidden_states = (is_prefill * prefill_kernel_applied + (1 - is_prefill) * decoder_kernel_applied)
+        hidden_states = is_prefill * prefill_kernel_applied + (1 - is_prefill) * decoder_kernel_applied
 
         # Apply activation
         hidden_states = self.act(hidden_states)
