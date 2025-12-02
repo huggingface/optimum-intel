@@ -4206,6 +4206,7 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 
         return dummy_inputs
 
+
 class HunyuanDummyPastKeyValuesGenerator(GemmaDummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -4227,7 +4228,10 @@ class HunyuanDummyPastKeyValuesGenerator(GemmaDummyPastKeyValuesGenerator):
         )
         self.head_dim = normalized_config.attention_head_dim
 
-@register_in_tasks_manager("hunyuan_v1_dense", *["text-generation", "text-generation-with-past"], library_name="transformers")
+
+@register_in_tasks_manager(
+    "hunyuan_v1_dense", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
 class HunyuanOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.55.0.dev0"
 
@@ -4239,6 +4243,7 @@ class HunyuanOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return OVDecoderModelPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager(
     "gpt2",
