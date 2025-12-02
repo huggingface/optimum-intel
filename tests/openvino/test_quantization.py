@@ -2130,6 +2130,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_NAME = ("whisper",)
+    STATEFUL = (False, True)
     APPLY_CACHING = (False, True)
 
     @staticmethod
