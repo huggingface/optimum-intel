@@ -951,7 +951,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sym=True,
                 group_size_fallback="adjust",
             ),
-            {"model": {"int8": 32}},
+            {"model": {"int8": 28, "int4": 2}},
         ),
         (
             OVModelForCausalLM,
@@ -962,7 +962,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sym=True,
                 group_size_fallback="ignore",
             ),
-            {"model": {"int8": 32}},
+            {"model": {"int8": 4}},
         ),
     ]
 
