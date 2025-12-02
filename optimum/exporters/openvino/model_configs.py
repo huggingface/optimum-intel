@@ -4228,18 +4228,21 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
 class DinoV3OpenVINOConfig(VisionOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.56.0"
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "pixel_values": {0: "image_batch_size", 1: "num_channels", 2: "height", 3: "width"},
         }
-        
+
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "last_hidden_state": {0: "image_batch_size"},
             "pooler_output": {0: "image_batch_size"},
         }
+
+
 @register_in_tasks_manager(
     "vision-encoder-decoder",
     *[
