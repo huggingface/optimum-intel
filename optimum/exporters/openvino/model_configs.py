@@ -4226,7 +4226,9 @@ class HunyuanDummyPastKeyValuesGenerator(GemmaDummyPastKeyValuesGenerator):
             random_batch_size_range=random_batch_size_range,
             random_sequence_length_range=random_sequence_length_range,
         )
-        self.head_dim = normalized_config.attention_head_dim
+        self.head_dim = getattr(
+            normalized_config, "head_dim", normalized_config.hidden_size // normalized_config.num_attention_heads
+        )
 
 
 @register_in_tasks_manager(
