@@ -9,7 +9,6 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from .. import OVConfig
 from .configuration import OVQuantizationConfigBase
 from .modeling import MODEL_START_DOCSTRING, OVModel
 
@@ -107,15 +106,10 @@ class OVSentenceTransformer(OVModel):
             from_onnx=from_onnx,
             local_files_only=local_files_only,
             tokenizer=tokenizer,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
             **kwargs,
         )
-
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        if quantization_config is not None:
-            from optimum.intel import OVQuantizer
-
-            quantizer = OVQuantizer(model)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
         return model
 
@@ -153,3 +147,6 @@ class OVSentenceTransformer(OVModel):
             )
         )
         return output
+
+    def get_model_kwargs(self):
+        return []

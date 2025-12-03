@@ -21,7 +21,7 @@ env:
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
-  HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
 
 jobs:
   build:
@@ -37,7 +37,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        transformers-version: ["4.36.0", "latest"]
+        transformers-version: ["4.45.0", "latest"]
 
     runs-on: ubuntu-22.04
 
@@ -48,7 +48,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
@@ -58,12 +58,17 @@ jobs:
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.30.* transformers_stream_generator
+          uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
       - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
+
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
 
       - name: Test with Pytest
         run: |

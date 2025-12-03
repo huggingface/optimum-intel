@@ -12,11 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import copy
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -58,7 +57,7 @@ class OVTextToSpeechEncoder(OVModelPart):
         self._main_input = list(self.input_names.keys())[0]
 
     def forward(self, input_ids, **kwargs):
-        self._compile()
+        self.compile()
         inputs = {self._main_input: input_ids}
         result = self.request(inputs)
         last_hidden_state = torch.from_numpy(result[0])
@@ -81,7 +80,7 @@ class OVTextToSpeechDecoder(OVModelPart):
             ]
 
     def forward(self, inputs_embeds, speaker_embeddings, encoder_last_hidden_state, encoder_attention_mask, **kwargs):
-        self._compile()
+        self.compile()
         bsz = inputs_embeds.size(0)
 
         inputs = {
@@ -117,7 +116,7 @@ class OVTextToSpeechPostNet(OVModelPart):
             ]
 
     def forward(self, spectrograms, **kwargs):
-        self._compile()
+        self.compile()
         inputs = {
             "raw_spectrogram": spectrograms,
         }
@@ -141,7 +140,7 @@ class OVTextToSpeechVocoder(OVModelPart):
             ]
 
     def forward(self, spectrogram, **kwargs):
-        self._compile()
+        self.compile()
         inputs = {
             "spectrogram": spectrogram,
         }
@@ -213,7 +212,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
 
         self.config = config
         self.use_cache = model_has_state(decoder)
-        self._model_save_dir = model_save_dir
+        self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = True
         self.ov_config = {} if ov_config is None else {**ov_config}
@@ -250,28 +249,24 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        for _, component in self.components.items():
+        for component in self.components.values():
             component.clear_requests()
 
     def compile(self):
-        for _, component in self.components.items():
-            if isinstance(component, OVModelPart):
-                component._compile()
-            else:
-                component.compile()
+        for component in self.components.values():
+            component.compile()
 
     @property
-    def _ov_submodel_names(self):
-        component_names = ["encoder", "decoder", "postnet", "vocoder"]
-        return component_names
+    def _component_names(self) -> List[str]:
+        return ["encoder", "decoder", "postnet", "vocoder"]
 
     @property
-    def components(self):
-        return {component_name: getattr(self, component_name) for component_name in self._ov_submodel_names}
+    def _ov_model_names(self) -> List[str]:
+        return self._component_names
 
     @property
-    def ov_submodels(self) -> Dict[str, openvino.Model]:
-        return {component_name: getattr(self, component_name).model for component_name in self._ov_submodel_names}
+    def ov_models(self) -> Dict[str, openvino.Model]:
+        return {name: getattr(component, "model") for name, component in self.components.items()}
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -282,7 +277,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_models = list(self.ov_submodels.values())
+        src_models = list(self.ov_models.values())
         dst_file_names = [
             self.OV_ENCODER_MODEL_NAME,
             self.OV_DECODER_MODEL_NAME,
@@ -315,6 +310,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         device = kwargs.pop("device", "CPU")
@@ -397,11 +393,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             except Exception:
                 pass
 
-        quantization_config = OVBaseModel._prepare_quantization_config(quantization_config, load_in_8bit)
-        to_quantize = not compile_only and quantization_config is not None
-        if to_quantize:
-            enable_compilation = False
-
+        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
         model = _OVModelForSpeechT5ForTextToSpeech(
             encoder=encoder_model,
             decoder=decoder_model,
@@ -415,16 +407,14 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             quantization_config=quantization_config,
             preprocessors=preprocessors,
             compile_only=compile_only,
-            compile=enable_compilation,
+            compile=enable_compilation and not quantization_config,
             generation_config=generation_config,
         )
 
-        if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
-
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        if quantization_config:
+            cls._apply_quantization(
+                model, quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
+            )
 
         return model
 
