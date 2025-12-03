@@ -47,6 +47,7 @@ from ..utils.import_utils import (
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
+    is_nncf_version,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -168,12 +169,14 @@ class InferRequestWrapper:
 
     def collect_inputs(self, inputs):
         if self.stateful:
-            if isinstance(inputs, dict) and is_nncf_version(">", "2.19"):
+            if isinstance(inputs, dict) and is_nncf_version(">=", "2.20"):
                 from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
 
                 # To reflect the state resetting during NNCF calibration, we add a special key to the input dict
-                # Shallow copying is done on purpose shallow copy on purpose: we only need to add a key to the top-level dict
+                # Shallow copying is done on purpose: we only need to add a key to the top-level dict
                 inputs = inputs.copy()
+                # inputs[NNCF_DATASET_RESET_STATE_KEY] should be set to True for any input sample before which
+                # request.reset_state() was called, and to False otherwise
                 inputs[NNCF_DATASET_RESET_STATE_KEY] = self._reset_state_called
             self._reset_state_called = False
 
