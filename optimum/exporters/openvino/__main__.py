@@ -331,8 +331,10 @@ def main_export(
         ):
             if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
                 dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
-            elif config.torch_dtype in [torch.float16, torch.bfloat16]:
+            elif config.torch_dtype == torch.float16:
                 dtype = torch.float16
+            elif config.torch_dtype == torch.bfloat16:
+                dtype = torch.bfloat16
 
         if dtype is not None:
             if dtype in [torch.float16, torch.bfloat16]:
