@@ -64,6 +64,8 @@ from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
+    is_openvino_version,
+    is_tokenizers_version,
     is_transformers_version,
 )
 
@@ -145,7 +147,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6,
         "flux": 4,
         "flux-fill": 4,
-        "lfm2": 0,  # Tokenizers fail to convert, ticket: CVS-176880
+        "lfm2": 2
+        if is_openvino_version(">=", "2026.0")
+        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "llava": 2,
         "sana": 2,
         "ltx-video": 2,
