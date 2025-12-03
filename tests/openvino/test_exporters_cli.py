@@ -65,7 +65,6 @@ from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
     is_openvino_version,
-    is_tokenizers_version,
     is_transformers_version,
 )
 
