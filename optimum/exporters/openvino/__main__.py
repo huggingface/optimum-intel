@@ -15,10 +15,11 @@
 import gc
 import logging
 import operator
+import shutil
 import warnings
 from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -199,6 +200,8 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
+    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
+    from optimum.intel.openvino.utils import TemporaryDirectory
 
     if use_auth_token is not None:
         warnings.warn(
@@ -409,6 +412,19 @@ def main_export(
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
+    temporary_directory = None
+    original_output = None
+    # TODO: Remove GPT-OSS workaround when possible
+    quantization_config = None if ov_config is None else ov_config.quantization_config
+    is_generic_quantization = quantization_config and not isinstance(quantization_config, _GPTOSSQuantizationConfig)
+    if is_generic_quantization:
+        # In case generic quantization will be applied, export to a temporary directory first. This is to avoid confusion
+        # in the case when quantization unexpectedly fails and an intermediate floating point model ends up at the target location.
+        original_output = Path(output)
+        temporary_directory = TemporaryDirectory()
+        output = Path(temporary_directory.name)
+    else:
+        output = Path(output)
     try:
         if library_name == "open_clip":
             model = _OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
@@ -509,67 +525,28 @@ def main_export(
         del model
         gc.collect()
 
-        for submodel_path in submodel_paths:
-            submodel_path = Path(output) / submodel_path
+        if is_generic_quantization:
+            # With generic quantization approach, a model first will be loaded with a corresponding OVModel class,
+            # then quantization will be applied and finally quantized model will be saved to disk.
+            _apply_generic_quantization(
+                model_name_or_path=model_name_or_path,
+                original_task=original_task,
+                task=task,
+                library_name=library_name,
+                quantization_config=quantization_config,
+                output=output,
+                cache_dir=cache_dir,
+                trust_remote_code=trust_remote_code,
+                model_kwargs=model_kwargs,
+            )
+        else:
+            # Apply int8_asym weight-only quantization to models larger than 1B parameters
+            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
 
-            if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
-                raise RuntimeError(
-                    f"An issue happenned during export : {submodel_path.name} was not converted and saved as expected."
-                )
-
-            submodel = core.read_model(submodel_path)
-
-            quantization_config = None
-            if ov_config is None:
-                num_parameters = 0
-                for op in submodel.get_ops():
-                    if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
-                        num_parameters += reduce(operator.mul, op.shape, 1)
-                    del op
-                if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-                    if is_nncf_available():
-                        quantization_config = {"bits": 8, "sym": False}
-                        logger.info("The model weights will be quantized to int8_asym.")
-                    else:
-                        logger.warning(
-                            "The model will be converted with no weights quantization. Quantization of the weights to int8 "
-                            "requires nncf. Please install it with `pip install nncf`"
-                        )
-                        break
-            else:
-                quantization_config = ov_config.quantization_config
-            if quantization_config is None:
-                del submodel
-                gc.collect()
-                continue
-
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
-                )
-
-            from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
-            from optimum.intel.openvino.quantization import _weight_only_quantization
-
-            if isinstance(quantization_config, _GPTOSSQuantizationConfig):
-                # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
-                # selectively quantize some weights to 4 bits and some to 8 bits.
-                _weight_only_quantization(submodel, quantization_config.quantization_config1)
-                _weight_only_quantization(
-                    submodel, quantization_config.quantization_config2, verify_not_optimized=False
-                )
-            else:
-                _weight_only_quantization(submodel, quantization_config)
-            compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
-            save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
-            del submodel
-            gc.collect()
-
-            submodel_path.unlink()
-            submodel_path.with_suffix(".bin").unlink()
-            compressed_submodel_path.rename(submodel_path)
-            compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
-
+        if original_output is not None:
+            # Move exported model to the original output directory
+            original_output.mkdir(parents=True, exist_ok=True)
+            _merge_move(output, original_output)
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -578,6 +555,8 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
@@ -621,3 +600,186 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")
+
+
+def _apply_generic_quantization(
+    model_name_or_path: str,
+    original_task: str,
+    task: str,
+    library_name: str,
+    quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
+    output: Path,
+    cache_dir: str,
+    trust_remote_code: bool = False,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+):
+    """
+    Apply quantization with a general quantization config to the exported model and save it to disk.
+    """
+    from ...intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
+    from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+
+    # Step 1. Obtain the correct OpenVINO model class
+    if library_name == "diffusers":
+        if not is_diffusers_available():
+            raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
+
+        from diffusers import DiffusionPipeline
+
+        diffusers_config = DiffusionPipeline.load_config(model_name_or_path)
+        class_name = diffusers_config.get("_class_name", None)
+        ov_class_name = f"OV{class_name}"
+        try:
+            model_cls = getattr(__import__("optimum.intel", fromlist=[ov_class_name]), ov_class_name)
+        except (AttributeError, ImportError) as e:
+            raise RuntimeError(f"Wasn't able to locate OpenVINO class for {class_name} diffusion model.") from e
+    else:
+        try:
+            model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+            if library_name == "sentence_transformers":
+                model_cls_name = "OVSentenceTransformer"
+            model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
+        except (AttributeError, ImportError, KeyError) as e:
+            raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
+
+    # Step 2. Load the exported model
+    additional_model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+    model = model_cls.from_pretrained(
+        output,
+        compile=False,
+        trust_remote_code=trust_remote_code,
+        cache_dir=cache_dir,
+        **((model_kwargs or {}) | additional_model_kwargs),
+    )
+
+    # Step 3. Apply quantization
+    with TemporaryDirectory() as tmpdir:
+        # Save quantized model to a temporary directory to avoid conflicts when reading and writing from the same directory
+        model._apply_quantization(
+            quantization_config,
+            compile_only=False,
+            compile_model=False,
+            model_name_or_path=model_name_or_path,
+            trust_remote_code=trust_remote_code,
+        )
+        model.save_pretrained(tmpdir)
+
+        del model
+        gc.collect()
+
+        # Move quantized model to the output directory
+        output.mkdir(parents=True, exist_ok=True)
+        for item in Path(tmpdir).iterdir():
+            dest = output / item.name
+            _merge_move(item, dest)
+
+
+def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+    """
+    Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+    """
+    # TODO: Refactor the code below in the following way:
+    #   1. Introduce OVBaseModel.ov_model_paths attribute that will return list of paths to all ov_models
+    #   2. Create a OVPipelineQuantizationConfig based on each submodel size
+    #   3. Run _apply_general_quantization() with the created quantization config
+    for submodel_path in submodel_paths:
+        submodel_path = Path(output) / submodel_path
+
+        if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
+            raise RuntimeError(
+                f"An issue happened during export : {submodel_path.name} was not converted and saved as expected."
+            )
+
+        submodel = core.read_model(submodel_path)
+
+        quantization_config = None
+        if ov_config is None:
+            num_parameters = 0
+            for op in submodel.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+                del op
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                if is_nncf_available():
+                    quantization_config = {"bits": 8, "sym": False}
+                    logger.info("The model weights will be quantized to int8_asym.")
+                else:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        else:
+            # TODO: Remove this case when the workaround for GPT-OSS is removed
+            quantization_config = ov_config.quantization_config
+        if quantization_config is None:
+            del submodel
+            gc.collect()
+            continue
+
+        if not is_nncf_available():
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+
+        from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
+        from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        if isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            # A workaround for GPT-OSS model is required to run quantization twice, this way it is possible to
+            # selectively quantize some weights to 4 bits and some to 8 bits.
+            _weight_only_quantization(submodel, quantization_config.quantization_config1)
+            _weight_only_quantization(submodel, quantization_config.quantization_config2, verify_not_optimized=False)
+        else:
+            _weight_only_quantization(submodel, quantization_config)
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        del submodel
+        gc.collect()
+
+        submodel_path.unlink()
+        submodel_path.with_suffix(".bin").unlink()
+        compressed_submodel_path.rename(submodel_path)
+        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
+
+
+def _merge_move(src: Path, dest: Path):
+    """
+    Move src to dest.
+
+    - If src is a directory:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a directory: merge src into dest recursively.
+        - If dest is a file: replace file with src directory (delete file, then rename).
+
+    - If src is a file:
+        - If dest does not exist: rename src -> dest.
+        - If dest is a file: overwrite file (delete dest, then rename).
+        - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
+    """
+    dest_exists = dest.exists()
+    dest_is_dir = dest_exists and dest.is_dir()
+    if src.is_dir():
+        if not dest_exists:
+            # No conflict: just rename
+            src.rename(dest)
+        elif dest_is_dir:
+            # Merge src into dest recursively
+            for child in src.iterdir():
+                _merge_move(child, dest / child.name)
+            # Remove src once empty
+            src.rmdir()
+        else:
+            # dest exists and is a file: replace file with directory
+            dest.unlink()
+            src.rename(dest)
+    else:
+        if not dest_exists:
+            # No conflict: just rename
+            src.rename(dest)
+        elif dest_is_dir:
+            # Replace directory (recursively) with file
+            shutil.rmtree(dest)
+            src.rename(dest)
+        else:
+            # dest is a file: overwrite
+            dest.unlink()
+            src.rename(dest)
