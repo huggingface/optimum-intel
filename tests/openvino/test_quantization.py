@@ -944,7 +944,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "llama_awq",
+            "llama",
             False,
             dict(
                 bits=4,
@@ -955,7 +955,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "llama_awq",
+            "llama",
             False,
             dict(
                 bits=4,
