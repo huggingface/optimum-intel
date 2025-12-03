@@ -208,6 +208,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 inputs["deepstack_visual_embeds"] = torch.Tensor(deepstack_visual_embeds)
             else:
                 inputs["deepstack_visual_embeds"] = torch.zeros((num_layers, 1, emd_dim), dtype=torch.float32)
+                
         if "token_type_ids" in self.input_names:
             if token_type_ids is None:
                 token_type_ids = np.zeros(inputs_embeds.shape[:2], dtype=int)
@@ -5049,9 +5050,11 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "phi3_v": _OVPhi3VisionForCausalLM,
     "internvl_chat": _OVInternVLForCausalLM,
     "qwen2_vl": _OVQwen2VLForCausalLM,
+    "qwen2_vl_text": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "qwen3_vl": _OVQwen3VLForCausalLM,
     "qwen3_vl_moe": _OVQwen3VLForCausalLM,
+    "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
