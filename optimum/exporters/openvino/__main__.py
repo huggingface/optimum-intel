@@ -30,7 +30,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
-    is_openvino_tokenizers_available,
+    is_openvino_tokenizers_available, 
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
