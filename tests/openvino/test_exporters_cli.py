@@ -133,13 +133,13 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
-        "t5": 2,  # 2025.1 brings support for unigram tokenizers
-        "albert": 2,  # 2025.1 brings support for unigram tokenizers
-        "distilbert": 2,  # no detokenizer before 2025.0
+        "t5": 2,
+        "albert": 2,
+        "distilbert": 2,
         "roberta": 2,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
-        "bert": 2,  # no detokenizer before 2025.0
+        "bert": 2,
         "blenderbot": 2,
         "stable-diffusion": 2,
         "stable-diffusion-xl": 4,
