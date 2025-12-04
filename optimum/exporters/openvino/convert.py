@@ -67,7 +67,10 @@ from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     OV_XML_FILE_NAME,
     _get_input_info,
+    _get_dynamic_shapes_info,
+    _normalize_dummy_inputs,
     _get_open_clip_submodels_fn_and_export_configs,
+    get_model_dtype,
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
@@ -148,6 +151,7 @@ def export(
     stateful: bool = True,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
+    use_torch_export: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch model to an OpenVINO Intermediate Representation.
@@ -170,6 +174,8 @@ def export(
             If specified, allows to use specific shapes for the example input provided to the exporter.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        use_torch_export (`bool`, defaults to `False`):
+            Use torch.export() for scripting of PyTorch models.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -222,6 +228,7 @@ def export(
             stateful=stateful,
             patch_16bit_model=patch_16bit_model,
             library_name=library_name,
+            use_torch_export=use_torch_export
         )
     else:
         raise RuntimeError("You either provided a non-PyTorch model or the PyTorch library is not installed.")
@@ -306,6 +313,7 @@ def export_pytorch(
     stateful: bool = False,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
+    use_torch_export: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -330,6 +338,8 @@ def export_pytorch(
             The configuration containing the parameters related to quantization.
         stateful (`bool`, defaults to `False`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        use_torch_export (`bool`, defaults to `False`):
+            Use torch.export() for scripting of PyTorch models.
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -409,18 +419,37 @@ def export_pytorch(
             ts_decoder_kwargs["trace_kwargs"] = {"check_trace": False}
 
         with patcher:
-            if patch_16bit_model:
-                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
-
-                __make_16bit_traceable(model)
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
-            ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
-            ov_model = convert_model(
-                ts_decoder,
-                example_input=dummy_inputs,
-                input=[(item.shape, item.type) for item in input_info],
-            )
+            if use_torch_export:
+                if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
+                    # patch_everywhere breaks torch.ops namespace
+                    del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
+                dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
+                _export_kwargs = {"args": tuple(), "kwargs": _normalize_dummy_inputs(dummy_inputs, get_model_dtype(model))}
+                _export_kwargs["dynamic_shapes"] = dynamic_shapes
+
+                try:
+                    from nncf.torch.dynamic_graph.patch_pytorch import disable_patching
+                    # nncf patching breaks export
+                    with disable_patching():
+                        ep = torch.export.export_for_training(model, **_export_kwargs)
+                except ImportError:
+                    ep = torch.export.export_for_training(model, **_export_kwargs)
+
+                ov_model = convert_model(ep)
+            else:
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+
+                    __make_16bit_traceable(model)
+
+                ts_decoder = TorchScriptPythonDecoder(model, example_input=dummy_inputs, **ts_decoder_kwargs)
+                ov_model = convert_model(
+                    ts_decoder,
+                    example_input=dummy_inputs,
+                    input=[(item.shape, item.type) for item in input_info],
+                )
 
         ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
 
@@ -467,6 +496,7 @@ def export_models(
     stateful: bool = True,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
+    use_torch_export: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -487,6 +517,8 @@ def export_models(
             Additional kwargs for model export.
         stateful (`bool`, defaults to `True`)
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        use_torch_export (`bool`, defaults to `False`)
+            Use torch.export() for scripting of PyTorch models.
 
     Raises:
         ValueError: if custom names set not equal of number of models
@@ -520,6 +552,7 @@ def export_models(
                 stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
                 patch_16bit_model=patch_16bit_model,
                 library_name=library_name,
+                use_torch_export=use_torch_export
             )
         )
 
@@ -541,6 +574,7 @@ def export_from_model(
     device: str = "cpu",
     trust_remote_code: bool = False,
     patch_16bit_model: bool = False,
+    use_torch_export: bool = False,
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
@@ -751,6 +785,7 @@ def export_from_model(
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
+        use_torch_export=use_torch_export
     )
 
     return files_subpaths
