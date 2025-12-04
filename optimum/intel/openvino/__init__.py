@@ -35,11 +35,10 @@ from .utils import (
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-logger = logging.getLogger(__name__)
 if is_openvino_version("<", "2025.4.0"):
     import openvino
 
-    logger.warning(
+    raise ImportError(
         "Optimum-Intel may not work correctly when using OpenVINO version earlier than 2025.4. "
         "Please upgrade OpenVINO to version 2025.4 or later. "
         f"The current version of OpenVINO is {openvino.__version__}."
@@ -47,7 +46,7 @@ if is_openvino_version("<", "2025.4.0"):
 if is_openvino_tokenizers_version("<", "2025.4.0"):
     import openvino_tokenizers
 
-    logger.warning(
+    raise ImportError(
         "Optimum-Intel may not work correctly when using OpenVINO Tokenizers version earlier than 2025.4. "
         "Please upgrade OpenVINO Tokenizers to version 2025.4 or later. "
         f"The current version of OpenVINO Tokenizers is {openvino_tokenizers.__version__}."
