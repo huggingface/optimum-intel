@@ -42,14 +42,6 @@ if is_openvino_version("<", "2025.4.0"):
         "Please upgrade OpenVINO to version 2025.4 or later. "
         f"The current version of OpenVINO is {_openvino_version}."
     )
-if is_openvino_tokenizers_version("<", "2025.4.0"):
-    import openvino_tokenizers
-
-    raise ImportError(
-        "Optimum-Intel may not work correctly when using OpenVINO Tokenizers version earlier than 2025.4. "
-        "Please upgrade OpenVINO Tokenizers to version 2025.4 or later. "
-        f"The current version of OpenVINO Tokenizers is {openvino_tokenizers.__version__}."
-    )
 
 from .configuration import (
     OVConfig,
