@@ -20,7 +20,6 @@ from ..utils.import_utils import (
     is_diffusers_available,
     is_nncf_available,
     is_nncf_version,
-    is_openvino_tokenizers_version,
     is_openvino_version,
     is_sentence_transformers_available,
 )
