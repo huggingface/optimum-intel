@@ -1010,7 +1010,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVSanaPipeline, "sana", 19, 53),
     ]
 
-    IS_SUPPORT_STATEFUL = True
 
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
 
