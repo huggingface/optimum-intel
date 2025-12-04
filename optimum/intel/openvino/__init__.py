@@ -19,6 +19,8 @@ from ..utils.import_utils import (
     is_diffusers_available,
     is_nncf_available,
     is_nncf_version,
+    is_openvino_tokenizers_version,
+    is_openvino_version,
     is_sentence_transformers_available,
 )
 from .utils import (
@@ -33,6 +35,23 @@ from .utils import (
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
+logger = logging.getLogger(__name__)
+if is_openvino_version("<", "2025.4.0"):
+    import openvino
+
+    logger.warning(
+        "Optimum-Intel may not work correctly when using OpenVINO version earlier than 2025.4. "
+        "Please upgrade OpenVINO to version 2025.4 or later. "
+        f"The current version of OpenVINO is {openvino.__version__}."
+    )
+if is_openvino_tokenizers_version("<", "2025.4.0"):
+    import openvino_tokenizers
+
+    logger.warning(
+        "Optimum-Intel may not work correctly when using OpenVINO Tokenizers version earlier than 2025.4. "
+        "Please upgrade OpenVINO Tokenizers to version 2025.4 or later. "
+        f"The current version of OpenVINO Tokenizers is {openvino_tokenizers.__version__}."
+    )
 
 from .configuration import (
     OVConfig,
