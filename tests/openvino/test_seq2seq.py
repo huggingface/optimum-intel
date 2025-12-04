@@ -480,6 +480,8 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ["llama4"]
     if is_transformers_version("<", "4.52"):
         SUPPORTED_ARCHITECTURES += ["minicpmo"]
+    if is_transformers_version(">=", "4.57.0"):
+        SUPPORTED_ARCHITECTURES += ["qwen3_vl"]
 
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
@@ -527,6 +529,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import Qwen2VLForConditionalGeneration
 
             return Qwen2VLForConditionalGeneration
+        if model_arch == "qwen3_vl":
+            from transformers import Qwen3VLForConditionalGeneration
+
+            return Qwen3VLForConditionalGeneration
         return AutoModelForCausalLM
 
     def _check_device_and_request(self, ov_model, expected_device, has_request):
@@ -585,7 +591,11 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 f"but found counts: {bos_token_counts.tolist()}",
             )
 
+            if is_transformers_version(">=", "4.57.0"):
+                inputs.pop("token_type_ids")
+
         transformers_inputs = copy.deepcopy(inputs)
+        print(inputs)
         # llama4 preprocessing force bf16 dtype for pixel_values, that does not work on CPU with fp32 model
         # if past key values are not initialized, llama4 creates HybridCache with bf16 precision
         if model_arch == "llama4":
@@ -606,7 +616,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat"]:
+        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "qwen3_vl"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
