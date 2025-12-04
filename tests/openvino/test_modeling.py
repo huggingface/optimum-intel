@@ -727,8 +727,8 @@ class PipelineTest(unittest.TestCase):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
 
         # verify could load both pytorch and openvino model (export argument should automatically infered)
-        ov_exported_pipe = optimum_pipeline("text-generation", model_id, revision="pt", accelerator="openvino")
-        ov_pipe = optimum_pipeline("text-generation", model_id, revision="ov", accelerator="openvino")
+        ov_exported_pipe = optimum_pipeline("text-generation", model_id, revision="pt", accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
+        ov_pipe = optimum_pipeline("text-generation", model_id, revision="ov", accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
@@ -737,7 +737,7 @@ class PipelineTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            ov_exported_pipe = optimum_pipeline("text-generation", tmpdirname, accelerator="openvino")
+            ov_exported_pipe = optimum_pipeline("text-generation", tmpdirname, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
         del ov_exported_pipe
@@ -747,8 +747,8 @@ class PipelineTest(unittest.TestCase):
     def test_seq2seq_load_from_hub(self):
         model_id = "echarlaix/tiny-random-t5"
         # verify could load both pytorch and openvino model (export argument should automatically infered)
-        ov_exported_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_pipe = optimum_pipeline("text2text-generation", model_id, revision="ov", accelerator="openvino")
+        ov_exported_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
+        ov_pipe = optimum_pipeline("text2text-generation", model_id, revision="ov", accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
@@ -758,7 +758,7 @@ class PipelineTest(unittest.TestCase):
             if not ov_exported_pipe.model.decoder.stateful:
                 self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
                 self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
-            ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
+            ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
         del ov_exported_pipe
@@ -829,7 +829,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
 
-        ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(inputs)
         atol = 1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08
         self.assertTrue(abs(ov_outputs[-1]["score"] - outputs[-1]["score"]) < atol)
@@ -914,7 +914,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
-        ov_pipe = optimum_pipeline("question-answering", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("question-answering", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(question, context)
         self.assertEqual(outputs["score"], ov_outputs["score"])
         del model
@@ -990,7 +990,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
-        ov_pipe = optimum_pipeline("token-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("token-classification", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1072,7 +1072,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(all(isinstance(item, float) for item in row) for row in outputs[0]))
-        ov_pipe = optimum_pipeline("feature-extraction", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("feature-extraction", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1][-1], ov_outputs[-1][-1][-1])
         del ov_pipe
@@ -1164,7 +1164,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
         set_seed(SEED)
-        ov_pipe = optimum_pipeline("fill-mask", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("fill-mask", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1236,7 +1236,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
         set_seed(SEED)
-        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1343,7 +1343,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
         set_seed(SEED)
-        ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino", model_kwargs={"use_torch_export": USE_TORCH_EXPORT})
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1]["score"], ov_outputs[-1][-1]["score"])
         del ov_pipe
@@ -1814,6 +1814,7 @@ class OVLangchainTest(unittest.TestCase):
             task="text-generation",
             pipeline_kwargs={"max_new_tokens": 10},
             backend="openvino",
+            model_kwargs={"use_torch_export": USE_TORCH_EXPORT},
         )
         self.assertIsInstance(hf_pipe.pipeline.model, OVBaseModel)
 

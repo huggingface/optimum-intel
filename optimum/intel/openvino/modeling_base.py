@@ -663,6 +663,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        use_torch_export: bool = False,
         **kwargs,
     ):
         """
@@ -719,6 +720,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
             library_name=cls._library_name,
+            use_torch_export=use_torch_export,
             variant=variant,
         )
 
@@ -748,6 +750,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         compile_only = kwargs.pop("compile_only", False)
+        use_torch_export = kwargs.pop("use_torch_export", False)
         if compile_only:
             logger.warning(
                 "`compile_only` mode will be disabled because it does not support model export."
@@ -762,6 +765,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             opset=onnx_config.DEFAULT_ONNX_OPSET,
             output=save_dir_path / OV_XML_FILE_NAME,
             stateful=stateful,
+            use_torch_export=use_torch_export,
         )
 
         return cls._from_pretrained(
