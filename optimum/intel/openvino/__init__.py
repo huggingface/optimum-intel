@@ -37,7 +37,7 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 
 if is_openvino_version("<", "2025.4.0"):
     raise ImportError(
-        "Optimum-Intel may not work correctly when using OpenVINO version earlier than 2025.4. "
+        "Optimum-intel requires OpenVINO version 2025.4.0 or higher. "
         "Please upgrade OpenVINO to version 2025.4 or later. "
         f"The current version of OpenVINO is {_openvino_version}."
     )
