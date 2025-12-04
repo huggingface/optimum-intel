@@ -17,7 +17,6 @@ from parameterized import parameterized
 from PIL import Image
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForImageTextToText,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTextToSpectrogram,
     AutoProcessor,
@@ -33,6 +32,7 @@ from optimum.intel.openvino import (
     OVModelForTextToSpeechSeq2Seq,
     OVModelForVisualCausalLM,
 )
+from optimum.utils import is_transformers_version
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -100,6 +100,7 @@ class LLMPipelineTestCase(unittest.TestCase):
 
 class VLMPipelineTestCase(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("qwen2_vl",)
+
     IMAGE = Image.open(
         requests.get(
             TEST_IMAGE_URL,
@@ -113,12 +114,23 @@ class VLMPipelineTestCase(unittest.TestCase):
         "num_beams": 1,
     }
 
+    def _get_model_class(self, model_arch):
+        if is_transformers_version(">=", "4.46"):
+            from transformers import AutoModelForImageTextToText
+
+            return AutoModelForImageTextToText
+        else:
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_outputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
 
         set_seed(42)
-        transformers_model = AutoModelForImageTextToText.from_pretrained(model_id).eval()
+        model_class = self._get_model_class(model_arch)
+        transformers_model = model_class.from_pretrained(model_id).eval()
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             set_seed(42)
