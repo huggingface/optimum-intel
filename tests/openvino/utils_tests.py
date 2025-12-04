@@ -150,6 +150,7 @@ MODEL_NAMES = {
     "pix2struct": "optimum-intel-internal-testing/pix2struct-tiny-random",
     "phi": "optimum-intel-internal-testing/tiny-random-PhiForCausalLM",
     "phi3": "optimum-intel-internal-testing/tiny-random-Phi3ForCausalLM",
+    "phi3-longrope": "optimum-intel-internal-testing/tiny-random-phi3-longrope",
     "phi3-moe": "optimum-intel-internal-testing/phi-3.5-moe-tiny-random",
     "phi3_v": "optimum-intel-internal-testing/tiny-random-phi3-vision",
     "phi4mm": "optimum-intel-internal-testing/tiny-random-phi-4-multimodal",
