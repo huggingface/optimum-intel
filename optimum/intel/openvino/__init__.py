@@ -16,6 +16,7 @@ import logging
 import warnings
 
 from ..utils.import_utils import (
+    _openvino_version,
     is_diffusers_available,
     is_nncf_available,
     is_nncf_version,
@@ -36,12 +37,10 @@ from .utils import (
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 if is_openvino_version("<", "2025.4.0"):
-    import openvino
-
     raise ImportError(
         "Optimum-Intel may not work correctly when using OpenVINO version earlier than 2025.4. "
         "Please upgrade OpenVINO to version 2025.4 or later. "
-        f"The current version of OpenVINO is {openvino.__version__}."
+        f"The current version of OpenVINO is {_openvino_version}."
     )
 if is_openvino_tokenizers_version("<", "2025.4.0"):
     import openvino_tokenizers
