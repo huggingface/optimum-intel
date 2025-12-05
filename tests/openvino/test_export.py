@@ -91,7 +91,6 @@ class ExportModelTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.update({"zamba2": OVModelForCausalLM})
 
     if is_transformers_version(">=", "4.54"):
-        SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM})
         SUPPORTED_ARCHITECTURES.update({"exaone4": OVModelForCausalLM, "lfm2": OVModelForCausalLM})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {

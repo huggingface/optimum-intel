@@ -1600,8 +1600,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                                 lora_correction=True,
                                 ignored_scope={
                                     "patterns": [
-                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))"
-                                        + ("\\.lora_B\\.speech/aten::linear/MatMul"),
+                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
                                     ],
                                 },
                             ),
