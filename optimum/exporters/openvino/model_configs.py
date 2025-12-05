@@ -3674,15 +3674,21 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 
 
 @register_in_tasks_manager(
-    "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
-)
-@register_in_tasks_manager(
     "deepseek_v2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
+
+
+@register_in_tasks_manager(
+    "deepseek_v3", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class DeepseekVOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, OVMiniCPM3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = OVMiniCPM3DummyPastKeyValuesGenerator
 
 
 @register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
@@ -4263,6 +4269,14 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
                 )
 
         return dummy_inputs
+
+
+@register_in_tasks_manager("ernie4_5", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ErnieOpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, GemmaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = GemmaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
 @register_in_tasks_manager(
