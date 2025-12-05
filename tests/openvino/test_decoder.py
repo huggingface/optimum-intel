@@ -56,7 +56,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "pegasus",
         "qwen",
         "phi",
-        "phi3-longrope",
         "internlm2",
         "orion",
         "falcon",
@@ -91,6 +90,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
+        SUPPORTED_ARCHITECTURES += ("phi3", "phi3-longrope")
 
     if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
@@ -110,9 +110,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # autoawq install disabled for windows test environment
         if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
-
-    if is_transformers_version(">=", "4.49.0"):
-        SUPPORTED_ARCHITECTURES += ("phi3",)
 
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)

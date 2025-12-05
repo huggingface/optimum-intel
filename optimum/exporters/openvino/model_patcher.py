@@ -1501,7 +1501,7 @@ def _phi3_longrope_forward(self, x, position_ids):
     the sequence length exceeds the original max position embeddings used during pretraining.
 
     Note: In transformers, the @dynamic_rope_update decorator replaces self.inv_freq before the forward pass.
-    Here we use torch.where to select between inv_freq and long_inv_freq and add the selection logic into the model graph.
+    Here we use torch.where to select between original_inv_freq and long_inv_freq and add the selection logic into the model graph.
     """
     seq_len = torch.max(position_ids) + 1
     original_max_position_embeddings = (
@@ -1515,7 +1515,7 @@ def _phi3_longrope_forward(self, x, position_ids):
     inv_freq = torch.where(
         seq_len > original_max_position_embeddings,
         self.long_inv_freq,
-        self.inv_freq,
+        self.original_inv_freq,
     )
 
     inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
