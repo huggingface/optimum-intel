@@ -8,6 +8,7 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, PretrainedConfig, pipeline, set_seed
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import (
     F32_CONFIG,
@@ -19,7 +20,10 @@ from utils_tests import (
     patch_awq_for_inference,
 )
 
+from optimum.exporters.onnx.model_configs import NemotronOnnxConfig
+from optimum.exporters.openvino.model_configs import BitnetOpenVINOConfig, DeepseekOpenVINOConfig, LFM2OpenVINOConfig
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
+from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -36,6 +40,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "baichuan2",
         "baichuan2-13b",
         "gpt_bigcode",
+        "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
         "bloom",
@@ -52,6 +57,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
+        "mbart",
         "opt",
         "pegasus",
         "qwen",
@@ -84,10 +90,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gemma2",
         "exaone",
         "granite",
-        "granite-moe",
+        "granitemoe",
     )
 
-    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon-mamba")
+    SUPPORTED_SSM_ARCHITECTURES = ("mamba", "falcon_mamba")
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
@@ -98,8 +104,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe", "deepseek")
-
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phimoe", "deepseek")
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("opt_gptq",)
@@ -108,17 +113,23 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
+    if is_transformers_version(">", "4.47"):
+        SUPPORTED_ARCHITECTURES += ("olmo2",)
+
+    if is_transformers_version(">", "4.48"):
+        SUPPORTED_ARCHITECTURES += ("nemotron",)
+
     if is_transformers_version(">", "4.49"):
-        SUPPORTED_ARCHITECTURES += ("gemma3_text",)
+        SUPPORTED_ARCHITECTURES += ("gemma3_text", "helium")
 
     if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3", "qwen3_moe")
+        SUPPORTED_ARCHITECTURES += ("llama4", "llama4_text", "qwen3", "qwen3_moe")
 
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("arcee",)
+        SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
 
     if is_transformers_version(">=", "4.52.1"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
@@ -159,6 +170,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
+        "bigbird_pegasus": 2 if is_transformers_version(">=", "4.52") else 0,
         "gpt_bigcode": 5,
         "blenderbot": 2,
         "blenderbot-small": 2,
@@ -172,12 +184,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox": 5,
         "lfm2": 1,
         "llama": 2,
+        "llama4": 5,
+        "llama4_text": 2,
         "marian": 2,
+        "mbart": 2,
         "minicpm": 4,
         "mistral": 2,
         "mixtral": 2,
         "mpt": 5,
-        "opt": 5 if is_transformers_version(">=", "4.46.0") else 0,
+        "nemotron": 2,
+        "olmo2": 2,
+        "opt": 5 if is_transformers_version(">=", "4.46") else 0,
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
@@ -197,6 +214,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "olmo": 2,
         "stablelm": 2,
         "starcoder2": 2,
+        "smollm3": 2,
         "dbrx": 2,
         "cohere": 2,
         "qwen2": 2,
@@ -207,26 +225,60 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "exaone": 8,
         "exaone4": 1,
         "granite": 6,
-        "granite-moe": 6,
+        "granitemoe": 6,
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
-        "phi3-moe": 2,
+        "phimoe": 2,
         "deepseek": 2,
         "opt_gptq": 12,
         "mixtral_awq": 2,
         "gemma3_text": 2,
         "glm4": 2,
+        "helium": 2,
         "qwen3": 2,
         "qwen3_moe": 2,
         "mamba": 0,
-        "falcon-mamba": 0,
+        "falcon_mamba": 0,
         "arcee": 2,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
         "bitnet": 6,
     }
+    TASK = "text-generation"
+
+    def test_find_untested_architectures(self):
+        if len(self.SUPPORTED_ARCHITECTURES) != len(set(self.SUPPORTED_ARCHITECTURES)):
+            raise ValueError(
+                f"For the task `{self.TASK}`, some architectures are duplicated in the list of tested architectures: "
+                f"{self.SUPPORTED_ARCHITECTURES}.\n"
+            )
+
+        tested_architectures = set(self.SUPPORTED_ARCHITECTURES)
+        transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
+        ov_architectures = set(TasksManager.get_supported_model_type_for_task(task=self.TASK, exporter="openvino"))
+        supported_architectures = ov_architectures & transformers_architectures
+
+        if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
+            if "deepseek_v2" in supported_architectures:
+                supported_architectures.remove("deepseek_v2")
+            if "deepseek_v3" in supported_architectures:
+                supported_architectures.remove("deepseek_v3")
+        elif is_transformers_version("<", str(NemotronOnnxConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures.remove("nemotron")
+        elif is_transformers_version("<", str(BitnetOpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures.remove("bitnet")
+
+        elif is_transformers_version("<", str(LFM2OpenVINOConfig.MIN_TRANSFORMERS_VERSION)):
+            supported_architectures.remove("lfm2")
+
+        untested_architectures = supported_architectures - tested_architectures
+
+        if len(untested_architectures) > 0:
+            raise ValueError(
+                f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
+            )
 
     def mock_torch_compile(self, model_arch):
         if model_arch == "bitnet":
