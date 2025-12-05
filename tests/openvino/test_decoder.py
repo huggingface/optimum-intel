@@ -27,7 +27,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 if is_transformers_version(">=", "4.55"):
@@ -98,23 +98,19 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phimoe")
-        # openvino 2025.0 required for disabling check_trace
-        if is_openvino_version(">=", "2025.0"):
-            SUPPORTED_ARCHITECTURES += ("deepseek",)
-
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phimoe", "deepseek")
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("opt_gptq",)
 
         # autoawq install disabled for windows test environment
-        if is_openvino_version(">=", "2024.6.0") and platform.system() != "Windows":
+        if platform.system() != "Windows":
             SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
 
     if is_transformers_version(">", "4.47"):
@@ -135,7 +131,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
 
-    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.52.1"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
@@ -245,8 +241,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon_mamba": 0,
         "arcee": 2,
-        "gpt_oss": 2 if is_openvino_version(">=", "2025.4") else 0,
-        "gpt_oss_mxfp4": 2 if is_openvino_version(">=", "2025.4") else 0,
+        "gpt_oss": 2,
+        "gpt_oss_mxfp4": 2,
         "zamba2": 1,
         "bitnet": 6,
     }
@@ -299,12 +295,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
 
         not_stateful = []
-        if is_openvino_version("<", "2024.0"):
-            not_stateful.append("mixtral")
-
-        if is_openvino_version("<", "2024.1"):
-            not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
-
         set_seed(SEED)
 
         model_kwargs = {}
@@ -821,9 +811,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         test_input = tokenizer(texts, return_tensors="pt")
 
         ref_logits = pt_model(**test_input).logits
-        torch_dtypes = [None, "auto", "float32", torch.float16]
-        if is_openvino_version(">", "2024.2.0"):
-            torch_dtypes.append("bfloat16")
+        torch_dtypes = [None, "auto", "float32", torch.float16, "bfloat16"]
 
         for dtype in torch_dtypes:
             ov_model = OVModelForCausalLM.from_pretrained(
