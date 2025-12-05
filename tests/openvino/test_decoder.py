@@ -126,7 +126,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.54.0"):
         # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES += ("exaone4",)
-        SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
+        SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic"})
         SUPPORTED_ARCHITECTURES += ("ernie4_5",)
 
     if is_transformers_version(">=", "4.55.0"):
@@ -595,10 +595,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
         if model_arch == "lfm2":
             return
-
-        # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
-        if model_arch in {"deepseek"} and is_transformers_version(">=", "4.49"):
-            self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "persimmon":
