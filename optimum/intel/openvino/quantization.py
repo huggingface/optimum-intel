@@ -41,14 +41,12 @@ from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
 from optimum.quantization_base import OptimumQuantizer
-from optimum.utils.logging import warn_once
 
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
-    is_nncf_version,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -771,12 +769,6 @@ class OVCalibrationDatasetBuilder:
                         and input_dict["pixel_values"].dim() == 4
                         and input_dict["pixel_values"].shape[0] > 1
                     ):
-                        if is_nncf_version("<=", "2.18"):
-                            # TODO (Nikita): Remove once NNCF 2.19 is released.
-                            warn_once(
-                                logger,
-                                "If you are facing RAM OOM issues, please update to the latest NNCF develop version.",
-                            )
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
@@ -1179,7 +1171,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning("The `task` argument is ignored and will be removed in optimum-intel v1.27")
 
     @property
-    def task(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def task(self) -> str:
         logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
         return self._task
 

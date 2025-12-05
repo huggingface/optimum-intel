@@ -63,7 +63,6 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_tokenizers_version,
@@ -120,6 +119,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "exaone4"),
+            ]
+        )
     if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
@@ -142,7 +147,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "lfm2": 0,  # Tokenizers fail to convert, ticket: CVS-176880
+        "lfm2": 2
+        if is_openvino_version(">=", "2026.0")
+        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
@@ -153,6 +160,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "falcon_mamba": 2,
         "qwen3": 2,
         "zamba2": 2,
+        "exaone4": 2,
         "bitnet": 2,
     }
 
@@ -459,11 +467,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset coco --num-samples 1",
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
@@ -520,6 +528,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             {"model": {"int4": 16}},
+        ),
+        (
+            "text-generation-with-past",
+            "gpt2",
+            "int4 --sym --group-size-fallback adjust",
+            {"model": {"int8": 4, "int4": 20}},
         ),
         (
             "text-generation-with-past",

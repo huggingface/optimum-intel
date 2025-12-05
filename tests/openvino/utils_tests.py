@@ -22,7 +22,7 @@ import openvino as ov
 import torch
 
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 
 
 SEED = 42
@@ -80,6 +80,7 @@ MODEL_NAMES = {
     "encoder-decoder": "optimum-internal-testing/tiny-random-encoder-decoder-gpt2-bert",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
+    "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
@@ -325,7 +326,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
+        "text_encoder": 16,
     },
     "ltx-video": {
         "transformer": 34,
@@ -335,7 +336,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "sam": {
         "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder": 100 if is_nncf_version("<=", "2.18") else 98,
+        "prompt_encoder_mask_decoder": 98,
     },
     "speecht5": {
         "encoder": 28,
@@ -344,8 +345,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 386},
-    "falcon_mamba": {"model": 194},
+    "mamba": {"model": 322},
+    "falcon_mamba": {"model": 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -353,6 +354,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "resampler_model": 6,
     },
     "zamba2": {"model": 44},
+    "exaone4": {"model": 16},
     "lfm2": {"model": 52},
 }
 
