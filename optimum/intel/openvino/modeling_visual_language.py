@@ -471,6 +471,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -506,6 +507,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -593,11 +596,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        to_quantize = not compile_only and quantization_config is not None
-        if to_quantize:
-            kwargs["compile"] = False
-
+        quantization_config = model_cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -605,17 +605,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
-
+        if quantization_config:
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
             quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            cls._apply_quantization(
+                model, quantization_config_copy, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 
@@ -687,6 +687,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             use_cache=use_cache,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 
@@ -706,7 +707,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         return model_names
 
     @property
-    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         ov_models = {}
         for ov_model_name in self._ov_model_names:
             if ov_model_name == "lm_model":
@@ -916,7 +917,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 "image_grid_thw": kwargs.get("image_grid_thw"),
                 "video_grid_thw": kwargs.get("video_grid_thw"),
                 "token_type_ids": kwargs.get("token_type_ids"),
-                "pixel_attetion_mask": kwargs.get("pixle_attetion_mask"),
+                "pixel_attention_mask": kwargs.get("pixel_attention_mask"),
                 "image_attention_mask": kwargs.get("image_attention_mask"),
                 "input_audio_embeds": kwargs.get("input_audio_embeds", kwargs.get("audio_input_features")),
                 "audio_embed_sizes": kwargs.get("audio_embed_sizes"),
@@ -1850,7 +1851,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         inputs.update(tokenizer(text, return_tensors="pt"))
         return inputs
 
-    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    # internvl has issue with check  _get_non_default_parameters, as wrkaraund override _prepare_generation_config
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
@@ -3526,7 +3527,16 @@ class _OVGemma3ForCausalLM(OVModelForVisualCausalLM):
 
         text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
 
+        # switch off add_bos_token if chat template already includes it
+        orig_add_bos_token = processor.tokenizer.add_bos_token
+        if "bos_token" in processor.tokenizer.chat_template:
+            processor.tokenizer.add_bos_token = False
+
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
+
+        # recover add_bos_token flag in tokenizer
+        processor.tokenizer.add_bos_token = orig_add_bos_token
+
         return inputs
 
     def _update_model_kwargs_for_generation(

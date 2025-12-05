@@ -196,7 +196,8 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand((True, False))
     def test_load_from_hub_and_save_decoder_model(self, use_cache):
-        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
+        model_id = MODEL_NAMES["gpt2-with-cache-ov"] if use_cache else MODEL_NAMES["gpt2-without-cache-ov"]
+
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache, device=OPENVINO_DEVICE)
@@ -283,15 +284,15 @@ class OVModelIntegrationTest(unittest.TestCase):
                     tmpdirname, compile_only=True, device=OPENVINO_DEVICE
                 )
                 for ov_model in compile_only_model.ov_models.values():
-                    self.assertIsInstance(ov_model, ov.runtime.CompiledModel)
+                    self.assertIsInstance(ov_model, ov.CompiledModel)
                 for component_name, component in compile_only_model.components.items():
-                    self.assertIsInstance(component.model, ov.runtime.CompiledModel)
+                    self.assertIsInstance(component.model, ov.CompiledModel)
                     if component_name == "language_model":
-                        self.assertIsInstance(component.request, ov.runtime.InferRequest)
-                        self.assertIsInstance(component.text_emb_model, ov.runtime.CompiledModel)
-                        self.assertIsInstance(component.text_emb_request, ov.runtime.CompiledModel)
+                        self.assertIsInstance(component.request, ov.InferRequest)
+                        self.assertIsInstance(component.text_emb_model, ov.CompiledModel)
+                        self.assertIsInstance(component.text_emb_request, ov.CompiledModel)
                     else:
-                        self.assertIsInstance(component.request, ov.runtime.CompiledModel)
+                        self.assertIsInstance(component.request, ov.CompiledModel)
 
                 outputs = compile_only_model(**inputs)
                 self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
@@ -1530,6 +1531,8 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
     def test_compare_output_attentions(self, model_arch):
+        if is_openvino_version(">=", "2025.4"):
+            self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
@@ -1568,6 +1571,8 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES)
     def test_compare_output_hidden_states(self, model_arch):
+        if is_openvino_version(">=", "2025.4"):
+            self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()

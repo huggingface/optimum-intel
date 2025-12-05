@@ -104,6 +104,34 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
+    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation", "lfm2"),
+                ("text-generation-with-past", "lfm2"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.49"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "zamba2"),
+            ]
+        )
+
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "exaone4"),
+            ]
+        )
+    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "bitnet"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
@@ -119,6 +147,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
         "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "lfm2": 2
+        if is_openvino_version(">=", "2026.0")
+        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
         "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
         "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
@@ -128,6 +159,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         "mamba": 2,
         "falcon-mamba": 2,
         "qwen3": 2,
+        "zamba2": 2,
+        "exaone4": 2,
+        "bitnet": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -433,11 +467,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset coco --num-samples 1",
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
@@ -494,6 +528,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             {"model": {"int4": 16}},
+        ),
+        (
+            "text-generation-with-past",
+            "gpt2",
+            "int4 --sym --group-size-fallback adjust",
+            {"model": {"int8": 4, "int4": 20}},
         ),
         (
             "text-generation-with-past",
@@ -958,6 +998,8 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
+        if model_type in ["bitnet"]:
+            self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":

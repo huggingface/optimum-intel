@@ -27,7 +27,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
-from ..utils.import_utils import is_nncf_available, is_nncf_version
+from ..utils.import_utils import is_nncf_available
 from .utils import (
     PREDEFINED_CAUSAL_LANGUAGE_DATASETS,
     PREDEFINED_LANGUAGE_DATASETS,
@@ -345,7 +345,27 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "weight_only": True,
         },
     },
+    "Qwen/Qwen3-30B-A3B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": -1,
+    },
+    "inceptionai/jais-13b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "group_size_fallback": "adjust",
+    },
+    "HuggingFaceTB/SmolVLM2-256M-Video-Instruct": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "group_size_fallback": "adjust",
+    },
 }
+
 
 # Add configs for model id aliases
 # The list below contains pairs of model ids: config for the second model id will be copied from the first model id.
@@ -532,7 +552,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: Optional[bool] = False,
+        trust_remote_code: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -548,16 +568,21 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
                 A transformers processor used to process the dataset inputs.
-            trust_remote_code (`bool`, defaults to `False`):
-                Allows to use custom code for the modeling hosted in the model repository. This option should only be
-                set for repositories you trust and in which you have read the code, as it will execute on your local
-                machine arbitrary code present in the model repository.
+            trust_remote_code (`bool`, defaults to `None`):
+                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
+                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
         """
+        if trust_remote_code is not None:
+            logger.warning(
+                "`trust_remote_code` parameter in `OVQuantizationConfigBase` is deprecated and will be removed in "
+                "optimum-intel v1.27.0. Please provide `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` "
+                "or `OVQuantizer.__init__` methods instead."
+            )
         self.num_samples = num_samples
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.processor = processor
-        self.trust_remote_code = trust_remote_code
+        self.trust_remote_code = trust_remote_code or False
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
@@ -621,10 +646,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     user or organization name, like `dbmdz/bert-base-german-cased`.
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
-        trust_remote_code (`bool`, defaults to `False`):
-            Allows to use custom code for the modeling hosted in the model repository. This option should only be set
-            for repositories you trust and in which you have read the code, as it will execute on your local machine
-            arbitrary code present in the model repository.
+        trust_remote_code (`bool`, defaults to `None`):
+            This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
+            `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression with NNCF.
             - For language models you can provide your own dataset in a list of strings or just use one from the list
@@ -692,6 +716,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             multiple times on the same model and dataset to avoid recomputing statistics.
             Please note that the statistics depend on the dataset, so if you change the dataset, you should also change
             the statistics path to avoid confusion.
+        group_size_fallback (`str`, *optional*):
+            Defines the behavior when the specified group size is not compatible with the weight shape. Possible values:
+            - "error": raises an error if the group size is not compatible with the weight shape (default);
+            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
+            - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
+                if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
+                which is int8_asym by default.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -701,7 +732,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sym: bool = False,
         group_size: Optional[int] = None,
         tokenizer: Optional[str] = None,
-        trust_remote_code: bool = False,
+        trust_remote_code: Optional[bool] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         all_layers: Optional[bool] = None,
@@ -716,6 +747,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
         statistics_path: Optional[str] = None,
+        group_size_fallback: Optional[str] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -747,6 +779,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.backup_precision = backup_precision
         self.dtype = dtype
         self.statistics_path = statistics_path
+        self.group_size_fallback = group_size_fallback
         self.post_init()
 
     def post_init(self):
@@ -795,9 +828,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "The provided dataset won't have any effect on the resulting compressed model because no data-aware "
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
-
-        if self.dataset is None and self.quant_method == OVQuantizationMethod.AWQ and is_nncf_version("<", "2.17.0"):
-            raise ValueError("Data-free AWQ is available starting form NNCF 2.17. Please update nncf package.")
 
         if self.dtype in ["int4", "int8"]:
             bits = 4 if self.dtype == "int4" else 8
@@ -880,6 +910,13 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.gptq and self.lora_correction:
             raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
+        valid_group_size_fallback_values = [e.value for e in nncf.GroupSizeFallbackMode]
+        if self.group_size_fallback not in valid_group_size_fallback_values + [None]:
+            raise ValueError(
+                f"`group_size_fallback` must be one of the following: {valid_group_size_fallback_values}, "
+                f"but found: {self.group_size_fallback}"
+            )
+
     def to_nncf_dict(self) -> Dict[str, Any]:
         """
         Returns a dictionary with the variables that are ready to use for nncf.quantize() call.
@@ -889,8 +926,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         mode = self.dtype if self.dtype else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
-        if mode == "mxfp4":
-            mode = "e2m1" if is_nncf_version("<=", "2.18") else "mxfp4"
         if mode == "cb4":
             mode = "cb4_f8e4m3"
         mode = nncf.CompressWeightsMode(mode)
@@ -899,9 +934,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
         kwargs = self.kwargs.copy()
-        if self.statistics_path:
+        if self.statistics_path or self.group_size_fallback:
             advanced_parameters = kwargs.get("advanced_parameters", nncf.AdvancedCompressionParameters())
-            advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            if self.statistics_path:
+                advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
+            if self.group_size_fallback:
+                advanced_parameters = dataclasses.replace(
+                    advanced_parameters, group_size_fallback_mode=nncf.GroupSizeFallbackMode(self.group_size_fallback)
+                )
             kwargs["advanced_parameters"] = advanced_parameters
         result = {
             "mode": mode,
@@ -956,7 +996,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         dataset: Optional[str] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: bool = False,
+        trust_remote_code: Optional[bool] = None,
         smooth_quant_alpha: Optional[float] = None,
         dtype: Optional[str] = "int8",
         **kwargs,
@@ -996,10 +1036,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                     - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
                     - A path to a *directory* containing files required by the processor, for instance saved
                         using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
-            trust_remote_code (`bool`, defaults to `False`):
-                Allows to use custom code for the modeling hosted in the model repository. This option should only be set
-                for repositories you trust and in which you have read the code, as it will execute on your local machine
-                arbitrary code present in the model repository.
+            trust_remote_code (`bool`, defaults to `None`):
+                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
+                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
             smooth_quant_alpha (`float`, *optional*):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
@@ -1193,7 +1232,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: bool = False,
+        trust_remote_code: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -1223,10 +1262,9 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
                 A transformers processor used to process the dataset inputs.
-            trust_remote_code (`bool`, defaults to `False`):
-                Allows to use custom code for the modeling hosted in the model repository. This option should only be
-                set for repositories you trust and in which you have read the code, as it will execute on your local
-                machine arbitrary code present in the model repository.
+            trust_remote_code (`bool`, defaults to `None`):
+                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
+                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
             **kwargs:
         """
         self.weight_quantization_config = self._initialize_quantization_config(
@@ -1300,7 +1338,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: Optional[bool] = False,
+        trust_remote_code: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -1325,9 +1363,9 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             processor (Optional[str]):
                 A transformers processor used to process the dataset inputs. Can be a model ID or a path to a
                 directory containing processor files. Defaults to None.
-            trust_remote_code (Optional[bool]):
-                If True, allows the use of custom code hosted in the model repository. This should only be set for repositories
-                you trust, as it will execute arbitrary code on your local machine. Defaults to False.
+            trust_remote_code (`bool`, defaults to `None`):
+                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
+                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
             **kwargs:
                 Additional parameters for the configuration.
         """

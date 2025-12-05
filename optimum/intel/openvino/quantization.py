@@ -40,17 +40,13 @@ from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_dat
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
-from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
-from optimum.utils.logging import warn_once
 
-from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
-    is_nncf_version,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -62,7 +58,7 @@ from .configuration import (
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
 )
-from .modeling import OVModel, OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
+from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel, OVModelForCausalLM
 from .modeling_sam import OVSamModel
@@ -243,17 +239,20 @@ class OVCalibrationDatasetBuilder:
     will contain two keys: `encoder_model` and `decoder_model`.
     """
 
-    def __init__(self, model: OVModel, seed: int = 42):
+    def __init__(self, model: OVBaseModel, seed: int = 42, trust_remote_code: bool = False):
         """
 
         Args:
-            model (`OVModel`):
+            model (`OVBaseModel`):
                 The model to build calibration dataset for.
             seed (`int`, defaults to 42):
                 Random seed to use for reproducibility.
+            trust_remote_code (`bool`, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor.
         """
         self.model = model
         self.seed = seed
+        self.trust_remote_code = trust_remote_code
         # TODO: deprecate "signature_columns": model.forward() may not be the method which is called during inference,
         #  for example there is model.generate()
         signature = inspect.signature(self.model.forward)
@@ -661,7 +660,10 @@ class OVCalibrationDatasetBuilder:
         """
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
+        # TODO: remove config.trust_remote_code from the condition once it is deprecated
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+        )
         nsamples = config.num_samples if config.num_samples else 128
         if isinstance(config.dataset, str):
             if config.dataset == "auto":
@@ -688,9 +690,14 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
-        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+        # TODO: remove config.trust_remote_code from the condition once it is deprecated
+        processor = AutoProcessor.from_pretrained(
+            config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+        )
         try:
-            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+            )
             tokenizer_error = None
         except Exception as tokenizer_error:  # noqa: F841
             tokenizer = None
@@ -762,12 +769,6 @@ class OVCalibrationDatasetBuilder:
                         and input_dict["pixel_values"].dim() == 4
                         and input_dict["pixel_values"].shape[0] > 1
                     ):
-                        if is_nncf_version("<=", "2.18"):
-                            # TODO (Nikita): Remove once NNCF 2.19 is released.
-                            warn_once(
-                                logger,
-                                "If you are facing RAM OOM issues, please update to the latest NNCF develop version.",
-                            )
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
@@ -811,7 +812,10 @@ class OVCalibrationDatasetBuilder:
                 component.request, collected_inputs[component_name], apply_caching=True
             )
         try:
-            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+            # TODO: remove config.trust_remote_code from the condition once it is deprecated
+            processor = AutoProcessor.from_pretrained(
+                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+            )
 
             # Download audio inputs beforehand to avoid possible connection issues
             num_samples = config.num_samples or 32
@@ -853,7 +857,10 @@ class OVCalibrationDatasetBuilder:
             def get_tokenizer():
                 if config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                return AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=config.trust_remote_code)
+                # TODO: remove config.trust_remote_code from the condition once it is deprecated
+                return AutoTokenizer.from_pretrained(
+                    config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+                )
 
             num_samples = config.num_samples or 128
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading dataset", total=num_samples))
@@ -945,8 +952,10 @@ class OVCalibrationDatasetBuilder:
             else:
                 if quantization_config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
+                # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
                 tokenizer = AutoTokenizer.from_pretrained(
-                    quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+                    quantization_config.tokenizer,
+                    trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
                 )
             return tokenizer
 
@@ -1021,8 +1030,10 @@ class OVCalibrationDatasetBuilder:
         self.model.compile()
 
         def get_processor():
+            # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
             processor = AutoProcessor.from_pretrained(
-                quantization_config.processor, trust_remote_code=quantization_config.trust_remote_code
+                quantization_config.processor,
+                trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
             )
             return processor
 
@@ -1095,7 +1106,10 @@ class OVCalibrationDatasetBuilder:
         )
 
         try:
-            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=config.trust_remote_code)
+            # TODO: remove config.trust_remote_code from the condition once it is deprecated
+            processor = AutoProcessor.from_pretrained(
+                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+            )
 
             num_samples = config.num_samples or 128
             for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
@@ -1137,25 +1151,34 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: OVModel, task: Optional[str] = None, seed: int = 42, **kwargs):
+    def __init__(
+        self, model: OVBaseModel, task: Optional[str] = None, seed: int = 42, trust_remote_code: bool = False, **kwargs
+    ):
         """
         Args:
-            model (`OVModel`):
-                The [OVModel](https://huggingface.co/docs/optimum-intel/en/openvino/reference) to quantize.
-            task (`str`, defaults to None):
-                The task defining the model topology used for the ONNX export.
+            model (`OVBaseModel`):
+                The [OVBaseModel](https://huggingface.co/docs/optimum-intel/en/openvino/reference) to quantize.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor.
         """
         super().__init__()
         self.model = model
-        self.task = task
-        self.dataset_builder = OVCalibrationDatasetBuilder(model, seed)
+        self.dataset_builder = OVCalibrationDatasetBuilder(model, seed, trust_remote_code)
+        self._task = task
+        if self._task is not None:
+            logger.warning("The `task` argument is ignored and will be removed in optimum-intel v1.27")
+
+    @property
+    def task(self) -> str:
+        logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
+        return self._task
 
     @classmethod
-    def from_pretrained(cls, model: OVModel, **kwargs):
+    def from_pretrained(cls, model: OVBaseModel, trust_remote_code: bool = False, **kwargs):
         # TODO : Create model
-        return cls(model, **kwargs)
+        return cls(model, trust_remote_code=trust_remote_code, **kwargs)
 
     def quantize(
         self,
@@ -1196,7 +1219,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> from optimum.intel import OVQuantizer, OVModelForCausalLM
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
-        >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
+        >>> quantizer = OVQuantizer.from_pretrained(model)
         >>> ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig())
         >>> quantizer.quantize(ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
@@ -1208,7 +1231,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
         >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
-        >>> quantizer = OVQuantizer.from_pretrained(model, task="text-classification")
+        >>> quantizer = OVQuantizer.from_pretrained(model)
         >>> ov_config = OVConfig(quantization_config=OVQuantizationConfig())
         >>> quantizer.quantize(calibration_dataset=dataset, ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
@@ -1453,22 +1476,6 @@ class OVQuantizer(OptimumQuantizer):
     def _save_pretrained(model: openvino.Model, output_path: str):
         compress_quantize_weights_transformation(model)
         openvino.save_model(model, output_path, compress_to_fp16=False)
-
-    def _set_task(self):
-        if self.task is None:
-            self.task = TasksManager.infer_task_from_model(self.model.config._name_or_path)
-            if self.task is None:
-                raise ValueError(
-                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
-                )
-
-        self.task = _TASK_ALIASES.get(self.task, self.task)
-
-        if self.task == "text2text-generation":
-            raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
-
-        if self.task == "image-to-text":
-            raise ValueError("Image2Text models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,
