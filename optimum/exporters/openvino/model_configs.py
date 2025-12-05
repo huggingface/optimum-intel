@@ -4281,6 +4281,12 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
 
 
+@register_in_tasks_manager("dinov3_vit", *["feature-extraction"], library_name="transformers")
+@register_in_tasks_manager("dinov3_convnext", *["feature-extraction"], library_name="transformers")
+class DinoV3OpenVINOConfig(ViTOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.56.0"
+
+
 @register_in_tasks_manager(
     "vision-encoder-decoder",
     *[

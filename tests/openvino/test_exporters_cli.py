@@ -102,6 +102,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
+        ("feature-extraction", "vit-with-pooler"),
     ]
 
     if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
