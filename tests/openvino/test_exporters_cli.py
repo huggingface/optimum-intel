@@ -131,12 +131,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-
     if is_transformers_version(">=", "4.51.3"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "granite-moe-hybrid"),
             ]
+        )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
