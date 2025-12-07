@@ -4557,4 +4557,3 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
-

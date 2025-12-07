@@ -7332,4 +7332,3 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
             else:
                 continue
             mamba_layer.forward = mamba_layer._orig_forward
-
