@@ -22,7 +22,7 @@ import openvino as ov
 import torch
 
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 SEED = 42
@@ -48,6 +48,7 @@ MODEL_NAMES = {
     "baichuan2-13b": "optimum-intel-internal-testing/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "optimum-intel-internal-testing/tiny-random-bigbird_pegasus",
     "biogpt": "optimum-intel-internal-testing/tiny-random-BioGptForCausalLM",
+    "bitnet": "optimum-intel-internal-testing/tiny-random-bitnet",
     "blenderbot-small": "optimum-intel-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "optimum-intel-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "optimum-intel-internal-testing/tiny-random-BloomModel",
@@ -71,12 +72,14 @@ MODEL_NAMES = {
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
     "distilbert": "optimum-intel-internal-testing/tiny-random-distilbert",
+    "distilbert-ov": "optimum-intel-internal-testing/ov-tiny-random-distilbert",
     "donut": "optimum-intel-internal-testing/tiny-doc-qa-vision-encoder-decoder",
     "donut-swin": "optimum-intel-internal-testing/tiny-random-DonutSwinModel",
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
+    "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
@@ -90,6 +93,8 @@ MODEL_NAMES = {
     "flux-fill": "optimum-intel-internal-testing/tiny-random-flux-fill",
     "gpt_bigcode": "optimum-intel-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "optimum-intel-internal-testing/tiny-random-gpt2",
+    "gpt2-with-cache-ov": "optimum-intel-internal-testing/ov-tiny-random-gpt2-with-cache",
+    "gpt2-without-cache-ov": "optimum-intel-internal-testing/ov-tiny-random-gpt2-without-cache",
     "gpt_neo": "optimum-intel-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "optimum-intel-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_neox_japanese": "optimum-intel-internal-testing/tiny-random-GPTNeoXJapaneseForCausalLM",
@@ -107,6 +112,7 @@ MODEL_NAMES = {
     "internvl_chat": "optimum-intel-internal-testing/tiny-random-internvl2",
     "jais": "optimum-intel-internal-testing/tiny-random-jais",
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
+    "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -172,6 +178,9 @@ MODEL_NAMES = {
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "optimum-intel-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "optimum-intel-internal-testing/tiny-stable-diffusion-torch",
+    "stable-diffusion-with-safety-checker": "optimum-intel-internal-testing/tiny-random-stable-diffusion-with-safety-checker",
+    "stable-diffusion-with-custom-variant": "optimum-intel-internal-testing/tiny-stable-diffusion-torch-custom-variant",
+    "stable-diffusion-with-textual-inversion": "optimum-intel-internal-testing/tiny-stable-diffusion-with-textual-inversion",
     "stable-diffusion-openvino": "optimum-intel-internal-testing/tiny-stable-diffusion-openvino",
     "stable-diffusion-xl": "optimum-intel-internal-testing/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "optimum-intel-internal-testing/tiny-random-stable-diffusion-xl-refiner",
@@ -312,7 +321,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
+        "text_encoder": 16,
     },
     "ltx-video": {
         "transformer": 34,
@@ -321,8 +330,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder": 100 if is_nncf_version("<=", "2.18") else 98,
+        "vision_encoder": 150,
+        "prompt_encoder_mask_decoder": 98,
     },
     "speecht5": {
         "encoder": 28,
@@ -331,8 +340,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 386},
-    "falcon-mamba": {"model": 194},
+    "mamba": {"model": 322},
+    "falcon-mamba": {"model": 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -340,6 +349,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "resampler_model": 6,
     },
     "zamba2": {"model": 44},
+    "exaone4": {"model": 16},
+    "lfm2": {"model": 52},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
