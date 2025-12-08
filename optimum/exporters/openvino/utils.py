@@ -25,7 +25,7 @@ from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_openvino_version, is_safetensors_available
+from optimum.intel.utils.import_utils import is_safetensors_available
 from optimum.utils import is_diffusers_available
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
@@ -380,8 +380,6 @@ SKIP_CHECK_TRACE_MODELS = (
 
 
 def allow_skip_tracing_check(library_name, model_type):
-    if is_openvino_version("<", "2025.0.0"):
-        return False
     if library_name in ["diffusers", "sentence_transformers"]:
         return True
     return model_type in SKIP_CHECK_TRACE_MODELS
