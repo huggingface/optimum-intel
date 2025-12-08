@@ -124,7 +124,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("exaone4",)
 
     if is_transformers_version("<", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("minicpm", "arctic")
+        SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
