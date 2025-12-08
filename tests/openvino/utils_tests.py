@@ -22,7 +22,7 @@ import openvino as ov
 import torch
 
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 SEED = 42
@@ -320,7 +320,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
+        "text_encoder": 16,
     },
     "ltx-video": {
         "transformer": 34,
@@ -329,8 +329,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder": 100 if is_nncf_version("<=", "2.18") else 98,
+        "vision_encoder": 150,
+        "prompt_encoder_mask_decoder": 98,
     },
     "speecht5": {
         "encoder": 28,
@@ -339,8 +339,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 386},
-    "falcon-mamba": {"model": 194},
+    "mamba": {"model": 322},
+    "falcon-mamba": {"model": 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
