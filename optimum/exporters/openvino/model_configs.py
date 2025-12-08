@@ -50,6 +50,7 @@ from optimum.exporters.onnx.model_configs import (
     VaeEncoderOnnxConfig,
     VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
+    ViTOnnxConfig,
     WhisperOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
