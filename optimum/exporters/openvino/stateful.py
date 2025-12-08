@@ -20,7 +20,6 @@ from transformers import PretrainedConfig
 
 import openvino as ov
 from openvino import opset13
-from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
 
 from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS, SSM_MODELS
 
@@ -177,13 +176,6 @@ def ensure_stateful_is_available(warn=True):
     """
     Check openvino version and raise error if it does not support stateful models
     """
-    if is_openvino_version("<", "2023.3"):
-        if warn:
-            log.warning(
-                f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. It may result in sub-optimal inference performance."
-                "Install openvino>=2023.3.0."
-            )
-        return False
     return True
 
 
