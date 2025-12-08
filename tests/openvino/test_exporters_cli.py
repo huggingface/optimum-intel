@@ -63,10 +63,8 @@ from optimum.intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIGS, _DEFA
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
-    is_nncf_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
-    is_tokenizers_version,
     is_transformers_version,
 )
 
@@ -105,7 +103,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("zero-shot-image-classification", "clip"),
     ]
 
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation", "lfm2"),
@@ -120,7 +118,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.54"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "exaone4"),
+            ]
+        )
+    if is_transformers_version(">=", "4.52.1"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "bitnet"),
@@ -128,37 +132,40 @@ class OVCLIExportTestCase(unittest.TestCase):
         )
 
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
-        "gpt2": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "t5": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
-        "albert": 0 if is_openvino_version("<", "2025.1") else 2,  # 2025.1 brings support for unigram tokenizers
-        "distilbert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
-        "roberta": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+        "gpt2": 2,
+        "t5": 2,
+        "albert": 2,
+        "distilbert": 2,
+        "roberta": 2,
         "vit": 0,  # no tokenizer for image model
         "wav2vec2": 0,  # no tokenizer
-        "bert": 1 if is_openvino_version("<", "2025.0") else 2,  # no detokenizer before 2025.0
-        "blenderbot": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "stable-diffusion": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "stable-diffusion-xl": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "stable-diffusion-3": 6 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 2,
-        "flux": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "flux-fill": 4 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "lfm2": 0,  # Tokenizers fail to convert, ticket: CVS-176880
-        "llava": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
-        "sana": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
-        "ltx-video": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "bert": 2,
+        "blenderbot": 2,
+        "stable-diffusion": 2,
+        "stable-diffusion-xl": 4,
+        "stable-diffusion-3": 6,
+        "flux": 4,
+        "flux-fill": 4,
+        "lfm2": 2
+        if is_openvino_version(">=", "2026.0")
+        else 0,  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
+        "llava": 2,
+        "sana": 2,
+        "ltx-video": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
-        "clip": 2 if is_tokenizers_version("<", "0.20.0") or is_openvino_version(">=", "2024.5") else 0,
+        "clip": 2,
         "mamba": 2,
         "falcon-mamba": 2,
         "qwen3": 2,
         "zamba2": 2,
+        "exaone4": 2,
         "bitnet": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
         "gpt2": {  # transformers, no chat template, no processor
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "text-generation-with-past",
             "expected_chat_template": False,
             "simplified_chat_template": False,
@@ -166,7 +173,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "remote_code": False,
         },
         "stable-diffusion": {  # diffusers, no chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "text-to-image",
             "processor_chat_template": False,
             "remote_code": False,
@@ -174,7 +181,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "simplified_chat_template": False,
         },
         "llava": {  # transformers, chat template in processor, simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "image-text-to-text",
             "processor_chat_template": True,
             "remote_code": False,
@@ -182,7 +189,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "simplified_chat_template": True,
         },
         "llava_next": {  # transformers, chat template in processor overrides tokinizer chat template, simplified chat template
-            "num_tokenizers": 2 if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5") else 0,
+            "num_tokenizers": 2,
             "task": "image-text-to-text",
             "processor_chat_template": True,
             "simplified_chat_template": True,
@@ -195,9 +202,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
             {
                 "glm": {  # transformers, no processor, no simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
+                    "num_tokenizers": 2,
                     "task": "text-generation-with-past",
                     "expected_chat_template": True,
                     "simplified_chat_template": False,
@@ -211,9 +216,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS.update(
             {
                 "minicpm3": {  # transformers, no processor, simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
+                    "num_tokenizers": 2,
                     "task": "text-generation-with-past",
                     "expected_chat_template": True,
                     "simplified_chat_template": True,
@@ -221,9 +224,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "remote_code": True,
                 },
                 "phi3_v": {  # transformers, no processor chat template, no simplified chat template
-                    "num_tokenizers": 2
-                    if is_tokenizers_version("<", "0.20") or is_openvino_version(">=", "2024.5")
-                    else 0,
+                    "num_tokenizers": 2,
                     "task": "image-text-to-text",
                     "expected_chat_template": True,
                     "simplified_chat_template": False,
@@ -459,11 +460,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             "--dataset coco --num-samples 1",
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
@@ -520,6 +521,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             {"model": {"int4": 16}},
+        ),
+        (
+            "text-generation-with-past",
+            "gpt2",
+            "int4 --sym --group-size-fallback adjust",
+            {"model": {"int8": 4, "int4": 20}},
         ),
         (
             "text-generation-with-past",

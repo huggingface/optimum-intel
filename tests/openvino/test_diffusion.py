@@ -325,9 +325,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(["stable-diffusion", "latent-consistency"])
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker", subfolder="safety_checker"
-        )
+        safety_checker_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_checker_id, subfolder="safety_checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
@@ -357,7 +356,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     @require_diffusers
     def test_load_and_save_pipeline_with_safety_checker(self):
-        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
+        model_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
         self.assertTrue(ov_pipeline.safety_checker is not None)
         self.assertIsInstance(ov_pipeline.safety_checker, StableDiffusionSafetyChecker)
@@ -431,19 +430,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     @require_diffusers
     def test_textual_inversion(self):
-        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
-        ti_id = "katuni4ka/textual_inversion_cat"
+        model_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
+        textual_inversion_id = MODEL_NAMES["stable-diffusion-with-textual-inversion"]
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion(ti_id)
+        diffusers_pipeline.load_textual_inversion(textual_inversion_id)
 
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
             model_id, compile=False, safety_checker=None, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
         )
-        ov_pipeline.load_textual_inversion(ti_id)
+        ov_pipeline.load_textual_inversion(textual_inversion_id)
 
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -452,7 +451,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
     @require_diffusers
     def test_load_custom_weight_variant(self):
-        model_id = "katuni4ka/tiny-stable-diffusion-torch-custom-variant"
+        model_id = MODEL_NAMES["stable-diffusion-with-custom-variant"]
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, variant="custom")
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
             model_id, compile=False, variant="custom", device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
@@ -673,9 +672,8 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @parameterized.expand(["stable-diffusion", "latent-consistency"])
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker", subfolder="safety_checker"
-        )
+        safety_checker_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_checker_id, subfolder="safety_checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
@@ -735,19 +733,19 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
     @require_diffusers
     def test_textual_inversion(self):
-        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
-        ti_id = "katuni4ka/textual_inversion_cat"
+        model_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
+        textual_inversion_id = MODEL_NAMES["stable-diffusion-with-textual-inversion"]
 
         inputs = self.generate_inputs(model_type="stable-diffusion")
         inputs["prompt"] = "A <cat-toy> backpack"
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion(ti_id)
+        diffusers_pipeline.load_textual_inversion(textual_inversion_id)
 
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
             model_id, compile=False, safety_checker=None, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
         )
-        ov_pipeline.load_textual_inversion(ti_id)
+        ov_pipeline.load_textual_inversion(textual_inversion_id)
 
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images
@@ -940,9 +938,8 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(["stable-diffusion"])
     @require_diffusers
     def test_safety_checker(self, model_arch: str):
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            "katuni4ka/tiny-random-stable-diffusion-with-safety-checker", subfolder="safety_checker"
-        )
+        safety_checker_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_checker_id, subfolder="safety_checker")
 
         pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], safety_checker=safety_checker)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
@@ -1005,19 +1002,19 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
     @require_diffusers
     def test_textual_inversion(self):
-        model_id = "katuni4ka/tiny-random-stable-diffusion-with-safety-checker"
-        ti_id = "katuni4ka/textual_inversion_cat"
+        model_id = MODEL_NAMES["stable-diffusion-with-safety-checker"]
+        textual_inversion_id = MODEL_NAMES["stable-diffusion-with-textual-inversion"]
 
         inputs = self.generate_inputs()
         inputs["prompt"] = "A <cat-toy> backpack"
 
         diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(model_id, safety_checker=None)
-        diffusers_pipeline.load_textual_inversion(ti_id)
+        diffusers_pipeline.load_textual_inversion(textual_inversion_id)
 
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(
             model_id, compile=False, safety_checker=None, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
         )
-        ov_pipeline.load_textual_inversion(ti_id)
+        ov_pipeline.load_textual_inversion(textual_inversion_id)
 
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).images
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).images

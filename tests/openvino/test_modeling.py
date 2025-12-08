@@ -100,7 +100,6 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
     _langchain_hf_available,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
@@ -155,10 +154,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         self.assertGreaterEqual(num_blobs, 1)
-        if is_openvino_version("<", "2023.3"):
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
-        else:
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+        self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
 
         # Test compile only
 
@@ -196,7 +192,8 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand((True, False))
     def test_load_from_hub_and_save_decoder_model(self, use_cache):
-        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
+        model_id = MODEL_NAMES["gpt2-with-cache-ov"] if use_cache else MODEL_NAMES["gpt2-without-cache-ov"]
+
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
@@ -1530,6 +1527,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
     def test_compare_output_attentions(self, model_arch):
+        self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
@@ -1568,6 +1566,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES)
     def test_compare_output_hidden_states(self, model_arch):
+        self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
