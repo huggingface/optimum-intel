@@ -7165,7 +7165,11 @@ class Lfm2ModelPatcher(ModelPatcher):
             conv_layer.slow_forward = conv_layer._orig_forward
 
 
-
+# This patch overrides the following line in Transformers:
+# https://github.com/huggingface/transformers/blob/v4.55-release/src/transformers/models/granitemoehybrid/modeling_granitemoehybrid.py#L1553
+# It is required to work around an OpenVINO issue:
+# [CPU] Broadcast node '__module.model/aten::copy_/Broadcast' failed the check
+# 'arg_shape[i - start_axis].is_dynamic()...' in src/core/shape_inference/include/broadcast_shape_inference.hpp:89
 def granite_moe_hybrid_update_causal_mask(
     self,
     attention_mask,
@@ -7174,11 +7178,6 @@ def granite_moe_hybrid_update_causal_mask(
     past_key_values,
     output_attentions: bool = False,
 ):
-    # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
-    # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
-    # to infer the attention mask.
-    past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-
     dtype = input_tensor.dtype
     batch_size = input_tensor.shape[0]
     sequence_length = input_tensor.shape[1]
@@ -7202,13 +7201,8 @@ def granite_moe_hybrid_update_causal_mask(
             mask_length = attention_mask.shape[-1]
             padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
             padding_mask = padding_mask == 0
-            tmp = causal_mask[:, :, :, :mask_length].masked_fill(
-                padding_mask, min_dtype
-            )
-            causal_mask = tmp
-            # causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-            #    padding_mask, min_dtype
-            # )
+            new_causal_mask = causal_mask[:, :, :, :mask_length].masked_fill(padding_mask, min_dtype)
+            causal_mask = new_causal_mask
 
     return causal_mask
 
@@ -7355,7 +7349,9 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
         self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-        self._model.model._update_causal_mask = types.MethodType(granite_moe_hybrid_update_causal_mask, self._model.model)
+        self._model.model._update_causal_mask = types.MethodType(
+            granite_moe_hybrid_update_causal_mask, self._model.model
+        )
         for idx, layer in enumerate(self._model.model.layers):
             if hasattr(layer, "block_sparse_moe"):
                 patch_sparse_moe(layer.block_sparse_moe)
