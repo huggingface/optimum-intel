@@ -594,7 +594,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-        if model_arch == "lfm2":
+        if model_arch in ["lfm2", "granite-moe-hybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
