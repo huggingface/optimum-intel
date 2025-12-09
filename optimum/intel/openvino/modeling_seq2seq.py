@@ -1001,7 +1001,7 @@ class OVDecoder(OVModelPart):
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
     def _get_past_length(self, past_key_values=None):
-        if past_key_values is None:
+        if past_key_values is None or len(past_key_values) == 0:
             return 0
         if self.stateful:
             return self._past_length
