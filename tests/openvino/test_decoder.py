@@ -142,6 +142,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
+    if is_transformers_version("<", "4.56.0"):
+        SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -248,6 +251,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     }
     TASK = "text-generation"
 
+    def mock_torch_compile(self, model_arch):
+        if model_arch == "bitnet":
+            # mock torch.compile to avoid compilation errors in tests
+            original_torch_compile = torch.compile
+            torch.compile = lambda func: func
+            # ensure restoration happens even if test fails
+            self.addCleanup(lambda: setattr(torch, "compile", original_torch_compile))
+
+    def get_tokenizer(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        if tokenizer.pad_token is None:
+            if tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif tokenizer.bos_token is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            else:
+                raise ValueError(
+                    f"Tokenizer for model {model_id} does not have a defined `pad_token`, `eos_token`, or `bos_token`."
+                )
+        tokenizer.padding_side = "left"
+        return tokenizer
+
     def test_find_untested_architectures(self):
         if len(self.SUPPORTED_ARCHITECTURES) != len(set(self.SUPPORTED_ARCHITECTURES)):
             raise ValueError(
@@ -280,14 +307,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"For the task `{self.TASK}`, the OpenVINO exporter supports {untested_architectures} which are not tested"
             )
 
-    def mock_torch_compile(self, model_arch):
-        if model_arch == "bitnet":
-            # mock torch.compile to avoid compilation errors in tests
-            original_torch_compile = torch.compile
-            torch.compile = lambda func: func
-            # ensure restoration happens even if test fails
-            self.addCleanup(lambda: setattr(torch, "compile", original_torch_compile))
-
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -310,7 +329,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer = self.get_tokenizer(model_arch)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
 
         ov_outputs = ov_model(**tokens)
@@ -372,13 +391,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch in ["qwen"]:
             return
 
-        if model_arch not in ["chatglm", "chatglm4", "persimmon"]:
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-
-        if model_arch == "persimmon":
-            tokenizer.pad_token_id = tokenizer.bos_token_id
-        # Compare batched generation
-        tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
