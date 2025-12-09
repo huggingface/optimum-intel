@@ -13,11 +13,11 @@
 #  limitations under the License.
 
 import pytest
-from tests.openvino.utils_tests import USE_TORCH_EXPORT
+import os
 
 
 def pytest_collection_modifyitems(config, items):
-    if USE_TORCH_EXPORT:
+    if bool(os.getenv("USE_TORCH_EXPORT", False)):
         with open(
                 "tests/openvino/excluded_tests_with_torch_export.txt", "r"
         ) as file:
