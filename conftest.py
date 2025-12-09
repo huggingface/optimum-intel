@@ -13,14 +13,16 @@
 #  limitations under the License.
 
 import pytest
-
-
-def pytest_addoption(parser):
-    parser.addoption("--use_torch_export", action="store", default="False")
+import os
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.option.use_torch_export == "True":
+    #will remove
+    use_torch_exp = bool(os.getenv("USE_TORCH_EXPORT", False))
+    print("use_torch_exp {}".format(use_torch_exp))
+    raise use_torch_exp
+
+    if bool(os.getenv("USE_TORCH_EXPORT", False)):
         with open(
                 "tests/openvino/excluded_tests_with_torch_export.txt", "r"
         ) as file:

@@ -76,8 +76,10 @@ jobs:
           python tests/scripts/login_with_ci_token.py
 
       - name: Test with Pytest
+        env:
+          USE_TORCH_EXPORT: ${{ matrix.use_torch_export }}
         run: |
-          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0 --use_torch_export ${{ matrix.use_torch_export }}
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO
