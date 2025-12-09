@@ -313,7 +313,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "text-generation",
             "llama",
             "int4_f8e5m2",
-            "--dataset wikitext2 --num-samples 1 --group-size 16 --trust-remote-code",
+            "--dataset gsm8k --num-samples 1 --group-size 16 --trust-remote-code",
             {
                 "model": 15,
             },
@@ -532,7 +532,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
+            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset gsm8k --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
             {"model": {"int8": 4, "int4": 14}},
         ),

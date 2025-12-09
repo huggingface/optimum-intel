@@ -82,7 +82,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version, is_nncf_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -204,7 +204,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16),
                 full_quantization_config=OVQuantizationConfig(dtype="f8e5m2"),
-                dataset="wikitext2",
+                dataset="gsm8k",
                 num_samples=1,
             ),
             {
@@ -1840,7 +1840,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                     dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
                 ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
-                dataset="wikitext2",
+                dataset="gsm8k",
                 num_samples=1,
             ),
         ),
@@ -1928,6 +1928,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (
             dict(bits=4, dataset="wikitext2"),
+            OVWeightQuantizationConfig,
+            None,
+        ),
+        (
+            dict(bits=4, dataset="gsm8k"),
             OVWeightQuantizationConfig,
             None,
         ),
@@ -2154,6 +2159,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_NAME = ("whisper",)
+    STATEFUL = (False, True)
     APPLY_CACHING = (False, True)
 
     @staticmethod
@@ -2167,10 +2173,12 @@ class InferRequestWrapperTest(unittest.TestCase):
         ).input_features
         return input_features
 
-    @parameterized.expand(itertools.product(MODEL_NAME, APPLY_CACHING))
-    def test_calibration_data_uniqueness(self, model_name, apply_caching):
+    @parameterized.expand(itertools.product(MODEL_NAME, STATEFUL, APPLY_CACHING))
+    def test_calibration_data_uniqueness(self, model_name, stateful, apply_caching):
         model_id = MODEL_NAMES[model_name]
-        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, compile=True, stateful=stateful, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+        )
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
@@ -2182,12 +2190,27 @@ class InferRequestWrapperTest(unittest.TestCase):
             ov_model.decoder.request = InferRequestWrapper(
                 ov_model.decoder.request, calibration_data, apply_caching=apply_caching
             )
-        for _ in range(2):
+        n_samples = 3
+        for _ in range(n_samples):
             input_features = self._generate_random_audio_data(processor)
             ov_model.generate(input_features, max_new_tokens=10, min_new_tokens=10)
 
         data_hashes_per_key = defaultdict(list)
         data_id_per_key = defaultdict(set)
+
+        # Check that reset state flag is present and correctly set in collected inputs
+        if stateful and is_nncf_version(">", "2.19"):
+            from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
+
+            # All inputs should have reset state key
+            self.assertTrue(all(NNCF_DATASET_RESET_STATE_KEY in inputs_dict for inputs_dict in calibration_data))
+            # The number of times reset state flag is set to True should be equal to (2 * n_samples), because
+            # for each sequence generation, the state is reset twice
+            self.assertEqual(
+                sum(int(inputs_dict[NNCF_DATASET_RESET_STATE_KEY]) for inputs_dict in calibration_data), 2 * n_samples
+            )
+            # Remove reset state key from inputs to avoid affecting data uniqueness checks
+            [input_dict.pop(NNCF_DATASET_RESET_STATE_KEY) for input_dict in calibration_data]
 
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
@@ -2198,14 +2221,14 @@ class InferRequestWrapperTest(unittest.TestCase):
                 data_hashes_per_key[k].append(hash(x.tobytes()))
                 data_id_per_key[k].add(id(v))
         for k, data_hashes in data_hashes_per_key.items():
-            # All hashes can not be equal because calibration dataset contains at least 2 different samples
+            # All hashes can not be equal because calibration dataset contains at least n_samples different samples
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
         if apply_caching:
-            # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
-            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), 2)
+            # With caching, encoder hidden states tensors should be cached, resulting in only n_samples tensors stored
+            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), n_samples)
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
-            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)
+            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), n_samples)
 
 
 def check_optimization_not_applicable_to_optimized_model(model, quantization_config):
