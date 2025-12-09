@@ -32,7 +32,6 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
     is_openvino_tokenizers_available,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
@@ -272,11 +271,7 @@ def main_export(
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
-        supported_quant_methods = ["gptq"]
-        if is_openvino_version(">=", "2024.6.0"):
-            supported_quant_methods.append("awq")
-        if is_openvino_version(">=", "2025.4.0"):
-            supported_quant_methods.append("bitnet")
+        supported_quant_methods = ["gptq", "awq", "bitnet"]
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
@@ -338,9 +333,9 @@ def main_export(
         ):
             if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
                 dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
-            elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+            elif config.torch_dtype == torch.float16:
                 dtype = torch.float16
-            elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+            elif config.torch_dtype == torch.bfloat16:
                 dtype = torch.bfloat16
 
         if dtype is not None:
@@ -386,7 +381,7 @@ def main_export(
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
-    elif library_name == "diffusers" and is_openvino_version(">=", "2024.6"):
+    elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
             dtype = deduce_diffusers_dtype(
