@@ -77,8 +77,7 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          echo "USE_TORCH_EXPORT=${{ matrix.use_torch_export }}" >> $GITHUB_ENV
-          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0 --use_torch_export ${{ matrix.use_torch_export }}
 
       - if: ${{ matrix.test-pattern == '*modeling*' }}
         name: Install Nightly OpenVINO

@@ -16,13 +16,17 @@ import pytest
 import os
 
 
+def pytest_addoption(parser):
+    parser.addoption("--use_torch_export", action="store", default="False")
+
+
 def pytest_collection_modifyitems(config, items):
     #will remove
-    use_torch_exp = bool(os.getenv("USE_TORCH_EXPORT", False))
+    use_torch_exp = config.option.use_torch_export == "True"
     print("use_torch_exp {}".format(use_torch_exp))
     raise use_torch_exp
 
-    if bool(os.getenv("USE_TORCH_EXPORT", False)):
+    if bool(config.option.use_torch_export):
         with open(
                 "tests/openvino/excluded_tests_with_torch_export.txt", "r"
         ) as file:
