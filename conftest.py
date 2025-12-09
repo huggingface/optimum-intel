@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import pytest
-import os
 
 
 def pytest_addoption(parser):
@@ -21,12 +20,7 @@ def pytest_addoption(parser):
 
 
 def pytest_collection_modifyitems(config, items):
-    #will remove
-    use_torch_exp = config.option.use_torch_export == "True"
-    print("use_torch_exp {}".format(use_torch_exp))
-    raise use_torch_exp
-
-    if bool(config.option.use_torch_export):
+    if config.option.use_torch_export == "True":
         with open(
                 "tests/openvino/excluded_tests_with_torch_export.txt", "r"
         ) as file:
