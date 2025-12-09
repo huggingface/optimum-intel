@@ -33,7 +33,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
-USE_TORCH_EXPORT = bool(os.getenv("USE_TORCH_EXPORT", False))
+USE_TORCH_EXPORT = os.getenv("USE_TORCH_EXPORT", "False") == "True"
 
 MODEL_NAMES = {
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
