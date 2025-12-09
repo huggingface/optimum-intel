@@ -203,7 +203,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVMixedQuantizationConfig(
                 weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16),
                 full_quantization_config=OVQuantizationConfig(dtype="f8e5m2"),
-                dataset="wikitext2",
+                dataset="gsm8k",
                 num_samples=1,
             ),
             {
@@ -1836,7 +1836,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                     dtype="f8e4m3", ignored_scope={"patterns": [f"{pattern_prefix}.layers.0.mlp"]}
                 ),
                 ignored_scope={"patterns": [f"{pattern_prefix}.layers.1.self_attn"]},
-                dataset="wikitext2",
+                dataset="gsm8k",
                 num_samples=1,
             ),
         ),
@@ -1924,6 +1924,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (
             dict(bits=4, dataset="wikitext2"),
+            OVWeightQuantizationConfig,
+            None,
+        ),
+        (
+            dict(bits=4, dataset="gsm8k"),
             OVWeightQuantizationConfig,
             None,
         ),
