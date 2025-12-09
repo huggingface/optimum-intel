@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE
+from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, USE_TORCH_EXPORT
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -112,6 +112,7 @@ class ExportModelTest(unittest.TestCase):
         stateful: bool = True,
         patch_16bit_model: bool = False,
         model_kwargs: dict = None,
+        use_torch_export: bool = False,
     ):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
@@ -145,6 +146,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
+                    use_torch_export = use_torch_export
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -204,7 +206,7 @@ class ExportModelTest(unittest.TestCase):
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(model_type, model_kwargs=model_kwargs)
+        self._openvino_export(model_type, model_kwargs=model_kwargs, use_torch_export=USE_TORCH_EXPORT)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):
@@ -239,6 +241,7 @@ class ExportModelTest(unittest.TestCase):
                     task=supported_task,
                     preprocessors=preprocessors,
                     model_kwargs=model_kwargs,
+                    use_torch_export=USE_TORCH_EXPORT,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -275,6 +278,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=None,
                     patch_16bit_model=True,
                     stateful=stateful,
+                    use_torch_export=USE_TORCH_EXPORT,
                 )
                 use_cache = supported_task.endswith("-with-past")
                 ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
@@ -314,9 +318,10 @@ class CustomExportModelTest(unittest.TestCase):
                 library_name="transformers",
                 output=Path(tmpdirname),
                 task=base_task,
+                use_torch_export = USE_TORCH_EXPORT
             )
 
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
 
             self.assertIsInstance(ov_model, OVBaseModel)
             self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})
@@ -333,7 +338,7 @@ class CustomExportModelTest(unittest.TestCase):
         model.to(torch.device("cpu"))
 
         with TemporaryDirectory() as tmpdirname:
-            export_from_model(model, output=tmpdirname, task="feature-extraction")
+            export_from_model(model, output=tmpdirname, task="feature-extraction", use_torch_export=USE_TORCH_EXPORT)
             ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)

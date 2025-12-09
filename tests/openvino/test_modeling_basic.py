@@ -15,7 +15,7 @@ import unittest
 
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
-from utils_tests import OPENVINO_DEVICE
+from utils_tests import OPENVINO_DEVICE, USE_TORCH_EXPORT
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -59,7 +59,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model_class_str = MODEL_NAMES[model_id]
         model_class = eval(model_class_str)
-        model = model_class.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = model_class.from_pretrained(model_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
         model.save_pretrained(f"{model_id}_ov")
         model = model_class.from_pretrained(f"{model_id}_ov", device=OPENVINO_DEVICE)
 
@@ -81,7 +81,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         """
         model_id = "hf-internal-testing/tiny-random-distilbert"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForSequenceClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForSequenceClassification.from_pretrained(model_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
         model.reshape(1, 16)
         model.half()
         model.to("cpu")

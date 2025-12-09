@@ -94,6 +94,7 @@ from utils_tests import (
     get_supported_model_for_library,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
+    USE_TORCH_EXPORT
 )
 
 _TASK_TO_DATASET = {
@@ -438,7 +439,7 @@ class OVQuantizerTest(unittest.TestCase):
         column_name = dataset_kwargs.pop("column_name")
 
         with TemporaryDirectory() as tmp_dir:
-            ov_model = model_cls.from_pretrained(model_id, export=True)
+            ov_model = model_cls.from_pretrained(model_id, export=True, use_torch_export=USE_TORCH_EXPORT)
 
             is_text_related_task = model_cls in (
                 OVModelForSequenceClassification,
@@ -527,7 +528,7 @@ class OVQuantizerTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
-            ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
+            ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config, use_torch_export=USE_TORCH_EXPORT)
             ov_model.save_pretrained(tmp_dir)
 
             check_model_inference(ov_model, model_id, trust_remote_code=False)
@@ -1032,7 +1033,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False)
+            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False, use_torch_export=USE_TORCH_EXPORT)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -1185,7 +1186,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4})
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4}, use_torch_export=USE_TORCH_EXPORT)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -1211,7 +1212,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code, use_torch_export=USE_TORCH_EXPORT,
             )
             if quantization_config.quant_method.lower() == "awq":
                 # TODO: Check that AWQ was actually applied
@@ -1370,7 +1371,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 weights_group_size=group_size, activations_group_size=group_size, **quantization_config
             )
             model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code, use_torch_export=USE_TORCH_EXPORT,
             )
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
@@ -1636,7 +1637,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVPipelineQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code, use_torch_export=USE_TORCH_EXPORT,
             )
             for save_load_model in [False, True]:
                 if save_load_model:
