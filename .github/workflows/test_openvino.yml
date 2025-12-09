@@ -70,16 +70,16 @@ jobs:
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
 
-      - name: Login with fork PRs CI token
-        if: ${{ env.HF_TOKEN == '' }}
-        run: |
-          python tests/scripts/login_with_ci_token.py
-
       - name: Set use_torch_export env
         run: echo "USE_TORCH_EXPORT=${{ matrix.use_torch_export }}" >> $GITHUB_ENV
 
       - name: Test env (will remove)
         run: echo $USE_TORCH_EXPORT
+
+      - name: Login with fork PRs CI token
+        if: ${{ env.HF_TOKEN == '' }}
+        run: |
+          python tests/scripts/login_with_ci_token.py
 
       - name: Test with Pytest
         run: |
