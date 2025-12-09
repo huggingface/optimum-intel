@@ -17,6 +17,11 @@ import os
 
 
 def pytest_collection_modifyitems(config, items):
+    #will remove
+    use_torch_exp = bool(os.getenv("USE_TORCH_EXPORT", False))
+    print("use_torch_exp {}".format(use_torch_exp))
+    raise use_torch_exp
+
     if bool(os.getenv("USE_TORCH_EXPORT", False)):
         with open(
                 "tests/openvino/excluded_tests_with_torch_export.txt", "r"
