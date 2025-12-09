@@ -81,7 +81,7 @@ class LLMPipelineTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.46.0"):
         SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phi3-moe", "qwen", "opt")
         if is_transformers_version("<", "4.54.0"):
-            SUPPORTED_ARCHITECTURES += ("minicpm3", "deepseek")
+            SUPPORTED_ARCHITECTURES += ("deepseek",)
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
     if is_transformers_version(">=", "4.51.0"):
@@ -95,7 +95,7 @@ class LLMPipelineTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss",)
     if is_transformers_version("<", "4.54.0"):
-        SUPPORTED_ARCHITECTURES += ("minicpm", "arctic")
+        SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
 
     REMOTE_CODE_MODELS = (
         "chatglm",
