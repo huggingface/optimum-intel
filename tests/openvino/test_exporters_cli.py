@@ -131,7 +131,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
-    if is_transformers_version(">=", "4.51.3"):
+    if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "granite-moe-hybrid"),
