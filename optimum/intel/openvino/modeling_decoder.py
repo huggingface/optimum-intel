@@ -1066,31 +1066,31 @@ class OVCacheWithMambaStates(MambaCache):
         self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
         self.mamba_expand = getattr(config, "mamba_expand", None)
         self.mamba_d_state = getattr(config, "mamba_d_state", None)
+        self.intermediate_size = config.intermediate_size
+        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
         if config.model_type == "granitemoehybrid":
+            layer_types = getattr(config, "layer_types", None)
             self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
             self.head_dim = int(self.hidden_size / self.num_attention_heads)
             self.mamba_ngroups = getattr(config, "mamba_n_groups", None)
             self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
             self.ssm_state_size = getattr(config, "mamba_d_state", None)
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
-
-            self.layer_types = getattr(config, "layer_types", None)
-            self.num_mamba_layers = self.layer_types.count("mamba")
-            self.num_attn_layers = self.layer_types.count("attention")
+            self.num_mamba_layers = layer_types.count("mamba")
+            self.num_attn_layers = layer_types.count("attention")
         else:
             # Mamba 2 specific parameters
-            self.intermediate_size = config.intermediate_size
-            self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
-            self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
-            self.num_hybrid_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
-            self.head_dim = getattr(config, "head_dim", None)
-            self.n_mamba_heads = getattr(config, "n_mamba_heads", None)
-            self.mamba_headdim = getattr(config, "mamba_headdim", None)
-            self.mamba_ngroups = getattr(config, "mamba_ngroups", None)
-            self.num_attn_layers = self.num_hybrid_layers
-            self.num_mamba_layers = config.num_hidden_layers
             self.num_key_value_heads = self.num_attention_heads
+            self.head_dim = getattr(config, "head_dim", None)
+            self.mamba_ngroups = getattr(config, "mamba_ngroups", None)
+            self.n_mamba_heads = getattr(config, "n_mamba_heads", None)
+            self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
+            self.mamba_headdim = getattr(config, "mamba_headdim", None)
+            # in Zamba2, all layers contain Mamba block
+            # some of these layers are hybrid so they contain both attention and mamba blocks
+            self.num_mamba_layers = config.num_hidden_layers
+            self.num_attn_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
 
         self.conv_states = conv_states
         if self.conv_states is None:
