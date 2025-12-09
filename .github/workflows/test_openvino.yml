@@ -38,6 +38,7 @@ jobs:
             "*quantization*",
           ]
         transformers-version: ["4.45.0", "latest"]
+        use_torch_export: ["True", "False"]
 
     runs-on: ubuntu-22.04
 
@@ -69,6 +70,12 @@ jobs:
         if: ${{ env.HF_TOKEN == '' }}
         run: |
           python tests/scripts/login_with_ci_token.py
+
+      - name: Set use_torch_export env
+        run: echo "USE_TORCH_EXPORT=${{ matrix.use_torch_export }}" >> $GITHUB_ENV
+
+      - name: Test env (will remove)
+        run: echo $USE_TORCH_EXPORT
 
       - name: Test with Pytest
         run: |
