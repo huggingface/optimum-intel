@@ -40,7 +40,7 @@ jobs:
         transformers-version: ["4.45.0", "latest"]
         use_torch_export: ["True", "False"]
 
-    exclude:
+      exclude:
         - transformers-version: "4.45.0"
           use_torch_export: "True"
 
