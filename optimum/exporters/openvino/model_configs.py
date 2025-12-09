@@ -606,6 +606,18 @@ class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "exaone4",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class Exaone4OpenVINOConfig(LlamaOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.54.0"
+
+
+@register_in_tasks_manager(
     "arcee",
     *[
         "feature-extraction",

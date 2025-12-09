@@ -471,6 +471,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -506,6 +507,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            trust_remote_code (`bool`, *optional*, defaults to `False`):
+                Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         if use_auth_token is not None:
             warnings.warn(
@@ -593,11 +596,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_quantization_config(quantization_config, load_in_8bit)
-        to_quantize = not compile_only and quantization_config is not None
-        if to_quantize:
-            kwargs["compile"] = False
-
+        quantization_config = model_cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
             text_embeddings=text_embeddings,
@@ -605,17 +605,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if to_quantize:
-            from optimum.intel.openvino.quantization import OVQuantizer
-
+        if quantization_config:
             quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
             potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
             quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
-            OVQuantizer(model).quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            cls._apply_quantization(
+                model, quantization_config_copy, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 
@@ -688,6 +688,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             use_cache=use_cache,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 

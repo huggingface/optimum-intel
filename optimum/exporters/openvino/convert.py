@@ -49,8 +49,6 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
-    is_openvino_tokenizers_version,
-    is_tokenizers_version,
     is_transformers_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
@@ -806,12 +804,6 @@ def export_tokenizer(
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
         return
-
-    if is_tokenizers_version(">", "0.19") and is_openvino_tokenizers_version("<", "2024.5.0.0"):
-        logger.warning(
-            "Exporting tokenizers to OpenVINO is not supported for tokenizers version > 0.19 and openvino version <= 2024.4. "
-            "Please downgrade to tokenizers version <= 0.19 to export tokenizers to OpenVINO."
-        )
 
     if not isinstance(output, Path):
         output = Path(output)

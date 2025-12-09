@@ -444,6 +444,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         from_onnx: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
@@ -530,7 +531,8 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", True)
         model = cls(
             encoder=encoder,
             decoder=decoder,
@@ -542,17 +544,14 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             device=device,
             ov_config=ov_config,
             compile_only=compile_only,
+            compile=compile_model and not quantization_config,
             **kwargs,
         )
 
-        if quantization_config is not None:
-            from optimum.intel import OVQuantizer
-
-            quantizer = OVQuantizer(model)
-            quantization_config_copy = quantization_config.clone()
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantization_config_copy.processor = str(quantization_config.processor or model_id)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        if quantization_config:
+            cls._apply_quantization(
+                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
+            )
 
         return model
 
@@ -630,6 +629,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             compile_only=compile_only,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 
@@ -960,7 +960,6 @@ class OVDecoder(OVModelPart):
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         self._past_length += input_ids.shape[1]
-
         out_past_key_values = ((),)
 
         if not self.stateful:
@@ -987,7 +986,7 @@ class OVDecoder(OVModelPart):
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
     def _get_past_length(self, past_key_values=None):
-        if past_key_values is None:
+        if not past_key_values:
             return 0
         if self.stateful:
             return self._past_length
@@ -1323,7 +1322,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # input_stride = self.model.encoder.conv1.stride[0] * self.model.encoder.conv2.stride[0]
     model = DummyWhisperModel()
 
-    # Adopeted for stateful support from https://github.com/huggingface/transformers/blob/main/src/transformers/models/whisper/modeling_whisper.py#L1810
+    # Adapted for stateful support from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/whisper/modeling_whisper.py#L1810
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,

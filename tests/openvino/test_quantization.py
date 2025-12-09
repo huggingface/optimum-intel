@@ -21,11 +21,9 @@ import logging
 import unittest
 from collections import defaultdict
 from collections.abc import Iterable
-from enum import Enum
 from functools import partial
 from typing import Union, Type
 
-import openvino as ov
 import pytest
 import numpy as np
 import torch
@@ -33,7 +31,6 @@ from PIL import Image
 from parameterized import parameterized
 import nncf
 from transformers import (
-    AutoModelForQuestionAnswering,
     AutoTokenizer,
     AutoProcessor,
     AutoConfig,
@@ -85,7 +82,7 @@ from optimum.intel.openvino.utils import TemporaryDirectory
 from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version, is_nncf_version
+from optimum.intel.utils.import_utils import is_transformers_version
 from utils_tests import (
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -225,7 +222,6 @@ class OVQuantizerTest(unittest.TestCase):
                 dataset="laion/220k-GPT4Vision-captions-from-LIVIS",
                 num_samples=1,
                 processor=MODEL_NAMES["stable-diffusion-xl"],
-                trust_remote_code=True,
             ),
             {
                 "unet": 198,
@@ -249,7 +245,6 @@ class OVQuantizerTest(unittest.TestCase):
                 dtype="f8e4m3",
                 dataset="laion/filtered-wit",
                 num_samples=1,
-                trust_remote_code=True,
             ),
             {
                 "unet": 87,
@@ -365,11 +360,11 @@ class OVQuantizerTest(unittest.TestCase):
             OVQuantizationConfig(bits=8, dataset="coco", num_samples=1),
             {
                 "vision_encoder": 75,
-                "prompt_encoder_mask_decoder": 61 if is_nncf_version("<=", "2.18") else 60,
+                "prompt_encoder_mask_decoder": 60,
             },
             {
                 "vision_encoder": {"int8": 75},
-                "prompt_encoder_mask_decoder": {"int8": 50 if is_nncf_version("<=", "2.18") else 49},
+                "prompt_encoder_mask_decoder": {"int8": 49},
             },
         ),
         (
@@ -738,7 +733,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(bits=4, dataset="coco", num_samples=1, group_size=2),
             {
                 "vision_encoder": {"int8": 56, "int4": 94},
-                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 94 if is_nncf_version("<=", "2.18") else 92},
+                "prompt_encoder_mask_decoder": {"int8": 6, "int4": 92},
             },
         ),
         (
@@ -773,7 +768,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
                 processor=MODEL_NAMES["nanollava_vision_tower"],
                 tokenizer=MODEL_NAMES["llava-qwen2"],
-                trust_remote_code=True,
             ),
             {
                 "lm_model": {"int8": 16, "int4": 14},
@@ -814,7 +808,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
                 processor=MODEL_NAMES["minicpmv"],
-                trust_remote_code=True,
             ),
             {
                 "lm_model": {"int8": 8, "int4": 22},
@@ -834,7 +827,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
-                trust_remote_code=True,
             ),
             {
                 "lm_model": {"int8": 8, "int4": 22},
@@ -872,7 +864,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
-                trust_remote_code=True,
             ),
             {
                 "lm_model": {"int8": 4, "int4": 14},
@@ -930,7 +921,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=1,
                 processor=MODEL_NAMES["minicpmo"],
-                trust_remote_code=True,
             ),
             {
                 "lm_model": {"int8": 6, "int4": 10},
@@ -938,6 +928,42 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 8},
                 "resampler_model": {"int8": 6},
             },
+        ),
+        (
+            OVModelForCausalLM,
+            "exaone4",
+            True,
+            dict(bits=4, sym=False, group_size=32, ratio=1.0),
+            {"model": {"int8": 2, "int4": 14}},
+        ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            False,
+            dict(bits=4, sym=True, group_size_fallback="adjust"),
+            {"model": {"int8": 4, "int4": 20}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size_fallback="adjust",
+            ),
+            {"model": {"int8": 28, "int4": 2}},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama",
+            False,
+            dict(
+                bits=4,
+                sym=True,
+                group_size_fallback="ignore",
+            ),
+            {"model": {"int8": 4}},
         ),
     ]
 
@@ -973,6 +999,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     if is_transformers_version("<", "4.52.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForVisualCausalLM, "minicpmo", True))
 
+    if is_transformers_version(">=", "4.54.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
+
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
@@ -982,19 +1011,18 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVSanaPipeline, "sana", 19, 53),
     ]
 
-    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
-
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
 
     def test_filtered_architectures(cls):
+        expected = set()
         if is_transformers_version("<", "4.49"):
-            expected = {"llama4", "qwen2_5_vl"}
-        elif is_transformers_version("<", "4.51"):
-            expected = {"llama4"}
-        elif is_transformers_version("<", "4.52"):
-            expected = set()
-        else:
-            expected = {"llava-qwen2", "phi3_v", "minicpmo"}
+            expected.add("qwen2_5_vl")
+        if is_transformers_version("<", "4.51"):
+            expected.add("llama4")
+        if is_transformers_version("<", "4.54"):
+            expected.add("exaone4")
+        if is_transformers_version(">=", "4.54"):
+            expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.LOAD_IN_4_BITS_SCOPE}
@@ -1435,7 +1463,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                         dtype="f8e4m3",
                         dataset="laion/filtered-wit",
                         num_samples=1,
-                        trust_remote_code=True,
                     ),
                     "vae_decoder": OVWeightQuantizationConfig(),
                     "vae_encoder": OVWeightQuantizationConfig(),
@@ -1523,7 +1550,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 dataset="librispeech",
                 num_samples=1,
                 processor=MODEL_NAMES["whisper"],
-                trust_remote_code=True,
             ),
             {"encoder": 14, "decoder": 22},
             {"encoder": {"int8": 14}, "decoder": {"int8": 22}},
@@ -1539,7 +1565,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                 },
                 dataset="contextual",
                 num_samples=1,
-                trust_remote_code=True,
                 default_config=dict(bits=8, sym=True, weight_only=True),
             ),
             {
@@ -1576,12 +1601,8 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                                 lora_correction=True,
                                 ignored_scope={
                                     "patterns": [
-                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\.(qkv_proj|o_proj))"
-                                        + (
-                                            "/aten::mul/Multiply"
-                                            if is_openvino_version("<", "2025.2")
-                                            else "\\.lora_B\\.speech/aten::linear/MatMul"
-                                        ),
+                                        "__module\\.model\\.layers\\.\\d+\\.(mlp\\.(gate_up_proj|down_proj)|self_attn\\."
+                                        "(qkv_proj|o_proj))\\.lora_B\\.speech/aten::linear/MatMul",
                                     ],
                                 },
                             ),
@@ -1589,7 +1610,6 @@ class OVPipelineQuantizationTest(unittest.TestCase):
                             "audio_encoder_model": dict(bits=8, sym=True, weight_only=True),
                             "vision_embeddings_model": dict(bits=8, sym=True, weight_only=True),
                         },
-                        trust_remote_code=True,
                     ),
                     {
                         "lm_model": 0,
