@@ -4319,12 +4319,12 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         )
 
         config = normalized_config.config
+        self.intermediate_size = int(config.mamba_expand * config.hidden_size)
+        self.conv_kernel_size = config.mamba_d_conv
+        self.mamba_d_state = config.mamba_d_state
         if config.model_type == "zamba2":
-            self.intermediate_size = int(config.mamba_expand * config.hidden_size)
-            self.conv_kernel_size = config.mamba_d_conv
             self.n_mamba_heads = config.n_mamba_heads
             self.mamba_ngroups = config.mamba_ngroups
-            self.mamba_d_state = config.mamba_d_state
             self.mamba_headdim = config.mamba_headdim
             self.head_dim = config.attention_head_dim
             self.num_hybrid_layers = len(config.hybrid_layer_ids)
@@ -4334,11 +4334,9 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 "Optimizations and improved support will be available in a future OpenVINO release."
             )
         else:
-            self.intermediate_size = int(config.mamba_expand * config.hidden_size)
-            self.conv_kernel_size = config.mamba_d_conv
+            # currently, this else-branch is applied for GraniteMoeHybrid models
             self.n_mamba_heads = config.mamba_n_heads
             self.mamba_ngroups = config.mamba_n_groups
-            self.mamba_d_state = config.mamba_d_state
             self.mamba_headdim = config.mamba_d_head
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
             self.num_hybrid_layers = config.layer_types.count("attention")
