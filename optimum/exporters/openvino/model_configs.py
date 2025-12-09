@@ -4327,7 +4327,10 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             self.mamba_ngroups = config.mamba_ngroups
             self.mamba_headdim = config.mamba_headdim
             self.head_dim = config.attention_head_dim
-            self.num_hybrid_layers = len(config.hybrid_layer_ids)
+            # in Zamba2, all layers contain Mamba block
+            # some of these layers are hybrid so they contain both attention and mamba blocks
+            self.num_attention_layers = len(config.hybrid_layer_ids)
+            self.num_mamba_layers = self.num_layers
             logger.warning(
                 "The current support for the 'Zamba2' model type is experimental. "
                 "Performance is not optimal with high memory consumption. "
@@ -4339,14 +4342,14 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             self.mamba_ngroups = config.mamba_n_groups
             self.mamba_headdim = config.mamba_d_head
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-            self.num_hybrid_layers = config.layer_types.count("attention")
-            self.num_layers = config.layer_types.count("mamba")
+            self.num_attention_layers = config.layer_types.count("attention")
+            self.num_mamba_layers = config.layer_types.count("mamba")
             self.num_attention_heads = config.num_key_value_heads
             self.sequence_length = 0
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         past_key_values = []
-        for i in range(self.num_layers):
+        for i in range(self.num_mamba_layers):
             conv_state_shape = (
                 self.batch_size,
                 self.intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
@@ -4358,7 +4361,7 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             ssm_state = self.random_float_tensor(ssm_state_shape, framework=framework, dtype=float_dtype)
             past_key_values.append(ssm_state)
 
-        for i in range(self.num_hybrid_layers):
+        for i in range(self.num_attention_layers):
             kv_shape = (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
             k = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
             v = self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype)
