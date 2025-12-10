@@ -131,6 +131,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             ]
         )
 
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("text-generation-with-past", "granite-moe-hybrid"),
+            ]
+        )
+
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
         "t5": 2,
@@ -161,6 +168,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "zamba2": 2,
         "exaone4": 2,
         "bitnet": 2,
+        "granite-moe-hybrid": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
