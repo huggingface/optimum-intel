@@ -64,13 +64,13 @@ from .stateful import (
 from .utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     OV_XML_FILE_NAME,
-    _get_input_info,
     _get_dynamic_shapes_info,
-    _normalize_dummy_inputs,
+    _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
-    get_model_dtype,
+    _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
+    get_model_dtype,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -226,7 +226,7 @@ def export(
             stateful=stateful,
             patch_16bit_model=patch_16bit_model,
             library_name=library_name,
-            use_torch_export=use_torch_export
+            use_torch_export=use_torch_export,
         )
     else:
         raise RuntimeError("You either provided a non-PyTorch model or the PyTorch library is not installed.")
@@ -424,11 +424,12 @@ def export_pytorch(
                     # patch_everywhere breaks torch.ops namespace
                     del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
                 dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
-                _export_kwargs = {"args": tuple(), "kwargs": _normalize_dummy_inputs(dummy_inputs, get_model_dtype(model))}
+                _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, get_model_dtype(model))}
                 _export_kwargs["dynamic_shapes"] = dynamic_shapes
 
                 try:
                     from nncf.torch.dynamic_graph.patch_pytorch import disable_patching
+
                     # nncf patching breaks export
                     with disable_patching():
                         ep = torch.export.export_for_training(model, **_export_kwargs)
@@ -550,7 +551,7 @@ def export_models(
                 stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
                 patch_16bit_model=patch_16bit_model,
                 library_name=library_name,
-                use_torch_export=use_torch_export
+                use_torch_export=use_torch_export,
             )
         )
 
@@ -783,7 +784,7 @@ def export_from_model(
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
-        use_torch_export=use_torch_export
+        use_torch_export=use_torch_export,
     )
 
     return files_subpaths

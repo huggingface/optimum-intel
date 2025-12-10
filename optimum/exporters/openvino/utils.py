@@ -164,6 +164,7 @@ def _get_dynamic_shapes_info(
 
 def _normalize_element(elem: Any, dtype: Any) -> Any:
     import torch
+
     if isinstance(elem, torch.Tensor):
         return elem.to(dtype) if elem.dtype.is_floating_point else elem
     if isinstance(elem, (list, tuple)):

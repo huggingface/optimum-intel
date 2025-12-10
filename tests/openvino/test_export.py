@@ -146,7 +146,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
-                    use_torch_export = use_torch_export
+                    use_torch_export=use_torch_export,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -318,10 +318,12 @@ class CustomExportModelTest(unittest.TestCase):
                 library_name="transformers",
                 output=Path(tmpdirname),
                 task=base_task,
-                use_torch_export = USE_TORCH_EXPORT
+                use_torch_export=USE_TORCH_EXPORT,
             )
 
-            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
+            ov_model = OVModelForCustomTasks.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            )
 
             self.assertIsInstance(ov_model, OVBaseModel)
             self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})

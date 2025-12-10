@@ -297,9 +297,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--use-torch-export",
         action="store_true",
         default=None,
-        help=(
-            "Use torch.export() for scripting of PyTorch models."
-        ),
+        help=("Use torch.export() for scripting of PyTorch models."),
     )
 
 

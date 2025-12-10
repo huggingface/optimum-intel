@@ -12,21 +12,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import pytest
 import os
+
+import pytest
 
 
 def pytest_collection_modifyitems(config, items):
     if os.getenv("USE_TORCH_EXPORT", "False") == "True":
-        with open(
-                "tests/openvino/excluded_tests_with_torch_export.txt", "r"
-        ) as file:
+        with open("tests/openvino/excluded_tests_with_torch_export.txt", "r") as file:
             skipped_tests = file.readlines()
             # it is necessary to check if stripped line is not empty
             # and exclude such lines
-            skipped_tests = [
-                line.strip() for line in skipped_tests if line.strip()
-            ]
+            skipped_tests = [line.strip() for line in skipped_tests if line.strip()]
             for item in items:
                 for skipped_test in skipped_tests:
                     if skipped_test in item.nodeid:

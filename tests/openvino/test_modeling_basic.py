@@ -81,7 +81,9 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         """
         model_id = "hf-internal-testing/tiny-random-distilbert"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForSequenceClassification.from_pretrained(model_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT)
+        model = OVModelForSequenceClassification.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+        )
         model.reshape(1, 16)
         model.half()
         model.to("cpu")
