@@ -47,6 +47,7 @@ from ..utils.import_utils import (
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
+    is_nncf_version,
     is_pillow_available,
     is_sentence_transformers_available,
 )
@@ -164,14 +165,31 @@ class InferRequestWrapper:
         self.apply_caching = apply_caching
         self.inference_result_mock = inference_result_mock
         self.tensor_cache = {}
+        self.stateful = len(request.query_state()) > 0
+        self._reset_state_called = False
 
     def collect_inputs(self, inputs):
+        if self.stateful:
+            if isinstance(inputs, dict) and is_nncf_version(">=", "2.20"):
+                from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
+
+                # To reflect the state resetting during NNCF calibration, we add a special key to the input dict
+                # Shallow copying is done on purpose: we only need to add a key to the top-level dict
+                inputs = inputs.copy()
+                # inputs[NNCF_DATASET_RESET_STATE_KEY] should be set to True for any input sample before which
+                # request.reset_state() was called, and to False otherwise
+                inputs[NNCF_DATASET_RESET_STATE_KEY] = self._reset_state_called
+            self._reset_state_called = False
+
         if not self.apply_caching or not isinstance(inputs, dict):
             self.collected_inputs.append(copy.deepcopy(inputs))
             return
 
         copied_inputs = {}
         for k, v in inputs.items():
+            if isinstance(v, bool):
+                copied_inputs[k] = v
+                continue
             data = v
             if isinstance(data, openvino.Tensor):
                 data = data.data
@@ -219,6 +237,10 @@ class InferRequestWrapper:
 
     def get_tensor(self, name: str):
         return Tensor(self.request.results[name])
+
+    def reset_state(self):
+        self.request.reset_state()
+        self._reset_state_called = True
 
     def __getattr__(self, attr):
         if attr in self.__dict__:
@@ -654,7 +676,7 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset(nncf.Dataset(collected_inputs))
 
     def _prepare_causal_lm_calibration_data(
-        self, config: OVQuantizationConfigBase, seqlen: int = 32
+        self, config: OVQuantizationConfigBase, seqlen: Optional[int] = None
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for causal language models. Relies on `optimum.gptq.data` module.
@@ -670,7 +692,22 @@ class OVCalibrationDatasetBuilder:
             if config.dataset == "auto":
                 generated_data = nncf.data.generate_text_data(self.model, tokenizer, dataset_size=nsamples)
                 calibration_dataset = [tokenizer(text, return_tensors="pt") for text in generated_data]
+            elif config.dataset == "gsm8k":
+                seqlen = seqlen or 256
+                dataset = self.load_dataset(
+                    "openai/gsm8k",
+                    dataset_config_name="main",
+                    dataset_split="train",
+                    num_samples=nsamples,
+                    preprocess_function=lambda x: {"text": f"Question: {x['question']}\nAnswer: {x['answer']}"},
+                    preprocess_batch=False,
+                )
+                calibration_dataset = [
+                    tokenizer(text, return_tensors="pt", truncation=True, max_length=seqlen)
+                    for text in dataset["text"]
+                ]
             else:
+                seqlen = seqlen or 32
                 calibration_dataset = get_dataset(config.dataset, tokenizer, seqlen=seqlen, nsamples=nsamples)
         elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config.dataset[:nsamples]]
