@@ -20,7 +20,6 @@ from transformers import PretrainedConfig
 
 import openvino as ov
 from openvino import opset13
-from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
 from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS, SSM_MODELS
 
@@ -122,7 +121,6 @@ def make_stateful(
     key_value_input_names: List[str],
     key_value_output_names: List[str],
     batch_dim: int,
-    num_attention_heads: int,
     num_beams_and_batch: int = None,
 ):
     """
@@ -139,8 +137,6 @@ def make_stateful(
             list of names for key value input layers
         batch_dim (int):
             index of batch dimension in key value layers
-        num_attention_heads (int):
-            number of attention heads for batch dimension initialization
         num_beams_an_batch (int):
             precalculated number of beams and batch for shapes initialization
     """
@@ -164,7 +160,7 @@ def make_stateful(
         if num_beams_and_batch is not None:
             input = ov_model.input(kv_name_pair[0])
             shape = input.get_partial_shape()
-            shape[batch_dim] = num_beams_and_batch * num_attention_heads
+            shape[batch_dim] = num_beams_and_batch
             input.get_node().set_partial_shape(shape)
 
     if num_beams_and_batch is not None:
@@ -180,13 +176,6 @@ def ensure_stateful_is_available(warn=True):
     """
     Check openvino version and raise error if it does not support stateful models
     """
-    if is_openvino_version("<", "2023.3"):
-        if warn:
-            log.warning(
-                f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. It may result in sub-optimal inference performance."
-                "Install openvino>=2023.3.0."
-            )
-        return False
     return True
 
 
@@ -199,7 +188,7 @@ _DECODER_TASKS_WITH_PAST = ("text-generation",)
 
 
 def ensure_export_task_support_stateful(task: str):
-    from optimum.exporters import TasksManager
+    from optimum.exporters.tasks import TasksManager
 
     task = TasksManager.map_from_synonym(task)
 
@@ -272,23 +261,53 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
-def patch_stateful_ssm(ov_model: ov.Model):
-    cache_input_names = [
-        key_name for key in ov_model.inputs for key_name in key.get_names() if "cache_params.past" in key_name
-    ]
-    cache_output_names = [
-        key_name for key in ov_model.outputs for key_name in key.get_names() if "cache_params.present" in key_name
-    ]
-
-    if not cache_input_names or not cache_output_names:
-        return
-
-    batch_dim = 0
-
+def patch_stateful_hybrid_ssm(ov_model: ov.Model):
     from openvino._offline_transformations import apply_make_stateful_transformation
 
+    def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
+        # return tensor names of model inputs/outputs tensors with KV and SSM states
+        kv_names = []
+        ssm_names = []
+        other_names = []
+        for ov_tensor in ov_tensors:
+            ov_tensor_names = ov_tensor.get_names()
+            is_kv_or_ssm = False
+            for ov_tensor_name in ov_tensor_names:
+                if any(prefix in ov_tensor_name for prefix in ssm_prefix_names):
+                    ssm_names.append(ov_tensor_name)
+                    is_kv_or_ssm = True
+                    break
+                elif any(prefix in ov_tensor_name for prefix in kv_prefix_names):
+                    kv_names.append(ov_tensor_name)
+                    is_kv_or_ssm = True
+                    break
+            if not is_kv_or_ssm:
+                other_names.append(ov_tensor_name)
+        return kv_names, ssm_names, other_names
+
+    ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.conv"]
+    kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
+    kv_input_names, ssm_input_names, other_input_names = get_kv_ssm_tensor_names(
+        ssm_prefix_input_names, kv_prefix_input_names, ov_model.inputs
+    )
+    not_kv_inputs = ssm_input_names + other_input_names
+
+    ssm_prefix_output_names = ["cache_params.present.ssm", "cache_params.present.conv"]
+    kv_prefix_output_names = ["cache_params.present.key", "cache_params.present.value"]
+    kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(
+        ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
+    )
+
+    # hybrid models can contain transformer blocks as well
+    # so KV tensors must be handled properly
+    batch_dim = 0
+    if kv_input_names is not None and len(kv_input_names) > 0:
+        fuse_cache_reorder(ov_model, not_kv_inputs, kv_input_names, batch_dim)
+        make_stateful(ov_model, not_kv_inputs, kv_input_names, kv_output_names, batch_dim)
+
+    # create states for SSM cache
     input_output_map = {}
-    for cache_name_pair in zip(cache_input_names, cache_output_names):
+    for cache_name_pair in zip(ssm_input_names, ssm_output_names):
         input_output_map[cache_name_pair[0]] = cache_name_pair[1]
 
     apply_make_stateful_transformation(ov_model, input_output_map)
@@ -299,7 +318,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
     if config.model_type in SSM_MODELS:
-        return patch_stateful_ssm(ov_model)
+        return patch_stateful_hybrid_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 
@@ -332,12 +351,7 @@ def patch_stateful_decoder(config: PretrainedConfig, ov_model: ov.Model):
     batch_dim = 1 if config.model_type == "chatglm" and not hasattr(config, "rope_ratio") else 0
 
     fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
-    num_attention_heads = (
-        config.num_attention_heads if (config.model_type == "bloom" and is_transformers_version("<", "4.44")) else 1
-    )
-    make_stateful(
-        ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
-    )
+    make_stateful(ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, None)
 
 
 def patch_stateful_encoder_decoder(config, ov_model):

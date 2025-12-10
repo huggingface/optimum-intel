@@ -15,28 +15,20 @@
 
 import json
 import logging
-import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
-from ...exporters import TasksManager
-from ...intel.utils.import_utils import (
-    DIFFUSERS_IMPORT_ERROR,
-    is_diffusers_available,
-    is_nncf_available,
-)
-from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
-from ...utils.save_utils import maybe_load_preprocessors
-from ..base import BaseOptimumCLICommand, CommandInfo
+from optimum.commands.base import BaseOptimumCLICommand, CommandInfo
+from optimum.utils.constant import ALL_TASKS
 
 
 logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
-    from argparse import ArgumentParser, Namespace, _SubParsersAction
+    from argparse import ArgumentParser
 
 
 def parse_args_openvino(parser: "ArgumentParser"):
@@ -52,18 +44,17 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--task",
         default="auto",
         help=(
-            "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among:"
-            f" {str(TasksManager.get_all_tasks())}. For decoder models, use `xxx-with-past` to export the model using past key values in the decoder."
+            "The task to export the model for. If not specified, the task will be auto-inferred from the model's metadata or files. "
+            "For tasks that generate text, add the `xxx-with-past` suffix to export the model using past key values caching. "
+            f"Available tasks depend on the model, but are among the following list: {ALL_TASKS}."
         ),
     )
     optional_group.add_argument(
         "--framework",
         type=str,
-        choices=["pt", "tf"],
-        default=None,
-        help=(
-            "The framework to use for the export. If not provided, will attempt to use the local checkpoint's original framework or what is available in the environment."
-        ),
+        choices=["pt"],
+        default="pt",
+        help="The framework to use for the export. Defaults to 'pt' for PyTorch. ",
     )
     optional_group.add_argument(
         "--trust-remote-code",
@@ -85,7 +76,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--quant-mode",
         type=str,
-        choices=["int8", "f8e4m3", "f8e5m2", "nf4_f8e4m3", "nf4_f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
+        choices=["int8", "f8e4m3", "f8e5m2", "cb4_f8e4m3", "int4_f8e4m3", "int4_f8e5m2"],
         default=None,
         help=(
             "Quantization precision mode. This is used for applying full model quantization including activations. "
@@ -151,6 +142,20 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
+        "--group-size-fallback",
+        type=str,
+        choices=["error", "ignore", "adjust"],
+        default=None,
+        help=(
+            "Specifies how to handle operations that do not support the given group size. Possible values are: "
+            "`error`: raise an error if the given group size is not supported by a node, this is the default behavior; "
+            "`ignore`: skip nodes that cannot be compressed with the given group size; "
+            "`adjust`: adjust the group size to the maximum supported value for each problematic node, if there is no "
+            "valid value greater than or equal to 32, then the node is quantized to the backup precision which is "
+            "int8_asym by default. "
+        ),
+    )
+    optional_group.add_argument(
         "--backup-precision",
         type=str,
         choices=["none", "int8_sym", "int8_asym"],
@@ -169,14 +174,14 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help=(
             "The dataset used for data-aware compression or quantization with NNCF. "
-            "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the "
+            "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new','gsm8k']. With 'auto' the "
             "dataset will be collected from model's generations. "
             "For diffusion models it should be on of ['conceptual_captions',"
             "'laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. "
             "For visual language models the dataset must be set to 'contextual'. "
             "Note: if none of the data-aware compression algorithms are selected and ratio parameter is omitted or "
             "equals 1.0, the dataset argument will not have an effect on the resulting model."
-            "Note: for text generation task, datasets with English texts such as 'wikitext2','c4' or 'c4-new' usually "
+            "Note: for text generation task, datasets with English texts such as 'wikitext2','gsm8k','c4' or 'c4-new' usually "
             "work fine even for non-English models."
         ),
     )
@@ -330,27 +335,18 @@ def no_quantization_parameter_provided(args):
 class OVExportCommand(BaseOptimumCLICommand):
     COMMAND = CommandInfo(name="openvino", help="Export PyTorch models to OpenVINO IR.")
 
-    def __init__(
-        self,
-        subparsers: "_SubParsersAction",
-        args: Optional["Namespace"] = None,
-        command: Optional["CommandInfo"] = None,
-        from_defaults_factory: bool = False,
-        parser: Optional["ArgumentParser"] = None,
-    ):
-        super().__init__(
-            subparsers, args=args, command=command, from_defaults_factory=from_defaults_factory, parser=parser
-        )
-        self.args_string = " ".join(sys.argv[3:])
-
     @staticmethod
     def parse_args(parser: "ArgumentParser"):
         return parse_args_openvino(parser)
 
     def run(self):
+        from optimum.utils.save_utils import maybe_load_preprocessors
+
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...exporters.openvino.utils import save_preprocessors
         from ...intel.openvino.configuration import _DEFAULT_4BIT_WQ_CONFIG, OVConfig, get_default_quantization_config
+        from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available, is_nncf_available
+        from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
@@ -419,8 +415,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                             "Dataset is required for full quantization. Please provide it with --dataset argument."
                         )
                     if self.args.quant_mode in [
-                        "nf4_f8e4m3",
-                        "nf4_f8e5m2",
                         "cb4_f8e4m3",
                         "int4_f8e4m3",
                         "int4_f8e5m2",
@@ -448,7 +442,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                                 "quantization. It will be ignored."
                             )
                         quantization_config = prepare_q_config(self.args)
-            quantization_config["trust_remote_code"] = self.args.trust_remote_code
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None
@@ -616,6 +609,7 @@ def prepare_wc_config(args, default_configs):
         "dtype": args.weight_format,
         "backup_precision": args.backup_precision,
         "statistics_path": args.quantization_statistics_path,
+        "group_size_fallback": args.group_size_fallback,
     }
 
 
@@ -627,5 +621,4 @@ def prepare_q_config(args):
         "dataset": args.dataset,
         "num_samples": args.num_samples,
         "smooth_quant_alpha": args.smooth_quant_alpha,
-        "trust_remote_code": args.trust_remote_code,
     }

@@ -60,7 +60,7 @@ from optimum.intel import (
     INCStableDiffusionPipeline,
 )
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
-from optimum.exporters import TasksManager
+from optimum.exporters.tasks import TasksManager
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""

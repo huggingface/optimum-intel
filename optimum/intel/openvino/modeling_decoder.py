@@ -11,7 +11,6 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import copy
 import logging
 import os
 from dataclasses import dataclass
@@ -32,6 +31,7 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.models.mamba.modeling_mamba import MambaCache
 from transformers.utils.hub import PushToHubMixin
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -39,13 +39,11 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ...exporters.openvino.utils import SSM_MODELS
-from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
+from ..utils.import_utils import compare_versions
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
-    _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVWeightQuantizationConfig,
-    get_default_quantization_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
@@ -57,11 +55,6 @@ from .utils import (
     model_has_dynamic_inputs,
 )
 
-
-if is_transformers_version(">=", "4.43"):
-    from transformers.cache_utils import MambaCache
-else:
-    MambaCache = object
 
 if TYPE_CHECKING:
     try:
@@ -746,12 +739,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        if is_transformers_version(">=", "4.39.0"):
-            _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
-            generation_mode = _generation_config.get_generation_mode(assistant_model)
-        else:
-            _generation_config = generation_config or self.generation_config
-            generation_mode = self._get_generation_mode(_generation_config, assistant_model)
+        _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
+        generation_mode = _generation_config.get_generation_mode(assistant_model)
 
         is_beam_search = generation_mode in [
             GenerationMode.BEAM_SEARCH,
@@ -823,6 +812,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
+    # modified from https://github.com/huggingface/transformers/blob/v4.55.0/src/transformers/generation/utils.py#L1992
+    def _prepare_cache_for_generation(self, *args, **kwargs):
+        """
+        This function is used to prepare the cache : when calling `generate` before the first inference, an instance of `DynamicCache` will be created.
+        For OVModel, we don't want model_kwargs to be updated before generation.
+        """
+        return
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -839,6 +836,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         load_in_8bit: bool = False,
         compile_only: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
@@ -871,27 +869,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         elif model_type in SSM_MODELS:
-            init_cls = OVMambaForCausalLM
+            init_cls = OVModelWithMambaForCausalLM
         else:
             init_cls = cls
-
-        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
-            quantization_config = cls._prepare_quantization_config(
-                default_config or _DEFAULT_4BIT_WQ_CONFIG, load_in_8bit
-            )
-            if quantization_config.dataset is not None:
-                quantization_config.trust_remote_code = kwargs.get("trust_remote_code", False)
-        else:
-            quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
-            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.bits == 4:
-                default_config = get_default_quantization_config(config.name_or_path, weight_format="int4")
-                if default_config:
-                    logger.info(
-                        f"For the given model, we recommend the following `quantization_config` : {default_config}"
-                    )
-
-        enable_compilation = kwargs.pop("compile", True) and not quantization_config
 
         if generation_config is None:
             try:
@@ -911,11 +891,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
+        quantization_config = cls._prepare_quantization_config(config.name_or_path, quantization_config, load_in_8bit)
+        compile_model = kwargs.pop("compile", True)
         causal_model = init_cls(
             model=model,
             config=config,
             model_save_dir=model_cache_path.parent,
-            compile=enable_compilation,
+            compile=compile_model and not quantization_config,
             compile_only=compile_only,
             quantization_config=quantization_config,
             generation_config=generation_config,
@@ -923,22 +905,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if quantization_config:
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
-                )
-
-            if compile_only:
-                raise ValueError(
-                    "quantization is not supported with `compile_only` mode, please initialize model without this option"
-                )
-
-            from optimum.intel.openvino.quantization import OVQuantizer
-
-            quantizer = OVQuantizer(causal_model)
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_id)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            cls._apply_quantization(
+                causal_model, quantization_config, compile_only, compile_model, config.name_or_path, trust_remote_code
+            )
 
         return causal_model
 
@@ -1051,9 +1020,9 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
 
 
-class OVMambaCache(MambaCache):
+class OVCacheWithMambaStates(MambaCache):
     """
-    Cache for mamba model which does not have attention mechanism and key value states.
+    Hybrid cache for Mamba and transformer blocks
 
     Arguments:
         config (`PretrainedConfig):
@@ -1086,41 +1055,121 @@ class OVMambaCache(MambaCache):
         max_batch_size: Optional[int] = None,
         conv_states: Optional[List[torch.Tensor]] = None,
         ssm_states: Optional[List[torch.Tensor]] = None,
+        key_cache: Optional[List[torch.Tensor]] = None,
+        value_cache: Optional[List[torch.Tensor]] = None,
     ):
         self.dtype = dtype
         self.max_batch_size = batch_size or max_batch_size
-        self.intermediate_size = config.intermediate_size
-        self.ssm_state_size = config.state_size
-        self.conv_kernel_size = config.conv_kernel
         self.device = torch.device(device) if device is not None else torch.device("cpu")
-
-        if conv_states is not None:
-            self.conv_states = conv_states
+        self.num_attention_heads = getattr(config, "num_attention_heads", None)
+        self.hidden_size = getattr(config, "hidden_size", None)
+        self.mamba_d_conv = getattr(config, "mamba_d_conv", None)
+        self.mamba_expand = getattr(config, "mamba_expand", None)
+        self.mamba_d_state = getattr(config, "mamba_d_state", None)
+        self.intermediate_size = config.intermediate_size
+        self.conv_kernel_size = getattr(config, "conv_kernel", getattr(config, "mamba_d_conv", None))
+        if config.model_type == "granitemoehybrid":
+            layer_types = getattr(config, "layer_types", None)
+            self.num_key_value_heads = getattr(config, "num_key_value_heads", None)
+            self.head_dim = int(self.hidden_size / self.num_attention_heads)
+            self.mamba_ngroups = getattr(config, "mamba_n_groups", None)
+            self.n_mamba_heads = getattr(config, "mamba_n_heads", None)
+            self.ssm_state_size = getattr(config, "mamba_d_state", None)
+            self.mamba_headdim = getattr(config, "mamba_d_head", None)
+            self.num_mamba_layers = layer_types.count("mamba")
+            self.num_attn_layers = layer_types.count("attention")
         else:
+            # Mamba 2 specific parameters
+            hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
+            self.num_key_value_heads = self.num_attention_heads
+            self.head_dim = getattr(config, "head_dim", None)
+            self.mamba_ngroups = getattr(config, "mamba_ngroups", None)
+            self.n_mamba_heads = getattr(config, "n_mamba_heads", None)
+            self.ssm_state_size = getattr(config, "state_size", getattr(config, "mamba_d_state", None))
+            self.mamba_headdim = getattr(config, "mamba_headdim", None)
+            # in Zamba2, all layers contain Mamba block
+            # some of these layers are hybrid so they contain both attention and mamba blocks
+            self.num_mamba_layers = config.num_hidden_layers
+            self.num_attn_layers = len(hybrid_layer_ids) if hybrid_layer_ids else 0
+
+        self.conv_states = conv_states
+        if self.conv_states is None:
             self.conv_states = []
-            for _ in range(config.num_hidden_layers):
-                conv_state: torch.Tensor = torch.zeros(
-                    self.max_batch_size, self.intermediate_size, self.conv_kernel_size, device=self.device, dtype=dtype
-                )
+            for _ in range(self.num_mamba_layers):
+                if (
+                    self.mamba_ngroups
+                    and self.mamba_d_state
+                    and self.mamba_d_conv
+                    and self.mamba_expand
+                    and self.hidden_size
+                ):
+                    # Mamba2 block
+                    intermediate_size = int(self.mamba_expand * self.hidden_size)
+                    conv_state_shape = (
+                        self.max_batch_size,
+                        intermediate_size + 2 * self.mamba_ngroups * self.mamba_d_state,
+                        self.mamba_d_conv,
+                    )
+                else:
+                    # Mamba block
+                    conv_state_shape = (self.max_batch_size, self.intermediate_size, self.conv_kernel_size)
+                conv_state: torch.Tensor = torch.zeros(conv_state_shape, device=self.device, dtype=dtype)
                 self.conv_states.append(conv_state)
 
-        if ssm_states is not None:
-            self.ssm_states = ssm_states
-        else:
+        self.ssm_states = ssm_states
+        if self.ssm_states is None:
             self.ssm_states: List[torch.Tensor] = []
-            for _ in range(config.num_hidden_layers):
+            for _ in range(self.num_mamba_layers):
+                if self.n_mamba_heads and self.mamba_headdim:
+                    # Mamba2 block
+                    ssm_state_shape = (
+                        self.max_batch_size,
+                        self.n_mamba_heads,
+                        self.mamba_headdim,
+                        self.ssm_state_size,
+                    )
+                else:
+                    # Mamba block
+                    ssm_state_shape = (self.max_batch_size, self.intermediate_size, self.ssm_state_size)
+
                 ssm_state: torch.Tensor = torch.zeros(
-                    self.max_batch_size,
-                    self.intermediate_size,
-                    self.ssm_state_size,
+                    ssm_state_shape,
                     device=self.device,
                     dtype=dtype,
                 )
                 self.ssm_states.append(ssm_state)
 
+        self.key_cache = key_cache
+        if self.key_cache is None:
+            self.key_cache = []
+            for _ in range(self.num_attn_layers):
+                key: torch.Tensor = torch.zeros(
+                    self.max_batch_size,
+                    self.num_key_value_heads,
+                    0,
+                    self.head_dim,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.key_cache.append(key)
+
+        self.value_cache = value_cache
+        if self.value_cache is None:
+            self.value_cache = []
+            for _ in range(self.num_attn_layers):
+                value: torch.Tensor = torch.zeros(
+                    self.max_batch_size,
+                    self.num_key_value_heads,
+                    0,
+                    self.head_dim,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                self.value_cache.append(value)
+
 
 @dataclass
-class MambaOutput(ModelOutput):
+class OVOutputWithMambaStates(ModelOutput):
     """
     Class for the MAMBA model outputs.
 
@@ -1140,11 +1189,11 @@ class MambaOutput(ModelOutput):
     """
 
     logits: Optional[torch.FloatTensor] = None
-    cache_params: Optional[OVMambaCache] = None
+    cache_params: Optional[OVCacheWithMambaStates] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class OVMambaForCausalLM(OVModelForCausalLM):
+class OVModelWithMambaForCausalLM(OVModelForCausalLM):
     """
     OpenVINO-based causal language model class designed to run models that include Mamba blocks.
     This model assumes a fixed-size Mamba context for sequential computation.
@@ -1176,10 +1225,45 @@ class OVMambaForCausalLM(OVModelForCausalLM):
             **kwargs,
         )
 
-        self.ssm_cache_input_names = [key for key in self.input_names if "cache_params.past.ssm" in key]
-        self.conv_cache_input_names = [key for key in self.input_names if "cache_params.past.conv" in key]
-        self.ssm_cache_output_names = [key for key in self.output_names if "cache_params.present.ssm" in key]
-        self.conv_cache_output_names = [key for key in self.output_names if "cache_params.present.conv" in key]
+        self.key_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.key" in key])
+        self.value_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.value" in key])
+        self.ssm_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.ssm" in key])
+        self.conv_cache_input_names = sorted([key for key in self.input_names if "cache_params.past.conv" in key])
+
+        self.key_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.key" in key])
+        self.value_cache_output_names = sorted(
+            [key for key in self.output_names if "cache_params.present.value" in key]
+        )
+        self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
+        self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
+
+        self.key_cache_names = []
+        self.value_cache_names = []
+        self.ssm_cache_names = []
+        self.conv_cache_names = []
+
+        if self.stateful:
+            if not self._compile_only:
+                self.compile()
+            for state in self.request.query_state():
+                if "cache_params.present.key" in state.name:
+                    self.key_cache_names.append(state.name)
+                elif "cache_params.present.value" in state.name:
+                    self.value_cache_names.append(state.name)
+                elif "cache_params.present.ssm" in state.name:
+                    self.ssm_cache_names.append(state.name)
+                elif "cache_params.present.conv" in state.name:
+                    self.conv_cache_names.append(state.name)
+
+        self.key_cache_names = sorted(self.key_cache_names)
+        self.value_cache_names = sorted(self.value_cache_names)
+        self.ssm_cache_names = sorted(self.ssm_cache_names)
+        self.conv_cache_names = sorted(self.conv_cache_names)
+
+        if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
+            self.conv_kernel = config.conv_kernel
+        else:
+            self.conv_kernel = getattr(config, "mamba_d_conv", 4)
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
@@ -1187,15 +1271,20 @@ class OVMambaForCausalLM(OVModelForCausalLM):
             "past_key_values" in key.get_any_name() or "cache_params" in key.get_any_name() for key in model.inputs
         )
 
-    def forward(
+    def prepare_inputs(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         cache_params=None,
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
         **kwargs,
-    ):
+    ) -> Dict:
+        if kwargs.get("past_key_values") is not None:
+            raise ValueError("`past_key_values` input is not supported for `OVModelWithMambaForCausalLM`")
+        if kwargs.get("position_ids") is not None:
+            raise ValueError("`position_ids` input is not supported for `OVModelWithMambaForCausalLM`")
+
         inputs = {"input_ids": input_ids}
         if "cache_position" in self.input_names:
             if cache_position is None:
@@ -1208,31 +1297,57 @@ class OVMambaForCausalLM(OVModelForCausalLM):
                 attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
             inputs["attention_mask"] = attention_mask
 
-        if not self.stateful and self.ssm_cache_input_names and self.conv_cache_input_names:
+        if self.stateful and cache_params is None:
+            # this is prefill step, reset all states
+            if self.request is not None:
+                self.request.reset_state()
+            self._past_length = 0
+        elif not self.stateful and use_cache:
             if cache_params is None:
-                cache_params = OVMambaCache(self.config, input_ids.shape[0])
+                cache_params = OVCacheWithMambaStates(self.config, input_ids.shape[0])
 
             ssm_cache = cache_params.ssm_states
             conv_cache = cache_params.conv_states
+            key_cache = cache_params.key_cache
+            value_cache = cache_params.value_cache
 
+            inputs.update(zip(self.key_cache_input_names, key_cache))
+            inputs.update(zip(self.value_cache_input_names, value_cache))
             inputs.update(zip(self.ssm_cache_input_names, ssm_cache))
             inputs.update(zip(self.conv_cache_input_names, conv_cache))
-        else:
-            if cache_params is None:
-                # this is prefill step, reset all states
-                if self.request is not None:
-                    self.request.reset_state()
-                self._past_length = 0
+
+        # prepare beam_idx input that is required for hybrid models with both KV cache and Mamba states
+        if "beam_idx" in self.input_names:
+            batch_size = input_ids.shape[0]
+            inputs["beam_idx"] = np.arange(batch_size, dtype=int)
+
+        return inputs
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        cache_params=None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        inputs = self.prepare_inputs(input_ids, attention_mask, cache_params, use_cache, cache_position, **kwargs)
 
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
+        ssm_states = None
+        conv_states = None
+        key_cache = None
+        value_cache = None
         if self.stateful:
             self._past_length += input_ids.shape[1]
-            num_states = len(self.request.query_state()) // 2
-            ssm_states = [None] * num_states
-            conv_states = [None] * num_states
+            ssm_states = [None] * len(self.ssm_cache_names)
+            conv_states = [None] * len(self.conv_cache_names)
+            key_cache = [None] * len(self.key_cache_names)
+            value_cache = [None] * len(self.value_cache_names)
             for state in self.request.query_state():
                 if "cache_params.past.ssm" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
@@ -1240,12 +1355,27 @@ class OVMambaForCausalLM(OVModelForCausalLM):
                 elif "cache_params.past.conv" in state.name:
                     idx = int(state.name.rsplit(".", 1)[-1])
                     conv_states[idx] = state.state.data
-        else:
+                elif "cache_params.past.key" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    key_cache[idx] = state.state.data
+                elif "cache_params.past.value" in state.name:
+                    idx = int(state.name.rsplit(".", 1)[-1])
+                    value_cache[idx] = state.state.data
+        elif not self.stateful and use_cache:
             ssm_states = [self.request.get_tensor(key).data for key in self.ssm_cache_output_names]
             conv_states = [self.request.get_tensor(key).data for key in self.conv_cache_output_names]
-        cache_params = OVMambaCache(self.config, input_ids.shape[0], conv_states=conv_states, ssm_states=ssm_states)
+            key_cache = [self.request.get_tensor(key).data for key in self.key_cache_output_names]
+            value_cache = [self.request.get_tensor(key).data for key in self.value_cache_output_names]
 
-        return MambaOutput(logits=logits, cache_params=cache_params)
+        cache_params = OVCacheWithMambaStates(
+            self.config,
+            batch_size=input_ids.shape[0],
+            conv_states=conv_states,
+            ssm_states=ssm_states,
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+        return OVOutputWithMambaStates(logits=logits, cache_params=cache_params)
 
     def _update_model_kwargs_for_generation(
         self, outputs: ModelOutput, model_kwargs: Dict[str, Any], num_new_tokens: int = 1, **kwargs
@@ -1289,16 +1419,20 @@ class OVMambaForCausalLM(OVModelForCausalLM):
             if cache_position[0] > 0:
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
-                # models like Mamba typically do not require an attention_mask
-                # for the decoding step after the first token so use attention mask of ones
-                attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+
+                if self.config.model_type not in ["lfm2", "granitemoehybrid"]:
+                    # LFM2 and GraniteMoeHybrid (Granite-4.0) require the attention mask
+                    # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
+                    # Other models like Mamba typically do not require an attention_mask
+                    # for the decoding step after the first token so use attention mask of ones.
+                    attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
 
             else:
                 # we initialize the `cache_position` to full size of `conv_states` at prefill stage
                 # considering padding will be applied when input length is shorter, and truncation
                 # will be applied when it is longer, so it will be equivalent to always have it match
                 # the length of `cache_params.conv_states`, which is `config.conv_kernel`
-                cache_position = torch.arange(0, self.config.conv_kernel, device=input_ids.device)
+                cache_position = torch.arange(0, self.conv_kernel, device=input_ids.device)
 
         if inputs_embeds is not None and cache_params is None:
             model_inputs = {"inputs_embeds": inputs_embeds}
@@ -1314,3 +1448,30 @@ class OVMambaForCausalLM(OVModelForCausalLM):
             }
         )
         return model_inputs
+
+
+class OVMambaForCausalLM(OVModelWithMambaForCausalLM):
+    def __init__(
+        self,
+        model: openvino.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            model=model,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        logger.warning(
+            "`OVMambaForCausalLM` class is deprecated and will be removed in v1.27. Please use `OVModelWithMambaForCausalLM` class instead."
+        )
