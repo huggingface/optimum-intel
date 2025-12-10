@@ -239,7 +239,7 @@ def _update_causal_mask_patched_latest(
 
     dtype, device = input_tensor.dtype, input_tensor.device
     # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # using minimum from dtype with larger bandwidth (float32) may lead to overflow
     # during execution on platforms with default lower precision (bfloat16, float16)
     min_dtype = torch.finfo(torch.float16).min
 
@@ -2324,7 +2324,7 @@ def _dbrx_update_causal_mask_latest(
 
     dtype, device = input_tensor.dtype, input_tensor.device
     # difference with original modeling
-    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # using minimum from dtype with larger bandwidth (float32) may lead to overflow
     # during execution on platforms with default lower precision (bfloat16, float16)
     min_dtype = torch.finfo(torch.float16).min
     sequence_length = input_tensor.shape[1]

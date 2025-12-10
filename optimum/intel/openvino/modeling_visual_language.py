@@ -1821,7 +1821,7 @@ class _OVInternVLForCausalLM(OVModelForVisualCausalLM):
         inputs.update(tokenizer(text, return_tensors="pt"))
         return inputs
 
-    # internvl has issue with check  _get_non_default_parameters, as wrkaraund overide _prepare_generation_config
+    # internvl has issue with check  _get_non_default_parameters, as workaround override _prepare_generation_config
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], use_model_defaults: Optional[bool] = None, **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
