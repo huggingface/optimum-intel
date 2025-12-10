@@ -1,4 +1,4 @@
-name: OpenVINO - Slow Test
+name: OpenVINO - Test
 
 on:
   workflow_dispatch:
@@ -18,7 +18,6 @@ permissions:
   contents: read
 
 env:
-  RUN_SLOW: true
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
@@ -29,19 +28,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04", "windows-2022"]
+        test-pattern:
+          [
+            "*export*",
+            "*decoder*",
+            "*seq2seq*",
+            "*modeling*",
+            "*diffusion*",
+            "*quantization*",
+          ]
         transformers-version: ["4.45.0", "latest"]
-        include:
-          - transformers-version: "main"
-            os: "ubuntu-22.04"
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Free Disk Space (Ubuntu)
-        if: matrix.runs-on == 'ubuntu-22.04'
-        uses: jlumbroso/free-disk-space@main
-
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -52,20 +52,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip uv
-          uv pip install .[openvino,tests,diffusers] transformers[testing]
+          pip install --upgrade pip uv
+          uv pip install .[openvino,diffusers,tests]
 
-      - if: ${{ matrix.transformers-version != 'latest' && matrix.transformers-version != 'main' }}
+      - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install specific dependencies and versions required for older transformers
         run: |
           uv pip install transformers==${{ matrix.transformers-version }} accelerate==0.* peft==0.13.* diffusers==0.32.* transformers_stream_generator
 
-      - if: ${{ matrix.transformers-version == 'main' }}
-        name: Install transformers from repository
-        run: |
-          uv pip install git+https://github.com/huggingface/transformers.git
-
-      - if: ${{ matrix.transformers-version == 'latest' && matrix.os != 'windows-2022' ||  matrix.transformers-version == 'main' }}
+      - if: ${{ matrix.transformers-version == 'latest' && matrix.test-pattern == '*decoder*'}}
         name: Install auto-gptq, autoawq
         run: |
           uv pip install auto-gptq "autoawq<0.2.8"
@@ -75,20 +70,16 @@ jobs:
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Pip freeze
+      - name: Test with Pytest
         run: |
-          pip freeze
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
 
-      - name: Test with Pytest (basic)
+      - if: ${{ matrix.test-pattern == '*modeling*' }}
+        name: Install Nightly OpenVINO
         run: |
-          pytest tests/openvino/test_modeling_basic.py
+          uv pip install --upgrade --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
-      - if: ${{ matrix.os == 'windows-2022' }}  # Run all tests on windows
-        name: Test with Pytest
+      - if: ${{ matrix.test-pattern == '*modeling*' }}
+        name: Test with Pytest - Nightly OpenVINO
         run: |
-          pytest tests/openvino --durations=0
-
-      - if: ${{ matrix.os != 'windows-2022' }}
-        name: Test with Pytest (slow)
-        run: |
-          pytest tests/openvino -m "run_slow" --durations=0
+          pytest tests/openvino/test_modeling_basic.py --durations=0
