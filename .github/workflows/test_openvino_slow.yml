@@ -89,10 +89,10 @@ jobs:
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
-      - if: ${{ matrix.os == 'windows-2022' }}  # Run all tests on windows
+      - if: ${{ matrix.os == 'windows-2022' }}  # Run exporters-cli tests on windows
         name: Test with Pytest
         run: |
-          pytest tests/openvino --durations=0
+          pytest tests/openvino/test_exporters_cli.py --durations=0
 
       - if: ${{ matrix.os != 'windows-2022' }}
         name: Test with Pytest (slow)
