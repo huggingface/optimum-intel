@@ -33,7 +33,6 @@ from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from PIL import Image
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
@@ -44,10 +43,12 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
+    PILLOW_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
     is_nncf_version,
+    is_pillow_available,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -727,6 +728,13 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format("OVCalibrationDatasetBuilder._prepare_visual_causal_lm_calibration_data")
+            )
+
+        from PIL import Image
+
         # TODO: remove config.trust_remote_code from the condition once it is deprecated
         processor = AutoProcessor.from_pretrained(
             config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
@@ -1064,6 +1072,15 @@ class OVCalibrationDatasetBuilder:
         dataset: "Dataset",
         seq_len: int = 128,
     ) -> OVCalibrationDataset:
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format(
+                    "OVCalibrationDatasetBuilder._prepare_text_image_encoder_model_calibration_data"
+                )
+            )
+
+        from PIL import Image
+
         self.model.compile()
 
         def get_processor():
