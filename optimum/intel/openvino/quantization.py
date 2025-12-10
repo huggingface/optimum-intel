@@ -729,7 +729,7 @@ class OVCalibrationDatasetBuilder:
         Currently, collects data only for a language model component.
         """
         if not is_pillow_available():
-            raise ValueError(
+            raise ImportError(
                 PILLOW_IMPORT_ERROR.format("OVCalibrationDatasetBuilder._prepare_visual_causal_lm_calibration_data")
             )
 
@@ -1073,7 +1073,7 @@ class OVCalibrationDatasetBuilder:
         seq_len: int = 128,
     ) -> OVCalibrationDataset:
         if not is_pillow_available():
-            raise ValueError(
+            raise ImportError(
                 PILLOW_IMPORT_ERROR.format(
                     "OVCalibrationDatasetBuilder._prepare_text_image_encoder_model_calibration_data"
                 )
