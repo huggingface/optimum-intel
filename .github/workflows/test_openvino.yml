@@ -18,6 +18,7 @@ permissions:
   contents: read
 
 env:
+  RUN_SLOW: true
   UV_TORCH_BACKEND: cpu
   UV_SYSTEM_PYTHON: true
   TRANSFORMERS_IS_CI: true
@@ -28,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04", "windows-2022"]
+        os: ["windows-2022"]
         transformers-version: ["4.45.0", "latest"]
         include:
           - transformers-version: "main"
@@ -82,12 +83,6 @@ jobs:
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
-      - if: ${{ matrix.os == 'windows-2022' }}  # Run all tests on windows
-        name: Test with Pytest
+      - name: Test with Pytest
         run: |
           pytest tests/openvino --durations=0
-
-      - if: ${{ matrix.os != 'windows-2022' }}
-        name: Test with Pytest (slow)
-        run: |
-          pytest tests/openvino -m "run_slow" --durations=0
