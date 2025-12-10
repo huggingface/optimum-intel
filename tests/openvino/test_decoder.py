@@ -132,6 +132,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
+    # Sort names to ensure determined tests names
+    SUPPORTED_ARCHITECTURES = sorted(SUPPORTED_ARCHITECTURES)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
