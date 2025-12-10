@@ -749,12 +749,20 @@ def _merge_move(src: Path, dest: Path):
         - If dest is a file: overwrite file (delete dest, then rename).
         - If dest is a directory: replace directory with src file (delete directory recursively, then rename).
     """
+
+    def _safe_rename(src: Path, dest: Path):
+        # Try to rename first, fall back to shutil.move if it fails (e.g., cross-device move)
+        try:
+            src.rename(dest)
+        except OSError:
+            shutil.move(str(src), str(dest))
+
     dest_exists = dest.exists()
     dest_is_dir = dest_exists and dest.is_dir()
     if src.is_dir():
         if not dest_exists:
             # No conflict: just rename
-            src.rename(dest)
+            _safe_rename(src, dest)
         elif dest_is_dir:
             # Merge src into dest recursively
             for child in src.iterdir():
@@ -764,16 +772,16 @@ def _merge_move(src: Path, dest: Path):
         else:
             # dest exists and is a file: replace file with directory
             dest.unlink()
-            src.rename(dest)
+            _safe_rename(src, dest)
     else:
         if not dest_exists:
             # No conflict: just rename
-            src.rename(dest)
+            _safe_rename(src, dest)
         elif dest_is_dir:
             # Replace directory (recursively) with file
             shutil.rmtree(dest)
-            src.rename(dest)
+            _safe_rename(src, dest)
         else:
             # dest is a file: overwrite
             dest.unlink()
-            src.rename(dest)
+            _safe_rename(src, dest)
