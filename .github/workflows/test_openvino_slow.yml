@@ -4,16 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - v*-release
   pull_request:
     branches:
       - main
-    types:
-      - opened
-      - labeled
-      - reopened
-      - unlabeled
-      - synchronize
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -31,7 +26,6 @@ env:
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-slow') }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,6 +83,12 @@ jobs:
         run: |
           pytest tests/openvino/test_modeling_basic.py
 
-      - name: Test with Pytest (slow)
+      - if: ${{ matrix.os == 'windows-2022' }}  # Run all tests on windows
+        name: Test with Pytest
+        run: |
+          pytest tests/openvino --durations=0
+
+      - if: ${{ matrix.os != 'windows-2022' }}
+        name: Test with Pytest (slow)
         run: |
           pytest tests/openvino -m "run_slow" --durations=0
