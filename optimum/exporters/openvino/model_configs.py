@@ -4271,8 +4271,8 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
 )
 class HunyuanOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.56.0"
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, HunyuanDummyPastKeyValuesGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = HunyuanDummyPastKeyValuesGenerator
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
 
