@@ -4265,29 +4265,6 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         return dummy_inputs
 
 
-class HunyuanDummyPastKeyValuesGenerator(GemmaDummyPastKeyValuesGenerator):
-    def __init__(
-        self,
-        task: str,
-        normalized_config: NormalizedTextConfig,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
-        random_batch_size_range: Optional[Tuple[int, int]] = None,
-        random_sequence_length_range: Optional[Tuple[int, int]] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            task=task,
-            normalized_config=normalized_config,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            random_batch_size_range=random_batch_size_range,
-            random_sequence_length_range=random_sequence_length_range,
-        )
-        self.head_dim = getattr(
-            normalized_config, "head_dim", normalized_config.hidden_size // normalized_config.num_attention_heads
-        )
-
 
 @register_in_tasks_manager(
     "hunyuan_v1_dense", *["text-generation", "text-generation-with-past"], library_name="transformers"
