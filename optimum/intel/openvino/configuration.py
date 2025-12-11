@@ -172,6 +172,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
+    "facebook/sam2.1-hiera-small": {"bits": 4, "sym": False, "group_size": 32, "ratio": 1.0},
     "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {
         "bits": 4,
         "sym": False,

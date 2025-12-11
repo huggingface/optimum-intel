@@ -69,6 +69,7 @@ from .utils import (
     allow_skip_tracing_check,
     clear_class_registry,
     remove_none_from_dummy_inputs,
+    resolve_model_type,
     save_config,
     save_preprocessors,
     set_simplified_chat_template,
@@ -552,10 +553,7 @@ def export_from_model(
     if library_name != "open_clip":
         TasksManager.standardize_model_attributes(model)
 
-    if hasattr(model.config, "export_model_type") and model.config.export_model_type is not None:
-        model_type = model.config.export_model_type
-    else:
-        model_type = getattr(model.config, "model_type", None) or ""
+    model_type = resolve_model_type(model.config, task)
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
@@ -698,11 +696,12 @@ def export_from_model(
     else:
         # save the subcomponent configuration
         for model_name in models_and_export_configs:
+            target_dir = output / model_name
             subcomponent = models_and_export_configs[model_name][0]
             if hasattr(subcomponent, "save_config"):
-                subcomponent.save_config(output / model_name)
+                subcomponent.save_config(target_dir)
             elif hasattr(subcomponent, "config") and hasattr(subcomponent.config, "save_pretrained"):
-                subcomponent.config.save_pretrained(output / model_name)
+                subcomponent.config.save_pretrained(target_dir)
 
         files_subpaths = [os.path.join(name_dir, OV_XML_FILE_NAME) for name_dir in models_and_export_configs]
 
@@ -913,6 +912,61 @@ def _get_multi_modal_submodels_and_export_configs(
     return main_config, models_for_export, stateful_parts
 
 
+def _get_sam2_video_submodels_and_export_configs(
+    model: "PreTrainedModel",
+    task: str,
+    library_name: str,
+    int_dtype: str,
+    float_dtype: str,
+    preprocessors: Optional[List[Any]] = None,
+    exporter: str = "openvino",
+):
+    models_for_export: Dict[str, Tuple["PreTrainedModel", "OnnxConfig"]] = {}
+
+    def _component_export_name(name: str) -> str:
+        if name.startswith("sam2video_"):
+            return name[len("sam2video_"):]
+        if name.startswith("sam2_"):
+            return name[len("sam2_"):]
+        return name
+
+    normalized_task = task or ""
+    if normalized_task.startswith("feature-extraction"):
+        component_specs: List[Tuple[str, str]] = [
+            ("sam2video_vision_encoder", "feature-extraction"),
+            ("sam2video_prompt_encoder", "feature-extraction"),
+        ]
+    elif normalized_task.startswith("image-segmentation"):
+        component_specs = [("sam2video_mask_decoder", "image-segmentation")]
+    else:
+        component_specs = [
+            ("sam2video_vision_encoder", "feature-extraction"),
+            ("sam2video_prompt_encoder", "feature-extraction"),
+            ("sam2video_mask_decoder", "image-segmentation"),
+        ]
+
+    for component_model_type, component_task in component_specs:
+        config_constructor = TasksManager.get_exporter_config_constructor(
+            model=model,
+            exporter=exporter,
+            library_name=library_name,
+            task=component_task,
+            model_type=component_model_type,
+        )
+        export_config = config_constructor(
+            model.config,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        export_name = _component_export_name(component_model_type)
+        models_for_export[export_name] = (model, export_config)
+
+    export_config = next(iter(models_for_export.values()))[1] if models_for_export else None
+    stateful_parts = [False] * len(models_for_export)
+    return export_config, models_for_export, stateful_parts
+
+
 def _get_submodels_and_export_configs(
     model: Union["PreTrainedModel", "DiffusionPipeline"],
     task: str,
@@ -936,6 +990,20 @@ def _get_submodels_and_export_configs(
     ):
         return _get_multi_modal_submodels_and_export_configs(
             model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
+        )
+    elif (
+        not custom_architecture
+        and library_name == "transformers"
+        and getattr(model.config, "model_type", None) == "sam2_video"
+    ):
+        return _get_sam2_video_submodels_and_export_configs(
+            model,
+            task,
+            library_name,
+            int_dtype,
+            float_dtype,
+            preprocessors,
+            exporter=exporter,
         )
     elif not custom_architecture and library_name == "transformers" and model.config.model_type == "speecht5":
         return _get_speecht5_tss_model_for_export(

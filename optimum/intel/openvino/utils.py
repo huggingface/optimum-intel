@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 
+import enum
 import json
 import logging
 import os
@@ -32,7 +33,21 @@ from openvino import Core, Model, properties
 from openvino import Type as OVType
 from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
-from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
+
+try:
+    from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
+except ImportError:
+    try:
+        from transformers.utils.onnx import ParameterFormat, compute_serialized_parameters_size
+    except ImportError:
+
+        class ParameterFormat(enum.Enum):  # type: ignore
+            Float = "float32"
+
+        def compute_serialized_parameters_size(num_parameters: int, parameter_format: ParameterFormat) -> int:
+            if parameter_format == ParameterFormat.Float:
+                return num_parameters * 4
+            raise ValueError("Unsupported parameter format in fallback implementation.")
 
 from optimum.intel.utils.import_utils import is_torch_version
 

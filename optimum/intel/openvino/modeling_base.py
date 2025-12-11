@@ -26,8 +26,16 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
-from transformers.utils import is_offline_mode
 from transformers.utils.hub import cached_file
+try:  # transformers >= 4.46
+    from transformers.utils import is_offline_mode
+except ImportError:  # transformers nightly dropped the re-export
+    try:
+        from huggingface_hub.utils import is_offline_mode  # type: ignore
+    except ImportError:
+        def is_offline_mode() -> bool:  # fallback for very old hub versions
+            value = os.environ.get("TRANSFORMERS_OFFLINE", "0")
+            return value.strip().lower() in {"1", "true", "yes"}
 
 from optimum.exporters.base import ExportConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel

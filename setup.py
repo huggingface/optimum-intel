@@ -29,7 +29,7 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=2.1",
     "optimum-onnx==0.0.*",
-    "transformers>=4.45,<4.56",
+    "transformers>=4.56.2,<4.57",
     "setuptools",
 ]
 
@@ -66,8 +66,8 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
     "openvino": ["nncf>=2.19.0", "openvino>=2025.4.0", "openvino-tokenizers>=2025.4.0"],
-    "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46", "datasets"],
-    "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>4.54,<4.56", "accelerate"],
+    "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "datasets"],
+    "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>=4.56.2,<4.57", "accelerate"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

@@ -139,6 +139,9 @@ from .model_patcher import (
     Qwen2VLVisionEmbMergerPatcher,
     Qwen3MoeModelPatcher,
     QwenModelPatcher,
+    Sam2VideoMaskDecoderPatcher,
+    Sam2VideoPromptEncoderPatcher,
+    Sam2VideoVisionEncoderPatcher,
     SanaTextEncoderModelPatcher,
     XverseModelPatcher,
     Zamba2ModelPatcher,
@@ -203,6 +206,34 @@ def init_model_configs():
         "transformers",
         "AutoModelForImageTextToText",
     )
+    TasksManager._CUSTOM_CLASSES[("pt", "sam2video_vision_encoder", "feature-extraction")] = (
+        "transformers",
+        "Sam2VideoModel",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "sam2video_prompt_encoder", "feature-extraction")] = (
+        "transformers",
+        "Sam2VideoModel",
+    )
+    TasksManager._CUSTOM_CLASSES[("pt", "sam2video_mask_decoder", "image-segmentation")] = (
+        "transformers",
+        "Sam2VideoModel",
+    )
+
+    if "transformers" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["transformers"] = {}
+
+    sam2_video_model_tasks = {
+        "sam2video_vision_encoder": "feature-extraction",
+        "sam2video_prompt_encoder": "feature-extraction",
+        "sam2video_mask_decoder": "image-segmentation",
+    }
+
+    for model_type, task in sam2_video_model_tasks.items():
+        library_supported_models = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["transformers"]
+        model_entry = library_supported_models.setdefault(model_type, {})
+        model_entry.setdefault("openvino", {})
+        TasksManager._SUPPORTED_MODEL_TYPE.setdefault(model_type, {})
+        TasksManager._SUPPORTED_MODEL_TYPE[model_type].setdefault("openvino", {})
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
@@ -4293,6 +4324,147 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
 )
 class VisionEncoderDecoderOpenVINOConfig(VisionEncoderDecoderOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+
+@register_in_tasks_manager("sam2video_vision_encoder", "feature-extraction", library_name="transformers")
+class Sam2VideoVisionEncoderOpenVINOConfig(VisionOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    _MODEL_PATCHER = Sam2VideoVisionEncoderPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "pixel_values": {
+                0: "video_batch_size",
+                1: "num_frames",
+                2: "num_channels",
+                3: "height",
+                4: "width",
+            }
+        }
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        pixel_values = kwargs.pop("pixel_values", None)
+        num_frames = kwargs.pop("num_frames", getattr(self._config, "num_frames", 1)) or 1
+        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
+        pixel_values = pixel_values if pixel_values is not None else dummy_inputs["pixel_values"]
+
+        # SAM2 backbone expects NHWC input; if the tensor is 5D fall back to a default batch of frames.
+        if pixel_values.ndim == 5:
+            if framework == "pt":
+                import torch  # type: ignore
+
+                pixel_values = pixel_values[:, 0].contiguous()
+            else:
+                import numpy as np  # type: ignore
+
+                pixel_values = np.ascontiguousarray(pixel_values[:, 0])
+
+        expected_frames = getattr(self._config, "num_frames", 1) or 1
+        if num_frames != expected_frames:
+            num_frames = expected_frames
+
+        if framework == "pt":
+            import torch
+
+            if pixel_values.dim() == 4:
+                pixel_values = pixel_values.unsqueeze(1)
+            if num_frames != pixel_values.shape[1]:
+                pixel_values = pixel_values.repeat(1, num_frames, 1, 1, 1)
+            pixel_values = pixel_values.contiguous()
+        else:
+            import numpy as np  # type: ignore
+
+            if pixel_values.ndim == 4:
+                pixel_values = np.expand_dims(pixel_values, axis=1)
+            if num_frames != pixel_values.shape[1]:
+                pixel_values = np.repeat(pixel_values, num_frames, axis=1)
+
+        dummy_inputs["pixel_values"] = pixel_values
+        return dummy_inputs
+
+
+@register_in_tasks_manager("sam2video_prompt_encoder", "feature-extraction", library_name="transformers")
+class Sam2VideoPromptEncoderOpenVINOConfig(TextDecoderOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES: Tuple[DummyInputGenerator, ...] = ()
+    _MODEL_PATCHER = Sam2VideoPromptEncoderPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_points": {0: "batch_size", 1: "point_batch_size", 2: "num_points", 3: "coords"},
+            "input_labels": {0: "batch_size", 1: "point_batch_size", 2: "num_points"},
+            "input_boxes": {0: "batch_size", 1: "point_batch_size", 2: "coords"},
+            "input_masks": {0: "batch_size", 1: "mask_channels", 2: "mask_height", 3: "mask_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sparse_embeddings": {
+                0: "batch_size",
+                1: "point_batch_size",
+                2: "num_prompt_tokens",
+                3: "hidden_size",
+            },
+            "dense_embeddings": {0: "batch_size", 1: "hidden_size", 2: "mask_height", 3: "mask_width"},
+        }
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        batch_size = max(1, kwargs.pop("batch_size", DEFAULT_DUMMY_SHAPES["batch_size"]))
+        point_batch_size = max(1, kwargs.pop("point_batch_size", 1))
+        num_points = max(1, kwargs.pop("num_points", 1))
+        num_boxes = max(1, kwargs.pop("num_boxes", point_batch_size))
+
+        prompt_config = getattr(self._config, "prompt_encoder_config", self._config)
+        image_size = getattr(prompt_config, "image_size", getattr(self._config, "image_size", 256))
+        patch_size = getattr(prompt_config, "patch_size", getattr(self._config, "patch_size", 16))
+        mask_height = kwargs.pop("mask_height", max(1, 4 * image_size // patch_size))
+        mask_width = kwargs.pop("mask_width", max(1, 4 * image_size // patch_size))
+
+        if framework == "pt":
+            import torch  # type: ignore
+
+            float_dtype = torch.float32
+            long_dtype = torch.long
+
+            input_points = torch.zeros(
+                (batch_size, point_batch_size, num_points, 2), dtype=float_dtype
+            )
+            input_labels = torch.full(
+                (batch_size, point_batch_size, num_points), fill_value=-1, dtype=long_dtype
+            )
+            input_boxes = torch.zeros((batch_size, num_boxes, 4), dtype=float_dtype)
+            input_masks = torch.zeros((batch_size, 1, mask_height, mask_width), dtype=float_dtype)
+        else:
+            import numpy as np  # type: ignore
+
+            float_dtype = np.float32
+            int_dtype = np.int64
+
+            input_points = np.zeros((batch_size, point_batch_size, num_points, 2), dtype=float_dtype)
+            input_labels = np.full((batch_size, point_batch_size, num_points), fill_value=-1, dtype=int_dtype)
+            input_boxes = np.zeros((batch_size, num_boxes, 4), dtype=float_dtype)
+            input_masks = np.zeros((batch_size, 1, mask_height, mask_width), dtype=float_dtype)
+
+        dummy_inputs = {
+            "input_points": input_points,
+            "input_labels": input_labels,
+            "input_boxes": input_boxes,
+            "input_masks": input_masks,
+        }
+
+        return dummy_inputs
+
+
+@register_in_tasks_manager("sam2video_mask_decoder", "image-segmentation", library_name="transformers")
+class Sam2VideoMaskDecoderOpenVINOConfig(VisionOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    _MODEL_PATCHER = Sam2VideoMaskDecoderPatcher
 
 
 class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):

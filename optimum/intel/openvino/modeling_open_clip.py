@@ -31,7 +31,15 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.clip.modeling_clip import CLIPOutput
-from transformers.utils import is_offline_mode
+try:  # transformers >= 4.46
+    from transformers.utils import is_offline_mode
+except ImportError:  # transformers nightly dropped the re-export
+    try:
+        from huggingface_hub.utils import is_offline_mode  # type: ignore
+    except ImportError:
+        def is_offline_mode() -> bool:  # fallback for very old hub versions
+            value = os.environ.get("TRANSFORMERS_OFFLINE", "0")
+            return value.strip().lower() in {"1", "true", "yes"}
 
 from optimum.exporters.tasks import TasksManager
 

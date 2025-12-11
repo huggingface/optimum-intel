@@ -49,6 +49,18 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
 
+def resolve_model_type(config: PretrainedConfig, task: Optional[str] = None) -> str:
+    export_model_map = getattr(config, "export_model_type_map", None)
+    if task is not None and isinstance(export_model_map, dict):
+        export_model_type = export_model_map.get(task)
+        if export_model_type is not None:
+            return export_model_type
+    export_model_type = getattr(config, "export_model_type", None)
+    if export_model_type is not None:
+        return export_model_type
+    return getattr(config, "model_type", None) or ""
+
+
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
     """
     Checks whether the model is a torch model.
@@ -298,10 +310,7 @@ def save_preprocessors(
     preprocessors: List, config: PretrainedConfig, output: Union[str, Path], trust_remote_code: bool
 ):
     model_name_or_path = config._name_or_path
-    if hasattr(config, "export_model_type"):
-        model_type = config.export_model_type
-    else:
-        model_type = config.model_type
+    model_type = resolve_model_type(config)
     if preprocessors is not None:
         # phi3-vision processor does not have chat_template attribute that breaks Processor saving on disk
         if model_type == "phi3_v" and len(preprocessors) > 1:

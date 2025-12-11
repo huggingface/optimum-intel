@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import pkgutil
+
+from . import _compat_sam2  # noqa: F401  Ensures SAM2 patches are applied before registrations.
 import optimum.exporters.openvino.model_configs
 
 from .__main__ import main_export
 from .convert import export, export_from_model, export_models, export_pytorch_via_onnx
 from .stateful import ensure_stateful_is_available, patch_stateful
 
+__path__ = pkgutil.extend_path(__path__, __name__)
 
 __all__ = ["main_export", "export", "export_models"]
