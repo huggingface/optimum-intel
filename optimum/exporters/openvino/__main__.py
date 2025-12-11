@@ -590,17 +590,13 @@ def main_quantize(
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
 
     # Step 2. Load the exported model
-    additional_model_kwargs = (
-        {"use_cache": task.endswith("with-past")}
-        if "generation" in task or task.startswith("automatic-speech-recognition")
-        else {}
-    )
     model = model_cls.from_pretrained(
         output,
         compile=False,
         trust_remote_code=trust_remote_code,
         cache_dir=cache_dir,
-        **((model_kwargs or {}) | additional_model_kwargs),
+        use_cache=task.endswith("with-past"),
+        **(model_kwargs or {}),
     )
 
     # Step 3. Apply quantization
