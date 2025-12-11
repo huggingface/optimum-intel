@@ -604,7 +604,8 @@ def main_quantize(
     )
 
     # Step 3. Apply quantization
-    with TemporaryDirectory() as tmpdir:
+    temporary_directory = TemporaryDirectory()
+    try:
         # Save quantized model to a temporary directory to avoid conflicts when reading and writing from the same directory
         model._apply_quantization(
             quantization_config,
@@ -613,16 +614,18 @@ def main_quantize(
             model_name_or_path=model_name_or_path,
             trust_remote_code=trust_remote_code,
         )
-        model.save_pretrained(tmpdir)
+        model.save_pretrained(temporary_directory.name)
 
         del model
         gc.collect()
 
         # Move quantized model to the output directory
         output.mkdir(parents=True, exist_ok=True)
-        for item in Path(tmpdir).iterdir():
+        for item in Path(temporary_directory.name).iterdir():
             dest = output / item.name
             _merge_move(item, dest)
+    finally:
+        temporary_directory.cleanup()
 
 
 def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
