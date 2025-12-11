@@ -215,23 +215,6 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
 
-    supported_model_types = [
-        "_SUPPORTED_MODEL_TYPE",
-        "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
-        "_TIMM_SUPPORTED_MODEL_TYPE",
-        "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
-    ]
-
-    for supported_models_config in supported_model_types:
-        supported_models = getattr(TasksManager, supported_models_config)
-        for model, export_configs in supported_models.items():
-            if "onnx" not in export_configs:
-                continue
-            onnx_config = export_configs["onnx"]
-            supported_models[model]["openvino"] = deepcopy(onnx_config)
-
-        setattr(TasksManager, supported_models_config, supported_models)
-
 
 init_model_configs()
 
