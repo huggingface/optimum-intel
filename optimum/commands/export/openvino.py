@@ -466,7 +466,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         try:
             # TODO : add input shapes
-            library_name, task = main_export(
+            main_export(
                 model_name_or_path=self.args.model,
                 output=output,
                 task=self.args.task,
@@ -485,8 +485,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             if apply_main_quantize:
                 main_quantize(
                     model_name_or_path=self.args.model,
-                    original_task=self.args.task,
-                    task=task,
+                    task=self.args.task,
                     library_name=library_name,
                     quantization_config=quantization_config,
                     output=output,

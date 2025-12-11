@@ -77,7 +77,9 @@ def infer_task(
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
     library_name: Optional[str] = None,
+    trust_remote_code: bool = False,
 ):
+    original_task = task
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
         if library_name == "open_clip":
@@ -106,7 +108,56 @@ def infer_task(
                 raise RequestsConnectionError(
                     f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
                 )
+
+    if library_name == "transformers":
+        config = AutoConfig.from_pretrained(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            trust_remote_code=trust_remote_code,
+        )
+        if hasattr(config, "export_model_type"):
+            model_type = config.export_model_type
+        else:
+            model_type = config.model_type
+        custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
+        if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
+            model_type, exporter="openvino", library_name=library_name
+        ):
+            # Make -with-past the default if --task was not explicitly specified
+            if original_task == "auto":
+                task = task + "-with-past"
+            else:
+                logger.info(
+                    f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
+                    f" if needed, please pass `--task {task}-with-past` to export using the past key values."
+                )
     return task
+
+
+def infer_library_name(
+    model_name_or_path: str,
+    subfolder: str = "",
+    revision: Optional[str] = None,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> str:
+    library_name = _infer_library_from_model_name_or_path(
+        model_name_or_path=model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+    )
+    if library_name == "sentence_transformers":
+        logger.warning(
+            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+            "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+        )
+        library_name = "transformers"
+    return library_name
 
 
 def main_export(
@@ -218,19 +269,13 @@ def main_export(
         )
 
     if library_name is None:
-        library_name = _infer_library_from_model_name_or_path(
-            model_name_or_path=model_name_or_path,
+        library_name = infer_library_name(
+            model_name_or_path,
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
             token=token,
         )
-        if library_name == "sentence_transformers":
-            logger.warning(
-                "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
-                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
-            )
-            library_name = "transformers"
 
     original_task = task
     task = infer_task(
@@ -241,11 +286,11 @@ def main_export(
         cache_dir=cache_dir,
         token=token,
         library_name=library_name,
+        trust_remote_code=trust_remote_code,
     )
 
     do_gptq_patching = False
     do_quant_patching = False
-    custom_architecture = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
     if variant is not None:
@@ -280,10 +325,14 @@ def main_export(
 
         model_type = config.model_type
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
-            custom_architecture = True
             if custom_export_configs is None:
                 raise ValueError(
-                    f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
+                    f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no "
+                    "custom export configuration was passed as `custom_export_configs`. Please refer to "
+                    "https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models "
+                    "for an example on how to export custom models. Please open an issue at "
+                    "https://github.com/huggingface/optimum-intel/issues if you would like the model type "
+                    f"{model_type} to be supported natively in the OpenVINO export."
                 )
         elif task not in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
@@ -455,23 +504,6 @@ def main_export(
         else:
             model_type = model.config.model_type
 
-        if (
-            not custom_architecture
-            and library_name != "diffusers"
-            and task + "-with-past"
-            in TasksManager.get_supported_tasks_for_model_type(
-                model_type, exporter="openvino", library_name=library_name
-            )
-        ):
-            # Make -with-past the default if --task was not explicitely specified
-            if original_task == "auto":
-                task = task + "-with-past"
-            else:
-                logger.info(
-                    f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
-                    f" if needed, please pass `--task {task}-with-past` to export using the past key values."
-                )
-
         if original_task == "auto":
             synonyms_for_task = sorted(TasksManager.synonyms_for_task(task))
             if synonyms_for_task:
@@ -521,18 +553,18 @@ def main_export(
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
 
-    return library_name, task
-
 
 def main_quantize(
     model_name_or_path: str,
-    original_task: str,
     task: str,
     library_name: str,
     quantization_config: Union[Dict, "OVQuantizationConfigBase"],  # noqa: F821
     output: Path,
     cache_dir: str,
     trust_remote_code: bool = False,
+    subfolder: str = "",
+    revision: str = "main",
+    token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ):
     """
@@ -541,10 +573,8 @@ def main_quantize(
     Args:
         model_name_or_path (`str`):
             Model ID on huggingface.co or path on disk to the model repository.
-        original_task (`str`):
-            The original task to export the model for.
         task (`str`):
-            The inferred task to export the model for.
+            The task to export the model for.
         library_name (`str`):
             The library name.
         quantization_config (`Union[Dict, OVQuantizationConfigBase]`):
@@ -558,6 +588,14 @@ def main_quantize(
             Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
             you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
             model repository.
+        subfolder (`str`, defaults to `""`):
+            In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can
+            specify the folder name here.
+        revision (`str`, defaults to `"main"`):
+            Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id.
+        token (Optional[Union[bool, str]], defaults to `None`):
+            The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+            when running `huggingface-cli login` (stored in `~/.huggingface`).
         model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
             Experimental usage: keyword arguments to pass to the model during
             the export. This argument should be used along the `custom_export_configs` argument
@@ -566,6 +604,27 @@ def main_quantize(
 
     """
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
+
+    # Step 0. Infer task and library name if needed
+    original_task = task
+    task = infer_task(
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+        library_name=library_name,
+        trust_remote_code=trust_remote_code,
+    )
+    if library_name is None:
+        library_name = infer_library_name(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
 
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
