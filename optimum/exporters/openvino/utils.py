@@ -227,6 +227,8 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
+    "qwen3_vl",
+    "qwen3_vl_moe",
     "got_ocr2",
     "gemma3",
     "idefics3",
@@ -403,3 +405,27 @@ def load_preprocessors(
         except Exception:
             pass
     return preprocessors
+
+
+def patch_qwenvl_configs():
+    from transformers import Qwen2_5_VLConfig, Qwen2VLConfig
+
+    original_getattribute_2 = Qwen2VLConfig.__getattribute__
+
+    def model_type_preserving_getattribute_2(self, name):
+        if name == "model_type":
+            return "qwen2_vl"
+        else:
+            return original_getattribute_2(self, name)
+
+    Qwen2VLConfig.__getattribute__ = model_type_preserving_getattribute_2
+
+    original_getattribute_25 = Qwen2_5_VLConfig.__getattribute__
+
+    def model_type_preserving_getattribute_25(self, name):
+        if name == "model_type":
+            return "qwen2_5_vl"
+        else:
+            return original_getattribute_25(self, name)
+
+    Qwen2_5_VLConfig.__getattribute__ = model_type_preserving_getattribute_25
