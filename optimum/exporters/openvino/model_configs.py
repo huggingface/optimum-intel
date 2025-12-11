@@ -79,6 +79,7 @@ from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BigBirdPegasusModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
     BloomModelPatcher,
@@ -3650,6 +3651,22 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
 )
 class BartOpenVINOConfig(BartOnnxConfig):
     _MODEL_PATCHER = OVSeq2SeqModelPatcher
+
+
+@register_in_tasks_manager(
+    "bigbird_pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BigBirdPegasusOpenVINOConfig(BartOpenVINOConfig):
+    _MODEL_PATCHER = BigBirdPegasusModelPatcher
 
 
 @register_in_tasks_manager(
