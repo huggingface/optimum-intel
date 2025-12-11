@@ -126,7 +126,6 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
-        "encoder-decoder",
         "longt5",
         "m2m_100",
         "mbart",

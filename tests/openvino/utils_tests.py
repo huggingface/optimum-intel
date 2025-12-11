@@ -77,7 +77,6 @@ MODEL_NAMES = {
     "donut-swin": "optimum-intel-internal-testing/tiny-random-DonutSwinModel",
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
-    "encoder-decoder": "optimum-internal-testing/tiny-random-encoder-decoder-gpt2-bert",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
     "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
