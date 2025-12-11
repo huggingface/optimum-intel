@@ -1249,9 +1249,9 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             self.conv_kernel = getattr(config, "mamba_d_conv", 4)
 
     def compile(self):
-        initialize_cache_names = self.request is None
+        is_first_time_compile = self.request is None
         super().compile()
-        if initialize_cache_names and self.stateful:
+        if is_first_time_compile and self.stateful:
             for state in self.request.query_state():
                 if "cache_params.present.key" in state.name:
                     self.key_cache_names.append(state.name)
