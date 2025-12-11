@@ -1214,6 +1214,12 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        # Initialized during compilation
+        self.key_cache_names = []
+        self.value_cache_names = []
+        self.ssm_cache_names = []
+        self.conv_cache_names = []
+
         super().__init__(
             model=model,
             config=config,
@@ -1237,14 +1243,15 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         self.ssm_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.ssm" in key])
         self.conv_cache_output_names = sorted([key for key in self.output_names if "cache_params.present.conv" in key])
 
-        self.key_cache_names = []
-        self.value_cache_names = []
-        self.ssm_cache_names = []
-        self.conv_cache_names = []
+        if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
+            self.conv_kernel = config.conv_kernel
+        else:
+            self.conv_kernel = getattr(config, "mamba_d_conv", 4)
 
-        if self.stateful:
-            if not self._compile_only:
-                self.compile()
+    def compile(self):
+        initialize_cache_names = self.request is None
+        super().compile()
+        if initialize_cache_names and self.stateful:
             for state in self.request.query_state():
                 if "cache_params.present.key" in state.name:
                     self.key_cache_names.append(state.name)
@@ -1254,16 +1261,10 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     self.ssm_cache_names.append(state.name)
                 elif "cache_params.present.conv" in state.name:
                     self.conv_cache_names.append(state.name)
-
-        self.key_cache_names = sorted(self.key_cache_names)
-        self.value_cache_names = sorted(self.value_cache_names)
-        self.ssm_cache_names = sorted(self.ssm_cache_names)
-        self.conv_cache_names = sorted(self.conv_cache_names)
-
-        if hasattr(config, "conv_kernel") and config.conv_kernel is not None:
-            self.conv_kernel = config.conv_kernel
-        else:
-            self.conv_kernel = getattr(config, "mamba_d_conv", 4)
+            self.key_cache_names = sorted(self.key_cache_names)
+            self.value_cache_names = sorted(self.value_cache_names)
+            self.ssm_cache_names = sorted(self.ssm_cache_names)
+            self.conv_cache_names = sorted(self.conv_cache_names)
 
     @staticmethod
     def _has_cache_inputs(model: openvino.Model) -> bool:
@@ -1332,6 +1333,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
         cache_position: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self.compile()
         inputs = self.prepare_inputs(input_ids, attention_mask, cache_params, use_cache, cache_position, **kwargs)
 
         self.request.start_async(inputs, share_inputs=True)
