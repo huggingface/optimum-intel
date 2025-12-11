@@ -30,6 +30,8 @@ from openvino import Core, Type, save_model
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
+    DIFFUSERS_IMPORT_ERROR,
+    is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
     is_transformers_version,
@@ -563,8 +565,7 @@ def main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
-    from ...intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
-    from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+    from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 
     # Step 1. Obtain the correct OpenVINO model class
     if library_name == "diffusers":
