@@ -14,7 +14,6 @@
 
 import enum
 import logging
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -79,6 +78,7 @@ from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BigBirdPegasusModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
     BloomModelPatcher,
@@ -213,23 +213,6 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
-
-    supported_model_types = [
-        "_SUPPORTED_MODEL_TYPE",
-        "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
-        "_TIMM_SUPPORTED_MODEL_TYPE",
-        "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
-    ]
-
-    for supported_models_config in supported_model_types:
-        supported_models = getattr(TasksManager, supported_models_config)
-        for model, export_configs in supported_models.items():
-            if "onnx" not in export_configs:
-                continue
-            onnx_config = export_configs["onnx"]
-            supported_models[model]["openvino"] = deepcopy(onnx_config)
-
-        setattr(TasksManager, supported_models_config, supported_models)
 
 
 init_model_configs()
@@ -3013,9 +2996,6 @@ class Phi4MMConfigBehavior(str, enum.Enum):
 @register_in_tasks_manager(
     "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
-@register_in_tasks_manager(
-    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
-)
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
@@ -3237,6 +3217,14 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             input_info = inputs.pop("audio_feature")
             inputs["input"] = input_info
         return inputs
+
+
+@register_in_tasks_manager(
+    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+)
+class Phi4MultimodalOpenVINOConfig(Phi4MMOpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.51.0"
+    MAX_TRANSFORMERS_VERSION = "4.60.0"
 
 
 class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
@@ -3648,6 +3636,22 @@ class BartOpenVINOConfig(BartOnnxConfig):
 
 
 @register_in_tasks_manager(
+    "bigbird_pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BigBirdPegasusOpenVINOConfig(BartOpenVINOConfig):
+    _MODEL_PATCHER = BigBirdPegasusModelPatcher
+
+
+@register_in_tasks_manager(
     "mbart",
     *[
         "feature-extraction",
@@ -3682,6 +3686,7 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
 
