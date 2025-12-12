@@ -42,7 +42,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from .. import OVConfig
 from ..utils import is_transformers_version
-from .configuration import OVWeightQuantizationConfig
+from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_DECODER_NAME,
@@ -531,7 +531,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "Generation config file not found, using a generation config created from the model config."
                 )
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             encoder=encoder,
@@ -549,8 +549,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
+            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            model._apply_quantization(
+                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
             )
 
         return model
@@ -813,6 +814,21 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         """
         return
 
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if model_name_or_path is not None and (
+            quantization_config.processor is None or quantization_config.tokenizer is None
+        ):
+            quantization_config = quantization_config.clone()
+            if quantization_config.processor is None:
+                quantization_config.processor = model_name_or_path
+            if quantization_config.tokenizer is None:
+                quantization_config.tokenizer = model_name_or_path
+        return quantization_config
+
 
 class OVEncoder(OVModelPart):
     def __init__(
@@ -960,6 +976,7 @@ class OVDecoder(OVModelPart):
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).clone().to(self.device)
         self._past_length += input_ids.shape[1]
+
         out_past_key_values = ((),)
 
         if not self.stateful:
@@ -986,7 +1003,7 @@ class OVDecoder(OVModelPart):
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
     def _get_past_length(self, past_key_values=None):
-        if not past_key_values:
+        if past_key_values is None or len(past_key_values) == 0:
             return 0
         if self.stateful:
             return self._past_length
@@ -1322,7 +1339,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
     # input_stride = self.model.encoder.conv1.stride[0] * self.model.encoder.conv2.stride[0]
     model = DummyWhisperModel()
 
-    # Adapted for stateful support from https://github.com/huggingface/transformers/blob/v4.47.0/src/transformers/models/whisper/modeling_whisper.py#L1810
+    # Adopeted for stateful support from https://github.com/huggingface/transformers/blob/main/src/transformers/models/whisper/modeling_whisper.py#L1810
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,

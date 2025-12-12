@@ -33,7 +33,6 @@ from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from PIL import Image
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
@@ -44,10 +43,12 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
+    PILLOW_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
     is_nncf_version,
+    is_pillow_available,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -727,6 +728,13 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format("OVCalibrationDatasetBuilder._prepare_visual_causal_lm_calibration_data")
+            )
+
+        from PIL import Image
+
         # TODO: remove config.trust_remote_code from the condition once it is deprecated
         processor = AutoProcessor.from_pretrained(
             config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
@@ -1064,6 +1072,15 @@ class OVCalibrationDatasetBuilder:
         dataset: "Dataset",
         seq_len: int = 128,
     ) -> OVCalibrationDataset:
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format(
+                    "OVCalibrationDatasetBuilder._prepare_text_image_encoder_model_calibration_data"
+                )
+            )
+
+        from PIL import Image
+
         self.model.compile()
 
         def get_processor():
@@ -1426,11 +1443,13 @@ class OVQuantizer(OptimumQuantizer):
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     quantization_configs["model"] = quantization_config
-            elif isinstance(quantization_config, OVQuantizationConfig):
+            elif isinstance(quantization_config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
                 #
-                # Full quantization
+                # Full & Mixed quantization
                 #
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                    if isinstance(quantization_config, OVMixedQuantizationConfig):
+                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
                     diffusion_model_name = next(iter(calibration_dataset))
                     quantization_configs[diffusion_model_name] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8)
@@ -1446,14 +1465,6 @@ class OVQuantizer(OptimumQuantizer):
                     default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config
-            elif isinstance(quantization_config, OVMixedQuantizationConfig):
-                #
-                # Mixed quantization
-                #
-                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                default_config = quantization_config
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
@@ -1503,11 +1514,12 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.clear_requests()
 
+        self.model._openvino_config = OVConfig(quantization_config=quantization_config)
+        self.model._set_ov_config_parameters()
         if save_directory is not None:
             save_directory = Path(save_directory)
             save_directory.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(save_directory)
-            ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.Model, output_path: str):

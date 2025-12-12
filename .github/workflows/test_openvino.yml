@@ -30,6 +30,7 @@ jobs:
       matrix:
         test-pattern:
           [
+            "*genai*",
             "*export*",
             "*decoder*",
             "*seq2seq*",
