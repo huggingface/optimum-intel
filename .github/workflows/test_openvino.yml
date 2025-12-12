@@ -38,8 +38,12 @@ jobs:
             "*quantization*",
           ]
         transformers-version: ["4.45.0", "latest"]
-        use_torch_export: ["True", "False"]
-
+        export_mode: ["torch_script", "torch_export"]
+        include:
+          - export_mode: "torch_export"
+            use_torch_export_bool: "True"
+          - export_mode: "torch_script"
+            use_torch_export_bool: "False"
         exclude:
           - transformers-version: "4.45.0"
             use_torch_export: "True"
@@ -77,7 +81,7 @@ jobs:
 
       - name: Test with Pytest
         env:
-          USE_TORCH_EXPORT: ${{ matrix.use_torch_export }}
+          USE_TORCH_EXPORT: ${{ matrix.use_torch_export_bool }}
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
 
