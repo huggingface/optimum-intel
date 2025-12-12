@@ -1297,7 +1297,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         def main_export_in_stacktrace(*args, **kwargs):
             # Compression was called from `main_export`
-            self.assertTrue(inspect.stack()[5].function == "main_export")
+            self.assertTrue(inspect.stack()[6].function == "main_export")
             return compressed_model_mock_obj
 
         with unittest.mock.patch(

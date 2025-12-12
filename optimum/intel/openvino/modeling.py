@@ -52,6 +52,7 @@ from transformers.modeling_outputs import (
 from transformers.models.clip.modeling_clip import CLIPOutput
 
 from ..utils.import_utils import is_timm_available, is_timm_version
+from .configuration import OVQuantizationConfigBase
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
 from .utils import _is_timm_ov_dir
@@ -412,6 +413,16 @@ class OVModelForFeatureExtraction(OVModel):
         else:
             return super()._from_pretrained(model_id, config, *args, **kwargs)
 
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.tokenizer is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.tokenizer = model_name_or_path
+        return quantization_config
+
 
 MASKED_LM_EXAMPLE = r"""
     Example of masked language modeling using `transformers.pipelines`:
@@ -476,6 +487,16 @@ class OVModelForMaskedLM(OVModel):
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return MaskedLMOutput(logits=logits)
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.tokenizer is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.tokenizer = model_name_or_path
+        return quantization_config
 
 
 IMAGE_CLASSIFICATION_EXAMPLE = r"""
@@ -998,3 +1019,13 @@ class OVModelForZeroShotImageClassification(OVModel):
             text_embeds=text_embeds,
             image_embeds=image_embeds,
         )
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.processor is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.processor = model_name_or_path
+        return quantization_config

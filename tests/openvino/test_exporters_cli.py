@@ -281,7 +281,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             ),
         ),
         (
-            "text-generation",
+            "text-generation-with-past",
             "llama",
             "f8e4m3",
             "--dataset wikitext2 --smooth-quant-alpha 0.9 --trust-remote-code",
@@ -424,7 +424,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "fill-mask",
             "xlm-roberta",
             "int8",
-            "--library sentence_transformers --dataset c4 --num-samples 1",
+            "--dataset c4 --num-samples 1",
             {
                 "model": 14,
             },
@@ -1110,9 +1110,11 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_cls = (
                 OVSentenceTransformer
                 if "--library sentence_transformers" in option
-                else eval(_HEAD_TO_AUTOMODELS[task])
+                else eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")])
             )
-            model = model_cls.from_pretrained(tmpdir, trust_remote_code="--trust-remote-code" in option)
+            model = model_cls.from_pretrained(
+                tmpdir, trust_remote_code="--trust-remote-code" in option, use_cache="with-past" in task
+            )
 
             if (
                 "automatic-speech-recognition" in task or "text2text-generation" in task
