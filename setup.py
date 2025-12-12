@@ -59,13 +59,14 @@ TESTS_REQUIRE = [
     "num2words",
     "vocos",
     "vector_quantize_pytorch",
+    "openvino-genai",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf>=2.18.0"],
-    "openvino": ["nncf>=2.18.0", "openvino>=2025.1.0", "openvino-tokenizers>=2025.1.0"],
+    "nncf": ["nncf>=2.19.0"],
+    "openvino": ["nncf>=2.19.0", "openvino>=2025.4.0", "openvino-tokenizers>=2025.4.0"],
     "neural-compressor": ["neural-compressor[pt]>=3.4.1", "accelerate", "transformers<4.46", "datasets"],
     "ipex": ["intel-extension-for-pytorch>=2.8", "transformers>4.54,<4.56", "accelerate"],
     "diffusers": ["diffusers"],

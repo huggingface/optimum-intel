@@ -33,7 +33,6 @@ from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from PIL import Image
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
@@ -41,14 +40,15 @@ from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
 from optimum.quantization_base import OptimumQuantizer
-from optimum.utils.logging import warn_once
 
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
+    PILLOW_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
     is_nncf_version,
+    is_pillow_available,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -165,14 +165,31 @@ class InferRequestWrapper:
         self.apply_caching = apply_caching
         self.inference_result_mock = inference_result_mock
         self.tensor_cache = {}
+        self.stateful = len(request.query_state()) > 0
+        self._reset_state_called = False
 
     def collect_inputs(self, inputs):
+        if self.stateful:
+            if isinstance(inputs, dict) and is_nncf_version(">=", "2.20"):
+                from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
+
+                # To reflect the state resetting during NNCF calibration, we add a special key to the input dict
+                # Shallow copying is done on purpose: we only need to add a key to the top-level dict
+                inputs = inputs.copy()
+                # inputs[NNCF_DATASET_RESET_STATE_KEY] should be set to True for any input sample before which
+                # request.reset_state() was called, and to False otherwise
+                inputs[NNCF_DATASET_RESET_STATE_KEY] = self._reset_state_called
+            self._reset_state_called = False
+
         if not self.apply_caching or not isinstance(inputs, dict):
             self.collected_inputs.append(copy.deepcopy(inputs))
             return
 
         copied_inputs = {}
         for k, v in inputs.items():
+            if isinstance(v, bool):
+                copied_inputs[k] = v
+                continue
             data = v
             if isinstance(data, openvino.Tensor):
                 data = data.data
@@ -220,6 +237,10 @@ class InferRequestWrapper:
 
     def get_tensor(self, name: str):
         return Tensor(self.request.results[name])
+
+    def reset_state(self):
+        self.request.reset_state()
+        self._reset_state_called = True
 
     def __getattr__(self, attr):
         if attr in self.__dict__:
@@ -655,7 +676,7 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset(nncf.Dataset(collected_inputs))
 
     def _prepare_causal_lm_calibration_data(
-        self, config: OVQuantizationConfigBase, seqlen: int = 32
+        self, config: OVQuantizationConfigBase, seqlen: Optional[int] = None
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for causal language models. Relies on `optimum.gptq.data` module.
@@ -671,7 +692,22 @@ class OVCalibrationDatasetBuilder:
             if config.dataset == "auto":
                 generated_data = nncf.data.generate_text_data(self.model, tokenizer, dataset_size=nsamples)
                 calibration_dataset = [tokenizer(text, return_tensors="pt") for text in generated_data]
+            elif config.dataset == "gsm8k":
+                seqlen = seqlen or 256
+                dataset = self.load_dataset(
+                    "openai/gsm8k",
+                    dataset_config_name="main",
+                    dataset_split="train",
+                    num_samples=nsamples,
+                    preprocess_function=lambda x: {"text": f"Question: {x['question']}\nAnswer: {x['answer']}"},
+                    preprocess_batch=False,
+                )
+                calibration_dataset = [
+                    tokenizer(text, return_tensors="pt", truncation=True, max_length=seqlen)
+                    for text in dataset["text"]
+                ]
             else:
+                seqlen = seqlen or 32
                 calibration_dataset = get_dataset(config.dataset, tokenizer, seqlen=seqlen, nsamples=nsamples)
         elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config.dataset[:nsamples]]
@@ -692,6 +728,13 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format("OVCalibrationDatasetBuilder._prepare_visual_causal_lm_calibration_data")
+            )
+
+        from PIL import Image
+
         # TODO: remove config.trust_remote_code from the condition once it is deprecated
         processor = AutoProcessor.from_pretrained(
             config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
@@ -771,12 +814,6 @@ class OVCalibrationDatasetBuilder:
                         and input_dict["pixel_values"].dim() == 4
                         and input_dict["pixel_values"].shape[0] > 1
                     ):
-                        if is_nncf_version("<=", "2.18"):
-                            # TODO (Nikita): Remove once NNCF 2.19 is released.
-                            warn_once(
-                                logger,
-                                "If you are facing RAM OOM issues, please update to the latest NNCF develop version.",
-                            )
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
@@ -1035,6 +1072,15 @@ class OVCalibrationDatasetBuilder:
         dataset: "Dataset",
         seq_len: int = 128,
     ) -> OVCalibrationDataset:
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format(
+                    "OVCalibrationDatasetBuilder._prepare_text_image_encoder_model_calibration_data"
+                )
+            )
+
+        from PIL import Image
+
         self.model.compile()
 
         def get_processor():
@@ -1179,7 +1225,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning("The `task` argument is ignored and will be removed in optimum-intel v1.27")
 
     @property
-    def task(self) -> Dict[str, Union[openvino.Model, openvino.runtime.CompiledModel]]:
+    def task(self) -> str:
         logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
         return self._task
 
@@ -1474,11 +1520,12 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.clear_requests()
 
+        self.model._openvino_config = OVConfig(quantization_config=quantization_config)
+        self.model._set_ov_config_parameters()
         if save_directory is not None:
             save_directory = Path(save_directory)
             save_directory.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(save_directory)
-            ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.Model, output_path: str):

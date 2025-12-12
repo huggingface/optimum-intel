@@ -22,7 +22,7 @@ import openvino as ov
 import torch
 
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_nncf_version, is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 SEED = 42
@@ -79,6 +79,7 @@ MODEL_NAMES = {
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
+    "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
     "gemma2": "optimum-intel-internal-testing/tiny-random-gemma2",
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
@@ -102,6 +103,7 @@ MODEL_NAMES = {
     "gptj": "optimum-intel-internal-testing/tiny-random-GPTJModel",
     "granite": "optimum-intel-internal-testing/tiny-random-granite",
     "granite-moe": "optimum-intel-internal-testing/tiny-random-granite-moe",
+    "granite-moe-hybrid": "optimum-intel-internal-testing/tiny-random-granitemoehybrid",
     "hubert": "optimum-intel-internal-testing/tiny-random-HubertModel",
     "ibert": "optimum-intel-internal-testing/tiny-random-ibert",
     "idefics3": "optimum-intel-internal-testing/tiny-random-Idefics3ForConditionalGeneration",
@@ -228,6 +230,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "vit": {"model": 64},
     "blenderbot": {"model": 70},
     "gpt2": {"model": 44},
+    "granite-moe-hybrid": {"model": 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {
@@ -318,7 +321,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "transformer": 58,
         "vae_decoder": 28,
         "vae_encoder": 28,
-        "text_encoder": 16 if is_nncf_version(">", "2.17") else 18,
+        "text_encoder": 16,
     },
     "ltx-video": {
         "transformer": 34,
@@ -327,8 +330,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
     },
     "sam": {
-        "vision_encoder": 102 if is_openvino_version("<", "2025.2.0") else 150,
-        "prompt_encoder_mask_decoder": 100 if is_nncf_version("<=", "2.18") else 98,
+        "vision_encoder": 150,
+        "prompt_encoder_mask_decoder": 98,
     },
     "speecht5": {
         "encoder": 28,
@@ -337,8 +340,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "clip": {"model": 130},
-    "mamba": {"model": 386},
-    "falcon-mamba": {"model": 194},
+    "mamba": {"model": 322},
+    "falcon-mamba": {"model": 162},
     "minicpmo": {
         "lm_model": 16,
         "text_embeddings_model": 1,
@@ -346,6 +349,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "resampler_model": 6,
     },
     "zamba2": {"model": 44},
+    "exaone4": {"model": 16},
     "lfm2": {"model": 52},
 }
 

@@ -23,7 +23,7 @@ from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 if is_transformers_version(">=", "4.55"):
@@ -47,7 +47,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox",
         "llama",
         "marian",
-        "minicpm",
         "mistral",
         "mixtral",
         "mpt",
@@ -76,7 +75,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "cohere",
         "qwen2",
         "qwen2_moe",
-        "arctic",
         "phi3",
         "gemma2",
         "exaone",
@@ -89,28 +87,23 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
 
-    if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.53.0"):
+        SUPPORTED_SSM_ARCHITECTURES += ("granite-moe-hybrid",)
+
+    if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("lfm2",)
 
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe")
-        # openvino 2025.0 required for disabling check_trace
-        if is_openvino_version(">=", "2025.0"):
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phi3-moe")
+
+        if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
 
         # gptq and awq install disabled for windows test environment
-        if platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
-
-        # autoawq install disabled for windows test environment
-        if (
-            platform.system() != "Windows"
-            and is_openvino_version(">=", "2024.6.0")
-            and is_transformers_version("<", "4.56.0")
-        ):
-            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+        if platform.system() != "Windows" and is_transformers_version("<", "4.56.0"):
+            SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
 
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
@@ -124,12 +117,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES += ("arcee",)
 
-    if is_transformers_version(">=", "4.52.1") and is_openvino_version(">=", "2025.4.0"):
+    if is_transformers_version(">=", "4.52.1"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
-        # remote code models differs after transformers v4.54
-        SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
+        SUPPORTED_ARCHITECTURES += ("exaone4",)
+
+    if is_transformers_version("<", "4.54.0"):
+        SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
@@ -155,6 +150,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "arctic",
         "chatglm4",
         "exaone",
+        "exaone4",
         "decilm",
         "minicpm3",
         "deepseek",
@@ -210,8 +206,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi3": 2,
         "gemma2": 4,
         "exaone": 8,
+        "exaone4": 1,
         "granite": 6,
         "granite-moe": 6,
+        "granite-moe-hybrid": 1,
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
@@ -226,8 +224,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
-        "gpt_oss": 2 if is_openvino_version(">=", "2025.4") else 0,
-        "gpt_oss_mxfp4": 2 if is_openvino_version(">=", "2025.4") else 0,
+        "gpt_oss": 2,
+        "gpt_oss_mxfp4": 2,
         "zamba2": 1,
         "bitnet": 6,
     }
@@ -247,12 +245,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
 
         not_stateful = []
-        if is_openvino_version("<", "2024.0"):
-            not_stateful.append("mixtral")
-
-        if is_openvino_version("<", "2024.1"):
-            not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
-
         set_seed(SEED)
 
         model_kwargs = {}
@@ -346,7 +338,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             max_new_tokens=30,
             min_new_tokens=30,
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-            num_beams=1 if model_arch in ["chatglm4", "lfm2"] else 2,
+            # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
+            # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granite-moe-hybrid"] else 2,
             do_sample=False,
         )
 
@@ -600,7 +594,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
-        if model_arch == "lfm2":
+        # CVS-177964 GraniteMoeHybrid fails due to lack support of Beam search for hybrid models in OpenVINO
+        # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
+        if model_arch in ["lfm2", "granite-moe-hybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current mdoeling incompatible with transformers >= v4.49
@@ -773,9 +769,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         test_input = tokenizer(texts, return_tensors="pt")
 
         ref_logits = pt_model(**test_input).logits
-        torch_dtypes = [None, "auto", "float32", torch.float16]
-        if is_openvino_version(">", "2024.2.0"):
-            torch_dtypes.append("bfloat16")
+        torch_dtypes = [None, "auto", "float32", torch.float16, "bfloat16"]
 
         for dtype in torch_dtypes:
             ov_model = OVModelForCausalLM.from_pretrained(

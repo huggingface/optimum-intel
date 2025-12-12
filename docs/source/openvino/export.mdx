@@ -101,6 +101,14 @@ Optional arguments:
   --group-size GROUP_SIZE
                         The group size to use for quantization. Recommended value is 128 and -1 uses per-column
                         quantization.
+  --group-size-fallback {error,ignore,adjust}
+                        Specifies how to handle operations that do not support the given group size. Possible values are:
+                        `error`: raise an error if the given group size is not supported by a node, this is the default
+                        behavior;
+                        `ignore`: skip nodes that cannot be compressed with the given group size;
+                        `adjust`: adjust the group size to the maximum supported value for each problematic node, if
+                        there is no valid value greater than or equal to 32, then the node is quantized to the backup
+                        precision which is int8_asym by default.
   --backup-precision {none,int8_sym,int8_asym}
                         Defines a backup precision for mixed-precision weight compression. Only valid for 4-bit weight
                         formats. If not provided, backup precision is int8_asym. 'none' stands for original floating-
@@ -109,14 +117,14 @@ Optional arguments:
                         without zero point. 'int8_asym' stands for 8-bit integer asymmetric quantization with zero
                         points per each quantization group.
   --dataset DATASET     The dataset used for data-aware compression or quantization with NNCF. For language models you
-                        can use the one from the list ['auto','wikitext2','c4','c4-new']. With 'auto' the dataset will
-                        be collected from model's generations. For diffusion models it should be on of
+                        can use the one from the list ['auto','wikitext2','c4','c4-new','gsm8k']. With 'auto' the
+                        dataset will be collected from model's generations. For diffusion models it should be on of
                         ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit']. For
                         visual language models the dataset must be set to 'contextual'. Note: if none of the data-aware
                         compression algorithms are selected and ratio parameter is omitted or equals 1.0, the dataset
                         argument will not have an effect on the resulting model. Note: for text generation task,
-                        datasets with English texts such as 'wikitext2','c4' or 'c4-new' usually work fine even for
-                        non-English models.
+                        datasets with English texts such as 'wikitext2','gsm8k','c4' or 'c4-new' usually work fine even
+                        for non-English models.
   --all-layers          Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an
                         weight compression is applied, they are compressed to INT8.
   --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs. If

@@ -6189,27 +6189,16 @@ class ConvSequenceTransform(torch.nn.Module):
         self.act = act
         self.conv_bias = conv_bias
 
-    def update_conv_state(
-        self, conv_state, new_conv_state: torch.Tensor, cache_position: torch.LongTensor
-    ) -> torch.Tensor:
-        conv_state_1 = conv_state.roll(shifts=-1, dims=-1)
-        conv_state_1[:, :, cache_position] = new_conv_state.to(device=conv_state.device, dtype=conv_state.dtype)
-        return conv_state_1
-
-    def get_positions(self, conv_state, cache_position):
-        cache_position_clamped = cache_position.clamp(0, self.conv_kernel_size - 1)
-        return cache_position_clamped
-
     def forward(self, hidden_states, cache_position, conv_state):
-        pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (
-            cache_position.shape[0] == self.conv_kernel_size
-        )
         # Pad the input
+        is_prefill = cache_position.shape[0] == self.conv_kernel_size
+        pad_value = (self.conv_kernel_size - hidden_states.shape[-1]) * (is_prefill)
         new_conv_state = torch.nn.functional.pad(hidden_states, (pad_value, 0))
 
         # Update convolutional state
-        upd_cache_position = self.get_positions(conv_state, cache_position)
-        upd_conv_state = self.update_conv_state(conv_state, new_conv_state, upd_cache_position)
+        upd_cache_position = cache_position.clamp(0, self.conv_kernel_size - 1)
+        upd_conv_state = conv_state.roll(shifts=-1, dims=-1)
+        upd_conv_state[:, :, upd_cache_position] = new_conv_state
 
         # compute both versions of hidden_states
         # 1. cache_position.shape[0] == self.conv_kernel_size, prefill step
@@ -6218,20 +6207,15 @@ class ConvSequenceTransform(torch.nn.Module):
         # the second version
         # 2. re-compute conv_states for decoding step
         new_upd_conv_state = upd_conv_state * self.conv1d.weight[:, 0, :]
-        B, C, K = new_upd_conv_state.shape
-        weight = torch.ones(C, 1, K, device=new_upd_conv_state.device, dtype=new_upd_conv_state.dtype)
-        manual_conv_applied = torch.nn.functional.conv1d(new_upd_conv_state, weight, groups=C)
-        manual_conv_applied = manual_conv_applied.squeeze(2)
+        decoder_kernel_applied = new_upd_conv_state.sum(dim=-1, keepdim=True)
+        decoder_kernel_applied = decoder_kernel_applied.squeeze(2)
         if self.use_conv_bias:
-            manual_conv_applied = manual_conv_applied + self.conv_bias
-        decoder_kernel_applied = manual_conv_applied.unsqueeze(-1)
-
-        # Build a mask for selecting the correct result based on kernel size
-        is_full = cache_position.shape[0] == self.conv_kernel_size
-        is_full = torch.tensor(is_full, dtype=hidden_states.dtype, device=hidden_states.device)
+            decoder_kernel_applied += self.conv_bias
+        decoder_kernel_applied = decoder_kernel_applied.unsqueeze(-1)
 
         # Select the correct result
-        hidden_states = is_full * prefill_kernel_applied + (1 - is_full) * decoder_kernel_applied
+        is_prefill = torch.tensor(is_prefill, dtype=hidden_states.dtype)
+        hidden_states = is_prefill * prefill_kernel_applied + (1 - is_prefill) * decoder_kernel_applied
 
         # Apply activation
         hidden_states = self.act(hidden_states)
@@ -6547,6 +6531,7 @@ def zamba2_mamba_mixer(
     self,
     hidden_states,
     cache_params=None,
+    cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
 ):
     def pad_tensor_by_size(input_tensor: torch.Tensor, pad_size: int):
@@ -6583,6 +6568,9 @@ def zamba2_mamba_mixer(
         return tensor_segsum
 
     input_states = hidden_states
+    layer_idx = self.layer_idx
+    if cache_params is not None and hasattr(cache_params, "mamba_layer_idx_mapping"):
+        layer_idx = cache_params.mamba_layer_idx_mapping[layer_idx]
 
     batch_size, seq_len, _ = input_states.shape
     dtype = input_states.dtype
@@ -6609,7 +6597,7 @@ def zamba2_mamba_mixer(
     # 1. Convolution sequence transformation
     # 1.1 Convolution sequence transformation for decoding step
     if cache_params is not None:
-        conv_state_dec = cache_params.conv_states[self.layer_idx]
+        conv_state_dec = cache_params.conv_states[layer_idx]
         conv_state_dec = torch.roll(conv_state_dec, shifts=-1, dims=-1)
         conv_state_dec[:, :, -1] = hidden_states[:, 0, :] if hidden_states.ndim == 3 else hidden_states
 
@@ -6631,11 +6619,11 @@ def zamba2_mamba_mixer(
         ]  # [batch, intermediate_size, seq_len]
         if attention_mask is not None:
             # tune out hidden states for pad tokens, see https://github.com/state-spaces/mamba/issues/66
-            hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :, None]).to(dtype)
+            hidden_states_prefill = (hidden_states_prefill * attention_mask[:, :seq_len, None]).to(dtype)
 
         # Compute final conv state and set into the cache
         conv_state = conv_state_prefill * (1.0 - is_decoding) + conv_state_dec * is_decoding
-        cache_params.conv_states[self.layer_idx].copy_(conv_state)
+        cache_params.conv_states[layer_idx].copy_(conv_state)
     else:
         hidden_states_prefill = self.act(self.conv1d(hidden_states.transpose(1, 2))[..., :seq_len].transpose(1, 2))
         hidden_states_dec = hidden_states_prefill[:, :1]
@@ -6687,7 +6675,7 @@ def zamba2_mamba_mixer(
         dBx = dB * hidden_states_dec[..., None]
 
         # State calculation
-        new_ssm_state_dec = cache_params.ssm_states[self.layer_idx] * dA + dBx
+        new_ssm_state_dec = cache_params.ssm_states[layer_idx] * dA + dBx
 
         # Subsequent output
         # [bsz, n_groups * state_size] -> [bsz, num_heads, state_size]
@@ -6805,7 +6793,7 @@ def zamba2_mamba_mixer(
         ssm_state = new_ssm_state_prefill * (1.0 - is_decoding) + new_ssm_state_dec * is_decoding
 
         # Set final ssm state into the cache
-        cache_params.ssm_states[self.layer_idx].copy_(ssm_state)
+        cache_params.ssm_states[layer_idx].copy_(ssm_state)
     else:
         y = y_prefill
 
@@ -7204,3 +7192,220 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
             from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
             GptOssExperts.forward = self.original_gpt_oss_forward
+
+
+# This patch overrides the following line in Transformers:
+# https://github.com/huggingface/transformers/blob/v4.55-release/src/transformers/models/granitemoehybrid/modeling_granitemoehybrid.py#L1553
+# It is required to work around an OpenVINO issue:
+# [CPU] Broadcast node '__module.model/aten::copy_/Broadcast' failed the check
+# 'arg_shape[i - start_axis].is_dynamic()...' in src/core/shape_inference/include/broadcast_shape_inference.hpp:89
+def granite_moe_hybrid_update_causal_mask(
+    self,
+    attention_mask,
+    input_tensor: torch.Tensor,
+    cache_position: torch.Tensor,
+    past_key_values,
+    output_attentions: bool = False,
+):
+    dtype = input_tensor.dtype
+    batch_size = input_tensor.shape[0]
+    sequence_length = input_tensor.shape[1]
+    target_length = attention_mask.shape[-1]
+
+    if attention_mask is not None and attention_mask.dim() == 4:
+        # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
+        causal_mask = attention_mask
+    else:
+        min_dtype = torch.finfo(dtype).min
+        causal_mask = torch.full(
+            (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
+        )
+        if sequence_length != 1:
+            causal_mask = torch.triu(causal_mask, diagonal=1)
+        causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
+        causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+
+        if attention_mask is not None:
+            causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+            mask_length = attention_mask.shape[-1]
+            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
+            padding_mask = padding_mask == 0
+            new_causal_mask = causal_mask[:, :, :, :mask_length].masked_fill(padding_mask, min_dtype)
+            causal_mask = new_causal_mask
+
+    return causal_mask
+
+
+class GraniteMoeHybridModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.models.granitemoehybrid.modeling_granitemoehybrid import HybridMambaAttentionDynamicCache
+
+        super().__init__(config, model, model_kwargs)
+
+        class GraniteMoeHybridDynamicCacheWrap(HybridMambaAttentionDynamicCache):
+            def __init__(self, config, batch_size: int, conv_states, ssm_states, key_cache, value_cache):
+                # Call parent constructor with all required arguments
+                super().__init__(config=config, batch_size=batch_size)
+                self.conv_states = conv_states
+                self.ssm_states = ssm_states
+                self.key_cache = key_cache
+                self.value_cache = value_cache
+                self.attention_layer_idx_mapping = {}
+                self.mamba_layer_idx_mapping = {}
+                attention_layer_idx = 0
+                mamba_layer_idx = 0
+                for i in range(config.num_hidden_layers):
+                    if self.layers_block_type[i] == "attention":
+                        self.attention_layer_idx_mapping[i] = attention_layer_idx
+                        attention_layer_idx += 1
+                    elif self.layers_block_type[i] == "mamba":
+                        self.mamba_layer_idx_mapping[i] = mamba_layer_idx
+                        mamba_layer_idx += 1
+
+            def update(
+                self,
+                key_states: torch.Tensor,
+                value_states: torch.Tensor,
+                layer_idx: int,
+                cache_kwargs: Optional[dict[str, Any]] = None,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+                # map layer_idx to key_cache (value_cache) idx
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                # Update the cache
+                if self.key_cache[layer_idx].shape[-1] == 0:
+                    self.key_cache[layer_idx] = key_states
+                    self.value_cache[layer_idx] = value_states
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def __getitem__(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+                # take any layer that contains cache and not empty tensor
+                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+                layer_idx = self.attention_layer_idx_mapping[layer_idx]
+                # if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx].numel() == 0:
+                #    return 0
+                return self.key_cache[layer_idx].shape[-2]
+
+        # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
+        def patched_forward(
+            input_ids,
+            attention_mask=None,
+            cache_params=None,
+        ):
+            num_mamba_layers = self.real_config._config.layer_types.count("mamba")
+            num_attention_layers = self.real_config._config.layer_types.count("attention")
+            use_cache = False
+            wrapped_cache_params = None
+            if cache_params is not None:
+                use_cache = True
+                conv_states = []
+                ssm_states = []
+                key_cache = []
+                value_cache = []
+
+                # decouple ssm_states, conv_states, keys and values from cache_params
+                batch_size = cache_params[0].size(0)
+                for idx in range(num_mamba_layers):
+                    conv_states.append(cache_params[2 * idx])
+                    ssm_states.append(cache_params[2 * idx + 1])
+
+                for idx in range(num_attention_layers):
+                    key_cache.append(cache_params[2 * num_mamba_layers + 2 * idx])
+                    value_cache.append(cache_params[2 * num_mamba_layers + 2 * idx + 1])
+
+                wrapped_cache_params = GraniteMoeHybridDynamicCacheWrap(
+                    self.real_config._config, batch_size, conv_states, ssm_states, key_cache, value_cache
+                )
+
+            causal_lm_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache_params,
+                use_cache=use_cache,
+            )
+            outputs = {
+                "logits": causal_lm_output.logits,
+            }
+
+            if use_cache:
+                past_key_values = causal_lm_output.past_key_values
+                # unwrap GraniteMoeHybridDynamicCacheWrap object
+                present_key_values = []
+                for idx in range(num_mamba_layers):
+                    present_key_values.append(past_key_values.conv_states[idx])
+                    present_key_values.append(past_key_values.ssm_states[idx])
+
+                for idx in range(num_attention_layers):
+                    present_key_values.append(past_key_values.key_cache[idx])
+                    present_key_values.append(past_key_values.value_cache[idx])
+
+                outputs["present_key_values"] = present_key_values
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        def patch_sparse_moe(sparse_moe_layer):
+            sparse_moe_layer.router._orig_forward = sparse_moe_layer.router.forward
+            sparse_moe_layer.router.forward = types.MethodType(
+                _granite_moe_topk_gating_forward, sparse_moe_layer.router
+            )
+            sparse_moe_layer.input_linear._orig_forward = sparse_moe_layer.input_linear.forward
+            sparse_moe_layer.input_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, sparse_moe_layer.input_linear
+            )
+            sparse_moe_layer.output_linear._orig_forward = sparse_moe_layer.output_linear.forward
+            sparse_moe_layer.output_linear.forward = types.MethodType(
+                _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
+            )
+
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
+        self._model.model._update_causal_mask = types.MethodType(
+            granite_moe_hybrid_update_causal_mask, self._model.model
+        )
+        for idx, layer in enumerate(self._model.model.layers):
+            if hasattr(layer, "block_sparse_moe"):
+                patch_sparse_moe(layer.block_sparse_moe)
+            if self.real_config._config.layers_block_type[idx] == "mamba":
+                mamba_layer = layer.mamba
+            else:
+                continue
+            mamba_layer._orig_forward = mamba_layer.forward
+            mamba_layer.forward = types.MethodType(zamba2_mamba_mixer, mamba_layer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        def unpatch_sparse_moe(sparse_moe_layer):
+            sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
+            sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
+            sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
+
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+        self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        for idx, layer in enumerate(self._model.model.layers):
+            if hasattr(layer, "block_sparse_moe"):
+                unpatch_sparse_moe(layer.block_sparse_moe)
+            if self.real_config._config.layers_block_type[idx] == "mamba":
+                mamba_layer = layer.mamba
+            else:
+                continue
+            mamba_layer.forward = mamba_layer._orig_forward
