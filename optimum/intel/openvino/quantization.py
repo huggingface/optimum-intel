@@ -1426,11 +1426,13 @@ class OVQuantizer(OptimumQuantizer):
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     quantization_configs["model"] = quantization_config
-            elif isinstance(quantization_config, OVQuantizationConfig):
+            elif isinstance(quantization_config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
                 #
-                # Full quantization
+                # Full & Mixed quantization
                 #
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                    if isinstance(quantization_config, OVMixedQuantizationConfig):
+                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
                     diffusion_model_name = next(iter(calibration_dataset))
                     quantization_configs[diffusion_model_name] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8)
@@ -1446,14 +1448,6 @@ class OVQuantizer(OptimumQuantizer):
                     default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config
-            elif isinstance(quantization_config, OVMixedQuantizationConfig):
-                #
-                # Mixed quantization
-                #
-                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                default_config = quantization_config
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
