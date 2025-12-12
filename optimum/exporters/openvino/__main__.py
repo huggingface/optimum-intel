@@ -554,7 +554,7 @@ def main_export(
                 AutoBitLinear.load_hook = orig_load_hook
 
 
-def main_quantize(
+def _main_quantize(
     model_name_or_path: str,
     task: str,
     library_name: str,

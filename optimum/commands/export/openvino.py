@@ -340,7 +340,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import _merge_move, main_export, main_quantize
+        from ...exporters.openvino.__main__ import _main_quantize, _merge_move, main_export
         from ...intel.openvino.configuration import (
             _DEFAULT_4BIT_WQ_CONFIG,
             OVConfig,
@@ -483,7 +483,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 # **input_shapes,
             )
             if apply_main_quantize:
-                main_quantize(
+                _main_quantize(
                     model_name_or_path=self.args.model,
                     task=self.args.task,
                     library_name=library_name,
