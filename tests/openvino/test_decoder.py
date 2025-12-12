@@ -264,7 +264,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             export=True,
             ov_config=F32_CONFIG,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
             **model_kwargs,
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
@@ -423,7 +423,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             use_cache=True,
             compile=False,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
             **model_kwargs,
         )
         model.eval()
@@ -466,7 +466,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_model_and_decoder_same_device(self):
         model_id = MODEL_NAMES["gpt2"]
         model = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         model.to("TEST")
         self.assertEqual(model._device, "TEST")
@@ -486,7 +486,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             use_cache=True,
             stateful=False,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
         )
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
@@ -494,7 +494,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_with_pkv
 
         model_without_pkv = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         outputs_model_without_pkv = model_without_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
@@ -511,7 +511,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             use_cache=True,
             stateful=True,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
         )
         outputs_model_stateful = model_stateful.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
@@ -531,7 +531,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
         os.environ["OPENVINO_LOG_LEVEL"] = "3"
         model = OVModelForSequenceClassification.from_pretrained(
-            MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         if openvino_log_level is not None:
             os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
@@ -554,7 +554,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_default_filling_attention_mask(self):
         model_id = MODEL_NAMES["gpt2"]
         model_with_cache = OVModelForCausalLM.from_pretrained(
-            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -579,7 +579,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
         model_with_cache = OVModelForCausalLM.from_pretrained(
-            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -686,7 +686,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             use_cache=True,
             stateful=True,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
             **model_kwargs,
         )
         set_seed(SEED)
@@ -696,7 +696,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             use_cache=True,
             stateful=False,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
             **model_kwargs,
         )
         if "awq" in model_arch or "gptq" in model_arch:
@@ -811,7 +811,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 export=True,
                 torch_dtype=dtype,
                 device=OPENVINO_DEVICE,
-                use_torch_export=USE_TORCH_EXPORT,
+                torch_export=USE_TORCH_EXPORT,
             )
             ov_logits = ov_model(**test_input).logits
             self.assertTrue(

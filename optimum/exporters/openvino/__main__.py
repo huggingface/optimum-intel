@@ -184,7 +184,7 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
-    use_torch_export: bool = False,
+    torch_export: bool = False,
     **kwargs_shapes,
 ):
     """
@@ -242,7 +242,7 @@ def main_export(
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
-        use_torch_export (`bool`, defaults to `False`):
+        torch_export (`bool`, defaults to `False`):
             Use torch.export() for scripting of PyTorch models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
@@ -533,7 +533,7 @@ def main_export(
             device=device,
             trust_remote_code=trust_remote_code,
             patch_16bit_model=patch_16bit,
-            use_torch_export=use_torch_export,
+            torch_export=torch_export,
             **kwargs_shapes,
         )
 

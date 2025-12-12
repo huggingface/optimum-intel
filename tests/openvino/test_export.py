@@ -115,7 +115,7 @@ class ExportModelTest(unittest.TestCase):
         stateful: bool = True,
         patch_16bit_model: bool = False,
         model_kwargs: dict = None,
-        use_torch_export: bool = False,
+        torch_export: bool = False,
     ):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
@@ -149,7 +149,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
-                    use_torch_export=use_torch_export,
+                    torch_export=torch_export,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -209,7 +209,7 @@ class ExportModelTest(unittest.TestCase):
         model_kwargs = None
         if model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(model_type, model_kwargs=model_kwargs, use_torch_export=USE_TORCH_EXPORT)
+        self._openvino_export(model_type, model_kwargs=model_kwargs, torch_export=USE_TORCH_EXPORT)
 
     @parameterized.expand(GENERATIVE_MODELS)
     def test_export_with_custom_gen_config(self, model_type):
@@ -244,7 +244,7 @@ class ExportModelTest(unittest.TestCase):
                     task=supported_task,
                     preprocessors=preprocessors,
                     model_kwargs=model_kwargs,
-                    use_torch_export=USE_TORCH_EXPORT,
+                    torch_export=USE_TORCH_EXPORT,
                 )
 
                 use_cache = supported_task.endswith("-with-past")
@@ -281,7 +281,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=None,
                     patch_16bit_model=True,
                     stateful=stateful,
-                    use_torch_export=USE_TORCH_EXPORT,
+                    torch_export=USE_TORCH_EXPORT,
                 )
                 use_cache = supported_task.endswith("-with-past")
                 ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
@@ -321,11 +321,11 @@ class CustomExportModelTest(unittest.TestCase):
                 library_name="transformers",
                 output=Path(tmpdirname),
                 task=base_task,
-                use_torch_export=USE_TORCH_EXPORT,
+                torch_export=USE_TORCH_EXPORT,
             )
 
             ov_model = OVModelForCustomTasks.from_pretrained(
-                tmpdirname, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+                tmpdirname, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
 
             self.assertIsInstance(ov_model, OVBaseModel)
@@ -343,7 +343,7 @@ class CustomExportModelTest(unittest.TestCase):
         model.to(torch.device("cpu"))
 
         with TemporaryDirectory() as tmpdirname:
-            export_from_model(model, output=tmpdirname, task="feature-extraction", use_torch_export=USE_TORCH_EXPORT)
+            export_from_model(model, output=tmpdirname, task="feature-extraction", torch_export=USE_TORCH_EXPORT)
             ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)

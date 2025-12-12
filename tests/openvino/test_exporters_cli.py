@@ -771,14 +771,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
-    def _openvino_export(self, model_name: str, task: str, use_torch_export: bool, model_kwargs: Dict = None):
+    def _openvino_export(self, model_name: str, task: str, torch_export: bool, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
             main_export(
                 model_name_or_path=model_name,
                 output=tmpdir,
                 task=task,
                 model_kwargs=model_kwargs,
-                use_torch_export=use_torch_export,
+                torch_export=torch_export,
             )
 
     def test_filtered_architectures(cls):
@@ -802,7 +802,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
         self._openvino_export(
-            MODEL_NAMES[model_type], task, use_torch_export=USE_TORCH_EXPORT, model_kwargs=model_kwargs
+            MODEL_NAMES[model_type], task, torch_export=USE_TORCH_EXPORT, model_kwargs=model_kwargs
         )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

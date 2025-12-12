@@ -93,7 +93,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSeq2SeqLM.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         ov_stateless_model = OVModelForSeq2SeqLM.from_pretrained(
             model_id,
@@ -102,7 +102,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
             stateful=False,
             ov_config=F32_CONFIG,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
         )
         expected_stateful = is_transformers_version(">", "4.46") and model_arch in self.SUPPORT_STATEFUL
         self.assertEqual(ov_model.decoder.stateful, expected_stateful)
@@ -224,7 +224,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         tokens = tokenizer(text, return_tensors="pt")
 
         model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(
-            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
@@ -233,7 +233,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
             )
 
         model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(
-            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
@@ -342,7 +342,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         processor = get_preprocessor(model_id)
         pipe = pipeline(
@@ -384,7 +384,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
             _ = OVModelForVision2Seq.from_pretrained(
-                MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+                MODEL_NAMES["bert"], export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
 
         self.assertIn("only supports the tasks", str(context.exception))
@@ -395,7 +395,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_generate_utils(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForVision2Seq.from_pretrained(
-            model_id, export=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
 
@@ -412,7 +412,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVModelForVision2Seq.from_pretrained(
-            model_id, export=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
@@ -457,7 +457,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVModelForVision2Seq.from_pretrained(
-            model_id, compile=False, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, compile=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
         ov_model.reshape(1, -1)
@@ -599,7 +599,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
             compile=False,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
         )
         self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
         for component_name, component in ov_model.components.items():
@@ -777,7 +777,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             export=True,
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
         )
         self.assertTrue(ov_model._support_new_processing)
         self.assertTrue(processor.patch_size is not None)
@@ -826,7 +826,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             export=True,
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
             device=OPENVINO_DEVICE,
-            use_torch_export=USE_TORCH_EXPORT,
+            torch_export=USE_TORCH_EXPORT,
         )
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -925,7 +925,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
                 compile=False,
                 trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
                 device=OPENVINO_DEVICE,
-                use_torch_export=USE_TORCH_EXPORT,
+                torch_export=USE_TORCH_EXPORT,
             )
             ov_model.save_pretrained(save_dir)
             ov_restored_model = OVModelForVisualCausalLM.from_pretrained(
@@ -990,7 +990,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
         ov_pipe = OVModelForTextToSpeechSeq2Seq.from_pretrained(
-            model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         ov_speech = ov_pipe.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
 
@@ -1023,7 +1023,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForPix2Struct.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
@@ -1054,7 +1054,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForPix2Struct.from_pretrained(
-            model_id, export=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         preprocessor = get_preprocessor(model_id)
         question = "Who am I?"
@@ -1075,7 +1075,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
         model_with_pkv = OVModelForPix2Struct.from_pretrained(
-            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
@@ -1084,7 +1084,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
             )
 
         model_without_pkv = OVModelForPix2Struct.from_pretrained(
-            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, use_torch_export=USE_TORCH_EXPORT
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:

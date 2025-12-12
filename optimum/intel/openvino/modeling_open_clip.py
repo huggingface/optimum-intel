@@ -275,7 +275,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             fn_get_submodels=fn_get_submodels,
             custom_architecture=True,
             custom_export_configs=custom_export_configs,
-            use_torch_export=kwargs.pop("use_torch_export", False),
+            torch_export=kwargs.pop("torch_export", False),
         )
 
         config.save_pretrained(save_dir_path)
@@ -401,7 +401,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             fn_get_submodels=fn_get_submodels,
             custom_architecture=True,
             custom_export_configs=custom_export_configs,
-            use_torch_export=kwargs.pop("use_torch_export", False),
+            torch_export=kwargs.pop("torch_export", False),
         )
 
         config.save_pretrained(save_dir_path)
