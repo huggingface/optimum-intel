@@ -32,14 +32,19 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     GPT2OnnxConfig,
+    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
+    HeliumOnnxConfig,
     IBertOnnxConfig,
     LlamaOnnxConfig,
     MarianOnnxConfig,
     MistralOnnxConfig,
     MPTOnnxConfig,
+    NemotronOnnxConfig,
+    Olmo2OnnxConfig,
+    OPTOnnxConfig,
     PegasusOnnxConfig,
     PhiOnnxConfig,
     SpeechT5OnnxConfig,
@@ -143,6 +148,30 @@ from .model_patcher import (
     XverseModelPatcher,
     Zamba2ModelPatcher,
 )
+
+
+COMMON_TEXT_TASKS = [
+    "feature-extraction",
+    "fill-mask",
+    "multiple-choice",
+    "question-answering",
+    "text-classification",
+    "token-classification",
+]
+
+
+COMMON_TEXT_GENERATION_TASKS = [
+    "feature-extraction",
+    "feature-extraction-with-past",
+    "text-generation",
+    "text-generation-with-past",
+]
+
+COMMON_TEXT2TEXT_GENERATION_TASKS = [
+    *COMMON_TEXT_GENERATION_TASKS,
+    "text2text-generation",
+    "text2text-generation-with-past",
+]
 
 
 logger = logging.getLogger(__name__)
@@ -4563,3 +4592,30 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+@register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
+class Olmo2OOpenVINOConfig(Olmo2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
+class OPTOpenVINOConfig(OPTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("helium", *COMMON_TEXT_GENERATION_TASKS)
+class HeliumOpenVINOConfig(HeliumOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("nemotron", *COMMON_TEXT_GENERATION_TASKS)
+class NemotronOpenVINOConfig(NemotronOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "gpt_bigcode", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "token-classification"]
+)
+class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    pass
