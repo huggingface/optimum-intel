@@ -284,7 +284,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         tested_architectures = set(self.SUPPORTED_ARCHITECTURES)
         transformers_architectures = set(CONFIG_MAPPING_NAMES.keys())
-        ov_architectures = set(TasksManager.get_supported_model_type_for_task(task=self.TASK, exporter="openvino"))
+        ov_architectures = {
+            model_type
+            for model_type in TasksManager._SUPPORTED_MODEL_TYPE
+            if self.TASK in TasksManager._SUPPORTED_MODEL_TYPE[model_type].get("openvino", {})
+        }
         supported_architectures = ov_architectures & transformers_architectures
 
         if is_transformers_version(">=", str(DeepseekOpenVINOConfig.MAX_TRANSFORMERS_VERSION)):
