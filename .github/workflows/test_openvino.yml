@@ -46,7 +46,7 @@ jobs:
             use_torch_export_bool: "False"
         exclude:
           - transformers-version: "4.45.0"
-            use_torch_export: "True"
+            export_mode: "torch_export"
 
     runs-on: ubuntu-22.04
 
