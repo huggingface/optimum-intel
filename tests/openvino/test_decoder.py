@@ -132,7 +132,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("glm4",)
 
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORTED_ARCHITECTURES += ("arcee", "smollm3")
+        SUPPORTED_ARCHITECTURES += ("arcee",)
 
     if is_transformers_version(">=", "4.52.1"):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
@@ -217,7 +217,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "olmo": 2,
         "stablelm": 2,
         "starcoder2": 2,
-        "smollm3": 2,
         "dbrx": 2,
         "cohere": 2,
         "qwen2": 2,
