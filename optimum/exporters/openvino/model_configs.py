@@ -805,6 +805,7 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
     _MODEL_PATCHER = Phi3ModelPatcher
+    MIN_TRANSFORMERS_VERSION = "4.49.0"
 
 
 @register_in_tasks_manager(

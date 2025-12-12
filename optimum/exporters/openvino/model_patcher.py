@@ -1493,41 +1493,69 @@ def _phi3_self_attn_sdpa_forward(
     return attn_output, None, past_key_value
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/phi3/modeling_phi3.py#L324
+# and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/modeling_rope_utils.py#L30
+def _phi3_longrope_forward(self, x, position_ids):
+    """
+    LongRoPE uses different scaling factors (short_factor vs long_factor) depending on whether
+    the sequence length exceeds the original max position embeddings used during pretraining.
+
+    Note: In transformers, the @dynamic_rope_update decorator replaces self.inv_freq before the forward pass.
+    Here we use torch.where to select between original_inv_freq and long_inv_freq and add the selection logic into the model graph.
+    """
+    seq_len = torch.max(position_ids) + 1
+    original_max_position_embeddings = (
+        self.original_max_position_embeddings
+        if hasattr(self, "original_max_positional_embeddings")
+        else self.config.original_max_position_embeddings
+    )
+
+    # Slow down all frequencies by scale factor for long prompts that makes attention more stable, i.e. preserve model accuracy
+    # Use long_inv_freq for sequences exceeding original pretraining length, otherwise use short (default) inv_freq.
+    inv_freq = torch.where(
+        seq_len > original_max_position_embeddings,
+        self.long_inv_freq,
+        self.original_inv_freq,
+    )
+
+    inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+    position_ids_expanded = position_ids[:, None, :].float()
+
+    # Force float32 since bfloat16 loses precision on long contexts
+    # See https://github.com/huggingface/transformers/pull/29285
+    device_type = x.device.type
+    device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+    with torch.autocast(device_type=device_type, enabled=False):  # Force float32
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.attention_scaling
+        sin = emb.sin() * self.attention_scaling
+    return cos, sin
+
+
 class Phi3ModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-
-        # currently, long RoPE can not be traced for long context support, disable it for avoid potential accuracy issues
-        if self._model.config.max_position_embeddings != getattr(
-            self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
-        ):
-            self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
-
-        if is_transformers_version("<", "4.48.0"):
-            self._model.model._orig_forward = self._model.model.forward
-            self._model.model.forward = types.MethodType(phi3_442_forward, self._model.model)
-
-        # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
-        # init inv_freq for torchscript tracing
-        # 4.48 transformers version phi3 fixed, but issue still visible with trust_remote_true=True (trust_remote_code has _support_sdpa = False)
-        for layer in self._model.model.layers:
+        if not getattr(self, "_disable_longrope", False):
             if (
-                is_torch_version(">=", "2.1.0")
-                and is_transformers_version("<", "4.48.0")
-                or not getattr(self._model, "_supports_sdpa", False)
+                hasattr(self._model.model, "rotary_emb")
+                and getattr(self._model.model.rotary_emb, "rope_type", "default") == "longrope"
             ):
-                orig_self_attn_fwd = layer.self_attn.forward
-                layer.self_attn.forward = types.MethodType(_phi3_self_attn_sdpa_forward, layer.self_attn)
-                layer.self_attn._orig_forward = orig_self_attn_fwd
-
-            if (
-                hasattr(layer.self_attn, "rotary_emb")
-                and getattr(layer.self_attn.rotary_emb, "inv_freq", None) is None
-            ):
-                rotary_emb = layer.self_attn.rotary_emb
-                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
-                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
+                long_inv_freq, _ = self._model.model.rotary_emb.rope_init_fn(
+                    self._model.config,
+                    torch.device("cpu"),
+                    seq_len=self._model.config.original_max_position_embeddings + 1,
                 )
+                self._model.model.rotary_emb.long_inv_freq = long_inv_freq
+                self._model.model.rotary_emb._orig_forward = self._model.model.rotary_emb.forward
+                self._model.model.rotary_emb.forward = types.MethodType(
+                    _phi3_longrope_forward, self._model.model.rotary_emb
+                )
+            elif self._model.config.max_position_embeddings != getattr(
+                self._model.config, "original_max_position_embeddings", self._model.config.max_position_embeddings
+            ):
+                self._orig_max_position_embeddings = self._model.config.max_position_embeddings
+                self._model.config.max_position_embeddings = self._model.config.original_max_position_embeddings
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -1538,6 +1566,8 @@ class Phi3ModelPatcher(OVDecoderModelPatcher):
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
+        if hasattr(self, "_orig_max_position_embeddings"):
+            self._model.config.max_position_embeddings = self._orig_max_position_embeddings
 
 
 # Modified from https://github.com/huggingface/transformers/blob/v4.50.2/src/transformers/models/phimoe/modeling_phimoe.py#L756
@@ -1589,8 +1619,19 @@ def _phi_moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 
 
 class PhiMoEModelPatcher(Phi3ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        # Disable longrope for Phi3-MOE
+        self._disable_longrope = True
+
     def __enter__(self):
         super().__enter__()
+
         for layer in self._model.model.layers:
             layer.block_sparse_moe._orig_forward = layer.block_sparse_moe.forward
             layer.block_sparse_moe.forward = types.MethodType(
@@ -1599,6 +1640,7 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
         for layer in self._model.model.layers:
             layer.block_sparse_moe.forward = layer.block_sparse_moe._orig_forward
 

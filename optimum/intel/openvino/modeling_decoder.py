@@ -356,11 +356,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             variant=variant,
         )
 
-        if config.model_type == "phi3" and config.max_position_embeddings != getattr(
-            config, "original_max_position_embeddings", config.max_position_embeddings
-        ):
-            config.max_position_embeddings = config.original_max_position_embeddings
-
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -879,6 +874,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt_bigcode":
             init_cls = OVGPTBigCodeForCausalLM
+        elif model_type == "phi3":
+            init_cls = OVPhi3ForCausalLM
         elif model_type in SSM_MODELS:
             init_cls = OVModelWithMambaForCausalLM
         else:
@@ -924,6 +921,48 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             )
 
         return causal_model
+
+
+class OVPhi3ForCausalLM(OVModelForCausalLM):
+    # Adapted from https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/phi3/modeling_phi3.py#L493
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        logits_to_keep=None,
+        **kwargs,
+    ):
+        # Overwritten -- this model may need to switch between short and long rope, invalidating the cache in the
+        # process
+
+        # When the first time input length reached long and short factor switching point, enforce re-compute cache
+        # The downside is slower inference at this single token position, however, this is better than wrong results
+        if (
+            past_key_values
+            and self.config.rope_scaling
+            and input_ids.shape[1] >= self.config.original_max_position_embeddings + 1
+        ):
+            past_length = cache_position[0]
+            if past_length <= self.config.original_max_position_embeddings:
+                past_key_values = None
+
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+            logits_to_keep=logits_to_keep,
+            **kwargs,
+        )
+        return model_inputs
 
 
 class OVBloomForCausalLM(OVModelForCausalLM):

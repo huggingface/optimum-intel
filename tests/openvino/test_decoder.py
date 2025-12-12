@@ -80,7 +80,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen2",
         "qwen2_moe",
         "arctic",
-        "phi3",
         "gemma2",
         "exaone",
         "granite",
@@ -91,6 +90,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.49"):
         SUPPORTED_SSM_ARCHITECTURES += ("zamba2",)
+        SUPPORTED_ARCHITECTURES += ("phi3", "phi3-longrope")
 
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_SSM_ARCHITECTURES += ("granite-moe-hybrid",)
@@ -184,6 +184,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "pegasus": 2,
         "qwen": 2,
         "phi": 2,
+        "phi3-longrope": 4,
         "internlm2": 4,
         "falcon": 2,
         "falcon-40b": 2,
@@ -778,3 +779,54 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 torch.allclose(torch.Tensor(ov_logits), ref_logits, atol=5e-3),
                 f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
             )
+
+    def test_phi3_longrope_support(self):
+        """Test LongRoPE support for Phi3 with inputs > 4096 tokens."""
+        if is_transformers_version("<", "4.49"):
+            self.skipTest("Incompatible transformers version: Phi3 longrope requires transformers>=4.49")
+        set_seed(SEED)
+        model_id = "optimum-intel-internal-testing/tiny-random-phi3-longrope"
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        # Doublecheck that model has LongRoPE support
+        original_max_pos = getattr(transformers_model.config, "original_max_position_embeddings", None)
+        self.assertIsNotNone(
+            original_max_pos,
+            f"Model {model_id} does not have original_max_position_embeddings attribute required for LongRoPE",
+        )
+
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        # Test 1: input tokens exceed original_max_pos
+        # Creating model inputs with more than original max position embeddings and enough variation for varied output tokens
+        tokens = torch.randint(high=transformers_model.config.vocab_size, size=(1, original_max_pos + 50))
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(tokens, max_new_tokens=20)
+            ov_outputs = ov_model.generate(tokens, max_new_tokens=20)
+
+        self.assertTrue(
+            torch.equal(transformers_outputs, ov_outputs),
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE test with inputs > original_max_pos.\n"
+            f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
+        )
+
+        # Test 2: generation tokens exceed original_max_pos
+        # Creating model inputs with slightly less than original max position embeddings
+        tokens = torch.randint(high=transformers_model.config.vocab_size, size=(1, original_max_pos - 50))
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(tokens, max_new_tokens=100)
+            ov_outputs = ov_model.generate(tokens, max_new_tokens=100)
+
+        self.assertTrue(
+            torch.equal(transformers_outputs, ov_outputs),
+            f"OpenVINO and PyTorch outputs do not match for LongRoPE test with cumulative context > max_pos.\n"
+            f"ov_outputs: {ov_outputs}\ntransformers_outputs: {transformers_outputs}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
