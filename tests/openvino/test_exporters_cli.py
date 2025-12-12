@@ -25,6 +25,7 @@ from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
     TEST_NAME_TO_MODEL_TYPE,
+    USE_TORCH_EXPORT,
     check_compression_state_per_model,
     get_num_quantized_nodes,
     get_supported_model_for_library,
@@ -770,9 +771,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
-    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
+    def _openvino_export(self, model_name: str, task: str, torch_export: bool, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
-            main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
+            main_export(
+                model_name_or_path=model_name,
+                output=tmpdir,
+                task=task,
+                model_kwargs=model_kwargs,
+                torch_export=torch_export,
+            )
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
@@ -794,7 +801,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs)
+        self._openvino_export(
+            MODEL_NAMES[model_type], task, torch_export=USE_TORCH_EXPORT, model_kwargs=model_kwargs
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):

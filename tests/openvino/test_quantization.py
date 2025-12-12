@@ -91,6 +91,7 @@ from utils_tests import (
     get_supported_model_for_library,
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
+    USE_TORCH_EXPORT,
 )
 
 _TASK_TO_DATASET = {
@@ -455,7 +456,7 @@ class OVQuantizerTest(unittest.TestCase):
         column_name = dataset_kwargs.pop("column_name")
 
         with TemporaryDirectory() as tmp_dir:
-            ov_model = model_cls.from_pretrained(model_id, export=True)
+            ov_model = model_cls.from_pretrained(model_id, export=True, torch_export=USE_TORCH_EXPORT)
 
             is_text_related_task = model_cls in (
                 OVModelForSequenceClassification,
@@ -544,7 +545,9 @@ class OVQuantizerTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_name]
 
         with TemporaryDirectory() as tmp_dir:
-            ov_model = model_cls.from_pretrained(model_id, quantization_config=quantization_config)
+            ov_model = model_cls.from_pretrained(
+                model_id, quantization_config=quantization_config, torch_export=USE_TORCH_EXPORT
+            )
             ov_model.save_pretrained(tmp_dir)
 
             check_model_inference(ov_model, model_id, trust_remote_code=False)
@@ -1082,7 +1085,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False)
+            transformers_model = model_cls.from_pretrained(
+                model_id, export=True, stateful=False, torch_export=USE_TORCH_EXPORT
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -1110,7 +1115,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
         with TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=True)
+            transformers_model = model_cls.from_pretrained(
+                model_id, export=True, stateful=True, torch_export=USE_TORCH_EXPORT
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -1139,6 +1146,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             load_in_8bit=True,
             stateful=False,
             trust_remote_code=trust_remote_code,
+            torch_export=USE_TORCH_EXPORT,
         )
 
         if model_type == "open-clip":
@@ -1162,7 +1170,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_type]
         quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
         with TemporaryDirectory() as tmp_dir:
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config=quantization_config, torch_export=USE_TORCH_EXPORT
+            )
 
             num_fake, num_weight_nodes = get_num_quantized_nodes(
                 model.unet if model.unet is not None else model.transformer
@@ -1176,7 +1186,10 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     def test_stable_diffusion_with_weight_compression(self):
         int8_pipe = OVStableDiffusionPipeline.from_pretrained(
-            model_id=MODEL_NAMES["stable-diffusion"], export=True, device=OPENVINO_DEVICE
+            model_id=MODEL_NAMES["stable-diffusion"],
+            export=True,
+            device=OPENVINO_DEVICE,
+            torch_export=USE_TORCH_EXPORT,
         )
         quantization_config = OVWeightQuantizationConfig(bits=8, quant_method=OVQuantizationMethod.DEFAULT)
         quantizer = OVQuantizer(int8_pipe)
@@ -1213,7 +1226,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         dataset = [
             "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
         ]
-        model = model_cls.from_pretrained(model_id, export=True)
+        model = model_cls.from_pretrained(model_id, export=True, torch_export=USE_TORCH_EXPORT)
         quantizer = OVQuantizer(model)
         quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method="hybrid")
         self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
@@ -1235,7 +1248,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4})
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config={"bits": 4}, torch_export=USE_TORCH_EXPORT
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -1261,7 +1276,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+                model_id,
+                export=True,
+                quantization_config=quantization_config,
+                trust_remote_code=trust_remote_code,
+                torch_export=USE_TORCH_EXPORT,
             )
             if quantization_config.quant_method.lower() == "awq":
                 # TODO: Check that AWQ was actually applied
@@ -1290,7 +1309,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
-        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)
+        model = model_cls.from_pretrained(
+            MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True, torch_export=USE_TORCH_EXPORT
+        )
         self.assertTrue(model.stateful)
         self.assertTrue(model.use_cache)
 
@@ -1302,7 +1323,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
-            MODEL_NAMES[model_type], export=True, load_in_8bit=False, trust_remote_code=trust_remote_code
+            MODEL_NAMES[model_type],
+            export=True,
+            load_in_8bit=False,
+            trust_remote_code=trust_remote_code,
+            torch_export=USE_TORCH_EXPORT,
         )
 
         for i, ov_model in enumerate(model.ov_models.values()):
@@ -1330,7 +1355,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "nncf.compress_weights", side_effect=main_export_in_stacktrace
             ) as compress_weights_patch:
                 _ = OVModelForCausalLM.from_pretrained(
-                    MODEL_NAMES["llama"], export=True, compile=False, use_cache=False, device=OPENVINO_DEVICE
+                    MODEL_NAMES["llama"],
+                    export=True,
+                    compile=False,
+                    use_cache=False,
+                    device=OPENVINO_DEVICE,
+                    torch_export=USE_TORCH_EXPORT,
                 )
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT8_ASYM,
@@ -1365,6 +1395,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     compile=False,
                     use_cache=False,
                     device=OPENVINO_DEVICE,
+                    torch_export=USE_TORCH_EXPORT,
                 )
                 compress_weights_patch.assert_not_called()
                 self.assertTrue(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
@@ -1391,6 +1422,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     compile=False,
                     use_cache=False,
                     quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
+                    torch_export=USE_TORCH_EXPORT,
                 )
                 compression_params = {
                     "mode": nncf.CompressWeightsMode.INT4_SYM,
@@ -1420,7 +1452,11 @@ class OVWeightCompressionTest(unittest.TestCase):
                 weights_group_size=group_size, activations_group_size=group_size, **quantization_config
             )
             model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+                model_id,
+                export=True,
+                quantization_config=quantization_config,
+                trust_remote_code=trust_remote_code,
+                torch_export=USE_TORCH_EXPORT,
             )
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
@@ -1678,7 +1714,11 @@ class OVPipelineQuantizationTest(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             quantization_config = OVPipelineQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
+                model_id,
+                export=True,
+                quantization_config=quantization_config,
+                trust_remote_code=trust_remote_code,
+                torch_export=USE_TORCH_EXPORT,
             )
             for save_load_model in [False, True]:
                 if save_load_model:
@@ -2195,7 +2235,12 @@ class InferRequestWrapperTest(unittest.TestCase):
     def test_calibration_data_uniqueness(self, model_name, stateful, apply_caching):
         model_id = MODEL_NAMES[model_name]
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
-            model_id, export=True, compile=True, stateful=stateful, device=OPENVINO_DEVICE
+            model_id,
+            export=True,
+            compile=True,
+            stateful=stateful,
+            device=OPENVINO_DEVICE,
+            torch_export=USE_TORCH_EXPORT,
         )
         processor = AutoProcessor.from_pretrained(model_id)
 

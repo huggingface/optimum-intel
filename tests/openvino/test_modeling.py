@@ -56,7 +56,15 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TENSOR_ALIAS_TO_TYPE, TEST_IMAGE_URL
+from utils_tests import (
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TENSOR_ALIAS_TO_TYPE,
+    TEST_IMAGE_URL,
+    USE_TORCH_EXPORT,
+)
 
 from optimum.intel import (
     OVDiffusionPipeline,
@@ -138,7 +146,9 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID, device=OPENVINO_DEVICE)
+        loaded_model = OVModelForSequenceClassification.from_pretrained(
+            self.OV_MODEL_ID, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -149,7 +159,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
         ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
         loaded_model = OVModelForSequenceClassification.from_pretrained(
-            self.OV_MODEL_ID, ov_config=ov_config, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID, ov_config=ov_config, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
@@ -159,7 +169,11 @@ class OVModelIntegrationTest(unittest.TestCase):
         # Test compile only
 
         compile_only_model = OVModelForSequenceClassification.from_pretrained(
-            self.OV_MODEL_ID, ov_config=ov_config, compile_only=True, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID,
+            ov_config=ov_config,
+            compile_only=True,
+            device=OPENVINO_DEVICE,
+            torch_export=USE_TORCH_EXPORT,
         )
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
@@ -177,7 +191,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
             model = OVModelForSequenceClassification.from_pretrained(
-                tmpdirname, ov_config={"NUM_STREAMS": 2}, device=OPENVINO_DEVICE
+                tmpdirname, ov_config={"NUM_STREAMS": 2}, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             # Test that PERFORMANCE_HINT is set to LATENCY by default even with ov_config provided
             self.assertEqual(model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -196,7 +210,9 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache, device=OPENVINO_DEVICE)
+        loaded_model = OVModelForCausalLM.from_pretrained(
+            model_id, use_cache=use_cache, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -208,11 +224,17 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache, device=OPENVINO_DEVICE)
+            model = OVModelForCausalLM.from_pretrained(
+                tmpdirname, use_cache=use_cache, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             self.assertEqual(model.use_cache, use_cache)
 
             compile_only_model = OVModelForCausalLM.from_pretrained(
-                tmpdirname, compile_only=True, use_cache=use_cache, device=OPENVINO_DEVICE
+                tmpdirname,
+                compile_only=True,
+                use_cache=use_cache,
+                device=OPENVINO_DEVICE,
+                torch_export=USE_TORCH_EXPORT,
             )
             self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
             self.assertIsInstance(compile_only_model.request, ov.InferRequest)
@@ -239,7 +261,9 @@ class OVModelIntegrationTest(unittest.TestCase):
                     stream=True,
                 ).raw
             )
-            loaded_model = OVModelForVisualCausalLM.from_pretrained(model_id, device=OPENVINO_DEVICE)
+            loaded_model = OVModelForVisualCausalLM.from_pretrained(
+                model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             self.assertIsInstance(loaded_model, MODEL_TYPE_TO_CLS_MAPPING[loaded_model.config.model_type])
             for component_name, component in loaded_model.components.items():
                 self.assertIsInstance(component, MODEL_PARTS_CLS_MAPPING[component_name])
@@ -275,9 +299,11 @@ class OVModelIntegrationTest(unittest.TestCase):
                 for xml_file_name in model_files:
                     self.assertTrue(xml_file_name in folder_contents)
                     self.assertTrue(xml_file_name.replace(".xml", ".bin") in folder_contents)
-                model = OVModelForVisualCausalLM.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+                model = OVModelForVisualCausalLM.from_pretrained(
+                    tmpdirname, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+                )
                 compile_only_model = OVModelForVisualCausalLM.from_pretrained(
-                    tmpdirname, compile_only=True, device=OPENVINO_DEVICE
+                    tmpdirname, compile_only=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
                 )
                 for ov_model in compile_only_model.ov_models.values():
                     self.assertIsInstance(ov_model, ov.CompiledModel)
@@ -304,7 +330,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForSeq2SeqLM.from_pretrained(
-            self.OV_SEQ2SEQ_MODEL_ID, compile=False, device=OPENVINO_DEVICE
+            self.OV_SEQ2SEQ_MODEL_ID, compile=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model.to("cpu")
@@ -324,7 +350,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForSeq2SeqLM.from_pretrained(
-                tmpdirname, compile_only=True, device=OPENVINO_DEVICE
+                tmpdirname, compile_only=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             self.assertIsInstance(compile_only_model.encoder.model, ov.CompiledModel)
             self.assertIsInstance(compile_only_model.decoder.model, ov.CompiledModel)
@@ -342,7 +368,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     @require_diffusers
     def test_load_from_hub_and_save_stable_diffusion_model(self):
         loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(
-            self.OV_SD_DIFFUSION_MODEL_ID, compile=False, device=OPENVINO_DEVICE
+            self.OV_SD_DIFFUSION_MODEL_ID, compile=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(loaded_pipeline.config, Dict)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
@@ -365,7 +391,9 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         with TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
-            pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            pipeline = OVStableDiffusionPipeline.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             folder_contents = os.listdir(tmpdirname)
             self.assertIn(loaded_pipeline.config_name, folder_contents)
             for subfoler in {
@@ -379,7 +407,7 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
 
             compile_only_pipeline = OVStableDiffusionPipeline.from_pretrained(
-                tmpdirname, compile_only=True, device=OPENVINO_DEVICE
+                tmpdirname, compile_only=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             self.assertIsInstance(compile_only_pipeline.unet.model, ov.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.CompiledModel)
@@ -402,7 +430,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     @require_diffusers
     def test_load_from_hub_and_save_flux_model(self):
         loaded_pipeline = OVDiffusionPipeline.from_pretrained(
-            self.OV_FLUX_DIFFUSION_MODEL_ID, compile=False, device=OPENVINO_DEVICE
+            self.OV_FLUX_DIFFUSION_MODEL_ID, compile=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
         self.assertIsInstance(loaded_pipeline.config, Dict)
@@ -427,7 +455,9 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         with TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
-            pipeline = OVDiffusionPipeline.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            pipeline = OVDiffusionPipeline.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             self.assertIsInstance(loaded_pipeline, OVFluxPipeline)
             folder_contents = os.listdir(tmpdirname)
             self.assertIn(loaded_pipeline.config_name, folder_contents)
@@ -443,7 +473,7 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
 
             compile_only_pipeline = OVDiffusionPipeline.from_pretrained(
-                tmpdirname, compile_only=True, device=OPENVINO_DEVICE
+                tmpdirname, compile_only=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             self.assertIsInstance(compile_only_pipeline, OVFluxPipeline)
             self.assertIsInstance(compile_only_pipeline.transformer.model, ov.CompiledModel)
@@ -466,7 +496,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_load_from_hub_and_save_sam_model(self):
-        loaded_model = OVModelForFeatureExtraction.from_pretrained(self.OV_SAM_MODEL_ID, device=OPENVINO_DEVICE)
+        loaded_model = OVModelForFeatureExtraction.from_pretrained(
+            self.OV_SAM_MODEL_ID, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(loaded_model, OVSamModel)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is not set by default
@@ -476,7 +508,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
         ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
         loaded_model = OVModelForFeatureExtraction.from_pretrained(
-            self.OV_SAM_MODEL_ID, ov_config=ov_config, device=OPENVINO_DEVICE
+            self.OV_SAM_MODEL_ID, ov_config=ov_config, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
         self.assertTrue(manual_openvino_cache_dir.is_dir())
@@ -497,7 +529,11 @@ class OVModelIntegrationTest(unittest.TestCase):
         # Test compile only
 
         compile_only_model = OVModelForFeatureExtraction.from_pretrained(
-            self.OV_SAM_MODEL_ID, ov_config=ov_config, compile_only=True, device=OPENVINO_DEVICE
+            self.OV_SAM_MODEL_ID,
+            ov_config=ov_config,
+            compile_only=True,
+            device=OPENVINO_DEVICE,
+            torch_export=USE_TORCH_EXPORT,
         )
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
@@ -519,7 +555,7 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertTrue(ir_file in folder_contents)
                 self.assertTrue(ir_file.replace(".xml", ".bin") in folder_contents)
             model = OVModelForFeatureExtraction.from_pretrained(
-                tmpdirname, ov_config={"NUM_STREAMS": 2}, device=OPENVINO_DEVICE
+                tmpdirname, ov_config={"NUM_STREAMS": 2}, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             self.assertEqual(loaded_model.vision_encoder.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
             self.assertEqual(
@@ -536,7 +572,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_text_speech_model(self):
         loaded_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
-            self.OV_TEXTSPEECH_MODEL_ID, device=OPENVINO_DEVICE
+            self.OV_TEXTSPEECH_MODEL_ID, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
@@ -560,7 +596,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForTextToSpeechSeq2Seq.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
-                tmpdirname, compile_only=True, device=OPENVINO_DEVICE
+                tmpdirname, compile_only=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             self.assertIsInstance(compile_only_model.encoder.model, ov.CompiledModel)
             self.assertIsInstance(compile_only_model.decoder.model, ov.CompiledModel)
@@ -585,7 +621,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         if not token:
             self.skipTest("Test requires a token `HF_TOKEN` in the environment variable")
 
-        model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino", device=OPENVINO_DEVICE)
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, token=token, revision="openvino", device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(model.config, PretrainedConfig)
         self.assertTrue(model.stateful)
 
@@ -596,13 +634,17 @@ class OVModelIntegrationTest(unittest.TestCase):
         export = subfolder == ""
         # hub model
         OVModelForFeatureExtraction.from_pretrained(
-            model_id, subfolder=subfolder, export=export, device=OPENVINO_DEVICE
+            model_id, subfolder=subfolder, export=export, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         with TemporaryDirectory() as tmpdirname:
             local_dir = Path(tmpdirname) / "model"
             snapshot_download(repo_id=model_id, local_dir=local_dir, user_agent=http_user_agent())
             OVModelForFeatureExtraction.from_pretrained(
-                local_dir, subfolder=subfolder, export=export, device=OPENVINO_DEVICE
+                local_dir,
+                subfolder=subfolder,
+                export=export,
+                device=OPENVINO_DEVICE,
+                torch_export=USE_TORCH_EXPORT,
             )
 
     def test_infer_export_when_loading(self):
@@ -611,10 +653,14 @@ class OVModelIntegrationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             model.save_pretrained(Path(tmpdirname) / "original")
             # Load original model and convert
-            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname, device=OPENVINO_DEVICE) / "original")
+            model = OVModelForCausalLM.from_pretrained(
+                Path(tmpdirname, device=OPENVINO_DEVICE) / "original", torch_export=USE_TORCH_EXPORT
+            )
             model.save_pretrained(Path(tmpdirname) / "openvino")
             # Load openvino model
-            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname, device=OPENVINO_DEVICE) / "openvino")
+            model = OVModelForCausalLM.from_pretrained(
+                Path(tmpdirname, device=OPENVINO_DEVICE) / "openvino", torch_export=USE_TORCH_EXPORT
+            )
         del model
         gc.collect()
 
@@ -688,7 +734,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         model_id = "katuni4ka/tiny-random-LlamaForCausalLM-onnx"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id, from_onnx=True, device=OPENVINO_DEVICE)
+        loaded_model = OVModelForCausalLM.from_pretrained(
+            model_id, from_onnx=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         # Test that PERFORMANCE_HINT is set to LATENCY by default
         self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
@@ -700,11 +748,13 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            model = OVModelForCausalLM.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             self.assertEqual(model.use_cache, loaded_model.use_cache)
 
             compile_only_model = OVModelForCausalLM.from_pretrained(
-                tmpdirname, compile_only=True, device=OPENVINO_DEVICE
+                tmpdirname, compile_only=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
             self.assertIsInstance(compile_only_model.model, ov.CompiledModel)
             self.assertIsInstance(compile_only_model.request, ov.InferRequest)
@@ -724,8 +774,20 @@ class PipelineTest(unittest.TestCase):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
 
         # verify could load both pytorch and openvino model (export argument should automatically infered)
-        ov_exported_pipe = optimum_pipeline("text-generation", model_id, revision="pt", accelerator="openvino")
-        ov_pipe = optimum_pipeline("text-generation", model_id, revision="ov", accelerator="openvino")
+        ov_exported_pipe = optimum_pipeline(
+            "text-generation",
+            model_id,
+            revision="pt",
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
+        ov_pipe = optimum_pipeline(
+            "text-generation",
+            model_id,
+            revision="ov",
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
@@ -734,7 +796,12 @@ class PipelineTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            ov_exported_pipe = optimum_pipeline("text-generation", tmpdirname, accelerator="openvino")
+            ov_exported_pipe = optimum_pipeline(
+                "text-generation",
+                tmpdirname,
+                accelerator="openvino",
+                model_kwargs={"torch_export": USE_TORCH_EXPORT},
+            )
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
         del ov_exported_pipe
@@ -744,8 +811,19 @@ class PipelineTest(unittest.TestCase):
     def test_seq2seq_load_from_hub(self):
         model_id = "echarlaix/tiny-random-t5"
         # verify could load both pytorch and openvino model (export argument should automatically infered)
-        ov_exported_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
-        ov_pipe = optimum_pipeline("text2text-generation", model_id, revision="ov", accelerator="openvino")
+        ov_exported_pipe = optimum_pipeline(
+            "text2text-generation",
+            model_id,
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
+        ov_pipe = optimum_pipeline(
+            "text2text-generation",
+            model_id,
+            revision="ov",
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
         self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
         self.assertIsInstance(ov_pipe.model, OVBaseModel)
 
@@ -755,7 +833,12 @@ class PipelineTest(unittest.TestCase):
             if not ov_exported_pipe.model.decoder.stateful:
                 self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
                 self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
-            ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
+            ov_exported_pipe = optimum_pipeline(
+                "text2text-generation",
+                tmpdirname,
+                accelerator="openvino",
+                model_kwargs={"torch_export": USE_TORCH_EXPORT},
+            )
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
         del ov_exported_pipe
@@ -783,7 +866,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSequenceClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -815,7 +898,9 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSequenceClassification.from_pretrained(model_id, compile=False, device=OPENVINO_DEVICE)
+        model = OVModelForSequenceClassification.from_pretrained(
+            model_id, compile=False, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
@@ -826,7 +911,12 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
 
-        ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "text-classification",
+            model_id,
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
         ov_outputs = ov_pipe(inputs)
         atol = 1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08
         self.assertTrue(abs(ov_outputs[-1]["score"] - outputs[-1]["score"]) < atol)
@@ -868,7 +958,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForQuestionAnswering.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
@@ -901,7 +991,9 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForQuestionAnswering.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForQuestionAnswering.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
@@ -911,7 +1003,9 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
-        ov_pipe = optimum_pipeline("question-answering", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "question-answering", model_id, accelerator="openvino", model_kwargs={"torch_export": USE_TORCH_EXPORT}
+        )
         ov_outputs = ov_pipe(question, context)
         self.assertEqual(outputs["score"], ov_outputs["score"])
         del model
@@ -923,7 +1017,9 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
         set_seed(SEED)
-        ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        ov_model = OVModelForQuestionAnswering.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         data = load_dataset("squad", split="validation").select(range(50))
@@ -953,7 +1049,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForTokenClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForTokenClassification.from_pretrained(model_id)
@@ -979,7 +1075,9 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForTokenClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForTokenClassification.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
@@ -987,7 +1085,12 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
-        ov_pipe = optimum_pipeline("token-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "token-classification",
+            model_id,
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -997,7 +1100,9 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
 
     def test_default_token_type_ids(self):
         model_id = MODEL_NAMES["bert"]
-        model = OVModelForTokenClassification.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        model = OVModelForTokenClassification.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("this is a simple input", return_tensors="np")
         self.assertTrue("token_type_ids" in model.input_names)
@@ -1031,7 +1136,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForFeatureExtraction.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModel.from_pretrained(model_id)
@@ -1061,7 +1166,9 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForFeatureExtraction.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForFeatureExtraction.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
@@ -1069,7 +1176,9 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(all(isinstance(item, float) for item in row) for row in outputs[0]))
-        ov_pipe = optimum_pipeline("feature-extraction", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "feature-extraction", model_id, accelerator="openvino", model_kwargs={"torch_export": USE_TORCH_EXPORT}
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1][-1], ov_outputs[-1][-1][-1])
         del ov_pipe
@@ -1086,11 +1195,13 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         with TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
-            OVSentenceTransformer.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE).save_pretrained(
-                save_dir
-            )
+            OVSentenceTransformer.from_pretrained(
+                model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            ).save_pretrained(save_dir)
             with self.assertRaises(Exception) as context:
-                OVModelForFeatureExtraction.from_pretrained(save_dir, device=OPENVINO_DEVICE)
+                OVModelForFeatureExtraction.from_pretrained(
+                    save_dir, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+                )
             self.assertIn("Please use `OVSentenceTransformer`", str(context.exception))
 
 
@@ -1127,7 +1238,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForMaskedLM.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         set_seed(SEED)
@@ -1152,7 +1263,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = OVModelForMaskedLM.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForMaskedLM.from_pretrained(model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
@@ -1161,7 +1272,9 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
         set_seed(SEED)
-        ov_pipe = optimum_pipeline("fill-mask", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "fill-mask", model_id, accelerator="openvino", model_kwargs={"torch_export": USE_TORCH_EXPORT}
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1195,7 +1308,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForImageClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         set_seed(SEED)
@@ -1223,7 +1336,9 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForImageClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForImageClassification.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
@@ -1233,7 +1348,12 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
         set_seed(SEED)
-        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "image-classification",
+            model_id,
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1244,7 +1364,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(TIMM_MODELS)
     def test_compare_to_timm(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
@@ -1267,11 +1387,15 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(TIMM_MODELS)
     def test_timm_save_and_infer(self, model_id):
-        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        ov_model = OVModelForImageClassification.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         with TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "timm_ov_model")
             ov_model.save_pretrained(model_save_path)
-            model = OVModelForImageClassification.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
+            model = OVModelForImageClassification.from_pretrained(
+                model_save_path, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
         gc.collect()
 
@@ -1302,7 +1426,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForAudioClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         set_seed(SEED)
@@ -1331,7 +1455,9 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForAudioClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = OVModelForAudioClassification.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
@@ -1340,7 +1466,12 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
         set_seed(SEED)
-        ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "audio-classification",
+            model_id,
+            accelerator="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1]["score"], ov_outputs[-1][-1]["score"])
         del ov_pipe
@@ -1371,7 +1502,9 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
 
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = OVModelForCTC.from_pretrained(MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE)
+            _ = OVModelForCTC.from_pretrained(
+                MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
 
         self.assertIn("only supports the tasks", str(context.exception))
 
@@ -1379,7 +1512,9 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForCTC.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+        ov_model = OVModelForCTC.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         set_seed(SEED)
@@ -1423,7 +1558,9 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
 
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
-            _ = OVModelForAudioXVector.from_pretrained(MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE)
+            _ = OVModelForAudioXVector.from_pretrained(
+                MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
 
         self.assertIn("only supports the tasks", str(context.exception))
 
@@ -1432,7 +1569,7 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForAudioXVector.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
@@ -1480,7 +1617,7 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
     def test_load_vanilla_transformers_which_is_not_supported(self):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioFrameClassification.from_pretrained(
-                MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE
+                MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
             )
 
         self.assertIn("only supports the tasks", str(context.exception))
@@ -1490,7 +1627,7 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForAudioFrameClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
@@ -1539,7 +1676,9 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs, output_attentions=True)
 
-        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+        ov_model = OVModelForCustomTasks.from_pretrained(
+            model_id, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         for input_type in ["pt", "np"]:
@@ -1578,7 +1717,9 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs, output_hidden_states=True)
 
-        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+        ov_model = OVModelForCustomTasks.from_pretrained(
+            model_id, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         for input_type in ["pt", "np"]:
             inputs = preprocessor(images=image, return_tensors=input_type)
@@ -1613,7 +1754,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_model(self):
         loaded_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID_IR, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID_IR, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
@@ -1645,7 +1786,9 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
             self.assertTrue(loaded_model.text_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
             self.assertTrue(loaded_model.visual_model._xml_model_name in folder_contents)
             self.assertTrue(loaded_model.visual_model._xml_model_name.replace(".xml", ".bin") in folder_contents)
-            model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
 
         outputs = model(tokens, processed_image)
         self.assertTrue(torch.equal(loaded_model_outputs.logits_per_image, outputs.logits_per_image))
@@ -1667,7 +1810,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
             clip_text_features = clip_model.encode_text(text)
 
         ov_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         ov_outputs = ov_model(text, image)
 
@@ -1687,7 +1830,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
     def test_functions(self):
         model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
@@ -1754,7 +1897,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVSentenceTransformer.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(hasattr(ov_model, "encode"))
@@ -1772,12 +1915,14 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_sentence_transformers_save_and_infer(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVSentenceTransformer.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         with TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "sentence_transformers_ov_model")
             ov_model.save_pretrained(model_save_path)
-            model = OVSentenceTransformer.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
+            model = OVSentenceTransformer.from_pretrained(
+                model_save_path, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            )
             sentences = ["This is an example sentence", "Each sentence is converted"]
             model.encode(sentences)
         gc.collect()
@@ -1813,6 +1958,7 @@ class OVLangchainTest(unittest.TestCase):
             task="text-generation",
             pipeline_kwargs={"max_new_tokens": 10},
             backend="openvino",
+            model_kwargs={"torch_export": USE_TORCH_EXPORT},
         )
         self.assertIsInstance(hf_pipe.pipeline.model, OVBaseModel)
 
@@ -1842,7 +1988,9 @@ class OVSamIntegrationTest(unittest.TestCase):
 
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+        ov_model = OVSamModel.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         processor = get_preprocessor(model_id)
 
         self.assertIsInstance(ov_model.vision_encoder, OVSamVisionEncoder)
@@ -1858,7 +2006,9 @@ class OVSamIntegrationTest(unittest.TestCase):
         ).convert("RGB")
         inputs = processor(IMAGE, input_points=input_points, return_tensors="pt")
 
-        transformers_model = OVSamModel.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        transformers_model = OVSamModel.from_pretrained(
+            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
 
         # test end-to-end inference
         ov_outputs = ov_model(**inputs)
@@ -1895,7 +2045,9 @@ class OVSamIntegrationTest(unittest.TestCase):
     def test_reshape(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVSamModel.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+        ov_model = OVSamModel.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+        )
         processor = get_preprocessor(model_id)
         self.assertTrue(ov_model.is_dynamic)
         input_points = [[[450, 600]]]
@@ -1930,7 +2082,7 @@ class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForZeroShotImageClassification.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         processor = get_preprocessor(model_id)
 
