@@ -56,7 +56,7 @@ if is_nncf_available():
     logging.disable(logging.INFO)
     import nncf
 
-    if is_nncf_version("<", "2.19"):
+    if not is_nncf_version(">=", "2.19.0.dev0"):
         raise ImportError(
             "NNCF version 2.19 or higher is required to use NNCF-based quantization. "
             f"Please upgrade your NNCF installation. The current version of NNCF is {nncf.__version__}."
