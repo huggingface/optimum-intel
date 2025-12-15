@@ -683,10 +683,7 @@ class OVCalibrationDatasetBuilder:
         """
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        # TODO: remove config.trust_remote_code from the condition once it is deprecated
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-        )
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
         nsamples = config.num_samples if config.num_samples else 128
         if isinstance(config.dataset, str):
             if config.dataset == "auto":
@@ -735,14 +732,9 @@ class OVCalibrationDatasetBuilder:
 
         from PIL import Image
 
-        # TODO: remove config.trust_remote_code from the condition once it is deprecated
-        processor = AutoProcessor.from_pretrained(
-            config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-        )
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
         try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
             tokenizer_error = None
         except Exception as tokenizer_error:  # noqa: F841
             tokenizer = None
@@ -857,10 +849,7 @@ class OVCalibrationDatasetBuilder:
                 component.request, collected_inputs[component_name], apply_caching=True
             )
         try:
-            # TODO: remove config.trust_remote_code from the condition once it is deprecated
-            processor = AutoProcessor.from_pretrained(
-                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
 
             # Download audio inputs beforehand to avoid possible connection issues
             num_samples = config.num_samples or 32
@@ -902,10 +891,7 @@ class OVCalibrationDatasetBuilder:
             def get_tokenizer():
                 if config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                # TODO: remove config.trust_remote_code from the condition once it is deprecated
-                return AutoTokenizer.from_pretrained(
-                    config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-                )
+                return AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading dataset", total=num_samples))
@@ -997,10 +983,8 @@ class OVCalibrationDatasetBuilder:
             else:
                 if quantization_config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
                 tokenizer = AutoTokenizer.from_pretrained(
-                    quantization_config.tokenizer,
-                    trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
+                    quantization_config.tokenizer, trust_remote_code=self.trust_remote_code
                 )
             return tokenizer
 
@@ -1084,10 +1068,9 @@ class OVCalibrationDatasetBuilder:
         self.model.compile()
 
         def get_processor():
-            # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
             processor = AutoProcessor.from_pretrained(
                 quantization_config.processor,
-                trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
+                trust_remote_code=self.trust_remote_code,
             )
             return processor
 
@@ -1160,10 +1143,7 @@ class OVCalibrationDatasetBuilder:
         )
 
         try:
-            # TODO: remove config.trust_remote_code from the condition once it is deprecated
-            processor = AutoProcessor.from_pretrained(
-                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
             for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
