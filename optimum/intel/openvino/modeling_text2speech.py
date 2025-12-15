@@ -33,13 +33,14 @@ from transformers.file_utils import add_start_docstrings
 from transformers.utils import ModelOutput
 
 from ...exporters.openvino.stateful import model_has_state
+from . import OV_DECODER_NAME, OV_ENCODER_NAME
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_seq2seq import (
     INPUTS_DOCSTRING,
     OVModelForSeq2SeqLM,
 )
-from .utils import TemporaryDirectory
+from .utils import TemporaryDirectory, classproperty
 
 
 logger = logging.getLogger(__name__)
@@ -184,11 +185,16 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
     to have encoder, decoder, postnet, and vocoder
     """
 
+    @classproperty
+    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+        return {
+            "encoder": OV_ENCODER_NAME,
+            "decoder": OV_DECODER_NAME,
+            "postnet": "openvino_postnet.xml",
+            "vocoder": "openvino_vocoder.xml",
+        }
+
     main_input_name = "input_ids"
-    OV_ENCODER_MODEL_NAME = "openvino_encoder_model.xml"
-    OV_DECODER_MODEL_NAME = "openvino_decoder_model.xml"
-    OV_POSTNET_MODEL_NAME = "openvino_postnet.xml"
-    OV_VOCODER_MODEL_NAME = "openvino_vocoder.xml"
     _supports_cache_class = True
 
     def __init__(
@@ -277,17 +283,9 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_models = list(self.ov_models.values())
-        dst_file_names = [
-            self.OV_ENCODER_MODEL_NAME,
-            self.OV_DECODER_MODEL_NAME,
-            self.OV_POSTNET_MODEL_NAME,
-            self.OV_VOCODER_MODEL_NAME,
-        ]
-
-        for src_model, dst_file_name in zip(src_models, dst_file_names):
-            dst_path = os.path.join(save_directory, dst_file_name)
-            openvino.save_model(src_model, dst_path, compress_to_fp16=False)
+        for ov_model_name, ov_model_path in self.ov_model_paths.items():
+            dst_path = os.path.join(save_directory, ov_model_path)
+            openvino.save_model(self.ov_models[ov_model_name], dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -321,16 +319,9 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         compile_only = kwargs.pop("compile_only", False)
         enable_compilation = kwargs.pop("compile", True)
 
-        model_file_names = {
-            "encoder_model": cls.OV_ENCODER_MODEL_NAME,
-            "encoder_model_bin": cls.OV_ENCODER_MODEL_NAME.replace(".xml", ".bin"),
-            "decoder_model": cls.OV_DECODER_MODEL_NAME,
-            "decoder_model_bin": cls.OV_DECODER_MODEL_NAME.replace(".xml", ".bin"),
-            "postnet_model": cls.OV_POSTNET_MODEL_NAME,
-            "postnet_model_bin": cls.OV_POSTNET_MODEL_NAME.replace(".xml", ".bin"),
-            "vocoder_model": cls.OV_VOCODER_MODEL_NAME,
-            "vocoder_model_bin": cls.OV_VOCODER_MODEL_NAME.replace(".xml", ".bin"),
-        }
+        model_file_names = cls.OV_MODEL_PATHS.copy()
+        for k in tuple(model_file_names):
+            model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
 
         if os.path.isdir(model_id):
             # Load model from a local directory
@@ -351,31 +342,31 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
                 file_names[name] = model_cache_path
             model_save_dir = Path(model_cache_path).parent
         if not compile_only:
-            encoder_model = OVBaseModel.load_model(file_names["encoder_model"])
-            decoder_model = OVBaseModel.load_model(file_names["decoder_model"])
-            postnet_model = OVBaseModel.load_model(file_names["postnet_model"])
-            vocoder_model = OVBaseModel.load_model(file_names["vocoder_model"])
+            encoder_model = OVBaseModel.load_model(file_names["encoder"])
+            decoder_model = OVBaseModel.load_model(file_names["decoder"])
+            postnet_model = OVBaseModel.load_model(file_names["postnet"])
+            vocoder_model = OVBaseModel.load_model(file_names["vocoder"])
         else:
             encoder_model = OVBaseModel._compile_model(
-                file_names["encoder_model"],
+                file_names["encoder"],
                 device,
                 ov_config,
                 model_save_dir,
             )
             decoder_model = OVBaseModel._compile_model(
-                file_names["decoder_model"],
+                file_names["decoder"],
                 device,
                 ov_config,
                 model_save_dir,
             )
             postnet_model = OVBaseModel._compile_model(
-                file_names["postnet_model"],
+                file_names["postnet"],
                 device,
                 ov_config,
                 model_save_dir,
             )
             vocoder_model = OVBaseModel._compile_model(
-                file_names["vocoder_model"],
+                file_names["vocoder"],
                 device,
                 ov_config,
                 model_save_dir,

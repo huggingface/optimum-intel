@@ -41,6 +41,7 @@ from .utils import (
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
     OV_VISION_EMBEDDINGS_MODEL_NAME,
     TemporaryDirectory,
+    classproperty,
 )
 
 
@@ -346,6 +347,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     additional_parts = []
     auto_model_class = transformers_auto_class
 
+    @classproperty
+    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+        model_paths = {
+            "lm_model": OV_LANGUAGE_MODEL_NAME,
+            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
+        }
+        for part in cls.additional_parts:
+            model_paths[part] = f"openvino_{part}_model.xml"
+        return model_paths
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -438,15 +450,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        dst_file_names = {
-            "lm_model": OV_LANGUAGE_MODEL_NAME,
-            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
-            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
-        }
-
         for name, model in self.ov_models.items():
-            dst_file_name = dst_file_names.get(name, f"openvino_{name}.xml")
-            dst_path = os.path.join(save_directory, dst_file_name)
+            dst_path = os.path.join(save_directory, self.ov_model_paths[name])
             ov.save_model(model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
@@ -519,19 +524,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        model_file_names = {
-            "language_model": OV_LANGUAGE_MODEL_NAME,
-            "language_model_bin": OV_LANGUAGE_MODEL_NAME.replace(".xml", ".bin"),
-            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
-            "text_embeddings_bin": OV_TEXT_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
-            "vision_embeddings": OV_VISION_EMBEDDINGS_MODEL_NAME,
-            "vision_embeddings_bin": OV_VISION_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
-        }
-
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        for part in model_cls.additional_parts:
-            model_file_names[part] = f"openvino_{part}_model.xml"
-            model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
+        model_file_names = model_cls.OV_MODEL_PATHS.copy()
+        for k in tuple(model_file_names):
+            model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory

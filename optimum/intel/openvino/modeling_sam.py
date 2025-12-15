@@ -22,6 +22,7 @@ from .utils import (
     OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
     OV_VISION_ENCODER_MODEL_NAME,
     TemporaryDirectory,
+    classproperty,
     model_has_dynamic_inputs,
 )
 
@@ -74,6 +75,13 @@ class OVSamPromptEncoder(OVModelPart):
 class OVSamModel(OVBaseModel):
     export_feature = "feature-extraction"
     auto_model_class = SamModel
+
+    @classproperty
+    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+        return {
+            "vision_encoder": OV_VISION_ENCODER_MODEL_NAME,
+            "prompt_encoder_mask_decoder": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
+        }
 
     def __init__(
         self,
@@ -145,12 +153,8 @@ class OVSamModel(OVBaseModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        dst_file_names = {
-            "vision_encoder": OV_VISION_ENCODER_MODEL_NAME,
-            "prompt_encoder_mask_decoder": OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
-        }
         for name, model in self.ov_models.items():
-            dst_file_name = dst_file_names[name]
+            dst_file_name = self.ov_model_paths[name]
             dst_path = os.path.join(save_directory, dst_file_name)
             ov.save_model(model, dst_path, compress_to_fp16=False)
         self._save_openvino_config(save_directory)
@@ -222,10 +226,12 @@ class OVSamModel(OVBaseModel):
         from_onnx = kwargs.get("from_onnx", False)
 
         default_vision_encoder_file_name = (
-            ONNX_VISION_ENCODER_MODEL_NAME if from_onnx else OV_VISION_ENCODER_MODEL_NAME
+            ONNX_VISION_ENCODER_MODEL_NAME if from_onnx else cls.OV_MODEL_PATHS["vision_encoder"]
         )
         default_prompt_encoder_mask_decoder_file_name = (
-            ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME if from_onnx else OV_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME
+            ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME
+            if from_onnx
+            else cls.OV_MODEL_PATHS["prompt_encoder_mask_decoder"]
         )
         vision_encoder_file_name = vision_encoder_file_name or default_vision_encoder_file_name
         prompt_encoder_mask_decoder_file_name = (

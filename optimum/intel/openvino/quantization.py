@@ -14,6 +14,7 @@
 
 import copy
 import dataclasses
+import gc
 import inspect
 import logging
 from collections import UserDict, deque
@@ -73,6 +74,7 @@ from .utils import (
     PREDEFINED_SPEECH_TO_TEXT_DATASETS,
     PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS,
     PREDEFINED_VISUAL_LM_DATASETS,
+    TemporaryDirectory,
 )
 
 
@@ -1245,6 +1247,7 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
+        immediate_save: bool = False,
         **kwargs,
     ):
         """
@@ -1267,7 +1270,10 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `False`):
                 Whether to remove the columns unused by the model forward method.
-
+            immediate_save (`bool`, defaults to `False`):
+                Whether to save each quantized sub-model immediately after its quantization. This will reduce peak
+                memory usage during quantization, but will make the model unusable after quantization.
+                To use this option, `save_directory` must be provided.
         Examples:
         ```python
         >>> from optimum.intel import OVQuantizer, OVModelForCausalLM
@@ -1291,6 +1297,9 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
+        if immediate_save and save_directory is None:
+            raise ValueError("Please provide `save_directory` to use `immediate_save` option.")
+
         if remove_unused_columns:
             logger.warning("`remove_unused_columns` is deprecated and will be removed in optimum-intel v1.25.")
 
@@ -1373,6 +1382,7 @@ class OVQuantizer(OptimumQuantizer):
                 ov_config,
                 save_directory,
                 calibration_dataset,
+                immediate_save,
                 **kwargs,
             )
         elif isinstance(self.model, torch.nn.Module):
@@ -1387,6 +1397,7 @@ class OVQuantizer(OptimumQuantizer):
         ov_config: OVConfig,
         save_directory: Union[str, Path] = None,
         calibration_dataset: Optional[OVCalibrationDataset] = None,
+        immediate_save: bool = False,
         **kwargs,
     ):
         quantization_config = ov_config.quantization_config
@@ -1474,7 +1485,7 @@ class OVQuantizer(OptimumQuantizer):
             else OVPipelineQuantizationConfig(quantization_configs, default_config=default_config)
         )
 
-        for ov_model_name in self.model.ov_models:
+        for ov_model_name in self.model._ov_model_names:
             config = pipeline_quantization_config.quantization_configs.get(
                 ov_model_name, pipeline_quantization_config.default_config
             )
@@ -1496,7 +1507,7 @@ class OVQuantizer(OptimumQuantizer):
                     # 8-bit weight only data-aware quantization is not supported
                     nncf_dataset = None
                 # Weight only quantization is performed in-place
-                _weight_only_quantization(ov_model, config, nncf_dataset, **kwargs)
+                quantized_model = _weight_only_quantization(ov_model, config, nncf_dataset, **kwargs)
             elif isinstance(config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
                 if nncf_dataset is None:
                     raise ValueError(
@@ -1512,14 +1523,40 @@ class OVQuantizer(OptimumQuantizer):
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(config)}.")
 
+            if immediate_save:
+                temporary_directory = TemporaryDirectory()
+                try:
+                    temp_model_path = Path(temporary_directory.name) / "model.xml"
+                    openvino.save_model(quantized_model, str(temp_model_path), compress_to_fp16=False)
+
+                    # Unload the model to allow Python's garbage collector to free its memory and file system -- to
+                    # delete corresponding model files
+                    self.model.unload_ov_model(ov_model)
+                    del quantized_model
+                    del ov_model
+                    gc.collect()
+
+                    ov_model_path = save_directory / Path(self.model.ov_model_paths[ov_model_name])
+                    if not ov_model_path.exists():
+                        raise FileNotFoundError(f"Expected to find model file at {ov_model_path} to overwrite it.")
+                    ov_model_path.unlink()
+                    ov_model_path.with_suffix(".bin").unlink()
+                    temp_model_path.rename(save_directory / ov_model_path)
+                    temp_model_path.with_suffix(".bin").rename((save_directory / ov_model_path).with_suffix(".bin"))
+                finally:
+                    temporary_directory.cleanup()
+
         self.model.clear_requests()
 
         self.model._openvino_config = OVConfig(quantization_config=quantization_config)
         self.model._set_ov_config_parameters()
         if save_directory is not None:
-            save_directory = Path(save_directory)
-            save_directory.mkdir(parents=True, exist_ok=True)
-            self.model.save_pretrained(save_directory)
+            if immediate_save:
+                self.model._openvino_config.save_pretrained(save_directory)
+            else:
+                save_directory = Path(save_directory)
+                save_directory.mkdir(parents=True, exist_ok=True)
+                self.model.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.Model, output_path: str):
