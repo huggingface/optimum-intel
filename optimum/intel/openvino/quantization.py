@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import nncf
 import numpy as np
@@ -29,15 +29,11 @@ import openvino
 import requests
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf.torch import register_module
-from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
-from transformers.pytorch_utils import Conv1D
-from transformers.utils import is_accelerate_available
 
 from optimum.quantization_base import OptimumQuantizer
 
@@ -85,7 +81,6 @@ if is_datasets_available():
 if is_sentence_transformers_available():
     from .modeling_sentence_transformers import OVSentenceTransformer
 
-register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
 logger = logging.getLogger(__name__)
@@ -115,21 +110,6 @@ class OVCalibrationDataset(UserDict):
             return self.data[item]
         except KeyError:
             raise AttributeError
-
-
-class OVDataLoader(PTInitializingDataLoader):
-    def get_inputs(self, dataloader_output) -> Tuple[Tuple, Dict]:
-        return (), dataloader_output
-
-    @property
-    def batch_size(self):
-        batch_size = self._data_loader.batch_size
-        if is_accelerate_available():
-            from accelerate.data_loader import DataLoaderStateMixin
-
-            if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
-                batch_size = self._data_loader.total_batch_size
-        return batch_size
 
 
 class InferRequestWrapper:
@@ -625,7 +605,7 @@ class OVCalibrationDatasetBuilder:
         batch_size: Optional[int] = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
-    ) -> OVDataLoader:
+    ) -> DataLoader:
         """
         Wrap dataset into a dataloader.
         """
@@ -650,10 +630,10 @@ class OVCalibrationDatasetBuilder:
         dataloader = DataLoader(
             dataset, batch_size=batch_size, sampler=sampler, collate_fn=data_collator, drop_last=False
         )
-        return OVDataLoader(dataloader)
+        return dataloader
 
     def _prepare_decoder_calibration_data(
-        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
+        self, quantization_config: OVQuantizationConfigBase, dataloader: DataLoader
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data by collecting model inputs during inference.
