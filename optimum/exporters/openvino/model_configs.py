@@ -90,6 +90,7 @@ from .model_patcher import (
     DeepseekPatcher,
     FalconModelPatcher,
     FluxTransfromerModelPatcher,
+    Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
     GptJModelPatcher,
     GptNeoModelPatcher,
@@ -1204,6 +1205,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
 )
 class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
+    _MODEL_PATCHER = Gemma2ModelPatcher
 
 
 @register_in_tasks_manager(
