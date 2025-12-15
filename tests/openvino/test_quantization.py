@@ -1251,15 +1251,19 @@ class OVWeightCompressionTest(unittest.TestCase):
             stateful=False,
             trust_remote_code=trust_remote_code,
         )
+        ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()
 
         if model_type == "open-clip":
-            self.assertEqual(model.text_model._openvino_config.quantization_config.bits, 8)
-            self.assertEqual(model.text_model._openvino_config.dtype, "int8")
-            self.assertEqual(model.visual_model._openvino_config.quantization_config.bits, 8)
-            self.assertEqual(model.visual_model._openvino_config.dtype, "int8")
+            self.assertEqual(
+                model.text_model._openvino_config.quantization_config.default_config.to_dict(), ref_config
+            )
+            self.assertEqual(
+                model.visual_model._openvino_config.quantization_config.default_config.to_dict(), ref_config
+            )
         else:
-            self.assertEqual(model._openvino_config.quantization_config.bits, 8)
-            self.assertEqual(model._openvino_config.dtype, "int8")
+            actual_config = model._openvino_config.quantization_config.default_config.to_dict()
+            actual_config["tokenizer"] = actual_config["processor"] = None
+            self.assertEqual(actual_config, ref_config)
 
         if model_type != "open-clip":  # ticket 161043
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
@@ -1396,6 +1400,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             model = model_cls.from_pretrained(
                 model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
             )
+            ref_quantization_config = model._openvino_config.quantization_config
             if quantization_config.quant_method.lower() == "awq":
                 # TODO: Check that AWQ was actually applied
                 pass
@@ -1418,8 +1423,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             )
 
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
+            self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -1555,6 +1559,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             model = model_cls.from_pretrained(
                 model_id, export=True, quantization_config=quantization_config, trust_remote_code=trust_remote_code
             )
+            ref_quantization_config = model._openvino_config.quantization_config
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
 
@@ -1562,8 +1567,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             model.save_pretrained(tmp_dir)
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, quantization_config.dtype)
+            self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):

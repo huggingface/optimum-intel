@@ -690,9 +690,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         from optimum.intel.openvino.quantization import OVQuantizer
 
         quantizer = OVQuantizer(self, trust_remote_code=trust_remote_code)
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
         quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
         quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
-        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 

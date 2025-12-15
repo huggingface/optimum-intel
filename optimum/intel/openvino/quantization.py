@@ -1566,6 +1566,10 @@ class OVQuantizer(OptimumQuantizer):
                         default_config = quantization_config_copy
                     else:
                         # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
+                        if len(self.model.ov_submodels) > 1 or "model" not in self.model.ov_submodels:
+                            raise NotImplementedError(
+                                f"Hybrid quantization is not supported for model type {type(self.model)}"
+                            )
                         quantization_configs["model"] = quantization_config
                 elif isinstance(quantization_config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
                     #
