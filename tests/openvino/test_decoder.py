@@ -29,6 +29,8 @@ from optimum.intel.utils.import_utils import is_transformers_version
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (

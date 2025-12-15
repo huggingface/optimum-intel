@@ -114,6 +114,9 @@ from optimum.utils import (
 from optimum.utils.testing_utils import require_diffusers
 
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
 class Timer(object):
     def __enter__(self):
         self.elapsed = time.perf_counter()
