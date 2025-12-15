@@ -311,6 +311,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         device = kwargs.pop("device", "CPU")
@@ -412,9 +413,10 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            model_id = export_model_id or getattr(config, "name_or_path", model_id)
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             model._apply_quantization(
-                quantization_config, compile_only, enable_compilation, str(model_id), trust_remote_code
+                quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
             )
 
         return model

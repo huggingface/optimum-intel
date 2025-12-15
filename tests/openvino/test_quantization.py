@@ -1032,7 +1032,118 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVSanaPipeline, "sana", 19, 53),
     ]
 
-    DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
+    DEFAULT_4BIT_COMPRESSION_CONFIGURATIONS = [
+        (OVModelForCausalLM, "llama", {"bits": 4, "group_size": 8, "ratio": 0.5}, {"model": {"int8": 26, "int4": 6}}),
+        (
+            OVModelForFeatureExtraction,
+            "llama",
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {"model": {"int8": 22, "int4": 8}},
+        ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            {"quantization_configs": {"unet": {"bits": 4, "group_size": -1, "ratio": 0.5}}},
+            {
+                "unet": {"int8": 182, "int4": 60},
+                "vae_decoder": {},
+                "vae_encoder": {},
+                "text_encoder": {},
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava",
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "lm_model": {"int8": 22, "int4": 8},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 9},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "vision_encoder": {"int8": 112, "int4": 38},
+                "prompt_encoder_mask_decoder": {"int8": 94, "int4": 4},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            {"bits": 4, "group_size": 8, "ratio": 0.5},
+            {
+                "decoder": {"int8": 40, "int4": 4},
+                "encoder": {"int8": 24, "int4": 4},
+            },
+        ),
+    ]
+
+    DEFAULT_IGNORED_SCOPE_CONFIGURATIONS = [
+        (
+            OVModelForCausalLM,
+            "llama",
+            {
+                "model": {
+                    "names": ["__module.model.layers.1.self_attn.v_proj/ov_ext::linear/MatMul"],
+                    "patterns": ["__module.model.layers.\\d.self_attn.o_proj/ov_ext::linear/MatMul"],
+                }
+            },
+        ),
+        (
+            OVModelForFeatureExtraction,
+            "llama",
+            {
+                "model": {
+                    "names": ["__module.layers.1.self_attn.v_proj/aten::linear/MatMul"],
+                    "patterns": ["__module.layers.\\d.self_attn.o_proj/aten::linear/MatMul"],
+                }
+            },
+        ),
+        (
+            OVStableDiffusionPipeline,
+            "stable-diffusion",
+            {
+                "unet": {"names": ["__module.time_embedding.linear_1/aten::linear/MatMul"]},
+                "text_encoder": {
+                    "names": ["__module.text_model.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"]
+                },
+            },
+        ),
+        (
+            OVModelForVisualCausalLM,
+            "llava",
+            {
+                "lm_model": {"names": ["__module.model.language_model.layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "vision_embeddings_model": {
+                    "names": [
+                        "__module.model.vision_tower.vision_model.encoder.layers.0.self_attn.q_proj/aten::linear/MatMul"
+                    ]
+                },
+                "text_embeddings_model": {"patterns": ["."]},
+            },
+        ),
+        (
+            OVSamModel,
+            "sam",
+            {
+                "prompt_encoder_mask_decoder": {
+                    "names": ["__module.model.prompt_encoder.shared_embedding/aten::matmul/MatMul"]
+                },
+                "vision_encoder": {"names": ["__module.vision_encoder.layers.0.attn.qkv/aten::linear/MatMul"]},
+            },
+        ),
+        (
+            OVModelForSpeechSeq2Seq,
+            "whisper",
+            {
+                "encoder": {"names": ["__module.layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "decoder": {"names": ["__module.model.decoder.layers.0.encoder_attn.k_proj/aten::linear/MatMul"]},
+            },
+        ),
+    ]
 
     def test_filtered_architectures(cls):
         expected = set()
@@ -1228,30 +1339,52 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_int8_nodes, num_weight_nodes["int8"])
         self.assertEqual(0, num_weight_nodes["int4"])
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
-    @unittest.mock.patch.dict(
-        "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
-    )
-    def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
-        with TemporaryDirectory() as tmp_dir:
-            model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4})
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+    @parameterized.expand(DEFAULT_4BIT_COMPRESSION_CONFIGURATIONS)
+    def test_ovmodel_4bit_default_compression(
+        self, model_cls, model_type, default_config, expected_num_weight_nodes_per_model
+    ):
+        with unittest.mock.patch.dict(
+            "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS",
+            {MODEL_NAMES[model_type]: default_config},
+            clear=False,
+        ):
+            model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, quantization_config={"bits": 4})
+            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
-            _, num_weight_nodes = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_weight_nodes["int4"])
-            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
-            model.save_pretrained(tmp_dir)
+    @parameterized.expand(DEFAULT_IGNORED_SCOPE_CONFIGURATIONS)
+    def test_ovmodel_default_ignored_scope(self, model_cls, model_type, expected_ignored_scope_per_model):
+        with unittest.mock.patch.dict(
+            "optimum.intel.openvino.configuration._DEFAULT_IGNORED_SCOPE_CONFIGS",
+            {MODEL_NAMES[model_type]: expected_ignored_scope_per_model},
+            clear=False,
+        ):
+            with TemporaryDirectory() as tmp_dir:
+                model_id = MODEL_NAMES[model_type]
+                model = model_cls.from_pretrained(
+                    model_id,
+                    export=True,
+                    quantization_config={"bits": 8},
+                )
+                model.save_pretrained(tmp_dir)
 
-            openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
-            self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, "int4")
-            if model_id == "facebook/opt-125m":
-                for key, value in self.DEFAULT_INT4_CONFIG.items():
-                    self.assertEqual(value, getattr(openvino_config.quantization_config, key))
-            check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
+                model = model_cls.from_pretrained(tmp_dir)
+                for ov_model_name, expected_ignored_scope in expected_ignored_scope_per_model.items():
+                    rt_info = model.ov_models[ov_model_name].get_rt_info()
+                    nncf_info = rt_info["nncf"]
+                    quantization_info = nncf_info["weight_compression"]
+
+                    self.assertIsInstance(
+                        quantization_info["ignored_scope"],
+                        dict,
+                        "Ignored scope is not found in the runtime info",
+                    )
+
+                    ignored_scope = {k: eval(v.value) for k, v in quantization_info["ignored_scope"].items()}
+                    self.assertEqual(
+                        expected_ignored_scope,
+                        ignored_scope,
+                        f"Ignored scope {ignored_scope} does not match expected {expected_ignored_scope}",
+                    )
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(

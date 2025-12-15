@@ -445,6 +445,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
@@ -549,10 +550,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
-            model._apply_quantization(
-                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
-            )
+            model_id = export_model_id or getattr(config, "name_or_path", model_id)
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -629,6 +629,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             quantization_config=quantization_config,
             compile_only=compile_only,
             trust_remote_code=trust_remote_code,
+            export_model_id=model_id,
             **kwargs,
         )
 

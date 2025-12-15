@@ -41,6 +41,7 @@ from .configuration import (
     OVDynamicQuantizationConfig,
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
+    _apply_default_ignored_scope_config,
     _quantization_config_from_dict,
     get_default_quantization_config,
 )
@@ -436,6 +437,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -467,6 +469,8 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 Whether or not to apply 8-bit weight quantization.
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
+            export_model_id (`str`, *optional*):
+                The original model id that was used for model export. Used to resolve default quantization config.
         """
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -507,10 +511,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
-            model._apply_quantization(
-                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
-            )
+            model_id = export_model_id or getattr(config, "name_or_path", model_id)
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -681,14 +684,16 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 "quantization is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        # TODO: Expand to pipeline quantization config and apply default ignored scope
         if isinstance(quantization_config, dict):
             quantization_config = _quantization_config_from_dict(quantization_config)
-        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
 
         from optimum.intel.openvino.quantization import OVQuantizer
 
         quantizer = OVQuantizer(self, trust_remote_code=trust_remote_code)
+        quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
+        quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
+
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
         if compile_model:
@@ -822,6 +827,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             quantization_config=quantization_config,
             compile_only=compile_only,
             trust_remote_code=trust_remote_code,
+            export_model_id=model_id,
             **kwargs,
         )
 

@@ -370,6 +370,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             quantization_config=quantization_config,
             trust_remote_code=trust_remote_code,
             compile_only=compile_only,
+            export_model_id=model_id,
             **kwargs,
         )
 
@@ -848,6 +849,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         compile_only: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         generation_config = kwargs.pop("generation_config", None)
@@ -916,11 +918,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(
-                str(config.name_or_path), quantization_config
-            )
+            model_id = export_model_id or getattr(config, "name_or_path", model_id)
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             causal_model._apply_quantization(
-                quantization_config, compile_only, compile_model, str(config.name_or_path), trust_remote_code
+                quantization_config, compile_only, compile_model, model_id, trust_remote_code
             )
 
         return causal_model
