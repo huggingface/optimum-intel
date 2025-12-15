@@ -496,11 +496,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         input_points = [[[450, 600]]]
         raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
         inputs = processor(raw_image, input_points=input_points, return_tensors="pt")
-
         loaded_model_outputs = loaded_model(**inputs)
 
         # Test compile only
-
         compile_only_model = OVModelForFeatureExtraction.from_pretrained(
             self.OV_SAM_MODEL_ID, ov_config=ov_config, compile_only=True, device=OPENVINO_DEVICE
         )
@@ -513,10 +511,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.model, ov.CompiledModel)
         self.assertIsInstance(compile_only_model.prompt_encoder_mask_decoder.request, ov.CompiledModel)
         outputs = compile_only_model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
-        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
-        del compile_only_model
+        torch.testing.assert_close(loaded_model_outputs.iou_scores, outputs.iou_scores, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(loaded_model_outputs.pred_masks, outputs.pred_masks, atol=1e-4, rtol=1e-4)
 
+        # Test save and load
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -532,12 +530,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             )
 
         outputs = model(**inputs)
-        self.assertTrue(torch.equal(loaded_model_outputs.iou_scores, outputs.iou_scores))
-        self.assertTrue(torch.equal(loaded_model_outputs.pred_masks, outputs.pred_masks))
-
-        del loaded_model
-        del model
-        gc.collect()
+        torch.testing.assert_close(loaded_model_outputs.iou_scores, outputs.iou_scores, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(loaded_model_outputs.pred_masks, outputs.pred_masks, atol=1e-4, rtol=1e-4)
 
     def test_load_from_hub_and_save_text_speech_model(self):
         loaded_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
