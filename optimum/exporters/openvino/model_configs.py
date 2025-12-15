@@ -547,6 +547,16 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class GemmaOpenVINOConfig(GemmaOnnxConfig):
     _MODEL_PATCHER = OVDecoderModelPatcher
 
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        # position_ids was removed from optimum-onnx's gemma config because
+        # it's not necessary (it's correctly generated inside the model)
+        # but openvino genai requires it to be present to work properly
+        inputs = super().inputs
+        if "position_ids" not in inputs:
+            inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+        return inputs
+
 
 @register_in_tasks_manager(
     "llama",
@@ -1193,7 +1203,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     ],
     library_name="transformers",
 )
-class Gemma2OpenVINOConfig(GemmaOnnxConfig):
+class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.43.0"
     _MODEL_PATCHER = Gemma2ModelPatcher
 
