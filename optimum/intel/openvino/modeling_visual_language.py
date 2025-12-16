@@ -713,27 +713,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_models[ov_model_name] = ov_model
         return ov_models
 
-    @property
-    def lm_model(self) -> ov.Model:
-        logger.warn(
-            "`lm_model` property is deprecated and will be removed in v1.27. Please use `.language_model.model` instead."
-        )
-        return self.language_model.model
-
-    @property
-    def text_embeddings_model(self) -> ov.Model:
-        logger.warn(
-            "`text_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.language_model.text_emb_model` instead."
-        )
-        return self.language_model.text_emb_model
-
-    @property
-    def vision_embeddings_model(self) -> ov.Model:
-        logger.warn(
-            "`vision_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.vision_embeddings.model` instead."
-        )
-        return self.vision_embeddings.model
-
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
