@@ -3023,6 +3023,9 @@ class Phi4MMConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager(
+    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+)
+@register_in_tasks_manager(
     "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
@@ -3248,12 +3251,11 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
         return inputs
 
 
-@register_in_tasks_manager(
-    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
-)
-class Phi4MultimodalOpenVINOConfig(Phi4MMOpenVINOConfig):
-    MIN_TRANSFORMERS_VERSION = "4.51.0"
-    MAX_TRANSFORMERS_VERSION = "4.60.0"
+# @register_in_tasks_manager(
+#     "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+# )
+# class Phi4MultimodalOpenVINOConfig(Phi4MMOpenVINOConfig):
+#     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
 
 class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
