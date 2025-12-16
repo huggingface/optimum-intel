@@ -1116,8 +1116,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForVisualCausalLM,
             "llava",
             {
-                "lm_model": {"patterns": ["layers.0.self_attn.q_proj/aten::linear/MatMul"]},
-                "vision_embeddings_model": {"patterns": ["layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "lm_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "vision_embeddings_model": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
                 "text_embeddings_model": {"patterns": ["."]},
             },
         ),
@@ -1135,8 +1135,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForSpeechSeq2Seq,
             "whisper",
             {
-                "encoder": {"patterns": ["layers.0.self_attn.q_proj/aten::linear/MatMul"]},
-                "decoder": {"patterns": ["layers.0.encoder_attn.k_proj/aten::linear/MatMul"]},
+                "encoder": {"patterns": [".*layers.0.self_attn.q_proj/aten::linear/MatMul"]},
+                "decoder": {"patterns": [".*layers.0.encoder_attn.k_proj/aten::linear/MatMul"]},
             },
         ),
     ]
