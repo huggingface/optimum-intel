@@ -1196,7 +1196,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
             pt_model.save_pretrained(tmpdir)
-            maybe_save_preprocessors(MODEL_NAMES[test_model_id], tmpdir)
+            maybe_save_preprocessors(MODEL_NAMES[model_name], tmpdir)
             with open(Path(tmpdir) / "config.json", "r") as f:
                 config = json.load(f)
                 config["_name_or_path"] = model_id
@@ -1294,7 +1294,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         options,
     ):
         with TemporaryDirectory() as tmpdir:
-            tmpdir = "tmp"
             # 1. Create a local copy of the model so that we can override _name_or_path
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[test_model_id])
             pt_model.save_pretrained(tmpdir)
