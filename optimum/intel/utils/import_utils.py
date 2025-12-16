@@ -407,7 +407,8 @@ def is_nncf_version(operation: str, version: str):
     """
     if not _nncf_available:
         return False
-    return compare_versions(parse(_nncf_version), operation, version)
+    base_version = parse(_nncf_version).base_version
+    return compare_versions(parse(base_version), operation, version)
 
 
 def is_openvino_tokenizers_version(operation: str, version: str):
