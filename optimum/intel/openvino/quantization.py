@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import nncf
 import numpy as np
@@ -29,15 +29,11 @@ import openvino
 import requests
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf.torch import register_module
-from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
-from transformers.pytorch_utils import Conv1D
-from transformers.utils import is_accelerate_available
 
 from optimum.quantization_base import OptimumQuantizer
 
@@ -85,7 +81,6 @@ if is_datasets_available():
 if is_sentence_transformers_available():
     from .modeling_sentence_transformers import OVSentenceTransformer
 
-register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
 logger = logging.getLogger(__name__)
@@ -115,21 +110,6 @@ class OVCalibrationDataset(UserDict):
             return self.data[item]
         except KeyError:
             raise AttributeError
-
-
-class OVDataLoader(PTInitializingDataLoader):
-    def get_inputs(self, dataloader_output) -> Tuple[Tuple, Dict]:
-        return (), dataloader_output
-
-    @property
-    def batch_size(self):
-        batch_size = self._data_loader.batch_size
-        if is_accelerate_available():
-            from accelerate.data_loader import DataLoaderStateMixin
-
-            if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
-                batch_size = self._data_loader.total_batch_size
-        return batch_size
 
 
 class InferRequestWrapper:
@@ -625,7 +605,7 @@ class OVCalibrationDatasetBuilder:
         batch_size: Optional[int] = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
-    ) -> OVDataLoader:
+    ) -> DataLoader:
         """
         Wrap dataset into a dataloader.
         """
@@ -650,10 +630,10 @@ class OVCalibrationDatasetBuilder:
         dataloader = DataLoader(
             dataset, batch_size=batch_size, sampler=sampler, collate_fn=data_collator, drop_last=False
         )
-        return OVDataLoader(dataloader)
+        return dataloader
 
     def _prepare_decoder_calibration_data(
-        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
+        self, quantization_config: OVQuantizationConfigBase, dataloader: DataLoader
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data by collecting model inputs during inference.
@@ -683,10 +663,7 @@ class OVCalibrationDatasetBuilder:
         """
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        # TODO: remove config.trust_remote_code from the condition once it is deprecated
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-        )
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
         nsamples = config.num_samples if config.num_samples else 128
         if isinstance(config.dataset, str):
             if config.dataset == "auto":
@@ -735,14 +712,9 @@ class OVCalibrationDatasetBuilder:
 
         from PIL import Image
 
-        # TODO: remove config.trust_remote_code from the condition once it is deprecated
-        processor = AutoProcessor.from_pretrained(
-            config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-        )
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
         try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
             tokenizer_error = None
         except Exception as tokenizer_error:  # noqa: F841
             tokenizer = None
@@ -857,10 +829,7 @@ class OVCalibrationDatasetBuilder:
                 component.request, collected_inputs[component_name], apply_caching=True
             )
         try:
-            # TODO: remove config.trust_remote_code from the condition once it is deprecated
-            processor = AutoProcessor.from_pretrained(
-                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
 
             # Download audio inputs beforehand to avoid possible connection issues
             num_samples = config.num_samples or 32
@@ -902,10 +871,7 @@ class OVCalibrationDatasetBuilder:
             def get_tokenizer():
                 if config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                # TODO: remove config.trust_remote_code from the condition once it is deprecated
-                return AutoTokenizer.from_pretrained(
-                    config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-                )
+                return AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading dataset", total=num_samples))
@@ -997,10 +963,8 @@ class OVCalibrationDatasetBuilder:
             else:
                 if quantization_config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
                 tokenizer = AutoTokenizer.from_pretrained(
-                    quantization_config.tokenizer,
-                    trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
+                    quantization_config.tokenizer, trust_remote_code=self.trust_remote_code
                 )
             return tokenizer
 
@@ -1084,10 +1048,9 @@ class OVCalibrationDatasetBuilder:
         self.model.compile()
 
         def get_processor():
-            # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
             processor = AutoProcessor.from_pretrained(
                 quantization_config.processor,
-                trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
+                trust_remote_code=self.trust_remote_code,
             )
             return processor
 
@@ -1160,10 +1123,7 @@ class OVCalibrationDatasetBuilder:
         )
 
         try:
-            # TODO: remove config.trust_remote_code from the condition once it is deprecated
-            processor = AutoProcessor.from_pretrained(
-                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
             for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
@@ -1443,11 +1403,13 @@ class OVQuantizer(OptimumQuantizer):
                 else:
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     quantization_configs["model"] = quantization_config
-            elif isinstance(quantization_config, OVQuantizationConfig):
+            elif isinstance(quantization_config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
                 #
-                # Full quantization
+                # Full & Mixed quantization
                 #
                 if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                    if isinstance(quantization_config, OVMixedQuantizationConfig):
+                        raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
                     diffusion_model_name = next(iter(calibration_dataset))
                     quantization_configs[diffusion_model_name] = quantization_config
                     default_config = OVWeightQuantizationConfig(bits=8)
@@ -1463,14 +1425,6 @@ class OVQuantizer(OptimumQuantizer):
                     default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config
-            elif isinstance(quantization_config, OVMixedQuantizationConfig):
-                #
-                # Mixed quantization
-                #
-                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                default_config = quantization_config
             else:
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
 
@@ -1520,11 +1474,12 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.clear_requests()
 
+        self.model._openvino_config = OVConfig(quantization_config=quantization_config)
+        self.model._set_ov_config_parameters()
         if save_directory is not None:
             save_directory = Path(save_directory)
             save_directory.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(save_directory)
-            ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.Model, output_path: str):

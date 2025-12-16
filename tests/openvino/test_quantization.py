@@ -387,6 +387,28 @@ class OVQuantizerTest(unittest.TestCase):
                 "vision_embeddings_merger_model": {"int8": 10},
             },
         ),
+        (
+            OVModelForVisualCausalLM,
+            "qwen2_vl",
+            OVMixedQuantizationConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(bits=4, group_size=16, ratio=0.7),
+                full_quantization_config=OVQuantizationConfig(dtype="f8e4m3", smooth_quant_alpha=0.9),
+                dataset="contextual",
+                num_samples=1,
+            ),
+            {
+                "lm_model": 16,
+                "text_embeddings_model": 0,
+                "vision_embeddings_model": 1,
+                "vision_embeddings_merger_model": 16,
+            },
+            {
+                "lm_model": {"f8e4m3": 8, "int4": 14},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"f8e4m3": 1},
+                "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
+            },
+        ),
     ]
 
     @staticmethod
@@ -1297,7 +1319,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         def main_export_in_stacktrace(*args, **kwargs):
             # Compression was called from `main_export`
-            self.assertTrue(inspect.stack()[5].function == "main_export")
+            self.assertTrue(inspect.stack()[6].function == "main_export")
             return compressed_model_mock_obj
 
         with unittest.mock.patch(

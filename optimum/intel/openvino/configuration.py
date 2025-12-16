@@ -552,7 +552,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -568,21 +567,11 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
                 A transformers processor used to process the dataset inputs.
-            trust_remote_code (`bool`, defaults to `None`):
-                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
-                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
         """
-        if trust_remote_code is not None:
-            logger.warning(
-                "`trust_remote_code` parameter in `OVQuantizationConfigBase` is deprecated and will be removed in "
-                "optimum-intel v1.27.0. Please provide `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` "
-                "or `OVQuantizer.__init__` methods instead."
-            )
         self.num_samples = num_samples
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.processor = processor
-        self.trust_remote_code = trust_remote_code or False
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
@@ -646,9 +635,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     user or organization name, like `dbmdz/bert-base-german-cased`.
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
-        trust_remote_code (`bool`, defaults to `None`):
-            This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
-            `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression with NNCF.
             - For language models you can provide your own dataset in a list of strings or just use one from the list
@@ -732,7 +718,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sym: bool = False,
         group_size: Optional[int] = None,
         tokenizer: Optional[str] = None,
-        trust_remote_code: Optional[bool] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         all_layers: Optional[bool] = None,
@@ -763,7 +748,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             dataset=dataset,
             tokenizer=tokenizer,
             processor=processor,
-            trust_remote_code=trust_remote_code,
             **kwargs,
         )
         self.bits = bits
@@ -996,7 +980,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         dataset: Optional[str] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: Optional[bool] = None,
         smooth_quant_alpha: Optional[float] = None,
         dtype: Optional[str] = "int8",
         **kwargs,
@@ -1036,9 +1019,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                     - A string, the *model id* of a predefined processor hosted inside a model repo on huggingface.co.
                     - A path to a *directory* containing files required by the processor, for instance saved
                         using the [`~AutoProcessor.save_pretrained`] method, e.g., `./my_model_directory/`.
-            trust_remote_code (`bool`, defaults to `None`):
-                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
-                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
             smooth_quant_alpha (`float`, *optional*):
                 SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers and
                 reduces quantization error.
@@ -1059,7 +1039,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             dataset=dataset,
             tokenizer=tokenizer,
             processor=processor,
-            trust_remote_code=trust_remote_code,
             **kwargs,
         )
         self.bits = bits
@@ -1232,7 +1211,6 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -1262,9 +1240,6 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
                 A transformers processor used to process the dataset inputs.
-            trust_remote_code (`bool`, defaults to `None`):
-                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
-                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
             **kwargs:
         """
         self.weight_quantization_config = self._initialize_quantization_config(
@@ -1291,14 +1266,12 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
         processor = processor or wqc.processor or fqc.processor
-        trust_remote_code = trust_remote_code or wqc.trust_remote_code or fqc.trust_remote_code
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
             dataset=dataset,
             tokenizer=tokenizer,
             processor=processor,
-            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 
@@ -1338,7 +1311,6 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         dataset: Optional[Union[str, List[str]]] = None,
         tokenizer: Optional[str] = None,
         processor: Optional[str] = None,
-        trust_remote_code: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -1363,9 +1335,6 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             processor (Optional[str]):
                 A transformers processor used to process the dataset inputs. Can be a model ID or a path to a
                 directory containing processor files. Defaults to None.
-            trust_remote_code (`bool`, defaults to `None`):
-                This is a deprecated argument and will be removed in optimum-intel v1.27.0. Please provide
-                `trust_remote_code` parameter to `PreTrainedModel.from_pretrained` or `OVQuantizer.__init__` methods instead.
             **kwargs:
                 Additional parameters for the configuration.
         """
@@ -1392,7 +1361,6 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
         processor = reduce(or_op, (processor, *(config.processor for config in configs)))
-        trust_remote_code = reduce(or_op, (trust_remote_code, *(config.trust_remote_code for config in configs)))
 
         super().__init__(
             ignored_scope=None,
@@ -1400,7 +1368,6 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             dataset=dataset,
             tokenizer=tokenizer,
             processor=processor,
-            trust_remote_code=trust_remote_code,
             **kwargs,
         )
         self.quantization_configs = quantization_configs
