@@ -95,7 +95,7 @@ class OVModelHostMixin:
     def ov_model_paths(self) -> Dict[str, str]:
         """
         Returns a dictionary of OpenVINO model file paths associated with this model. Keys are model names, and values
-        are string paths of corresponding OpenVINO model files relative to the model folder.
+        are string paths of corresponding OpenVINO model files relative to the model folder. Keys are the same as self._ov_model_names.
         Compared to `OVModelHostMixin.OV_MODEL_PATHS`, this includes only those model names that are actually
         present in the model.
         """

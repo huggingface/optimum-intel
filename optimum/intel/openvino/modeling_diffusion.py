@@ -324,11 +324,10 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         save_directory = Path(save_directory)
 
         models_to_save_paths = {
-            getattr(self, ov_model_name): save_directory / self.ov_model_paths[ov_model_name]
-            for ov_model_name in self._ov_model_names
-            if getattr(self, ov_model_name)
+            component: save_directory / self.ov_model_paths[ov_component_name]
+            for ov_component_name, component in self.components.items()
         }
-        for model, dst_path in models_to_save_paths:
+        for model, dst_path in models_to_save_paths.items():
             save_path = dst_path.parent
             save_path.mkdir(parents=True, exist_ok=True)
             openvino.save_model(model.model, dst_path, compress_to_fp16=False)

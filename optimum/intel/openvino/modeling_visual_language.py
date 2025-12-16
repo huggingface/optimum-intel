@@ -355,7 +355,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
         }
         for part in cls.additional_parts:
-            model_paths[part] = f"openvino_{part}_model.xml"
+            model_paths[f"{part}_model"] = f"openvino_{part}_model.xml"
         return model_paths
 
     def __init__(
@@ -552,7 +552,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             text_embeddings = model_cls.load_model(file_names["text_embeddings_model"])
             vision_embeddings = model_cls.load_model(file_names["vision_embeddings_model"])
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[part])
+                kwargs[part] = model_cls.load_model(file_names[f"{part}_model"])
         else:
             language_model = model_cls._compile_model(
                 file_names["lm_model"],

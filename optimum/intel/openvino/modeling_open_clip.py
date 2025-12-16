@@ -40,7 +40,7 @@ from ..utils.modeling_utils import _find_files_matching_pattern, _OpenClipForZer
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
 from .modeling_base import OVModelHostMixin
-from .utils import TemporaryDirectory
+from .utils import TemporaryDirectory, classproperty
 
 
 logger = logging.getLogger(__name__)
@@ -215,8 +215,11 @@ class OVModelOpenCLIPBase(OVModel):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPText(OVModelOpenCLIPBase):
-    _xml_model_name = "openvino_model_text.xml"
     export_feature = "feature-extraction"
+
+    @classproperty
+    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+        return {"model": "openvino_model_text.xml"}
 
     def __init__(self, model=None, config=None, tokenize_cfg=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -283,7 +286,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls._xml_model_name,
+            file_name=cls.OV_MODEL_PATHS["model"],
             **kwargs,
         )
 
@@ -340,8 +343,11 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
     MODEL_START_DOCSTRING,
 )
 class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
-    _xml_model_name = "openvino_model_vision.xml"
     export_feature = "feature-extraction"
+
+    @classproperty
+    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+        return {"model": "openvino_model_vision.xml"}
 
     def __init__(self, model=None, config=None, preprocess_cfg=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -408,7 +414,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls._xml_model_name,
+            file_name=cls.OV_MODEL_PATHS["model"],
             **kwargs,
         )
 
