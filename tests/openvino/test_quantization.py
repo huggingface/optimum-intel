@@ -92,6 +92,7 @@ from utils_tests import (
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
     USE_TORCH_EXPORT,
+    skip_architectures_unsupported_with_torch_export
 )
 
 _TASK_TO_DATASET = {
@@ -447,6 +448,7 @@ class OVQuantizerTest(unittest.TestCase):
     @parameterized.expand(
         [(*it[0], it[1]) for it in itertools.product(SUPPORTED_ARCHITECTURES_OV_MODEL, [False, True])]
     )
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_static_quantization(
         self, model_cls, model_name, expected_fake_nodes, expected_int8_nodes, from_dataset_instance
     ):
@@ -534,6 +536,7 @@ class OVQuantizerTest(unittest.TestCase):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL_WITH_AUTO_DATASET)
+    @skip_architectures_unsupported_with_torch_export
     def test_ov_model_static_quantization_with_auto_dataset(
         self,
         model_cls,
@@ -1054,6 +1057,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
@@ -1111,6 +1115,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
@@ -1139,6 +1144,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
             MODEL_NAMES[model_type],
@@ -1166,6 +1172,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         check_compression_state_per_model(self, model.ov_models, expected_ov_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_fake_nodes, expected_int8_nodes):
         model_id = MODEL_NAMES[model_type]
         quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
@@ -1213,6 +1220,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             for it in itertools.product(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:], [False, True])
         ]
     )
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
         self,
         model_cls,
@@ -1245,6 +1253,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     @unittest.mock.patch.dict(
         "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
     )
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
@@ -1308,6 +1317,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(openvino_config.dtype, quantization_config.dtype)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(
             MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True, torch_export=USE_TORCH_EXPORT
@@ -1321,6 +1331,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type, trust_remote_code):
         model = model_cls.from_pretrained(
             MODEL_NAMES[model_type],
@@ -1442,6 +1453,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE[::5])
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_4bit_dynamic_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):
@@ -1695,6 +1707,7 @@ class OVPipelineQuantizationTest(unittest.TestCase):
         )
 
     @parameterized.expand(PIPELINE_QUANTIZATION_SCOPE)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_pipeline_quantization(
         self,
         model_cls,
@@ -2232,6 +2245,7 @@ class InferRequestWrapperTest(unittest.TestCase):
         return input_features
 
     @parameterized.expand(itertools.product(MODEL_NAME, STATEFUL, APPLY_CACHING))
+    @skip_architectures_unsupported_with_torch_export
     def test_calibration_data_uniqueness(self, model_name, stateful, apply_caching):
         model_id = MODEL_NAMES[model_name]
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(

@@ -583,7 +583,15 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
     "blenderbot",
     "speecht5",
     "llava",
-
+    "qwen2_vl",
+    "opt125m",
+    "llama_awq",
+    "llava_next",
+    "llava_next_video",
+    "minicpmv",
+    "llama4",
+    "whisper",
+    "internvl_chat"
 }
 
 
