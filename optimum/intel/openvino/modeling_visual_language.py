@@ -574,7 +574,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             )
             for part in model_cls.additional_parts:
                 kwargs[part] = model_cls._compile_model(
-                    file_names[part],
+                    file_names[f"{part}_model"],
                     kwargs.get("device", "CPU"),
                     kwargs.get("ov_config"),
                     model_save_dir,
