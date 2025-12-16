@@ -16,6 +16,7 @@ import time
 import unittest
 from contextlib import contextmanager
 from typing import Dict, Optional
+from inspect import signature
 import functools
 import pytest
 
@@ -589,9 +590,16 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
 def skip_architectures_unsupported_with_torch_export(fn):
     @functools.wraps(fn)
     def run_test(*args, **kwargs):
-        model_id = args[-1]
-        if USE_TORCH_EXPORT and model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
-            pytest.skip("{} is unsupported with torch.export.".format(model_id))
+        test_signature = signature(fn)
+        model_id_idx = -1
+        for idx, param in enumerate(test_signature.parameters):
+            if param in ["model_arch", "model_id", "model_type", "model_name"]:
+                model_id_idx = idx
+                break
+        if model_id_idx != -1:
+            model_id = args[model_id_idx]
+            if USE_TORCH_EXPORT and model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
+                pytest.skip("{} is unsupported with torch.export.".format(model_id))
         return fn(*args, **kwargs)
 
     return run_test
