@@ -524,9 +524,6 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         ).raw
     )
 
-    # Sort names to ensure determined tests names
-    SUPPORTED_ARCHITECTURES = sorted(SUPPORTED_ARCHITECTURES)
-
     def get_transformer_model_class(self, model_arch):
         if is_transformers_version(">=", "4.46") and model_arch in [
             "llava",

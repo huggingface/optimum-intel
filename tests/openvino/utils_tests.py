@@ -565,7 +565,16 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
     "phi3-moe",
     "qwen",
     "xglm",
-    "zamba2"
+    "zamba2",
+    "stable-diffusion-xl",
+    "stable-diffusion-3",
+    "flux",
+    "sana",
+    "sana-sprint",
+    "stable-diffusion-with-safety-checker",
+    "flux-fill",
+    "ltx-video",
+
 
 }
 
