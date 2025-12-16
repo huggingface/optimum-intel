@@ -325,7 +325,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         models_to_save_paths = {
             getattr(self, ov_model_name): save_directory / self.ov_model_paths[ov_model_name]
-            for ov_model_name in self.ov_model_names
+            for ov_model_name in self._ov_model_names
             if getattr(self, ov_model_name)
         }
         for model, dst_path in models_to_save_paths:

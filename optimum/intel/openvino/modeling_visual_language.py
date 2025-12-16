@@ -548,26 +548,26 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 file_names[name] = model_cache_path
             model_save_dir = Path(model_cache_path).parent
         if not compile_only:
-            language_model = model_cls.load_model(file_names["language_model"])
-            text_embeddings = model_cls.load_model(file_names["text_embeddings"])
-            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"])
+            language_model = model_cls.load_model(file_names["lm_model"])
+            text_embeddings = model_cls.load_model(file_names["text_embeddings_model"])
+            vision_embeddings = model_cls.load_model(file_names["vision_embeddings_model"])
             for part in model_cls.additional_parts:
                 kwargs[part] = model_cls.load_model(file_names[part])
         else:
             language_model = model_cls._compile_model(
-                file_names["language_model"],
+                file_names["lm_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             text_embeddings = model_cls._compile_model(
-                file_names["text_embeddings"],
+                file_names["text_embeddings_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             vision_embeddings = model_cls._compile_model(
-                file_names["vision_embeddings"],
+                file_names["vision_embeddings_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
