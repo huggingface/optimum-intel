@@ -591,6 +591,11 @@ def _apply_default_ignored_scope_config(
     Returns:
         Updated quantization configuration with the default ignored scope applied.
     """
+    if not isinstance(quantization_config, OVPipelineQuantizationConfig):
+        raise ValueError(
+            "`_apply_default_ignored_scope_config` function expects `OVPipelineQuantizationConfig` instance as "
+            f"`quantization_config` argument, but got: {type(quantization_config)}"
+        )
     quantization_config_copy = None
     model_id_candidates = _get_model_id_candidates(model_id_or_path)
     for model_id in model_id_candidates:
