@@ -20,16 +20,25 @@ from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    AlbertOnnxConfig,
     BartOnnxConfig,
+    BertOnnxConfig,
     BlenderbotOnnxConfig,
     BlenderbotSmallOnnxConfig,
     BloomOnnxConfig,
+    CamembertOnnxConfig,
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
     CLIPTextWithProjectionOnnxConfig,
     CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
+    ConvBertOnnxConfig,
+    DebertaOnnxConfig,
+    DebertaV2OnnxConfig,
+    DistilBertOnnxConfig,
+    ElectraOnnxConfig,
     FalconOnnxConfig,
+    FlaubertOnnxConfig,
     GemmaOnnxConfig,
     GPT2OnnxConfig,
     GPTBigCodeOnnxConfig,
@@ -41,13 +50,18 @@ from optimum.exporters.onnx.model_configs import (
     LlamaOnnxConfig,
     MarianOnnxConfig,
     MistralOnnxConfig,
+    MobileBertOnnxConfig,
     MPTOnnxConfig,
     NemotronOnnxConfig,
     Olmo2OnnxConfig,
     OPTOnnxConfig,
     PegasusOnnxConfig,
     PhiOnnxConfig,
+    Pix2StructOnnxConfig,
+    RobertaOnnxConfig,
+    RoFormerOnnxConfig,
     SpeechT5OnnxConfig,
+    SqueezeBertOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
@@ -55,6 +69,8 @@ from optimum.exporters.onnx.model_configs import (
     VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
     WhisperOnnxConfig,
+    XLMOnnxConfig,
+    XLMRobertaOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -4620,4 +4636,93 @@ class NemotronOpenVINOConfig(NemotronOnnxConfig):
     "gpt_bigcode", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "token-classification"]
 )
 class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "pix2struct",
+    *[
+        "image-to-text",
+        "image-to-text-with-past",
+    ],
+)
+class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("bert", *COMMON_TEXT_TASKS)
+class BertOpenVINOConfig(BertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("albert", *COMMON_TEXT_TASKS)
+class AlbertOpenVINOConfig(AlbertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("convbert", *COMMON_TEXT_TASKS)
+class ConvBertOpenVINOConfig(ConvBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("electra", *COMMON_TEXT_TASKS)
+class ElectraOpenVINOConfig(ElectraOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("roformer", *COMMON_TEXT_TASKS)
+class RoFormerOpenVINOConfig(RoFormerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("squeezebert", *COMMON_TEXT_TASKS)
+class SqueezeBertOpenVINOConfig(SqueezeBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilebert", *COMMON_TEXT_TASKS)
+class MobileBertOpenVINOConfig(MobileBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("xlm", *COMMON_TEXT_TASKS)
+class XLMOpenVINOConfig(XLMOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("xlm-roberta", *COMMON_TEXT_TASKS)
+class XLMRobertaOpenVINOConfig(XLMRobertaOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("distilbert", *COMMON_TEXT_TASKS)
+class DistilBertOpenVINOConfig(DistilBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("roberta", *COMMON_TEXT_TASKS)
+class RobertaOpenVINOConfig(RobertaOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("camembert", *COMMON_TEXT_TASKS)
+class CamembertOpenVINOConfig(CamembertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("flaubert", *COMMON_TEXT_TASKS)
+class FlaubertOpenVINOConfig(FlaubertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "deberta",
+    *["feature-extraction", "fill-mask", "text-classification", "token-classification", "question-answering"],
+)
+class DebertaOpenVINOConfig(DebertaOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("deberta-v2", *COMMON_TEXT_TASKS)
+class DebertaV2OpenVINOConfig(DebertaV2OnnxConfig):
     pass
