@@ -683,6 +683,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
         )
+        name_or_path = config.name_or_path
+        config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+        # Keep the original name_or_path to be able to resolve default quantization config later
+        config.name_or_path = name_or_path
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
