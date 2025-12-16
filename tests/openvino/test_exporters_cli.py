@@ -77,6 +77,7 @@ from optimum.intel.utils.import_utils import (
     is_openvino_version,
     is_transformers_version,
 )
+from optimum.utils.save_utils import maybe_save_preprocessors
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -1195,14 +1196,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[model_name])
             # overload for matching with default configuration
             pt_model.save_pretrained(tmpdir)
-            try:
-                AutoTokenizer.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
-            except Exception:
-                pass
-            try:
-                AutoProcessor.from_pretrained(MODEL_NAMES[model_name]).save_pretrained(tmpdir)
-            except Exception:
-                pass
+            maybe_save_preprocessors(MODEL_NAMES[test_model_id], tmpdir)
             with open(Path(tmpdir) / "config.json", "r") as f:
                 config = json.load(f)
                 config["_name_or_path"] = model_id
@@ -1304,15 +1298,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             # 1. Create a local copy of the model so that we can override _name_or_path
             pt_model = auto_model_cls.from_pretrained(MODEL_NAMES[test_model_id])
             pt_model.save_pretrained(tmpdir)
-            try:
-                AutoTokenizer.from_pretrained(MODEL_NAMES[test_model_id]).save_pretrained(tmpdir)
-            except Exception:
-                pass
-
-            try:
-                AutoProcessor.from_pretrained(MODEL_NAMES[test_model_id]).save_pretrained(tmpdir)
-            except Exception:
-                pass
+            maybe_save_preprocessors(MODEL_NAMES[test_model_id], tmpdir)
 
             # 2. Overwrite config.json so that _name_or_path matches the HF model id
             config_path = Path(tmpdir) / "config.json"
