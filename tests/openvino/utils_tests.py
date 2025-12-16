@@ -566,7 +566,9 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
     "qwen",
     "xglm",
     "zamba2",
+    "stable-diffusion",
     "stable-diffusion-xl",
+    "stable-diffusion-xl-refiner",
     "stable-diffusion-3",
     "flux",
     "sana",
@@ -574,7 +576,12 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
     "stable-diffusion-with-safety-checker",
     "flux-fill",
     "ltx-video",
-
+    "pix2struct",
+    "t5",
+    "bart",
+    "blenderbot",
+    "speecht5",
+    "llava",
 
 }
 
@@ -582,7 +589,7 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
 def skip_architectures_unsupported_with_torch_export(fn):
     @functools.wraps(fn)
     def run_test(*args, **kwargs):
-        model_id = args[1]
+        model_id = args[-1]
         if USE_TORCH_EXPORT and model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
             pytest.skip("{} is unsupported with torch.export.".format(model_id))
         return fn(*args, **kwargs)

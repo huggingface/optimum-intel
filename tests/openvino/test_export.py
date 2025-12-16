@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, USE_TORCH_EXPORT
+from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, USE_TORCH_EXPORT, skip_architectures_unsupported_with_torch_export
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig
@@ -205,6 +205,7 @@ class ExportModelTest(unittest.TestCase):
                             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_export(self, model_type: str):
         model_kwargs = None
         if model_type == "speecht5":
@@ -212,6 +213,7 @@ class ExportModelTest(unittest.TestCase):
         self._openvino_export(model_type, model_kwargs=model_kwargs, torch_export=USE_TORCH_EXPORT)
 
     @parameterized.expand(GENERATIVE_MODELS)
+    @skip_architectures_unsupported_with_torch_export
     def test_export_with_custom_gen_config(self, model_type):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature

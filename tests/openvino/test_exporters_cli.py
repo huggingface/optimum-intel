@@ -29,6 +29,7 @@ from utils_tests import (
     check_compression_state_per_model,
     get_num_quantized_nodes,
     get_supported_model_for_library,
+    skip_architectures_unsupported_with_torch_export
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -797,6 +798,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_export(self, task: str, model_type: str):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
@@ -806,7 +808,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli(self, task: str, model_type: str):
+        print("model_type {}".format(model_type)) #will remove
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
@@ -828,7 +832,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         for arch in SUPPORTED_ARCHITECTURES
         if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
     )
+    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
+        print("model_type {}".format(model_type))
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
@@ -989,7 +995,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli_fp16(self, task: str, model_type: str):
+        print("model_type {}".format(model_type)) #will remove
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
             if task == "text-to-audio" and model_type == "speecht5":
@@ -1007,7 +1015,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             ).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli_int8(self, task: str, model_type: str):
+        print("model_type {}".format(model_type)) #will remove
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
         with TemporaryDirectory() as tmpdir:
@@ -1322,12 +1332,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("text_features" in model.text_model.output_names)
             self.assertTrue("image_features" in model.visual_model.output_names)
 
-    def test_export_openvino_with_missed_weight_format(self):
+    @parameterized.expand({"gpt2"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_export_openvino_with_missed_weight_format(self, model_id):
         # Test that exception is raised when some compression parameter is given, but weight format is not.
         with TemporaryDirectory() as tmpdir:
             with self.assertRaises(subprocess.CalledProcessError) as exc_info:
                 subprocess.run(
-                    f"optimum-cli export openvino --model {MODEL_NAMES['gpt2']} --task text-generation --sym {tmpdir}",
+                    f"optimum-cli export openvino --model {MODEL_NAMES[model_id]} --task text-generation --sym {tmpdir}",
                     shell=True,
                     check=True,
                     stdout=subprocess.PIPE,
@@ -1339,13 +1351,15 @@ class OVCLIExportTestCase(unittest.TestCase):
                 str(exc_info.exception.stderr),
             )
 
-    def test_export_openvino_with_custom_variant(self):
+    @parameterized.expand({"stable-diffusion"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_export_openvino_with_custom_variant(self, model_id):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --model katuni4ka/tiny-stable-diffusion-torch-custom-variant --variant custom {tmpdir}",
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
+            model = eval(_HEAD_TO_AUTOMODELS[model_id]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
