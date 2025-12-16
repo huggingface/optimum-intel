@@ -16,6 +16,8 @@ import time
 import unittest
 from contextlib import contextmanager
 from typing import Dict, Optional
+import functools
+import pytest
 
 import numpy as np
 import openvino as ov
@@ -501,6 +503,82 @@ TEST_NAME_TO_MODEL_TYPE = {
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
 }
+
+_ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
+    "hf-internal-testing/tiny-random-mbart",
+    "hf-internal-testing/tiny-random-gpt2",
+    "hf-internal-testing/tiny-random-t5",
+    "hf-internal-testing/tiny-random-bart",
+    "echarlaix/tiny-random-t5",
+    "ibert",
+    "timm/pit_s_distilled_224.in1k",
+    "timm/vit_tiny_patch16_224.augreg_in21k",
+    "beit",
+    "convnext",
+    "data2vec-vision",
+    "deit",
+    "levit",
+    "mobilevit",
+    "poolformer",
+    "perceiver_vision",
+    "resnet",
+    "segformer",
+    "swin",
+    "vit",
+    "sew",
+    "sew-d",
+    "open-clip",
+    "gpt2",
+    "sam",
+    "clip",
+    "siglip",
+    "baichuan2-13b",
+    "biogpt",
+    "bitnet",
+    "bloom",
+    "chatglm4",
+    "codegen",
+    "codegen2",
+    "dbrx",
+    "decilm",
+    "exaone4",
+    "falcon",
+    "falcon-40b",
+    "falcon-mamba",
+    "gemma3_text",
+    "gpt_bigcode",
+    "gpt_neo",
+    "gpt_oss",
+    "gpt_oss_mxfp4",
+    "gptj",
+    "granite-moe",
+    "granite-moe-hybrid",
+    "jais",
+    "lfm2",
+    "llama",
+    "mamba",
+    "mixtral_awq",
+    "mpt",
+    "opt",
+    "opt_gptq",
+    "orion",
+    "phi3-moe",
+    "qwen",
+    "xglm",
+    "zamba2"
+
+}
+
+
+def skip_architectures_unsupported_with_torch_export(fn):
+    @functools.wraps(fn)
+    def run_test(*args, **kwargs):
+        model_id = args[1]
+        if USE_TORCH_EXPORT and model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
+            pytest.skip("{} is unsupported with torch.export.".format(model_id))
+        return fn(*args, **kwargs)
+
+    return run_test
 
 
 def get_supported_model_for_library(library_name):

@@ -15,7 +15,7 @@ import unittest
 
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
-from utils_tests import OPENVINO_DEVICE, USE_TORCH_EXPORT
+from utils_tests import OPENVINO_DEVICE, USE_TORCH_EXPORT, skip_architectures_unsupported_with_torch_export
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -52,6 +52,7 @@ TASKS = {
 
 class OVModelBasicIntegrationTest(unittest.TestCase):
     @parameterized.expand(MODEL_NAMES.keys())
+    @skip_architectures_unsupported_with_torch_export
     def test_pipeline(self, model_id):
         """
         Test that loading, inference and saving works for all models in MODEL_NAMES
@@ -75,11 +76,12 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
             pipe(*input_text)
         gc.collect()
 
-    def test_openvino_methods(self):
+    @parameterized.expand({"hf-internal-testing/tiny-random-distilbert"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_openvino_methods(self, model_id):
         """
         Sanity check for .reshape() .to() and .half()
         """
-        model_id = "hf-internal-testing/tiny-random-distilbert"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForSequenceClassification.from_pretrained(
             model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT

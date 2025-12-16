@@ -64,6 +64,7 @@ from utils_tests import (
     TENSOR_ALIAS_TO_TYPE,
     TEST_IMAGE_URL,
     USE_TORCH_EXPORT,
+    skip_architectures_unsupported_with_torch_export
 )
 
 from optimum.intel import (
@@ -808,8 +809,9 @@ class PipelineTest(unittest.TestCase):
         del ov_pipe
         gc.collect()
 
-    def test_seq2seq_load_from_hub(self):
-        model_id = "echarlaix/tiny-random-t5"
+    @parameterized.expand({"echarlaix/tiny-random-t5"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_seq2seq_load_from_hub(self, model_id):
         # verify could load both pytorch and openvino model (export argument should automatically infered)
         ov_exported_pipe = optimum_pipeline(
             "text2text-generation",
@@ -862,6 +864,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1234,6 +1237,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("nystromformer",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1260,6 +1264,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1304,6 +1309,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     TIMM_MODELS = ("timm/pit_s_distilled_224.in1k", "timm/vit_tiny_patch16_224.augreg_in21k")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1362,6 +1368,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(TIMM_MODELS)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_timm(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
@@ -1386,6 +1393,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(TIMM_MODELS)
+    @skip_architectures_unsupported_with_torch_export
     def test_timm_save_and_infer(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(
             model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
@@ -1422,6 +1430,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         return audio_data
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1509,6 +1518,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1744,20 +1754,20 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
 
 class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
-    OV_MODEL_ID = MODEL_NAMES["open-clip"]
-    OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
-
     def _get_sample_image(self):
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
 
-    def test_load_from_hub_and_save_model(self):
+    @parameterized.expand({"open-clip"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_load_from_hub_and_save_model(self, model_id):
+        ir_id = MODEL_NAMES[model_id + "-ov"]
         loaded_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID_IR, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            ir_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
+        tokenizer = AutoTokenizer.from_pretrained(ir_id)
         all_text = ["a dog", "a cat", "a frog"]
         tokens = tokenizer.batch_encode_plus(
             all_text,
@@ -1798,9 +1808,12 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    def test_compare_output_open_clip(self):
-        clip_model, clip_preprocessor = open_clip.create_model_from_pretrained(f"hf-hub:{self.OV_MODEL_ID}")
-        clip_tokenizer = open_clip.get_tokenizer(f"hf-hub:{self.OV_MODEL_ID}")
+    @parameterized.expand({"open-clip"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_compare_output_open_clip(self, model_id):
+        model_id = MODEL_NAMES[model_id]
+        clip_model, clip_preprocessor = open_clip.create_model_from_pretrained(f"hf-hub:{model_id}")
+        clip_tokenizer = open_clip.get_tokenizer(f"hf-hub:{model_id}")
 
         image = clip_preprocessor(self._get_sample_image()).unsqueeze(0)
         text = clip_tokenizer(["a dog", "a cat", "a frog"])
@@ -1810,7 +1823,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
             clip_text_features = clip_model.encode_text(text)
 
         ov_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
         ov_outputs = ov_model(text, image)
 
@@ -1828,9 +1841,12 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-    def test_functions(self):
+    @parameterized.expand({"open-clip"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_functions(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
+            model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
@@ -1948,6 +1964,7 @@ class OVLangchainTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @unittest.skipIf(not _langchain_hf_available, reason="langchain not installed")
+    @skip_architectures_unsupported_with_torch_export
     def test_huggingface_pipeline_streaming(self, model_arch):
         from langchain_huggingface import HuggingFacePipeline
 
@@ -1983,6 +2000,7 @@ class OVSamIntegrationTest(unittest.TestCase):
     IMAGE_URL = "https://huggingface.co/ybelkada/segment-anything/resolve/main/assets/car.png"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         from optimum.intel.openvino.modeling_sam import OVSamPromptEncoder, OVSamVisionEncoder
 
@@ -2042,6 +2060,7 @@ class OVSamIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_reshape(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -2078,6 +2097,7 @@ class OVModelForZeroShotImageClassificationIntegrationTest(unittest.TestCase):
     IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)

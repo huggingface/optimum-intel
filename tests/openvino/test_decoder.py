@@ -18,6 +18,7 @@ from utils_tests import (
     get_num_sdpa,
     mock_torch_cuda_is_available,
     patch_awq_for_inference,
+    skip_architectures_unsupported_with_torch_export
 )
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
@@ -244,6 +245,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     # TODO: remove gptq/awq from here
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         self.mock_torch_compile(model_arch)
         model_id = MODEL_NAMES[model_arch]
@@ -463,8 +465,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    def test_model_and_decoder_same_device(self):
-        model_id = MODEL_NAMES["gpt2"]
+    @parameterized.expand({"gpt2"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_model_and_decoder_same_device(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         model = OVModelForCausalLM.from_pretrained(
             model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
@@ -475,8 +479,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["gpt2"]
+    @parameterized.expand({"gpt2"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_compare_with_and_without_past_key_values(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
@@ -551,8 +557,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             del model
             gc.collect()
 
-    def test_default_filling_attention_mask(self):
-        model_id = MODEL_NAMES["gpt2"]
+    @parameterized.expand({"gpt2"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_default_filling_attention_mask(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         model_with_cache = OVModelForCausalLM.from_pretrained(
             model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
@@ -576,8 +584,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_with_cache
         gc.collect()
 
-    def test_default_filling_attention_mask_and_position_ids(self):
-        model_id = MODEL_NAMES["llama"]
+    @parameterized.expand({"llama"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_default_filling_attention_mask_and_position_ids(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         model_with_cache = OVModelForCausalLM.from_pretrained(
             model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
@@ -791,9 +801,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateless output {ov_stateless_outputs}",
             )
 
-    def test_load_with_different_dtype(self):
+    @parameterized.expand({"llama"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_load_with_different_dtype(self, model_id):
         set_seed(SEED)
-        model_id = MODEL_NAMES["llama"]
+        model_id = MODEL_NAMES[model_id]
         pt_model = AutoModelForCausalLM.from_pretrained(
             model_id,
         )
