@@ -1844,12 +1844,13 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
     @parameterized.expand({"open-clip"})
     @skip_architectures_unsupported_with_torch_export
     def test_functions(self, model_id):
+        ir_id = MODEL_NAMES[model_id + "-ov"]
         model_id = MODEL_NAMES[model_id]
         model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
             model_id, export=True, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
         )
 
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
+        tokenizer = AutoTokenizer.from_pretrained(ir_id)
         all_text = ["a dog", "a cat", "a frog"]
         tokens = tokenizer.batch_encode_plus(
             all_text,
