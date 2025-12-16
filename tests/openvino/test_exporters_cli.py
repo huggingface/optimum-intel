@@ -575,6 +575,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --gptq --dataset wikitext2:seq_len=64 --num-samples 1",
+            {"model": {"int8": 4, "int4": 14}},
+        ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --lora-correction --dataset auto --num-samples 16",
             {"model": {"int8": 60, "int4": 14}},
         ),
