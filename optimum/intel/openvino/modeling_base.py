@@ -66,12 +66,15 @@ class OVModelHostMixin:
     """
 
     @classproperty
-    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+    def all_ov_model_paths(cls) -> Dict[str, str]:
         """
-        Returns a dictionary of all possible OpenVINO model file paths associated with this model. Keys are model names, and
-        values are string paths of corresponding OpenVINO model files relative to the model folder.
-        Compared to `OVModelHostMixin.ov_model_paths`, this includes all possible model names, not only those that are
-        actually present in the model.
+        Returns a dictionary of all OpenVINO model file paths defined by this class.
+
+        The keys represent all possible OpenVINO submodel names supported by the class, and the values are the relative
+        file paths (inside the model directory) where those submodels would be stored.
+
+        This list is static and does not depend on which submodels are actually loaded in a particular instance.
+        Use `ov_model_paths` to retrieve only the models that are present in a specific instance.
         """
         return {"model": OV_XML_FILE_NAME}
 
@@ -85,23 +88,18 @@ class OVModelHostMixin:
         return {ov_model_name: getattr(self, ov_model_name) for ov_model_name in self._ov_model_names}
 
     @property
-    def ov_submodels(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
-        logger.warn(
-            "`ov_submodels` property is deprecated and will be removed in v1.27. Please use `ov_models` property instead."
-        )
-        return self.ov_models
-
-    @property
     def ov_model_paths(self) -> Dict[str, str]:
         """
-        Returns a dictionary of OpenVINO model file paths associated with this model. Keys are model names, and values
-        are string paths of corresponding OpenVINO model files relative to the model folder. Keys are the same as self._ov_model_names.
-        Compared to `OVModelHostMixin.OV_MODEL_PATHS`, this includes only those model names that are actually
-        present in the model.
+        Returns a dictionary of OpenVINO model file paths for the models that are actually present in this instance.
+
+        The keys correspond to `self._ov_model_names`, and the values are taken from the class-level `all_ov_model_paths`
+        mapping. Only paths for instantiated submodels are included.
+
+        Use `all_ov_model_paths` to see the complete set of possible model paths supported by the class.
         """
         model_paths = {}
         for ov_model_name in self._ov_model_names:
-            model_paths[ov_model_name] = self.OV_MODEL_PATHS[ov_model_name]
+            model_paths[ov_model_name] = self.all_ov_model_paths[ov_model_name]
         return model_paths
 
     @property
@@ -504,7 +502,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
         model_path = Path(model_id)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls.OV_MODEL_PATHS["model"]
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls.all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
@@ -890,7 +888,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             model=model,
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / cls.OV_MODEL_PATHS["model"],
+            output=save_dir_path / cls.all_ov_model_paths["model"],
             stateful=stateful,
         )
 

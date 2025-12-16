@@ -851,7 +851,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     ):
         generation_config = kwargs.pop("generation_config", None)
         model_path = Path(model_id)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls.OV_MODEL_PATHS["model"]
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls.all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(

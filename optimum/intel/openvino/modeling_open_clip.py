@@ -218,7 +218,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
     export_feature = "feature-extraction"
 
     @classproperty
-    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+    def all_ov_model_paths(cls) -> Dict[str, str]:
         return {"model": "openvino_model_text.xml"}
 
     def __init__(self, model=None, config=None, tokenize_cfg=None, **kwargs):
@@ -286,7 +286,7 @@ class OVModelOpenCLIPText(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls.OV_MODEL_PATHS["model"],
+            file_name=cls.all_ov_model_paths["model"],
             **kwargs,
         )
 
@@ -346,7 +346,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
     export_feature = "feature-extraction"
 
     @classproperty
-    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+    def all_ov_model_paths(cls) -> Dict[str, str]:
         return {"model": "openvino_model_vision.xml"}
 
     def __init__(self, model=None, config=None, preprocess_cfg=None, **kwargs):
@@ -414,7 +414,7 @@ class OVModelOpenCLIPVisual(OVModelOpenCLIPBase):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            file_name=cls.OV_MODEL_PATHS["model"],
+            file_name=cls.all_ov_model_paths["model"],
             **kwargs,
         )
 

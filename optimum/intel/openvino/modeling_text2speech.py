@@ -186,7 +186,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
     """
 
     @classproperty
-    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+    def all_ov_model_paths(cls) -> Dict[str, str]:
         return {
             "encoder": OV_ENCODER_NAME,
             "decoder": OV_DECODER_NAME,
@@ -319,7 +319,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         compile_only = kwargs.pop("compile_only", False)
         enable_compilation = kwargs.pop("compile", True)
 
-        model_file_names = cls.OV_MODEL_PATHS.copy()
+        model_file_names = cls.all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
 

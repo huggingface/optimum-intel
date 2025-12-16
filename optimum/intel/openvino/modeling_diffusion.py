@@ -143,7 +143,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
     _library_name = "diffusers"
 
     @classproperty
-    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+    def all_ov_model_paths(cls) -> Dict[str, str]:
         models_paths = {
             "unet": os.path.join(DIFFUSION_MODEL_UNET_SUBFOLDER, OV_XML_FILE_NAME),
             "transformer": os.path.join(DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER, OV_XML_FILE_NAME),
@@ -296,7 +296,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
     @property
     def _component_names(self) -> List[str]:
-        component_names = [name for name in self.OV_MODEL_PATHS if getattr(self, name) is not None]
+        component_names = [name for name in self.all_ov_model_paths if getattr(self, name) is not None]
         return component_names
 
     @property
@@ -495,7 +495,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         models = {
             ov_model_name: (model_save_path / ov_model_path).parent / file_names[ov_model_name]
-            for ov_model_name, ov_model_path in cls.OV_MODEL_PATHS.items()
+            for ov_model_name, ov_model_path in cls.all_ov_model_paths.items()
         }
         for config_key, value in config.items():
             if config_key not in models and config_key not in kwargs and config_key not in submodels:

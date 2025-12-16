@@ -348,7 +348,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     auto_model_class = transformers_auto_class
 
     @classproperty
-    def OV_MODEL_PATHS(cls) -> Dict[str, str]:
+    def all_ov_model_paths(cls) -> Dict[str, str]:
         model_paths = {
             "lm_model": OV_LANGUAGE_MODEL_NAME,
             "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -525,7 +525,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             token = use_auth_token
 
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        model_file_names = model_cls.OV_MODEL_PATHS.copy()
+        model_file_names = model_cls.all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
         compile_only = kwargs.get("compile_only", False)
