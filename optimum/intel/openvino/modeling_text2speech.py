@@ -412,9 +412,16 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             model._apply_quantization(
-                quantization_config, compile_only, enable_compilation, str(model_id), trust_remote_code
+                quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
             )
 
         return model

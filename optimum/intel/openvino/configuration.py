@@ -473,20 +473,44 @@ _DEFAULT_INT8_FQ_CONFIGS = {
 }
 
 
-def get_default_int4_config(model_id_or_path: str):
-    """
-    Args:
-        model_id_or_path (`str`):
-            id of the model or path to it.
-    Returns:
-        Default int4 config for the given model or generic default int4 config.
-    """
-    logger.warning(
-        "The `get_default_int4_config` function is deprecated and will be removed in optimum-intel v1.25.0. "
-        "Please use `get_default_quantization_config` instead."
-    )
+_DEFAULT_IGNORED_SCOPE_CONFIGS = {
+    "Qwen/Qwen3-Embedding-0.6B": {
+        "model": {
+            "names": [
+                "__module.layers.27.mlp.up_proj/aten::linear/MatMul",
+                "__module.layers.27.mlp.gate_proj/aten::linear/MatMul",
+            ],
+        },
+    },
+    "microsoft/speecht5_tts": {
+        "decoder": {
+            "patterns": [
+                "__module.speech_decoder_postnet",
+                "__module.speecht5.decoder.prenet",
+            ],
+        },
+    },
+}
 
-    return get_default_quantization_config(model_id_or_path, "int4") or _DEFAULT_4BIT_WQ_CONFIG
+
+def _get_model_id_candidates(model_id_or_path: str) -> List[str]:
+    """
+    Get possible model id candidates from the given model id or path.
+    Returns a list containing `model_id_or_path` itself and possibly the model id extracted from config.json file.
+    """
+    candidates = [model_id_or_path]
+
+    # Try to extract model_id from config.json
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
+    if config_path.exists():
+        with config_path.open("r") as config_f:
+            config = json.load(config_f)
+            original_model_name = config.get("_name_or_path", "")
+        if original_model_name:
+            candidates.append(original_model_name)
+
+    return candidates
 
 
 def get_default_quantization_config(
@@ -515,26 +539,86 @@ def get_default_quantization_config(
         return None
 
     # Check if the model_id_or_path is in the default configs
-    if model_id_or_path in default_configs_dict:
-        return default_configs_dict[model_id_or_path]
-
-    # Try to match by config.json
-    model_path = Path(model_id_or_path)
-    config_path = model_path / "config.json"
-    if config_path.exists():
-        with config_path.open("r") as config_f:
-            config = json.load(config_f)
-            original_model_name = config.get("_name_or_path", "")
-        if original_model_name in default_configs_dict:
-            return default_configs_dict[original_model_name]
+    model_id_candidates = _get_model_id_candidates(model_id_or_path)
+    for model_id in model_id_candidates:
+        if model_id in default_configs_dict:
+            return default_configs_dict[model_id]
 
     # Try to match by folder name
+    model_path = Path(model_id_or_path)
     for model_id, config in default_configs_dict.items():
         short_id = model_id.split("/")[-1]
         if model_path.name == short_id:
             return config
 
     return None
+
+
+def _merge_ignored_scopes(
+    ignored_scope_1: Union[Dict[str, List[str]], None], ignored_scope_2: Union[Dict[str, List[str]], None]
+) -> Dict[str, List[str]]:
+    """
+    Merges two ignored scopes represented as dictionaries. If a key exists in both dictionaries, the corresponding lists
+    are merged and duplicates are removed.
+    Args:
+        ignored_scope_1 (`dict` or `None`):
+            The first ignored scope dictionary.
+        ignored_scope_2 (`dict` or `None`):
+            The second ignored scope dictionary.
+    Returns:
+        Merged ignored scope dictionary.
+    """
+    if ignored_scope_1 is None:
+        return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
+    if ignored_scope_2 is None:
+        return copy.deepcopy(ignored_scope_1)
+    merged_ignored_scope = {}
+    for key in set(ignored_scope_1) | set(ignored_scope_2):
+        merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
+    return merged_ignored_scope
+
+
+def _apply_default_ignored_scope_config(
+    model_id_or_path: str, quantization_config: "OVPipelineQuantizationConfig"
+) -> "OVPipelineQuantizationConfig":
+    """
+    Applies default ignored scope configuration to the given quantization configuration based on the model ID or path.
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+        quantization_config (`OVPipelineQuantizationConfig`):
+            The quantization configuration to which the default ignored scope will be applied.
+    Returns:
+        Updated quantization configuration with the default ignored scope applied.
+    """
+    if not isinstance(quantization_config, OVPipelineQuantizationConfig):
+        raise ValueError(
+            "`_apply_default_ignored_scope_config` function expects `OVPipelineQuantizationConfig` instance as "
+            f"`quantization_config` argument, but got: {type(quantization_config)}"
+        )
+    quantization_config_copy = None
+    model_id_candidates = _get_model_id_candidates(model_id_or_path)
+    for model_id in model_id_candidates:
+        default_ignored_scopes_per_model = _DEFAULT_IGNORED_SCOPE_CONFIGS.get(model_id)
+        if not default_ignored_scopes_per_model:
+            continue
+        quantization_config_copy = quantization_config.clone()
+        for ov_model_name, default_ignored_scope in default_ignored_scopes_per_model.items():
+            q_config = quantization_config_copy.quantization_configs.get(
+                ov_model_name, quantization_config_copy.default_config
+            )
+            if not q_config:
+                raise RuntimeError(
+                    "Can't apply default quantization config because corresponding model quantization config is missing."
+                )
+            if ov_model_name not in quantization_config_copy.quantization_configs:
+                # If submodel quantization config is not explicitly defined, clone and modify the default one
+                q_config = q_config.clone()
+                quantization_config_copy.quantization_configs[ov_model_name] = q_config
+
+            merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
+            q_config.ignored_scope = merged_ignored_scope
+    return quantization_config_copy or quantization_config
 
 
 @dataclass
@@ -1357,6 +1441,8 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
 
         # Pull dataset-related parameters from child configs
         configs = quantization_configs.values()
+        if default_config is not None:
+            configs = tuple(configs) + (default_config,)
         num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
