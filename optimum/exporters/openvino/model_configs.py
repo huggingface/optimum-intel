@@ -22,6 +22,7 @@ from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, Tex
 from optimum.exporters.onnx.model_configs import (
     AlbertOnnxConfig,
     BartOnnxConfig,
+    BeitOnnxConfig,
     BertOnnxConfig,
     BlenderbotOnnxConfig,
     BlenderbotSmallOnnxConfig,
@@ -33,10 +34,14 @@ from optimum.exporters.onnx.model_configs import (
     CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
     ConvBertOnnxConfig,
+    Data2VecTextOnnxConfig,
+    Data2VecVisionOnnxConfig,
     DebertaOnnxConfig,
     DebertaV2OnnxConfig,
+    DeiTOnnxConfig,
     DistilBertOnnxConfig,
     ElectraOnnxConfig,
+    EsmOnnxConfig,
     FalconOnnxConfig,
     FlaubertOnnxConfig,
     GemmaOnnxConfig,
@@ -46,28 +51,50 @@ from optimum.exporters.onnx.model_configs import (
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
     HeliumOnnxConfig,
+    HubertOnnxConfig,
     IBertOnnxConfig,
+    LevitOnnxConfig,
     LlamaOnnxConfig,
     MarianOnnxConfig,
     MistralOnnxConfig,
     MobileBertOnnxConfig,
+    MobileNetV1OnnxConfig,
+    MobileNetV2OnnxConfig,
+    MobileViTOnnxConfig,
+    MPNetOnnxConfig,
     MPTOnnxConfig,
     NemotronOnnxConfig,
     Olmo2OnnxConfig,
     OPTOnnxConfig,
     PegasusOnnxConfig,
+    PerceiverOnnxConfig,
     PhiOnnxConfig,
     Pix2StructOnnxConfig,
+    PoolFormerOnnxConfig,
+    ResNetOnnxConfig,
     RobertaOnnxConfig,
     RoFormerOnnxConfig,
+    SamOnnxConfig,
+    SegformerOnnxConfig,
+    SentenceTransformersTransformerOnnxConfig,
+    SEWDOnnxConfig,
+    SEWOnnxConfig,
+    SiglipOnnxConfig,
     SpeechT5OnnxConfig,
     SqueezeBertOnnxConfig,
+    SwinOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
+    UniSpeechOnnxConfig,
+    UniSpeechSATOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
     VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
+    ViTOnnxConfig,
+    Wav2Vec2ConformerOnnxConfig,
+    Wav2Vec2OnnxConfig,
+    WavLMOnnxConfig,
     WhisperOnnxConfig,
     XLMOnnxConfig,
     XLMRobertaOnnxConfig,
@@ -4725,4 +4752,195 @@ class DebertaOpenVINOConfig(DebertaOnnxConfig):
 
 @register_in_tasks_manager("deberta-v2", *COMMON_TEXT_TASKS)
 class DebertaV2OpenVINOConfig(DebertaV2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "data2vec-audio",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class Data2VecAudioOpenVINOConfig(Data2VecAudioOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("data2vec-text", *COMMON_TEXT_TASKS)
+class Data2VecTextOpenVINOConfig(Data2VecTextOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("data2vec-vision", *["feature-extraction", "image-classification"])
+class Data2VecVisionOpenVINOConfig(Data2VecVisionOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("perceiver", *["fill-mask", "text-classification", "image-classification"])
+class PerceiverOpenVINOConfig(PerceiverOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("esm", *["feature-extraction", "fill-mask", "text-classification", "token-classification"])
+class EsmOpenVINOConfig(EsmOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mpnet", *COMMON_TEXT_TASKS)
+class MPNetOpenVINOConfig(MPNetOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("beit", *["feature-extraction", "image-classification"])
+class BeitOpenVINOConfig(BeitOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("deit", *["feature-extraction", "image-classification", "masked-im"])
+class DeiTOpenVINOConfig(DeiTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("levit", *["feature-extraction", "image-classification"])
+class LevitOpenVINOConfig(LevitOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilevit", *["feature-extraction", "image-classification", "image-segmentation"])
+class MobileViTOpenVINOConfig(MobileViTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilenet_v1", *["feature-extraction", "image-classification"])
+class MobileNetV1OpenVINOConfig(MobileNetV1OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilenet_v2", *["feature-extraction", "image-classification"])
+class MobileNetV2OpenVINOConfig(MobileNetV2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("poolformer", *["feature-extraction", "image-classification"])
+class PoolFormerOpenVINOConfig(PoolFormerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "segformer", *["feature-extraction", "image-classification", "image-segmentation", "semantic-segmentation"]
+)
+class SegformerOpenVINOConfig(SegformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("swin", *["feature-extraction", "image-classification", "masked-im"])
+class SwinOpenVINOConfig(SwinOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("vit", *["feature-extraction", "image-classification", "masked-im"])
+class ViTOpenVINOConfig(ViTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("resnet", *["feature-extraction", "image-classification"])
+class ResNetOpenVINOConfig(ResNetOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "wav2vec2",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class Wav2Vec2OpenVINOConfig(Wav2Vec2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "wav2vec2-conformer",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class Wav2Vec2ConformerOpenVINOConfig(Wav2Vec2ConformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("hubert", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class HubertOpenVINOConfig(HubertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("sew", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class SEWOpenVINOConfig(SEWOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("sew-d", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class SEWDOpenVINOConfig(SEWDOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "unispeech", *["feature-extraction", "automatic-speech-recognition", "audio-classification"]
+)
+class UniSpeechOpenVINOConfig(UniSpeechOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "unispeech-sat",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class UniSpeechSATOpenVINOConfig(UniSpeechSATOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "wavlm",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class WavLMOpenVINOConfig(WavLMOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("sam", *["feature-extraction"])
+class SamOpenVINOConfig(SamOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("siglip", *["feature-extraction", "zero-shot-image-classification"])
+class SiglipOpenVINOConfig(SiglipOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "transformer", *["feature-extraction", "sentence-similarity"], library_name="sentence_transformers"
+)
+class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
     pass
