@@ -919,11 +919,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(
-                str(config.name_or_path), quantization_config
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             causal_model._apply_quantization(
-                quantization_config, compile_only, compile_model, str(config.name_or_path), trust_remote_code
+                quantization_config, compile_only, compile_model, model_id, trust_remote_code
             )
 
         return causal_model

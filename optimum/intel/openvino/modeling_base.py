@@ -41,6 +41,7 @@ from .configuration import (
     OVDynamicQuantizationConfig,
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
+    _apply_default_ignored_scope_config,
     _quantization_config_from_dict,
     get_default_quantization_config,
 )
@@ -507,10 +508,15 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
-            model._apply_quantization(
-                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -681,14 +687,16 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 "quantization is not supported with `compile_only` mode, please initialize model without this option"
             )
 
-        # TODO: Expand to pipeline quantization config and apply default ignored scope
         if isinstance(quantization_config, dict):
             quantization_config = _quantization_config_from_dict(quantization_config)
-        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
 
         from optimum.intel.openvino.quantization import OVQuantizer
 
         quantizer = OVQuantizer(self, trust_remote_code=trust_remote_code)
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
+        quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
+        quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
+
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
         if compile_model:

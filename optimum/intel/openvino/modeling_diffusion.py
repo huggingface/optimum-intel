@@ -404,6 +404,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         # same as DiffusionPipeline.from_pretraoned, if called directly, it loads the class in the config
@@ -569,9 +570,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     f"Data-aware quantization is not supported for {cls.__name__} with "
                     f"{ov_pipeline_class.export_feature} task."
                 )
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            # export_model_id is needed because _name_or_path is not necessarily present in the model config
+            model_id = export_model_id or name_or_path
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             ov_pipeline._apply_quantization(
-                quantization_config, compile_only, compile_model, str(model_id), trust_remote_code
+                quantization_config, compile_only, compile_model, model_id, trust_remote_code
             )
 
         return ov_pipeline
@@ -647,6 +650,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             quantization_config=quantization_config,
             load_in_8bit=load_in_8bit,
             compile_only=compile_only,
+            export_model_id=model_id,  # needed to resolve default quantization config during export
             **kwargs,
         )
 
