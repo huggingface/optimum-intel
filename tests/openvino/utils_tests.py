@@ -598,16 +598,20 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
 def skip_architectures_unsupported_with_torch_export(fn):
     @functools.wraps(fn)
     def run_test(*args, **kwargs):
+        if not USE_TORCH_EXPORT:
+            return fn(*args, **kwargs)
         test_signature = signature(fn)
         model_id_idx = -1
         for idx, param in enumerate(test_signature.parameters):
             if param in ["model_arch", "model_id", "model_type", "model_name"]:
+                if model_id_idx != -1:
+                    raise RuntimeError("Detected ambiguous model id arguments.")
                 model_id_idx = idx
-                break
-        if model_id_idx != -1:
-            model_id = args[model_id_idx]
-            if USE_TORCH_EXPORT and model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
-                pytest.skip("{} is unsupported with torch.export.".format(model_id))
+        if model_id_idx == -1:
+            raise ValueError("Model id argument not found.")
+        model_id = args[model_id_idx]
+        if model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
+            pytest.skip(f"{model_id} is unsupported with torch.export.")
         return fn(*args, **kwargs)
 
     return run_test
