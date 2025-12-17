@@ -33,7 +33,7 @@ from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
 from .utils import (
@@ -616,7 +616,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         except Exception:
             pass
 
-        quantization_config = model_cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = model_cls(
             language_model=language_model,
@@ -630,12 +630,15 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            quantization_config_copy = copy.deepcopy(quantization_config)
-            potential_processor_id = config.mm_vision_tower if isinstance(model, _OVNanoLlavaForCausalLM) else model_id
-            quantization_config_copy.processor = str(quantization_config.processor or potential_processor_id)
-            cls._apply_quantization(
-                model, quantization_config_copy, compile_only, compile_model, model_id, trust_remote_code
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -700,7 +703,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
         )
+        name_or_path = config.name_or_path
         config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+        # Keep the original name_or_path to be able to resolve default quantization config later
+        config.name_or_path = name_or_path
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -981,6 +987,23 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         For OVModel, we don't want model_kwargs to be updated before generation.
         """
         return
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.processor is None or quantization_config.tokenizer is None:
+            quantization_config = quantization_config.clone()
+            if quantization_config.processor is None:
+                potential_processor_id = (
+                    self.config.mm_vision_tower if isinstance(self, _OVNanoLlavaForCausalLM) else model_name_or_path
+                )
+                quantization_config.processor = potential_processor_id
+            if quantization_config.tokenizer is None:
+                quantization_config.tokenizer = model_name_or_path
+        return quantization_config
+
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
     def __init__(

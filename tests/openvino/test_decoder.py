@@ -47,7 +47,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox",
         "llama",
         "marian",
-        "minicpm",
         "mistral",
         "mixtral",
         "mpt",
@@ -76,7 +75,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "cohere",
         "qwen2",
         "qwen2_moe",
-        "arctic",
         "phi3",
         "gemma2",
         "exaone",
@@ -98,15 +96,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "minicpm3", "phi3-moe", "deepseek")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phi3-moe")
+
+        if is_transformers_version("<", "4.54.0"):
+            SUPPORTED_ARCHITECTURES += ("deepseek",)
 
         # gptq and awq install disabled for windows test environment
         if platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("opt_gptq",)
-
-        # autoawq install disabled for windows test environment
-        if platform.system() != "Windows":
-            SUPPORTED_ARCHITECTURES += ("mixtral_awq",)
+            SUPPORTED_ARCHITECTURES += ("opt_gptq", "mixtral_awq")
 
     if is_transformers_version(">", "4.49"):
         SUPPORTED_ARCHITECTURES += ("gemma3_text",)
@@ -124,9 +121,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES += ("bitnet",)
 
     if is_transformers_version(">=", "4.54.0"):
-        # remote code models differs after transformers v4.54
         SUPPORTED_ARCHITECTURES += ("exaone4",)
-        SUPPORTED_ARCHITECTURES = tuple(set(SUPPORTED_ARCHITECTURES) - {"minicpm", "minicpm3", "arctic", "deepseek"})
+
+    if is_transformers_version("<", "4.54.0"):
+        SUPPORTED_ARCHITECTURES += ("minicpm", "minicpm3", "arctic")
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")

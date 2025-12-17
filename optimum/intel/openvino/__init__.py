@@ -52,26 +52,16 @@ from .configuration import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 if is_nncf_available():
-    logging.disable(logging.INFO)
     import nncf
 
     if is_nncf_version("<", "2.19"):
-        raise ImportError(
+        logger.warning(
             "NNCF version 2.19 or higher is required to use NNCF-based quantization. "
             f"Please upgrade your NNCF installation. The current version of NNCF is {nncf.__version__}."
         )
-
-    logging.disable(logging.NOTSET)
-
-    # Suppress version mismatch logging
-    nncf.set_log_level(logging.ERROR)
-    from nncf.torch import patch_torch_operators
-
-    nncf.set_log_level(logging.INFO)
-
-    patch_torch_operators()
-
     from .quantization import OVCalibrationDataset, OVQuantizer
 
 

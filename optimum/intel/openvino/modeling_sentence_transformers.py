@@ -150,3 +150,13 @@ class OVSentenceTransformer(OVModel):
 
     def get_model_kwargs(self):
         return []
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.tokenizer is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.tokenizer = model_name_or_path
+        return quantization_config
