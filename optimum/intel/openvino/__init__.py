@@ -52,11 +52,13 @@ from .configuration import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 if is_nncf_available():
     import nncf
 
     if is_nncf_version("<", "2.19"):
-        raise ImportError(
+        logger.warning(
             "NNCF version 2.19 or higher is required to use NNCF-based quantization. "
             f"Please upgrade your NNCF installation. The current version of NNCF is {nncf.__version__}."
         )
