@@ -570,6 +570,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     f"Data-aware quantization is not supported for {cls.__name__} with "
                     f"{ov_pipeline_class.export_feature} task."
                 )
+            # export_model_id is needed because _name_or_path is not necessarily present in the model config
             model_id = export_model_id or name_or_path
             quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
             ov_pipeline._apply_quantization(
@@ -648,7 +649,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             quantization_config=quantization_config,
             load_in_8bit=load_in_8bit,
             compile_only=compile_only,
-            export_model_id=model_id,
+            export_model_id=model_id,  # needed to resolve default quantization config during export
             **kwargs,
         )
 
