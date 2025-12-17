@@ -647,7 +647,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
                 The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext')
-                or a string with options (e.g., 'wikitext:seq_len=128'). Currently supported option: seq_len.
+                or a string with options (e.g., 'wikitext2:seq_len=128'). Currently supported option: seq_len.
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
@@ -762,7 +762,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression with NNCF. Can be a dataset name (e.g., 'wikitext'),
-            a string with options (e.g., 'wikitext:seq_len=128') or a list of string-typed dataset elements.
+            a string with options (e.g., 'wikitext2:seq_len=128') or a list of string-typed dataset elements.
             - For language models you can provide your own dataset in a list of strings or just use one from the list
                 ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
             - For diffusion models the dataset must be one of ['conceptual_captions',
@@ -1132,7 +1132,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Parameter for controlling overflow fix setting.
             dataset (`str`, *optional*):
                 The dataset used for quantization. Can be a dataset name (e.g., 'wikitext') or a string with options
-                (e.g., 'wikitext:seq_len=128'). Currently supported option: seq_len. For language models the allowed
+                (e.g., 'wikitext2:seq_len=128'). Currently supported option: seq_len. For language models the allowed
                 values are ['auto', 'wikitext2','c4','c4-new']. For text-to-speech model quantization the allowed value
                 is 'librispeech'.
             tokenizer (`str`, *optional*):
@@ -1364,7 +1364,7 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
                 The maximum number of samples composing the calibration dataset.
             dataset (`str or List[str]`, *optional*):
                 The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext')
-                or a string with options (e.g., 'wikitext:seq_len=128'). Currently supported option: seq_len.
+                or a string with options (e.g., 'wikitext2:seq_len=128'). Currently supported option: seq_len.
             tokenizer (`str`, *optional*):
                 The tokenizer used to process the dataset.
             processor (`str`, *optional*):
@@ -1458,7 +1458,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
                 The maximum number of samples composing the calibration dataset. Defaults to None.
             dataset (Optional[Union[str, List[str]]]):
                 The dataset used for data-aware optimization with NNCF. Can be a dataset name (e.g., 'wikitext'),
-                a string with options (e.g., 'wikitext:seq_len=128'), or a list of strings. Currently supported option:
+                a string with options (e.g., 'wikitext2:seq_len=128'), or a list of strings. Currently supported option:
                 seq_len. Defaults to None.
             tokenizer (Optional[str]):
                 The tokenizer used to process the dataset. Can be a model ID or a path to a directory containing
