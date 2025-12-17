@@ -2275,6 +2275,11 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
         return inputs
 
 
+@register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    pass
+
+
 @register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class DcaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
