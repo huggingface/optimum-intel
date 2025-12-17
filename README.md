@@ -4,11 +4,7 @@
 
 # Optimum Intel
 
-🤗 Optimum Intel is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
-
-[Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction) is an open-source library which provides optimizations like faster attention and operators fusion.
-
-Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
+🤗 [Optimum Intel](https://huggingface.co/docs/optimum-intel/en/index) is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
 
 [OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
 
@@ -17,11 +13,9 @@ Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tool
 
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
-| Accelerator                                                                                                      | Installation                                                         |
-|:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
-| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `pip install --upgrade --upgrade-strategy eager "optimum[neural-compressor]"`  |
-| [OpenVINO](https://docs.openvino.ai)                                                                             | `pip install --upgrade --upgrade-strategy eager "optimum[openvino]"`           |
-| [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction)                 | `pip install --upgrade --upgrade-strategy eager "optimum[ipex]"`               |
+```bash
+pip install --upgrade --upgrade-strategy eager "optimum[openvino]"
+```
 
 The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
 
@@ -31,39 +25,19 @@ pip with `python -m pip install --upgrade pip`.
 Optimum Intel is a fast-moving project, and you may want to install from source with the following command:
 
 ```bash
-python -m pip install git+https://github.com/huggingface/optimum-intel.git
+python -m pip install "optimum-intel[openvino]"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
-or to install from source including dependencies:
-
-```bash
-python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface/optimum-intel.git
-```
-
-where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`.
 
 # Quick tour
 
-## Neural Compressor
-
-Dynamic quantization can be used through the Optimum CLI:
-
-```bash
-optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
-```
-Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
-
-You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
-
-For more details on the supported compression techniques, please refer to the [documentation](https://huggingface.co/docs/optimum-intel/en/neural_compressor/optimization).
-
 ## OpenVINO
 
-Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/2024/openvino-workflow/model-optimization-guide/compressing-models-during-training.html) framework to accelerate inference.
+Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/2025/openvino-workflow/model-optimization.html) framework to accelerate inference.
 
 #### Export:
 
-It is also possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
+It is also possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2025/documentation/openvino-ir-format.html) format with the CLI :
 
 ```plain
 optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_llama/
@@ -118,25 +92,6 @@ save_dir = "nncf_results"
 q_model.save_pretrained(save_dir)
 ```
 You can find more information in the [documentation](https://huggingface.co/docs/optimum-intel/en/openvino/optimization).
-
-
-## IPEX
-To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. It will load a PyTorch checkpoint, and apply IPEX operators optimization (replaced with customized IPEX operators).
-```diff
-  from transformers import AutoTokenizer, pipeline
-- from transformers import AutoModelForCausalLM
-+ from optimum.intel import IPEXModelForCausalLM
-
-
-  model_id = "gpt2"
-- model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-+ model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-  tokenizer = AutoTokenizer.from_pretrained(model_id)
-  pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-  results = pipe("He's a dreadful magician and")
-```
-
-For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
 
 
 ## Running the examples
