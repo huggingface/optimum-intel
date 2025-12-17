@@ -34,6 +34,7 @@ from optimum.exporters.onnx.model_configs import (
     CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
     ConvBertOnnxConfig,
+    Data2VecAudioOnnxConfig,
     Data2VecTextOnnxConfig,
     Data2VecVisionOnnxConfig,
     DebertaOnnxConfig,
