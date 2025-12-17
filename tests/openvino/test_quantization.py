@@ -1371,7 +1371,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             {MODEL_NAMES[model_type]: default_config},
             clear=False,
         ):
-            model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, quantization_config={"bits": 4}, torch_export=USE_TORCH_EXPORT)
+            model = model_cls.from_pretrained(
+                MODEL_NAMES[model_type], export=True, quantization_config={"bits": 4}, torch_export=USE_TORCH_EXPORT
+            )
             check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
 
     @parameterized.expand(DEFAULT_IGNORED_SCOPE_CONFIGURATIONS)
