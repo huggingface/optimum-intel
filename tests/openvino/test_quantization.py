@@ -964,6 +964,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             {"model": {"int8": 4}},
         ),
+        (
+            OVModelForCausalLM,
+            "hunyuan_v1_dense",
+            True,
+            dict(bits=4, sym=False, group_size=32, ratio=1.0),
+            {"model": {"int8": 2, "int4": 14}},
+        ),
     ]
 
     # filter models type depending on min max transformers version
@@ -1000,6 +1007,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.54.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "exaone4", True))
+        
+    if is_transformers_version(">=", "4.56.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCausalLM, "hunyuan_v1_dense", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
@@ -1020,6 +1030,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             expected.add("llama4")
         if is_transformers_version("<", "4.54"):
             expected.add("exaone4")
+        if is_transformers_version("<", "4.56"):
+            expected.add("hunyuan_v1_dense")
         if is_transformers_version(">=", "4.54"):
             expected.update({"llava-qwen2", "phi3_v", "minicpmo"})
 
