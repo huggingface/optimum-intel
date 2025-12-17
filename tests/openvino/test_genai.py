@@ -75,11 +75,11 @@ class LLMPipelineTestCase(unittest.TestCase):
         "gemma2",
         "exaone",
         "granite",
-        "granite-moe",
+        "granitemoe",
     )
 
     if is_transformers_version(">=", "4.46.0"):
-        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phi3-moe", "qwen", "opt")
+        SUPPORTED_ARCHITECTURES += ("glm", "mistral-nemo", "phimoe", "qwen", "opt")
         if is_transformers_version("<", "4.54.0"):
             SUPPORTED_ARCHITECTURES += ("deepseek",)
     if is_transformers_version(">=", "4.49"):

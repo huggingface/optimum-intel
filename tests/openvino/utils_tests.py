@@ -235,7 +235,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "vit": {"model": 64},
     "blenderbot": {"model": 70},
     "gpt2": {"model": 44},
-    "granite-moe-hybrid": {"model": 118},
+    "granitemoehybrid": {"model": 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {

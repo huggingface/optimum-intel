@@ -134,7 +134,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     if is_transformers_version(">=", "4.53.0"):
         SUPPORTED_ARCHITECTURES.extend(
             [
-                ("text-generation-with-past", "granite-moe-hybrid"),
+                ("text-generation-with-past", "granitemoehybrid"),
             ]
         )
 
@@ -168,7 +168,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "zamba2": 2,
         "exaone4": 2,
         "bitnet": 2,
-        "granite-moe-hybrid": 2,
+        "granitemoehybrid": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
