@@ -14,7 +14,6 @@
 
 import copy
 import dataclasses
-import gc
 import inspect
 import logging
 from collections import UserDict, deque
@@ -1534,7 +1533,6 @@ class OVQuantizer(OptimumQuantizer):
                     self.model.unload_ov_model(ov_model)
                     del quantized_model
                     del ov_model
-                    gc.collect()
 
                     ov_model_path = save_directory / Path(self.model.ov_model_paths[ov_model_name])
                     if not ov_model_path.exists():
