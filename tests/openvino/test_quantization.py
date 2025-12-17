@@ -2464,7 +2464,7 @@ class TestDatasetParsing(unittest.TestCase):
     def test_dataset_with_seq_len_option(self):
         """Test parsing of seq_len option from dataset string."""
         config = OVQuantizationConfigBase(dataset="wikitext2:seq_len=128")
-        self.assertEqual(config.dataset, "wikitext")
+        self.assertEqual(config.dataset, "wikitext2")
         self.assertEqual(config.dataset_kwargs, {"seq_len": 128})
 
     def test_dataset_gsm8k_with_seq_len(self):
