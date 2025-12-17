@@ -591,7 +591,21 @@ _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
     "minicpmv",
     "llama4",
     "whisper",
-    "internvl_chat"
+    "internvl_chat",
+    "blenderbot-small",
+    "m2m_100",
+    "mbart",
+    "mt5",
+    "pegasus",
+    "marian",
+    "vision-encoder-decoder",
+    "trocr",
+    "donut",
+    "llava_next_mistral",
+    "smolvlm",
+    "gemma3",
+    "idefics3",
+    "got_ocr2",
 }
 
 

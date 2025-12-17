@@ -1085,6 +1085,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertFalse(model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8_nodes, expected_int4_nodes):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
@@ -1278,6 +1279,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
+    @skip_architectures_unsupported_with_torch_export
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, trust_remote_code, quantization_config, expected_num_weight_nodes_per_model
     ):

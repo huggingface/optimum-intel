@@ -43,7 +43,7 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, USE_TORCH_EXPORT, Timer
+from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, USE_TORCH_EXPORT, Timer, skip_architectures_unsupported_with_torch_export
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state
@@ -89,6 +89,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         SUPPORT_STATEFUL += ("pegasus",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -217,8 +218,10 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["bart"]
+    @parameterized.expand({"bart"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_compare_with_and_without_past_key_values(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -409,6 +412,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVModelForVision2Seq.from_pretrained(
@@ -568,6 +572,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             request_check_fn(component.request is None)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         prompt = "What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
@@ -757,6 +762,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(["llava", "llava_next", "llava_next_video", "llava_next_mistral"])
+    @skip_architectures_unsupported_with_torch_export
     def test_llava_with_new_preprocessing(self, model_arch):
         prompt = "<image>\n What is shown in this image?"
         model_id = MODEL_NAMES[model_arch]
@@ -816,6 +822,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForVisualCausalLM.from_pretrained(
@@ -914,6 +921,7 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
         return preprocessors
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_model_can_be_loaded_after_saving(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         with TemporaryDirectory() as save_dir:
@@ -967,6 +975,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             raise Exception("{} unknown model for text-to-speech".format(model_arch))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         text_data = self._generate_text()
@@ -1016,6 +1025,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -1048,6 +1058,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @skip_architectures_unsupported_with_torch_export
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForPix2Struct.from_pretrained(
@@ -1065,8 +1076,10 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    def test_compare_with_and_without_past_key_values(self):
-        model_id = MODEL_NAMES["pix2struct"]
+    @parameterized.expand({"pix2struct"})
+    @skip_architectures_unsupported_with_torch_export
+    def test_compare_with_and_without_past_key_values(self, model_id):
+        model_id = MODEL_NAMES[model_id]
         preprocessor = get_preprocessor(model_id)
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
