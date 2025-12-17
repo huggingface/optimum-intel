@@ -91,4 +91,4 @@ jobs:
 
       - name: Test with Pytest (slow)
         run: |
-          pytest tests/openvino -m "run_slow" --durations=0
+          pytest tests/openvino --durations=0
