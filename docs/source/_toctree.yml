@@ -30,6 +30,7 @@
       title: Tutorials
       isExpanded: false
     title: OpenVINO
+    isExpanded: true
   - sections:
     - local: ipex/inference
       title: Inference
