@@ -92,7 +92,7 @@ from utils_tests import (
     TEST_NAME_TO_MODEL_TYPE,
     OPENVINO_DEVICE,
     USE_TORCH_EXPORT,
-    skip_architectures_unsupported_with_torch_export
+    skip_architectures_unsupported_with_torch_export,
 )
 
 _TASK_TO_DATASET = {

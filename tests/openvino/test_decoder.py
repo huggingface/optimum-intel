@@ -18,7 +18,7 @@ from utils_tests import (
     get_num_sdpa,
     mock_torch_cuda_is_available,
     patch_awq_for_inference,
-    skip_architectures_unsupported_with_torch_export
+    skip_architectures_unsupported_with_torch_export,
 )
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask

@@ -64,7 +64,7 @@ from utils_tests import (
     TENSOR_ALIAS_TO_TYPE,
     TEST_IMAGE_URL,
     USE_TORCH_EXPORT,
-    skip_architectures_unsupported_with_torch_export
+    skip_architectures_unsupported_with_torch_export,
 )
 
 from optimum.intel import (

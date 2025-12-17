@@ -11,17 +11,17 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import functools
 import os
 import time
 import unittest
 from contextlib import contextmanager
-from typing import Dict, Optional
 from inspect import signature
-import functools
-import pytest
+from typing import Dict, Optional
 
 import numpy as np
 import openvino as ov
+import pytest
 import torch
 
 from optimum.exporters.tasks import TasksManager

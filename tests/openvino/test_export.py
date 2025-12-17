@@ -20,7 +20,12 @@ import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, USE_TORCH_EXPORT, skip_architectures_unsupported_with_torch_export
+from utils_tests import (
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    USE_TORCH_EXPORT,
+    skip_architectures_unsupported_with_torch_export,
+)
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.model_configs import BertOnnxConfig

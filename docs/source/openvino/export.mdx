@@ -40,7 +40,7 @@ usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt}
                                    [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
                                    [--quantization-statistics-path QUANTIZATION_STATISTICS_PATH]
                                    [--num-samples NUM_SAMPLES] [--disable-stateful] [--disable-convert-tokenizer]
-                                   [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
+                                   [--smooth-quant-alpha SMOOTH_QUANT_ALPHA] [--use-torch-export]
                                    output
 
 optional arguments:
@@ -165,6 +165,7 @@ Optional arguments:
   --smooth-quant-alpha SMOOTH_QUANT_ALPHA
                         SmoothQuant alpha parameter that improves the distribution of activations before MatMul layers
                         and reduces quantization error. Valid only when activations quantization is enabled.
+  --use-torch-export    Use torch.export() for scripting of PyTorch models.
 ```
 
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`.

@@ -28,7 +28,13 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, SEED, USE_TORCH_EXPORT, skip_architectures_unsupported_with_torch_export
+from utils_tests import (
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    USE_TORCH_EXPORT,
+    skip_architectures_unsupported_with_torch_export,
+)
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,

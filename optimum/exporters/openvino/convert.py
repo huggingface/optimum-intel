@@ -427,14 +427,7 @@ def export_pytorch(
                 _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, get_model_dtype(model))}
                 _export_kwargs["dynamic_shapes"] = dynamic_shapes
 
-                try:
-                    from nncf.torch.dynamic_graph.patch_pytorch import disable_patching
-
-                    # nncf patching breaks export
-                    with disable_patching():
-                        ep = torch.export.export_for_training(model, **_export_kwargs)
-                except ImportError:
-                    ep = torch.export.export_for_training(model, **_export_kwargs)
+                ep = torch.export.export_for_training(model, **_export_kwargs)
 
                 ov_model = convert_model(ep)
             else:

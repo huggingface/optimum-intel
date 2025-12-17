@@ -43,7 +43,16 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TEST_IMAGE_URL, USE_TORCH_EXPORT, Timer, skip_architectures_unsupported_with_torch_export
+from utils_tests import (
+    F32_CONFIG,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TEST_IMAGE_URL,
+    USE_TORCH_EXPORT,
+    Timer,
+    skip_architectures_unsupported_with_torch_export,
+)
 
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.stateful import model_has_state

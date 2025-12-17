@@ -29,7 +29,7 @@ from utils_tests import (
     check_compression_state_per_model,
     get_num_quantized_nodes,
     get_supported_model_for_library,
-    skip_architectures_unsupported_with_torch_export
+    skip_architectures_unsupported_with_torch_export,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -803,9 +803,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(
-            MODEL_NAMES[model_type], task, torch_export=USE_TORCH_EXPORT, model_kwargs=model_kwargs
-        )
+        self._openvino_export(MODEL_NAMES[model_type], task, torch_export=USE_TORCH_EXPORT, model_kwargs=model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @skip_architectures_unsupported_with_torch_export
