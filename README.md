@@ -25,16 +25,9 @@ pip with `python -m pip install --upgrade pip`.
 Optimum Intel is a fast-moving project, and you may want to install from source with the following command:
 
 ```bash
-python -m pip install git+https://github.com/huggingface/optimum-intel.git
+python -m pip install "optimum-intel[openvino]"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
-or to install from source including dependencies:
-
-```bash
-python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface/optimum-intel.git
-```
-
-where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`.
 
 # Quick tour
 
