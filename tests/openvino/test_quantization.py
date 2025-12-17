@@ -145,7 +145,7 @@ class OVQuantizerTest(unittest.TestCase):
             OVModelForCausalLM,
             "llama",
             dict(
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
                 dtype="f8e4m3",
             ),
@@ -263,7 +263,7 @@ class OVQuantizerTest(unittest.TestCase):
             "blenderbot",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -293,7 +293,7 @@ class OVQuantizerTest(unittest.TestCase):
             "roberta",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -323,7 +323,7 @@ class OVQuantizerTest(unittest.TestCase):
             "clip",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="conceptual_captions",
+                dataset="conceptual_captions:seq_len=64",
                 num_samples=1,
             ),
             {
@@ -338,7 +338,7 @@ class OVQuantizerTest(unittest.TestCase):
             "t5",
             OVQuantizationConfig(
                 dtype="int8",
-                dataset="wikitext2",
+                dataset="wikitext2:seq_len=64",
                 num_samples=1,
             ),
             {"encoder": 30, "decoder": 52, "decoder_with_past": 61}
@@ -659,23 +659,6 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
-                quant_method=QuantizationMethod.AWQ,
-                scale_estimation=True,
-            ),
-            {"model": {"int8": 8, "int4": 12}},
-        ),
-        (
-            OVModelForCausalLM,
-            "llama_awq",
-            False,
-            dict(
-                bits=4,
-                sym=True,
-                group_size=16,
-                num_samples=1,
-                ratio=0.8,
-                sensitivity_metric="mean_activation_magnitude",
-                dataset="c4:seq_len=64",
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
@@ -2541,13 +2524,3 @@ class TestDatasetParsing(unittest.TestCase):
         config = OVQuantizationConfigBase(dataset="wikitext:")
         self.assertEqual(config.dataset, "wikitext")
         self.assertEqual(config.dataset_kwargs, {})
-
-    def test_backward_compatibility_no_options(self):
-        """Test that datasets without options work as before."""
-        configs = [
-            OVQuantizationConfigBase(dataset="wikitext2", tokenizer="gpt2"),
-            OVQuantizationConfigBase(dataset="gsm8k", tokenizer="gpt2"),
-            OVQuantizationConfigBase(dataset="c4", tokenizer="t5-small"),
-        ]
-        for config in configs:
-            self.assertEqual(config.dataset_kwargs, {})

@@ -278,10 +278,7 @@ class OVCalibrationDatasetBuilder:
             raise ValueError("Please provide a dataset for calibration.")
 
         if isinstance(self.model, OVModelForCausalLM):
-            kwargs = {}
-            if "seq_len" in config.dataset_kwargs:
-                kwargs["seq_len"] = config.dataset_kwargs["seq_len"]
-            return self._prepare_causal_lm_calibration_data(config, **kwargs)
+            return self._prepare_causal_lm_calibration_data(config)
         elif isinstance(
             self.model,
             (OVModelForVisualCausalLM, _OVModelForWhisper, OVModelForZeroShotImageClassification, OVSamModel),
@@ -512,10 +509,7 @@ class OVCalibrationDatasetBuilder:
             elif isinstance(self.model, _OVModelForWhisper):
                 return self._prepare_speech_to_text_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, OVModelForSeq2SeqLM):
-                kwargs = {}
-                if "seq_len" in quantization_config.dataset_kwargs:
-                    kwargs["seq_len"] = quantization_config.dataset_kwargs["seq_len"]
-                return self._prepare_text_to_text_calibration_data(quantization_config, dataset, **kwargs)
+                return self._prepare_text_to_text_calibration_data(quantization_config, dataset)
             elif is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
                 return self._prepare_diffusion_calibration_data(quantization_config, dataset)
             elif (
@@ -523,15 +517,9 @@ class OVCalibrationDatasetBuilder:
                 or is_sentence_transformers_available()
                 and isinstance(self.model, OVSentenceTransformer)
             ):
-                kwargs = {}
-                if "seq_len" in quantization_config.dataset_kwargs:
-                    kwargs["seq_len"] = quantization_config.dataset_kwargs["seq_len"]
-                return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset, **kwargs)
+                return self._prepare_text_encoder_model_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, OVModelForZeroShotImageClassification):
-                kwargs = {}
-                if "seq_len" in quantization_config.dataset_kwargs:
-                    kwargs["seq_len"] = quantization_config.dataset_kwargs["seq_len"]
-                return self._prepare_text_image_encoder_model_calibration_data(quantization_config, dataset, **kwargs)
+                return self._prepare_text_image_encoder_model_calibration_data(quantization_config, dataset)
             elif isinstance(self.model, OVSamModel):
                 return self._prepare_sam_dataset(quantization_config, dataset)
             else:
@@ -668,15 +656,13 @@ class OVCalibrationDatasetBuilder:
 
         return OVCalibrationDataset(nncf.Dataset(collected_inputs))
 
-    def _prepare_causal_lm_calibration_data(
-        self, config: OVQuantizationConfigBase, seq_len: Optional[int] = None
-    ) -> OVCalibrationDataset:
+    def _prepare_causal_lm_calibration_data(self, config: OVQuantizationConfigBase) -> OVCalibrationDataset:
         """
         Prepares calibration data for causal language models. Relies on `optimum.gptq.data` module.
         """
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        seq_len = seq_len or config.dataset_kwargs.get("seq_len")
+        seq_len = config.dataset_kwargs.get("seq_len")
         tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
         nsamples = config.num_samples if config.num_samples else 128
         if isinstance(config.dataset, str):
@@ -867,7 +853,6 @@ class OVCalibrationDatasetBuilder:
         self,
         config: OVQuantizationConfigBase,
         dataset: "Dataset",
-        seq_len: int = 128,
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for text-to-text pipelines by inferring it on a dataset and collecting incurred inputs.
@@ -888,6 +873,7 @@ class OVCalibrationDatasetBuilder:
                 return AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
+            seq_len = config.dataset_kwargs.get("seq_len") or 128
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading dataset", total=num_samples))
 
             tokenizer = None
@@ -964,7 +950,6 @@ class OVCalibrationDatasetBuilder:
         self,
         quantization_config: OVQuantizationConfigBase,
         dataset: "Dataset",
-        seq_len: int = 128,
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for text-encoder-like models.
@@ -984,6 +969,7 @@ class OVCalibrationDatasetBuilder:
 
         self.model.compile()
 
+        seq_len = quantization_config.dataset_kwargs.get("seq_len") or 128
         num_samples = quantization_config.num_samples or 128
         calibration_data = []
         try:
@@ -1048,7 +1034,6 @@ class OVCalibrationDatasetBuilder:
         self,
         quantization_config: OVQuantizationConfigBase,
         dataset: "Dataset",
-        seq_len: int = 128,
     ) -> OVCalibrationDataset:
         if not is_pillow_available():
             raise ImportError(
@@ -1068,6 +1053,7 @@ class OVCalibrationDatasetBuilder:
             )
             return processor
 
+        seq_len = quantization_config.dataset_kwargs.get("seq_len") or 128
         max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
         if max_position_embeddings is not None and max_position_embeddings > 0:
             seq_len = min(seq_len, max_position_embeddings)

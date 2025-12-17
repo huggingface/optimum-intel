@@ -655,18 +655,15 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         """
         self.num_samples = num_samples
 
-        # Handle dataset_kwargs from deserialization (backward compatibility)
-        # Extract it from kwargs if present, otherwise initialize as empty dict
+        # Handle dataset_kwargs from deserialization
         self.dataset_kwargs = kwargs.pop("dataset_kwargs", {})
-        
-        # Parse dataset string for options (only if not already provided via kwargs)
+
         if not self.dataset_kwargs and isinstance(dataset, str) and ":" in dataset:
             # Parse dataset with options: "dataset_name:key1=value1,key2=value2"
             parts = dataset.split(":", 1)
             self.dataset = parts[0]
             options_str = parts[1]
 
-            # Parse options
             for option in options_str.split(","):
                 option = option.strip()
                 if not option:
@@ -695,7 +692,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                         f"Only 'seq_len' is supported."
                     )
         else:
-            # No options or list dataset
+            # No options or list-of-str dataset
             self.dataset = dataset
 
         self.tokenizer = tokenizer
@@ -764,8 +761,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression with NNCF. Can be a dataset name (e.g., 'wikitext')
-            or a string with options (e.g., 'wikitext:seq_len=128'). Currently supported option: seq_len.
+            The dataset used for data-aware compression with NNCF. Can be a dataset name (e.g., 'wikitext'),
+            a string with options (e.g., 'wikitext:seq_len=128') or a list of string-typed dataset elements.
             - For language models you can provide your own dataset in a list of strings or just use one from the list
                 ['auto', 'wikitext2','c4','c4-new']. With 'auto' the dataset will be collected from model's generations.
             - For diffusion models the dataset must be one of ['conceptual_captions',
