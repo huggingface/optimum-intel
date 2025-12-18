@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+
+import warnings
+
 from ..utils.import_utils import is_diffusers_available
 from .configuration import INCConfig
 from .modeling_base import (
@@ -32,3 +35,10 @@ from .trainer_seq2seq import INCSeq2SeqTrainer
 
 if is_diffusers_available():
     from .modeling_diffusion import INCStableDiffusionPipeline
+
+
+warnings.warn(
+    "`optimum.intel.neural_compressor` is deprecated and will be removed in the next major release of optimum-intel. ",
+    FutureWarning,
+    stacklevel=2,
+)
