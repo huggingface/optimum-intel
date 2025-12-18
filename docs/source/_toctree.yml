@@ -4,14 +4,6 @@
   - local: installation
     title: Installation
   - sections:
-    - local: neural_compressor/optimization
-      title: Optimization
-    - local: neural_compressor/distributed_training
-      title: Distributed Training
-    - local: neural_compressor/reference
-      title: Reference
-    title: Neural Compressor
-  - sections:
     - local: openvino/export
       title: Export
     - local: openvino/inference
@@ -31,6 +23,14 @@
       isExpanded: false
     title: OpenVINO
     isExpanded: true
+  - sections:
+    - local: neural_compressor/optimization
+      title: Optimization
+    - local: neural_compressor/distributed_training
+      title: Distributed Training
+    - local: neural_compressor/reference
+      title: Reference
+    title: Neural Compressor
   - sections:
     - local: ipex/inference
       title: Inference
