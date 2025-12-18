@@ -14,7 +14,6 @@
 
 import copy
 import dataclasses
-import gc
 import inspect
 import logging
 from collections import UserDict, deque
@@ -1411,10 +1410,9 @@ class OVQuantizer(OptimumQuantizer):
 
                     # Unload the model to allow Python's garbage collector to free its memory and file system -- to
                     # delete corresponding model files
-                    self.model.unload_ov_model(ov_model)
+                    self.model.unload_ov_model(quantized_model)
                     del quantized_model
                     del ov_model
-                    gc.collect()
 
                     ov_model_path = save_directory / Path(self.model.ov_model_paths[ov_model_name])
                     if not ov_model_path.exists():
