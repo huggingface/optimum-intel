@@ -7380,3 +7380,56 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
             else:
                 continue
             mamba_layer.forward = mamba_layer._orig_forward
+
+
+def afmoe_moe_forward_patched(self, hidden_states):
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+    hidden_states_flat = hidden_states.view(-1, hidden_dim)
+    routing_weights, selected_experts = self.router(hidden_states, self.expert_bias)
+
+    # Process through shared experts
+    if self.shared_experts is not None:
+        shared_output = self.shared_experts(hidden_states_flat)
+    else:
+        shared_output = torch.zeros_like(hidden_states_flat)
+
+    final_hidden_states = torch.zeros_like(hidden_states_flat)
+
+    # One hot encode the selected experts to create an expert mask
+    # this will be used to easily index which expert is going to be solicited
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.config.num_experts).permute(2, 1, 0)
+
+    # Loop over all available experts in the model and perform the computation on each expert
+    for expert_idx in range(self.config.num_experts):
+        expert_layer = self.experts[expert_idx]
+        idx, top_x = torch.where(expert_mask[expert_idx])
+
+        # Index the correct hidden states and compute the expert hidden state for
+        # the current expert. We need to make sure to multiply the output hidden
+        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+        current_state = hidden_states_flat[None, top_x].reshape(-1, hidden_dim)
+        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+        # However `index_add_` only support torch tensors for indexing so we'll use
+        # the `top_x` tensor here.
+        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states_flat.dtype))
+
+    output = shared_output + final_hidden_states
+    return output.view(batch_size, seq_len, hidden_dim)
+
+
+class AfmoeModelPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for idx, layer in enumerate(self._model.model.layers):
+            if layer.moe_enabled:
+                afmoe_moe = layer.mlp
+                afmoe_moe._orig_forward = afmoe_moe.forward
+                afmoe_moe.forward = types.MethodType(afmoe_moe_forward_patched, afmoe_moe)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for idx, layer in enumerate(self._model.model.layers):
+            if layer.moe_enabled:
+                afmoe_moe = layer.mlp
+                afmoe_moe.forward = afmoe_moe._orig_forward
