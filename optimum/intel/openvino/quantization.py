@@ -662,7 +662,7 @@ class OVCalibrationDatasetBuilder:
         """
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        seq_len = config.dataset_kwargs.get("seq_len")
+        seq_len = config._dataset_kwargs.get("seq_len")
         tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
         nsamples = config.num_samples if config.num_samples else 128
         if isinstance(config.dataset, str):
@@ -873,7 +873,7 @@ class OVCalibrationDatasetBuilder:
                 return AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
-            seq_len = config.dataset_kwargs.get("seq_len") or 128
+            seq_len = config._dataset_kwargs.get("seq_len") or 128
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading dataset", total=num_samples))
 
             tokenizer = None
@@ -969,7 +969,7 @@ class OVCalibrationDatasetBuilder:
 
         self.model.compile()
 
-        seq_len = quantization_config.dataset_kwargs.get("seq_len") or 128
+        seq_len = quantization_config._dataset_kwargs.get("seq_len") or 128
         num_samples = quantization_config.num_samples or 128
         calibration_data = []
         try:
@@ -1053,7 +1053,7 @@ class OVCalibrationDatasetBuilder:
             )
             return processor
 
-        seq_len = quantization_config.dataset_kwargs.get("seq_len") or 128
+        seq_len = quantization_config._dataset_kwargs.get("seq_len") or 128
         max_position_embeddings = getattr(self.model.config, "max_position_embeddings", None)
         if max_position_embeddings is not None and max_position_embeddings > 0:
             seq_len = min(seq_len, max_position_embeddings)

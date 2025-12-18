@@ -2459,32 +2459,32 @@ class TestDatasetParsing(unittest.TestCase):
         """Test that a simple dataset name without options is preserved."""
         config = OVQuantizationConfigBase(dataset="wikitext")
         self.assertEqual(config.dataset, "wikitext")
-        self.assertEqual(config.dataset_kwargs, {})
+        self.assertEqual(config._dataset_kwargs, {})
 
     def test_dataset_with_seq_len_option(self):
         """Test parsing of seq_len option from dataset string."""
         config = OVQuantizationConfigBase(dataset="wikitext2:seq_len=128")
         self.assertEqual(config.dataset, "wikitext2")
-        self.assertEqual(config.dataset_kwargs, {"seq_len": 128})
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
 
     def test_dataset_gsm8k_with_seq_len(self):
         """Test parsing of seq_len option for gsm8k dataset."""
         config = OVQuantizationConfigBase(dataset="gsm8k:seq_len=512")
         self.assertEqual(config.dataset, "gsm8k")
-        self.assertEqual(config.dataset_kwargs, {"seq_len": 512})
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 512})
 
     def test_dataset_with_multiple_spaces(self):
         """Test parsing with spaces around the option."""
         config = OVQuantizationConfigBase(dataset="wikitext:seq_len = 64")
         self.assertEqual(config.dataset, "wikitext")
-        self.assertEqual(config.dataset_kwargs, {"seq_len": 64})
+        self.assertEqual(config._dataset_kwargs, {"seq_len": 64})
 
     def test_dataset_list_no_parsing(self):
         """Test that list datasets skip parsing and remain unchanged."""
         dataset_list = ["sample text 1", "sample text 2", "sample text 3"]
         config = OVQuantizationConfigBase(dataset=dataset_list)
         self.assertEqual(config.dataset, dataset_list)
-        self.assertEqual(config.dataset_kwargs, {})
+        self.assertEqual(config._dataset_kwargs, {})
 
     def test_dataset_unsupported_option(self):
         """Test that unsupported options raise ValueError."""
@@ -2517,10 +2517,10 @@ class TestDatasetParsing(unittest.TestCase):
         """Test that None dataset is handled correctly."""
         config = OVQuantizationConfigBase(dataset=None)
         self.assertIsNone(config.dataset)
-        self.assertEqual(config.dataset_kwargs, {})
+        self.assertEqual(config._dataset_kwargs, {})
 
     def test_dataset_with_colon_in_name_only(self):
         """Test handling of dataset string with trailing colon but no options."""
         config = OVQuantizationConfigBase(dataset="wikitext:")
         self.assertEqual(config.dataset, "wikitext")
-        self.assertEqual(config.dataset_kwargs, {})
+        self.assertEqual(config._dataset_kwargs, {})

@@ -656,9 +656,9 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self.num_samples = num_samples
 
         # Handle dataset_kwargs from deserialization
-        self.dataset_kwargs = kwargs.pop("dataset_kwargs", {})
+        self._dataset_kwargs = kwargs.pop("_dataset_kwargs", {})
 
-        if not self.dataset_kwargs and isinstance(dataset, str) and ":" in dataset:
+        if not self._dataset_kwargs and isinstance(dataset, str) and ":" in dataset:
             # Parse dataset with options: "dataset_name:key1=value1,key2=value2"
             parts = dataset.split(":", 1)
             self.dataset = parts[0]
@@ -680,7 +680,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 # Validate and parse known options
                 if key == "seq_len":
                     try:
-                        self.dataset_kwargs[key] = int(value)
+                        self._dataset_kwargs[key] = int(value)
                     except ValueError:
                         raise ValueError(
                             f"Invalid value '{value}' for seq_len in dataset spec '{dataset}'. "
