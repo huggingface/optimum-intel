@@ -605,7 +605,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             ov_config = OVConfig(dtype="fp32")
         stateful = kwargs.get("stateful", True)
         variant = kwargs.pop("variant", None)
-        torch_export = kwargs.pop("torch_export", False)
 
         # now we use model_kwargs only for text-to-speech models to specify vocoder
         model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
@@ -624,7 +623,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             stateful=stateful,
             variant=variant,
-            torch_export=torch_export,
             model_kwargs=model_kwargs,
         )
 

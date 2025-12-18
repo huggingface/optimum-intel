@@ -11,17 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import functools
 import os
 import time
 import unittest
 from contextlib import contextmanager
-from inspect import signature
 from typing import Dict, Optional
 
 import numpy as np
 import openvino as ov
-import pytest
 import torch
 
 from optimum.exporters.tasks import TasksManager
@@ -35,8 +32,6 @@ F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
-
-USE_TORCH_EXPORT = os.getenv("USE_TORCH_EXPORT", "False") == "True"
 
 MODEL_NAMES = {
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
@@ -504,131 +499,6 @@ TEST_NAME_TO_MODEL_TYPE = {
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
 }
-
-_ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT = {
-    "hf-internal-testing/tiny-random-mbart",
-    "hf-internal-testing/tiny-random-gpt2",
-    "hf-internal-testing/tiny-random-t5",
-    "hf-internal-testing/tiny-random-bart",
-    "echarlaix/tiny-random-t5",
-    "ibert",
-    "timm/pit_s_distilled_224.in1k",
-    "timm/vit_tiny_patch16_224.augreg_in21k",
-    "beit",
-    "convnext",
-    "data2vec-vision",
-    "deit",
-    "levit",
-    "mobilevit",
-    "poolformer",
-    "perceiver_vision",
-    "resnet",
-    "segformer",
-    "swin",
-    "vit",
-    "sew",
-    "sew-d",
-    "open-clip",
-    "gpt2",
-    "sam",
-    "clip",
-    "siglip",
-    "baichuan2-13b",
-    "biogpt",
-    "bitnet",
-    "bloom",
-    "chatglm4",
-    "codegen",
-    "codegen2",
-    "dbrx",
-    "decilm",
-    "exaone4",
-    "falcon",
-    "falcon-40b",
-    "falcon-mamba",
-    "gemma3_text",
-    "gpt_bigcode",
-    "gpt_neo",
-    "gpt_oss",
-    "gpt_oss_mxfp4",
-    "gptj",
-    "granite-moe",
-    "granite-moe-hybrid",
-    "jais",
-    "lfm2",
-    "llama",
-    "mamba",
-    "mixtral_awq",
-    "mpt",
-    "opt",
-    "opt_gptq",
-    "orion",
-    "phi3-moe",
-    "qwen",
-    "xglm",
-    "zamba2",
-    "stable-diffusion",
-    "stable-diffusion-xl",
-    "stable-diffusion-xl-refiner",
-    "stable-diffusion-3",
-    "flux",
-    "sana",
-    "sana-sprint",
-    "stable-diffusion-with-safety-checker",
-    "flux-fill",
-    "ltx-video",
-    "pix2struct",
-    "t5",
-    "bart",
-    "blenderbot",
-    "speecht5",
-    "llava",
-    "qwen2_vl",
-    "opt125m",
-    "llama_awq",
-    "llava_next",
-    "llava_next_video",
-    "minicpmv",
-    "llama4",
-    "whisper",
-    "internvl_chat",
-    "blenderbot-small",
-    "m2m_100",
-    "mbart",
-    "mt5",
-    "pegasus",
-    "marian",
-    "vision-encoder-decoder",
-    "trocr",
-    "donut",
-    "llava_next_mistral",
-    "smolvlm",
-    "gemma3",
-    "idefics3",
-    "got_ocr2",
-}
-
-
-def skip_architectures_unsupported_with_torch_export(fn):
-    @functools.wraps(fn)
-    def run_test(*args, **kwargs):
-        if not USE_TORCH_EXPORT:
-            return fn(*args, **kwargs)
-        test_signature = signature(fn)
-        model_id_idx = -1
-        for idx, param in enumerate(test_signature.parameters):
-            if param in ["model_arch", "model_id", "model_type", "model_name"]:
-                if model_id_idx != -1:
-                    raise RuntimeError("Detected ambiguous model id arguments.")
-                model_id_idx = idx
-        if model_id_idx == -1:
-            raise ValueError("Model id argument not found.")
-        model_id = args[model_id_idx]
-        if model_id in _ARCHITECTURES_NOT_SUPPORTED_WITH_TORCH_EXPORT:
-            pytest.skip(f"{model_id} is unsupported with torch.export.")
-        return fn(*args, **kwargs)
-
-    return run_test
 
 
 def get_supported_model_for_library(library_name):

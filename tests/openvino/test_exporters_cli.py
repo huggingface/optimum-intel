@@ -31,11 +31,9 @@ from utils_tests import (
     MODEL_NAMES,
     OPENVINO_DEVICE,
     TEST_NAME_TO_MODEL_TYPE,
-    USE_TORCH_EXPORT,
     check_compression_state_per_model,
     get_num_quantized_nodes,
     get_supported_model_for_library,
-    skip_architectures_unsupported_with_torch_export,
 )
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -783,15 +781,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1]) in get_supported_model_for_library("transformers")
     ]
 
-    def _openvino_export(self, model_name: str, task: str, torch_export: bool, model_kwargs: Dict = None):
+    def _openvino_export(self, model_name: str, task: str, model_kwargs: Dict = None):
         with TemporaryDirectory() as tmpdir:
-            main_export(
-                model_name_or_path=model_name,
-                output=tmpdir,
-                task=task,
-                model_kwargs=model_kwargs,
-                torch_export=torch_export,
-            )
+            main_export(model_name_or_path=model_name, output=tmpdir, task=task, model_kwargs=model_kwargs)
 
     def test_filtered_architectures(cls):
         if is_transformers_version("<", "4.49"):
@@ -809,15 +801,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         cls.assertEqual(skipped, expected)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @skip_architectures_unsupported_with_torch_export
     def test_export(self, task: str, model_type: str):
         model_kwargs = None
         if task == "text-to-audio" and model_type == "speecht5":
             model_kwargs = {"vocoder": "fxmarty/speecht5-hifigan-tiny"}
-        self._openvino_export(MODEL_NAMES[model_type], task, torch_export=USE_TORCH_EXPORT, model_kwargs=model_kwargs)
+        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
@@ -840,7 +830,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         for arch in SUPPORTED_ARCHITECTURES
         if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
     )
-    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
@@ -1002,7 +991,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             add_ops = ""
@@ -1021,7 +1009,6 @@ class OVCLIExportTestCase(unittest.TestCase):
             ).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @skip_architectures_unsupported_with_torch_export
     def test_exporters_cli_int8(self, task: str, model_type: str):
         if model_type in ["bitnet"]:
             self.skipTest("CVS-176501 INT8 compression fails for BitNet; need to compress remaining BF16 weights")
@@ -1396,14 +1383,12 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("text_features" in model.text_model.output_names)
             self.assertTrue("image_features" in model.visual_model.output_names)
 
-    @parameterized.expand({"gpt2"})
-    @skip_architectures_unsupported_with_torch_export
-    def test_export_openvino_with_missed_weight_format(self, model_id):
+    def test_export_openvino_with_missed_weight_format(self):
         # Test that exception is raised when some compression parameter is given, but weight format is not.
         with TemporaryDirectory() as tmpdir:
             with self.assertRaises(subprocess.CalledProcessError) as exc_info:
                 subprocess.run(
-                    f"optimum-cli export openvino --model {MODEL_NAMES[model_id]} --task text-generation --sym {tmpdir}",
+                    f"optimum-cli export openvino --model {MODEL_NAMES['gpt2']} --task text-generation --sym {tmpdir}",
                     shell=True,
                     check=True,
                     stdout=subprocess.PIPE,
@@ -1415,15 +1400,13 @@ class OVCLIExportTestCase(unittest.TestCase):
                 str(exc_info.exception.stderr),
             )
 
-    @parameterized.expand({"stable-diffusion"})
-    @skip_architectures_unsupported_with_torch_export
-    def test_export_openvino_with_custom_variant(self, model_id):
+    def test_export_openvino_with_custom_variant(self):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --model katuni4ka/tiny-stable-diffusion-torch-custom-variant --variant custom {tmpdir}",
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS[model_id]).from_pretrained(tmpdir, compile=False)
+            model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))

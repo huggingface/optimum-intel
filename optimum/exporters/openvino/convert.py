@@ -149,7 +149,6 @@ def export(
     stateful: bool = True,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
-    torch_export: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch model to an OpenVINO Intermediate Representation.
@@ -172,8 +171,6 @@ def export(
             If specified, allows to use specific shapes for the example input provided to the exporter.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
-        torch_export (`bool`, defaults to `False`):
-            Use torch.export() for scripting of PyTorch models.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -226,7 +223,6 @@ def export(
             stateful=stateful,
             patch_16bit_model=patch_16bit_model,
             library_name=library_name,
-            torch_export=torch_export,
         )
     else:
         raise RuntimeError("You either provided a non-PyTorch model or the PyTorch library is not installed.")
@@ -311,7 +307,6 @@ def export_pytorch(
     stateful: bool = False,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
-    torch_export: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -336,8 +331,6 @@ def export_pytorch(
             The configuration containing the parameters related to quantization.
         stateful (`bool`, defaults to `False`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
-        torch_export (`bool`, defaults to `False`):
-            Use torch.export() for scripting of PyTorch models.
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -419,6 +412,7 @@ def export_pytorch(
         with patcher:
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
+            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "False") == "True"
             if torch_export:
                 if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
                     # patch_everywhere breaks torch.ops namespace
@@ -488,7 +482,6 @@ def export_models(
     stateful: bool = True,
     patch_16bit_model: bool = False,
     library_name: Optional[str] = None,
-    torch_export: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -509,8 +502,6 @@ def export_models(
             Additional kwargs for model export.
         stateful (`bool`, defaults to `True`)
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
-        torch_export (`bool`, defaults to `False`)
-            Use torch.export() for scripting of PyTorch models.
 
     Raises:
         ValueError: if custom names set not equal of number of models
@@ -544,7 +535,6 @@ def export_models(
                 stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
                 patch_16bit_model=patch_16bit_model,
                 library_name=library_name,
-                torch_export=torch_export,
             )
         )
 
@@ -566,7 +556,6 @@ def export_from_model(
     device: str = "cpu",
     trust_remote_code: bool = False,
     patch_16bit_model: bool = False,
-    torch_export: bool = False,
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
@@ -777,7 +766,6 @@ def export_from_model(
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
         library_name=library_name,
-        torch_export=torch_export,
     )
 
     return files_subpaths

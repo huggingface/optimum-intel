@@ -338,8 +338,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
 
         variant = kwargs.pop("variant", None)
 
-        torch_export = kwargs.pop("torch_export", False)
-
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -356,7 +354,6 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             model_loading_kwargs=model_loading_kwargs,
             library_name=cls._library_name,
             variant=variant,
-            torch_export=torch_export,
         )
 
         if config.model_type == "phi3" and config.max_position_embeddings != getattr(

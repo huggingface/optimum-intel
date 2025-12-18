@@ -15,7 +15,7 @@ import unittest
 
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
-from utils_tests import OPENVINO_DEVICE, USE_TORCH_EXPORT, skip_architectures_unsupported_with_torch_export
+from utils_tests import OPENVINO_DEVICE
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForCausalLM,
@@ -52,7 +52,6 @@ TASKS = {
 
 class OVModelBasicIntegrationTest(unittest.TestCase):
     @parameterized.expand(MODEL_NAMES.keys())
-    @skip_architectures_unsupported_with_torch_export
     def test_pipeline(self, model_id):
         """
         Test that loading, inference and saving works for all models in MODEL_NAMES
@@ -60,7 +59,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model_class_str = MODEL_NAMES[model_id]
         model_class = eval(model_class_str)
-        model = model_class.from_pretrained(model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT)
+        model = model_class.from_pretrained(model_id, device=OPENVINO_DEVICE)
         model.save_pretrained(f"{model_id}_ov")
         model = model_class.from_pretrained(f"{model_id}_ov", device=OPENVINO_DEVICE)
 
@@ -76,16 +75,13 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
             pipe(*input_text)
         gc.collect()
 
-    @parameterized.expand({"hf-internal-testing/tiny-random-distilbert"})
-    @skip_architectures_unsupported_with_torch_export
-    def test_openvino_methods(self, model_id):
+    def test_openvino_methods(self):
         """
         Sanity check for .reshape() .to() and .half()
         """
+        model_id = "hf-internal-testing/tiny-random-distilbert"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForSequenceClassification.from_pretrained(
-            model_id, device=OPENVINO_DEVICE, torch_export=USE_TORCH_EXPORT
-        )
+        model = OVModelForSequenceClassification.from_pretrained(model_id, device=OPENVINO_DEVICE)
         model.reshape(1, 16)
         model.half()
         model.to("cpu")

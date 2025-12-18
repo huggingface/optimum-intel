@@ -682,7 +682,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             stateful=stateful,
             variant=variant,
-            torch_export=kwargs.pop("torch_export", False),
         )
         name_or_path = config.name_or_path
         config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)

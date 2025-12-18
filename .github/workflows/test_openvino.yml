@@ -39,15 +39,6 @@ jobs:
             "*quantization*",
           ]
         transformers-version: ["4.45.0", "latest"]
-        export_mode: ["torch_script", "torch_export"]
-        include:
-          - export_mode: "torch_export"
-            use_torch_export_bool: "True"
-          - export_mode: "torch_script"
-            use_torch_export_bool: "False"
-        exclude:
-          - transformers-version: "4.45.0"
-            export_mode: "torch_export"
 
     runs-on: ubuntu-22.04
 
@@ -81,8 +72,6 @@ jobs:
           python tests/scripts/login_with_ci_token.py
 
       - name: Test with Pytest
-        env:
-          USE_TORCH_EXPORT: ${{ matrix.use_torch_export_bool }}
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
 

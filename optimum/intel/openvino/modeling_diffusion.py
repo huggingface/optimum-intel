@@ -634,7 +634,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             library_name=cls._library_name,
             variant=variant,
             model_loading_kwargs=model_loading_kwargs,
-            torch_export=kwargs.pop("torch_export", False),
         )
 
         return cls._from_pretrained(
