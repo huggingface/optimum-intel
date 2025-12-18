@@ -151,7 +151,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
     if is_transformers_version(">=", "4.52.0"):
         SUPPORT_STATEFUL += ("bart", "blenderbot", "blenderbot-small", "m2m_100", "marian", "mbart")
     if is_transformers_version(">=", "4.53.0"):
-        SUPPORT_STATEFUL += ("pegasus",)
+        SUPPORT_STATEFUL += ("pegasus", "bigbird_pegasus")
 
     def test_find_untested_architectures(self):
         self._test_find_untested_architectures()
