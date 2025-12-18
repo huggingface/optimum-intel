@@ -3779,7 +3779,7 @@ class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
     _MODEL_PATCHER = DeepseekPatcher
 
 
-@register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("got_ocr2", *["image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 

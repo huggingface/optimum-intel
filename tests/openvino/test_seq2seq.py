@@ -416,7 +416,6 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 class OVModelForVision2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = [
         "donut",
-        "got_ocr2",
         "pix2struct",
         "trocr",
         "vision-encoder-decoder",
