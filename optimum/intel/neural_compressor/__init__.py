@@ -38,7 +38,7 @@ if is_diffusers_available():
 
 
 warnings.warn(
-    "`optimum.intel.neural_compressor` is deprecated and will be removed in the next major release of optimum-intel. ",
+    "`optimum.intel.neural_compressor` is deprecated and will be removed in the next major release of `optimum-intel`.",
     FutureWarning,
     stacklevel=2,
 )

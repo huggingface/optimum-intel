@@ -34,7 +34,7 @@ if is_sentence_transformers_available():
 
 
 warnings.warn(
-    "`optimum.intel.ipex` is deprecated and will be removed in the next major release of optimum-intel. ",
+    "`optimum.intel.ipex` is deprecated and will be removed in the next major release of `optimum-intel`.",
     FutureWarning,
     stacklevel=2,
 )
