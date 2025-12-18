@@ -2304,9 +2304,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         with unittest.mock.patch(mock_method_name) as mock_method:
             mock_model = unittest.mock.Mock([])
             mock_model.get_rt_info = unittest.mock.Mock(return_value={})
+            mock_model.set_rt_info = unittest.mock.Mock(return_value={})
 
             mock_quantization_config = unittest.mock.Mock(config_type)
             mock_quantization_config.to_nncf_dict.return_value = {"param1": "value1", "param2": "value2"}
+            mock_quantization_config.dq_group_size = None
 
             additional_kwargs = {"param2": "new_value2", "param3": "value3"}
 
