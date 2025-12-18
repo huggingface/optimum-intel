@@ -51,6 +51,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
+        export_mode: [ "torch_script", "dynamo_export" ]
 
         include:
           # stable openvino + nncf develop tests
@@ -61,6 +62,10 @@ jobs:
           - nncf-version: "nncf-develop"
             openvino-version: "openvino-nightly"
             test-pattern: "*{quantization,export}*"
+          - export_mode: "dynamo_export"
+            dynamo_export_bool: "True"
+          - export_mode: "torch_script"
+            dynamo_export_bool: "False"
 
     runs-on: ubuntu-22.04
 
@@ -103,5 +108,7 @@ jobs:
           pip freeze
 
       - name: Test with Pytest
+        env:
+          OPENVINO_DYNAMO_EXPORT: ${{ matrix.dynamo_export_bool }}
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
