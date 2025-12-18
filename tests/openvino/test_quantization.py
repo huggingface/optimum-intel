@@ -1565,6 +1565,50 @@ class OVWeightCompressionTest(unittest.TestCase):
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
+    @parameterized.expand([(MODEL_NAMES["gpt2"],)])
+    def test_dataset_seq_len_option_passed_to_get_dataset(self, model_id):
+        """Test that seq_len from dataset option is correctly passed to get_dataset."""
+
+        with TemporaryDirectory() as tmp_dir:
+            # Patch get_dataset to capture the seqlen parameter
+            with unittest.mock.patch("optimum.gptq.data.get_dataset") as mock_get_dataset:
+                # Setup mock to return a minimal dataset
+                mock_get_dataset.return_value = [
+                    {
+                        "input_ids": torch.tensor([[1, 2, 3]]),
+                        "attention_mask": torch.tensor([[1, 1, 1]]),
+                    }
+                ]
+
+                OVModelForCausalLM.from_pretrained(
+                    model_id,
+                    export=True,
+                    quantization_config=OVWeightQuantizationConfig(
+                        bits=4,
+                        group_size=8,
+                        dataset="wikitext2:seq_len=64",
+                        quant_method=OVQuantizationMethod.AWQ,
+                        tokenizer=model_id,
+                        num_samples=1,
+                    ),
+                )
+
+                # Verify that get_dataset was called
+                self.assertTrue(mock_get_dataset.called, "get_dataset should have been called")
+
+                # Verify that seqlen parameter was passed and is not the default value of 32
+                call_args = mock_get_dataset.call_args
+                if call_args is not None:
+                    # Check if seqlen was passed as a keyword argument
+                    if "seqlen" in call_args.kwargs:
+                        actual_seqlen = call_args.kwargs["seqlen"]
+                        self.assertEqual(
+                            actual_seqlen,
+                            64,
+                            f"Expected seq_len to be 64 (from dataset option), but got {actual_seqlen}",
+                        )
+                        self.assertNotEqual(actual_seqlen, 32, "seq_len should not be the default value of 32")
+
 
 class OVPipelineQuantizationTest(unittest.TestCase):
     maxDiff = None
@@ -2464,8 +2508,28 @@ class TestDatasetParsing(unittest.TestCase):
     def test_dataset_with_seq_len_option(self):
         """Test parsing of seq_len option from dataset string."""
         config = OVQuantizationConfigBase(dataset="wikitext2:seq_len=128")
-        self.assertEqual(config.dataset, "wikitext2")
-        self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_with_seq_len_option_mixed_q_config(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVMixedQuantizationConfig(
+            OVWeightQuantizationConfig(dataset="wikitext2:seq_len=128"), OVQuantizationConfig()
+        )
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
+
+    def test_dataset_with_seq_len_option_pipeline_q_config(self):
+        """Test parsing of seq_len option from dataset string."""
+        config = OVPipelineQuantizationConfig({"model": OVWeightQuantizationConfig(dataset="wikitext2:seq_len=128")})
+        for _ in range(2):
+            self.assertEqual(config.dataset, "wikitext2")
+            self.assertEqual(config._dataset_kwargs, {"seq_len": 128})
+            config = _quantization_config_from_dict(config.to_dict())
 
     def test_dataset_gsm8k_with_seq_len(self):
         """Test parsing of seq_len option for gsm8k dataset."""

@@ -1395,6 +1395,9 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset = dataset or wqc.dataset or fqc.dataset
         tokenizer = tokenizer or wqc.tokenizer or fqc.tokenizer
         processor = processor or wqc.processor or fqc.processor
+        dataset_kwargs = kwargs.get("_dataset_kwargs", {}) or wqc._dataset_kwargs or fqc._dataset_kwargs
+        if dataset_kwargs:
+            kwargs["_dataset_kwargs"] = dataset_kwargs
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -1494,6 +1497,11 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
         processor = reduce(or_op, (processor, *(config.processor for config in configs)))
+        dataset_kwargs = reduce(
+            or_op, (kwargs.get("_dataset_kwargs", {}), *(config._dataset_kwargs for config in configs))
+        )
+        if dataset_kwargs:
+            kwargs["_dataset_kwargs"] = dataset_kwargs
 
         super().__init__(
             ignored_scope=None,
