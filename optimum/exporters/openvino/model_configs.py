@@ -21,6 +21,7 @@ from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
     AlbertOnnxConfig,
+    ASTOnnxConfig,
     BartOnnxConfig,
     BeitOnnxConfig,
     BertOnnxConfig,
@@ -34,6 +35,7 @@ from optimum.exporters.onnx.model_configs import (
     CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
     ConvBertOnnxConfig,
+    ConvNextOnnxConfig,
     Data2VecAudioOnnxConfig,
     Data2VecTextOnnxConfig,
     Data2VecVisionOnnxConfig,
@@ -65,6 +67,7 @@ from optimum.exporters.onnx.model_configs import (
     MPNetOnnxConfig,
     MPTOnnxConfig,
     NemotronOnnxConfig,
+    NystromformerOnnxConfig,
     Olmo2OnnxConfig,
     OPTOnnxConfig,
     PegasusOnnxConfig,
@@ -2278,6 +2281,11 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
 
 @register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
     pass
 
 
@@ -4693,6 +4701,11 @@ class AlbertOpenVINOConfig(AlbertOnnxConfig):
     pass
 
 
+@register_in_tasks_manager("nystromformer", *COMMON_TEXT_TASKS)
+class NystromformerOpenVINOConfig(NystromformerOnnxConfig):
+    pass
+
+
 @register_in_tasks_manager("convbert", *COMMON_TEXT_TASKS)
 class ConvBertOpenVINOConfig(ConvBertOnnxConfig):
     pass
@@ -4852,6 +4865,11 @@ class ViTOpenVINOConfig(ViTOnnxConfig):
     pass
 
 
+@register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])
+class ConvNextOpenVINOConfig(ConvNextOnnxConfig):
+    pass
+
+
 @register_in_tasks_manager("resnet", *["feature-extraction", "image-classification"])
 class ResNetOpenVINOConfig(ResNetOnnxConfig):
     pass
@@ -4949,4 +4967,9 @@ class SiglipOpenVINOConfig(SiglipOnnxConfig):
     "transformer", *["feature-extraction", "sentence-similarity"], library_name="sentence_transformers"
 )
 class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
+class ASTOpenVINOConfig(ASTOnnxConfig):
     pass
