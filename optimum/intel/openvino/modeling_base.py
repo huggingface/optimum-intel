@@ -38,9 +38,9 @@ from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import (
     _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
-    OVDynamicQuantizationConfig,
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
+    _apply_default_dq_group_size_config,
     _apply_default_ignored_scope_config,
     _quantization_config_from_dict,
     get_default_quantization_config,
@@ -696,6 +696,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
         quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
         quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
+        quantization_config = _apply_default_dq_group_size_config(model_name_or_path, quantization_config)
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
@@ -705,12 +706,6 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
     def _set_ov_config_parameters(self):
         if self.ov_config.get("PERFORMANCE_HINT") is None:
             self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
-
-        q_config = self._openvino_config.quantization_config if self._openvino_config else None
-        if isinstance(q_config, OVDynamicQuantizationConfig):
-            self.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(q_config.activations_group_size)
-            if self.can_generate() and "KV_CACHE_PRECISION" not in self.ov_config:
-                self.ov_config["KV_CACHE_PRECISION"] = "u8"
 
     @staticmethod
     def _cached_file(

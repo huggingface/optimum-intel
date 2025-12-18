@@ -493,6 +493,9 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
 }
 
 
+_DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS = {"Qwen/Qwen2.5-Coder-3B-Instruct": {"model": 128}}
+
+
 def _get_model_id_candidates(model_id_or_path: str) -> List[str]:
     """
     Get possible model id candidates from the given model id or path.
@@ -618,6 +621,45 @@ def _apply_default_ignored_scope_config(
 
             merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
             q_config.ignored_scope = merged_ignored_scope
+    return quantization_config_copy or quantization_config
+
+
+def _apply_default_dq_group_size_config(
+    model_id_or_path: str, quantization_config: "OVPipelineQuantizationConfig"
+) -> "OVPipelineQuantizationConfig":
+    """
+    Applies default dynamic quantization group size configuration to the given quantization configuration based on
+    the model ID or path.
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+        quantization_config (`OVPipelineQuantizationConfig`):
+            The quantization configuration to which the default dynamic quantization group size will be applied.
+    Returns:
+        Updated quantization configuration with the default dynamic quantization group size applied.
+    """
+    if not isinstance(quantization_config, OVPipelineQuantizationConfig):
+        raise ValueError(
+            "`_apply_default_dynamic_quantization_group_size_config` function expects "
+            "`OVPipelineQuantizationConfig` instance as `quantization_config` argument, but got: "
+            f"{type(quantization_config)}"
+        )
+    quantization_config_copy = None
+    model_id_candidates = _get_model_id_candidates(model_id_or_path)
+    for model_id in model_id_candidates:
+        default_group_sizes_per_model = _DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS.get(model_id)
+        if not default_group_sizes_per_model:
+            continue
+        for ov_model_name, default_group_size in default_group_sizes_per_model.items():
+            q_config = quantization_config.quantization_configs.get(ov_model_name, quantization_config.default_config)
+            # We skip setting DQ group size for non-weight-only quantization configs
+            if q_config and isinstance(q_config, OVWeightQuantizationConfig):
+                q_config = q_config.clone()
+                q_config.dq_group_size = default_group_size
+                if quantization_config_copy is None:
+                    # Clone only if needed
+                    quantization_config_copy = quantization_config.clone()
+                quantization_config_copy.quantization_configs[ov_model_name] = q_config
     return quantization_config_copy or quantization_config
 
 
@@ -793,6 +835,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
                 if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
+        dq_group_size (`int`, *optional*):
+            Group size to be used for dynamic quantization of activations. Applied by setting
+            "DYNAMIC_QUANTIZATION_GROUP_SIZE" runtime info value in the OpenVINO model IR. If not explicitly set,
+            dynamic quantization of activations may still be applied by OpenVINO runtime. Value 0 disables dynamic
+            quantization of activations.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -817,6 +864,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         backup_precision: Optional[str] = None,
         statistics_path: Optional[str] = None,
         group_size_fallback: Optional[str] = None,
+        dq_group_size: Optional[int] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -848,6 +896,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.dtype = dtype
         self.statistics_path = statistics_path
         self.group_size_fallback = group_size_fallback
+        self.dq_group_size = dq_group_size
         self.post_init()
 
     def post_init(self):
@@ -859,6 +908,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
+        if self.dq_group_size is not None and self.dq_group_size < 0:
+            raise ValueError("`dq_group_size` must not be less than 0")
         if not (self.dataset is None or isinstance(self.dataset, (str, list))):
             raise ValueError(
                 f"Dataset must be a instance of either string or list of strings, but found {type(self.dataset)}. "
@@ -1027,27 +1078,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             **kwargs,
         }
         return result
-
-
-@dataclass
-class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
-    def __init__(
-        self,
-        bits: int = 8,
-        sym: bool = False,
-        weights_group_size: Optional[int] = None,
-        activations_group_size: int = 32,
-        **kwargs,
-    ):
-        super().__init__(bits=bits, sym=sym, group_size=weights_group_size, **kwargs)
-        self.activations_group_size = activations_group_size
-        logger.warning(
-            "OVDynamicQuantizationConfig is deprecated and will be removed in optimum-intel v1.24.0. "
-            "Dynamic quantization and KV cache compression are enabled by default starting from OpenVINO 2024.6 and "
-            "there is no need to enable them manually. If you need precise control over these parameters, please "
-            "provide `DYNAMIC_QUANTIZATION_GROUP_SIZE` and `KV_CACHE_PRECISION` with `ov_config` argument during model "
-            "inference."
-        )
 
 
 @dataclass
