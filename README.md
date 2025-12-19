@@ -14,7 +14,7 @@
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
 ```bash
-pip install --upgrade --upgrade-strategy eager "optimum[openvino]"
+python -m pip install --upgrade-strategy eager "optimum-intel[openvino]"
 ```
 
 The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
