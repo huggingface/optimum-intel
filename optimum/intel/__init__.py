@@ -27,10 +27,9 @@ from .utils import (
 from .version import __version__
 
 
+# Base objects, independent of any specific backend
+# TODO: add openvino once ipex and inc officially deprecated
 _import_structure = {
-    "ipex": [],
-    "neural_compressor": [],
-    "openvino": [],
     "pipelines": ["pipeline"],
     # dummy objects
     "utils.dummy_ipex_objects": [],
@@ -60,19 +59,17 @@ except OptionalDependencyNotAvailable:
         ]
     )
 else:
-    _import_structure["ipex"].extend(
-        [
-            "IPEXModelForCausalLM",
-            "IPEXModelForSeq2SeqLM",
-            "IPEXModelForSequenceClassification",
-            "IPEXModelForMaskedLM",
-            "IPEXModelForTokenClassification",
-            "IPEXModelForQuestionAnswering",
-            "IPEXModelForImageClassification",
-            "IPEXModelForAudioClassification",
-            "IPEXModel",
-        ]
-    )
+    _import_structure["ipex"] = [
+        "IPEXModelForCausalLM",
+        "IPEXModelForSeq2SeqLM",
+        "IPEXModelForSequenceClassification",
+        "IPEXModelForMaskedLM",
+        "IPEXModelForTokenClassification",
+        "IPEXModelForQuestionAnswering",
+        "IPEXModelForImageClassification",
+        "IPEXModelForAudioClassification",
+        "IPEXModel",
+    ]
 
 
 try:
@@ -82,6 +79,69 @@ except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_ipex_objects"].extend(["IPEXSentenceTransformer"])
 else:
     _import_structure["ipex"].extend(["IPEXSentenceTransformer"])
+
+
+try:
+    if not is_openvino_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    from .utils import dummy_openvino_objects
+
+    _import_structure["utils.dummy_openvino_objects"].extend(
+        [
+            "OVModelForAudioClassification",
+            "OVModelForAudioFrameClassification",
+            "OVModelForAudioXVector",
+            "OVModelForCausalLM",
+            "OVModelForCTC",
+            "OVModelForCustomTasks",
+            "OVModelForFeatureExtraction",
+            "OVModelForImageClassification",
+            "OVModelForMaskedLM",
+            "OVModelForPix2Struct",
+            "OVModelForQuestionAnswering",
+            "OVModelForSeq2SeqLM",
+            "OVModelForSpeechSeq2Seq",
+            "OVModelForTextToSpeechSeq2Seq",
+            "OVModelForVision2Seq",
+            "OVModelForVisualCausalLM",
+            "OVModelForSequenceClassification",
+            "OVModelForTokenClassification",
+            "OVConfig",
+            "OVModelOpenCLIPVisual",
+            "OVModelOpenCLIPText",
+            "OVModelOpenCLIPForZeroShotImageClassification",
+            "OVModelForZeroShotImageClassification",
+            "OVSamModel",
+        ]
+    )
+else:
+    _import_structure["openvino"] = [
+        "OVModelForAudioClassification",
+        "OVModelForAudioFrameClassification",
+        "OVModelForAudioXVector",
+        "OVModelForCausalLM",
+        "OVModelForCTC",
+        "OVModelForCustomTasks",
+        "OVModelForFeatureExtraction",
+        "OVModelForImageClassification",
+        "OVModelForMaskedLM",
+        "OVModelForPix2Struct",
+        "OVModelForQuestionAnswering",
+        "OVModelForSeq2SeqLM",
+        "OVModelForSpeechSeq2Seq",
+        "OVModelForTextToSpeechSeq2Seq",
+        "OVModelForVision2Seq",
+        "OVModelForVisualCausalLM",
+        "OVModelForSequenceClassification",
+        "OVModelForTokenClassification",
+        "OVConfig",
+        "OVModelOpenCLIPVisual",
+        "OVModelOpenCLIPText",
+        "OVModelOpenCLIPForZeroShotImageClassification",
+        "OVModelForZeroShotImageClassification",
+        "OVSamModel",
+    ]
 
 
 try:
@@ -126,7 +186,7 @@ except OptionalDependencyNotAvailable:
             "OVStableDiffusionXLImg2ImgPipeline",
             "OVStableDiffusionXLInpaintPipeline",
             "OVStableDiffusion3Pipeline",
-            "OVStableDiffusion3Image2ImagePipeline",
+            "OVStableDiffusion3Img2ImgPipeline",
             "OVStableDiffusion3InpaintPipeline",
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
@@ -153,7 +213,7 @@ else:
             "OVStableDiffusionXLImg2ImgPipeline",
             "OVStableDiffusionXLInpaintPipeline",
             "OVStableDiffusion3Pipeline",
-            "OVStableDiffusion3Image2ImagePipeline",
+            "OVStableDiffusion3Img2ImgPipeline",
             "OVStableDiffusion3InpaintPipeline",
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
@@ -171,69 +231,6 @@ else:
         ]
     )
 
-try:
-    if not is_openvino_available():
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    from .utils import dummy_openvino_objects
-
-    _import_structure["utils.dummy_openvino_objects"].extend(
-        [
-            "OVModelForAudioClassification",
-            "OVModelForAudioFrameClassification",
-            "OVModelForAudioXVector",
-            "OVModelForCausalLM",
-            "OVModelForCTC",
-            "OVModelForCustomTasks",
-            "OVModelForFeatureExtraction",
-            "OVModelForImageClassification",
-            "OVModelForMaskedLM",
-            "OVModelForPix2Struct",
-            "OVModelForQuestionAnswering",
-            "OVModelForSeq2SeqLM",
-            "OVModelForSpeechSeq2Seq",
-            "OVModelForTextToSpeechSeq2Seq",
-            "OVModelForVision2Seq",
-            "OVModelForVisualCausalLM",
-            "OVModelForSequenceClassification",
-            "OVModelForTokenClassification",
-            "OVConfig",
-            "OVModelOpenCLIPVisual",
-            "OVModelOpenCLIPText",
-            "OVModelOpenCLIPForZeroShotImageClassification",
-            "OVModelForZeroShotImageClassification",
-            "OVSamModel",
-        ]
-    )
-else:
-    _import_structure["openvino"].extend(
-        [
-            "OVModelForAudioClassification",
-            "OVModelForAudioFrameClassification",
-            "OVModelForAudioXVector",
-            "OVModelForCausalLM",
-            "OVModelForCTC",
-            "OVModelForCustomTasks",
-            "OVModelForFeatureExtraction",
-            "OVModelForImageClassification",
-            "OVModelForMaskedLM",
-            "OVModelForPix2Struct",
-            "OVModelForQuestionAnswering",
-            "OVModelForSeq2SeqLM",
-            "OVModelForSpeechSeq2Seq",
-            "OVModelForTextToSpeechSeq2Seq",
-            "OVModelForVision2Seq",
-            "OVModelForVisualCausalLM",
-            "OVModelForSequenceClassification",
-            "OVModelForTokenClassification",
-            "OVConfig",
-            "OVModelOpenCLIPVisual",
-            "OVModelOpenCLIPText",
-            "OVModelOpenCLIPForZeroShotImageClassification",
-            "OVModelForZeroShotImageClassification",
-            "OVSamModel",
-        ]
-    )
 
 try:
     if not is_neural_compressor_available():
@@ -257,23 +254,21 @@ except OptionalDependencyNotAvailable:
         ]
     )
 else:
-    _import_structure["neural_compressor"].extend(
-        [
-            "INCConfig",
-            "INCModel",
-            "INCModelForCausalLM",
-            "INCModelForMaskedLM",
-            "INCModelForMultipleChoice",
-            "INCModelForQuestionAnswering",
-            "INCModelForSeq2SeqLM",
-            "INCModelForSequenceClassification",
-            "INCModelForTokenClassification",
-            "INCModelForVision2Seq",
-            "INCQuantizer",
-            "INCSeq2SeqTrainer",
-            "INCTrainer",
-        ]
-    )
+    _import_structure["neural_compressor"] = [
+        "INCConfig",
+        "INCModel",
+        "INCModelForCausalLM",
+        "INCModelForMaskedLM",
+        "INCModelForMultipleChoice",
+        "INCModelForQuestionAnswering",
+        "INCModelForSeq2SeqLM",
+        "INCModelForSequenceClassification",
+        "INCModelForTokenClassification",
+        "INCModelForVision2Seq",
+        "INCQuantizer",
+        "INCSeq2SeqTrainer",
+        "INCTrainer",
+    ]
 
 try:
     if not (is_neural_compressor_available() and is_diffusers_available()):
