@@ -47,6 +47,7 @@ from .utils import (
     clear_class_registry,
     deduce_diffusers_dtype,
     load_preprocessors,
+    resolve_model_type,
 )
 
 
@@ -323,7 +324,7 @@ def main_export(
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
 
-        model_type = config.model_type
+        model_type = resolve_model_type(config, task)
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             if custom_export_configs is None:
                 raise ValueError(
@@ -499,10 +500,7 @@ def main_export(
                     )
                 model.config.pad_token_id = pad_token_id
 
-        if hasattr(model.config, "export_model_type"):
-            model_type = model.config.export_model_type
-        else:
-            model_type = model.config.model_type
+        model_type = resolve_model_type(model.config, task)
 
         if original_task == "auto":
             synonyms_for_task = sorted(TasksManager.synonyms_for_task(task))

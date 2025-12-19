@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
 
+from . import _compat_transformers  # noqa: F401  Ensures legacy architectures get registered.
+
 from .utils import (
     is_diffusers_available,
     is_ipex_available,

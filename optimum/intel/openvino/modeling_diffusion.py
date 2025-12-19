@@ -50,7 +50,14 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import validate_hf_hub_args
 from openvino import Core
 from openvino._offline_transformations import compress_model_transformation
-from transformers import CLIPFeatureExtractor, CLIPTokenizer
+
+try:
+    from transformers import CLIPFeatureExtractor, CLIPTokenizer
+except ImportError:
+    from transformers import CLIPImageProcessor, CLIPTokenizer
+
+    CLIPFeatureExtractor = CLIPImageProcessor  # type: ignore
+
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import http_user_agent
 

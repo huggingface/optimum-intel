@@ -32,6 +32,23 @@ from .utils import (
     OV_XML_FILE_NAME,
 )
 
+try:
+    from transformers import utils as _transformers_utils
+except Exception:  # pragma: no cover - defensive fallback
+    _transformers_utils = None
+else:
+    try:
+        _ = _transformers_utils.TRANSFORMERS_CACHE
+    except AttributeError:
+        try:
+            from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE as _hf_cache_path
+        except Exception:
+            import os
+
+            _hf_cache_path = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+
+        _transformers_utils.TRANSFORMERS_CACHE = _hf_cache_path
+
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 

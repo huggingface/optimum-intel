@@ -23,7 +23,55 @@ from pathlib import Path
 from typing import Dict, List, Optional, Type, Union
 
 import torch
-from huggingface_hub import HfApi, HfFolder, hf_hub_download
+
+try:
+    from huggingface_hub import HfApi, HfFolder, hf_hub_download
+except ImportError:
+    # huggingface_hub>=0.26 stops re-exporting HfFolder from the package root
+    from huggingface_hub import HfApi, hf_hub_download
+
+    _get_token_fn = None
+    try:
+        from huggingface_hub import get_token as _get_token_fn  # type: ignore
+    except ImportError:
+        try:
+            from huggingface_hub._auth import get_token as _get_token_fn  # type: ignore
+        except ImportError:
+            _get_token_fn = None
+
+    if _get_token_fn is None:
+        try:
+            from huggingface_hub.utils import HF_TOKEN_PATH  # type: ignore
+        except ImportError:
+            HF_TOKEN_PATH = None  # type: ignore
+
+        def _read_token_from_fs() -> Optional[str]:
+            if HF_TOKEN_PATH is None:
+                return None
+            try:
+                token_path = Path(HF_TOKEN_PATH)
+                if token_path.exists():
+                    return token_path.read_text(encoding="utf-8").strip() or None
+            except Exception:
+                return None
+            return None
+
+        def _get_token_wrapper() -> Optional[str]:
+            return _read_token_from_fs()
+    else:
+
+        def _get_token_wrapper() -> Optional[str]:
+            try:
+                return _get_token_fn()
+            except Exception:
+                return None
+
+    class HfFolder:  # type: ignore
+        """Minimal token reader compatible with legacy HfFolder API."""
+
+        def get_token(self) -> Optional[str]:
+            return _get_token_wrapper()
+
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.hf_api import file_exists
 from transformers import CLIPConfig, PretrainedConfig, PreTrainedModel
