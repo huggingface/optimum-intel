@@ -4266,6 +4266,18 @@ class MambaOpenVINOConfig(TextDecoderOnnxConfig):
         return dummy_inputs
 
 
+
+@register_in_tasks_manager(
+    "hunyuan_v1_dense", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class HunyuanOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = "4.56.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+
+
 @register_in_tasks_manager(
     "gpt2",
     *[

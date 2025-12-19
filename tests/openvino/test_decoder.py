@@ -132,6 +132,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
+    if is_transformers_version(">=", "4.56.0"):
+        SUPPORTED_ARCHITECTURES += ("hunyuan_v1_dense",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -154,6 +157,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "decilm",
         "minicpm3",
         "deepseek",
+        "hunyuan_v1_dense",
     )
 
     EXPECTED_NUM_SDPA = {
@@ -224,6 +228,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mamba": 0,
         "falcon-mamba": 0,
         "arcee": 2,
+        "hunyuan_v1_dense": 2,
         "gpt_oss": 2,
         "gpt_oss_mxfp4": 2,
         "zamba2": 1,
@@ -262,6 +267,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(ov_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
+        # Remove token_type_ids if model doesn't support it
+        if model_arch in ["hunyuan_v1_dense"]:
+            tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -330,6 +338,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        # Remove token_type_ids if model doesn't support it
+        if model_arch in ["hunyuan_v1_dense"]:
+            tokens.pop("token_type_ids", None)
+
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
