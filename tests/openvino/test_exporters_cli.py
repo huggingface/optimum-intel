@@ -103,7 +103,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
-        ("feature-extraction", "vit-with-pooler"),
     ]
 
     if is_transformers_version(">=", "4.54.0") and is_openvino_version(">=", "2025.4.0"):
@@ -131,6 +130,13 @@ class OVCLIExportTestCase(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(
             [
                 ("text-generation-with-past", "bitnet"),
+            ]
+        )
+        
+    if is_transformers_version(">=", "4.56"):
+        SUPPORTED_ARCHITECTURES.extend(
+            [
+                ("feature-extraction", "dinov3_vit"),
             ]
         )
 
@@ -162,6 +168,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "zamba2": 2,
         "exaone4": 2,
         "bitnet": 2,
+        "dinov3_vit": 0,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
