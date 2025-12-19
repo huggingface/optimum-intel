@@ -70,7 +70,7 @@ from .utils import (
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
     clear_class_registry,
-    get_model_dtype,
+    _get_model_dtype,
     remove_none_from_dummy_inputs,
     save_config,
     save_preprocessors,
@@ -418,7 +418,7 @@ def export_pytorch(
                     # patch_everywhere breaks torch.ops namespace
                     del torch.ops._prepare_4d_causal_attention_mask_for_sdpa
                 dynamic_shapes = _get_dynamic_shapes_info(model, config, dummy_inputs)
-                _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, get_model_dtype(model))}
+                _export_kwargs = {"args": (), "kwargs": _normalize_dummy_inputs(dummy_inputs, _get_model_dtype(model))}
                 _export_kwargs["dynamic_shapes"] = dynamic_shapes
 
                 ep = torch.export.export_for_training(model, **_export_kwargs)
