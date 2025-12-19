@@ -4226,7 +4226,7 @@ class GPT2OpenVINOConfig(GPT2OnnxConfig):
 
 @register_in_tasks_manager("dinov3_vit", *["feature-extraction"], library_name="transformers")
 @register_in_tasks_manager("dinov3_convnext", *["feature-extraction"], library_name="transformers")
-class DinoV3OpenVINOConfig(ViTOnnxConfig):
+class DinoV3OpenVINOConfig(CLIPVisionModelOnnxConfig):
     MIN_TRANSFORMERS_VERSION = "4.56.0"
 
 

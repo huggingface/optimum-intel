@@ -71,6 +71,7 @@ from optimum.intel import (
     OVSentenceTransformer,
     OVModelForZeroShotImageClassification,
     OVSamModel,
+    OVModelForCustomTasks,
 )
 from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
@@ -966,6 +967,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionPipeline, "stable-diffusion", False),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl", False),
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
+        (OVModelForCustomTasks, "dinov3_vit", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "llava_next_video", False),
         (OVModelForVisualCausalLM, "minicpmv", True),
