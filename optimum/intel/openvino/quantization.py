@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import nncf
 import numpy as np
@@ -29,26 +29,22 @@ import openvino
 import requests
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from nncf.torch import register_module
-from nncf.torch.initialization import PTInitializingDataLoader
 from openvino import Core, Tensor
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from PIL import Image
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
-from transformers.pytorch_utils import Conv1D
-from transformers.utils import is_accelerate_available
 
 from optimum.quantization_base import OptimumQuantizer
-from optimum.utils.logging import warn_once
 
 from ..utils.import_utils import (
     DATASETS_IMPORT_ERROR,
+    PILLOW_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
     is_diffusers_available,
     is_nncf_version,
+    is_pillow_available,
     is_sentence_transformers_available,
 )
 from .configuration import (
@@ -59,6 +55,7 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
+    _merge_ignored_scopes,
 )
 from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
 from .modeling_base import OVBaseModel
@@ -85,7 +82,6 @@ if is_datasets_available():
 if is_sentence_transformers_available():
     from .modeling_sentence_transformers import OVSentenceTransformer
 
-register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
 logger = logging.getLogger(__name__)
@@ -115,21 +111,6 @@ class OVCalibrationDataset(UserDict):
             return self.data[item]
         except KeyError:
             raise AttributeError
-
-
-class OVDataLoader(PTInitializingDataLoader):
-    def get_inputs(self, dataloader_output) -> Tuple[Tuple, Dict]:
-        return (), dataloader_output
-
-    @property
-    def batch_size(self):
-        batch_size = self._data_loader.batch_size
-        if is_accelerate_available():
-            from accelerate.data_loader import DataLoaderStateMixin
-
-            if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
-                batch_size = self._data_loader.total_batch_size
-        return batch_size
 
 
 class InferRequestWrapper:
@@ -165,14 +146,31 @@ class InferRequestWrapper:
         self.apply_caching = apply_caching
         self.inference_result_mock = inference_result_mock
         self.tensor_cache = {}
+        self.stateful = len(request.query_state()) > 0
+        self._reset_state_called = False
 
     def collect_inputs(self, inputs):
+        if self.stateful:
+            if isinstance(inputs, dict) and is_nncf_version(">=", "2.20"):
+                from nncf.definitions import NNCF_DATASET_RESET_STATE_KEY
+
+                # To reflect the state resetting during NNCF calibration, we add a special key to the input dict
+                # Shallow copying is done on purpose: we only need to add a key to the top-level dict
+                inputs = inputs.copy()
+                # inputs[NNCF_DATASET_RESET_STATE_KEY] should be set to True for any input sample before which
+                # request.reset_state() was called, and to False otherwise
+                inputs[NNCF_DATASET_RESET_STATE_KEY] = self._reset_state_called
+            self._reset_state_called = False
+
         if not self.apply_caching or not isinstance(inputs, dict):
             self.collected_inputs.append(copy.deepcopy(inputs))
             return
 
         copied_inputs = {}
         for k, v in inputs.items():
+            if isinstance(v, bool):
+                copied_inputs[k] = v
+                continue
             data = v
             if isinstance(data, openvino.Tensor):
                 data = data.data
@@ -220,6 +218,10 @@ class InferRequestWrapper:
 
     def get_tensor(self, name: str):
         return Tensor(self.request.results[name])
+
+    def reset_state(self):
+        self.request.reset_state()
+        self._reset_state_called = True
 
     def __getattr__(self, attr):
         if attr in self.__dict__:
@@ -604,7 +606,7 @@ class OVCalibrationDatasetBuilder:
         batch_size: Optional[int] = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = False,
-    ) -> OVDataLoader:
+    ) -> DataLoader:
         """
         Wrap dataset into a dataloader.
         """
@@ -629,10 +631,10 @@ class OVCalibrationDatasetBuilder:
         dataloader = DataLoader(
             dataset, batch_size=batch_size, sampler=sampler, collate_fn=data_collator, drop_last=False
         )
-        return OVDataLoader(dataloader)
+        return dataloader
 
     def _prepare_decoder_calibration_data(
-        self, quantization_config: OVQuantizationConfigBase, dataloader: OVDataLoader
+        self, quantization_config: OVQuantizationConfigBase, dataloader: DataLoader
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data by collecting model inputs during inference.
@@ -655,23 +657,35 @@ class OVCalibrationDatasetBuilder:
         return OVCalibrationDataset(nncf.Dataset(collected_inputs))
 
     def _prepare_causal_lm_calibration_data(
-        self, config: OVQuantizationConfigBase, seqlen: int = 32
+        self, config: OVQuantizationConfigBase, seqlen: Optional[int] = None
     ) -> OVCalibrationDataset:
         """
         Prepares calibration data for causal language models. Relies on `optimum.gptq.data` module.
         """
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        # TODO: remove config.trust_remote_code from the condition once it is deprecated
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-        )
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
         nsamples = config.num_samples if config.num_samples else 128
         if isinstance(config.dataset, str):
             if config.dataset == "auto":
                 generated_data = nncf.data.generate_text_data(self.model, tokenizer, dataset_size=nsamples)
                 calibration_dataset = [tokenizer(text, return_tensors="pt") for text in generated_data]
+            elif config.dataset == "gsm8k":
+                seqlen = seqlen or 256
+                dataset = self.load_dataset(
+                    "openai/gsm8k",
+                    dataset_config_name="main",
+                    dataset_split="train",
+                    num_samples=nsamples,
+                    preprocess_function=lambda x: {"text": f"Question: {x['question']}\nAnswer: {x['answer']}"},
+                    preprocess_batch=False,
+                )
+                calibration_dataset = [
+                    tokenizer(text, return_tensors="pt", truncation=True, max_length=seqlen)
+                    for text in dataset["text"]
+                ]
             else:
+                seqlen = seqlen or 32
                 calibration_dataset = get_dataset(config.dataset, tokenizer, seqlen=seqlen, nsamples=nsamples)
         elif isinstance(config.dataset, list) and all(isinstance(it, str) for it in config.dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config.dataset[:nsamples]]
@@ -692,14 +706,16 @@ class OVCalibrationDatasetBuilder:
         Prepares calibration data for VLM pipelines.
         Currently, collects data only for a language model component.
         """
-        # TODO: remove config.trust_remote_code from the condition once it is deprecated
-        processor = AutoProcessor.from_pretrained(
-            config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-        )
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format("OVCalibrationDatasetBuilder._prepare_visual_causal_lm_calibration_data")
             )
+
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
             tokenizer_error = None
         except Exception as tokenizer_error:  # noqa: F841
             tokenizer = None
@@ -771,12 +787,6 @@ class OVCalibrationDatasetBuilder:
                         and input_dict["pixel_values"].dim() == 4
                         and input_dict["pixel_values"].shape[0] > 1
                     ):
-                        if is_nncf_version("<=", "2.18"):
-                            # TODO (Nikita): Remove once NNCF 2.19 is released.
-                            warn_once(
-                                logger,
-                                "If you are facing RAM OOM issues, please update to the latest NNCF develop version.",
-                            )
                         batch_size = input_dict["pixel_values"].shape[0]
                         for i in range(batch_size):
                             single_batch_input_dict = {}
@@ -820,10 +830,7 @@ class OVCalibrationDatasetBuilder:
                 component.request, collected_inputs[component_name], apply_caching=True
             )
         try:
-            # TODO: remove config.trust_remote_code from the condition once it is deprecated
-            processor = AutoProcessor.from_pretrained(
-                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
 
             # Download audio inputs beforehand to avoid possible connection issues
             num_samples = config.num_samples or 32
@@ -865,10 +872,7 @@ class OVCalibrationDatasetBuilder:
             def get_tokenizer():
                 if config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                # TODO: remove config.trust_remote_code from the condition once it is deprecated
-                return AutoTokenizer.from_pretrained(
-                    config.tokenizer, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-                )
+                return AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading dataset", total=num_samples))
@@ -960,10 +964,8 @@ class OVCalibrationDatasetBuilder:
             else:
                 if quantization_config.tokenizer is None:
                     raise ValueError("Please provide tokenizer for calibration via quantization_config.tokenizer.")
-                # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
                 tokenizer = AutoTokenizer.from_pretrained(
-                    quantization_config.tokenizer,
-                    trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
+                    quantization_config.tokenizer, trust_remote_code=self.trust_remote_code
                 )
             return tokenizer
 
@@ -1035,13 +1037,21 @@ class OVCalibrationDatasetBuilder:
         dataset: "Dataset",
         seq_len: int = 128,
     ) -> OVCalibrationDataset:
+        if not is_pillow_available():
+            raise ImportError(
+                PILLOW_IMPORT_ERROR.format(
+                    "OVCalibrationDatasetBuilder._prepare_text_image_encoder_model_calibration_data"
+                )
+            )
+
+        from PIL import Image
+
         self.model.compile()
 
         def get_processor():
-            # TODO: remove quantization_config.trust_remote_code from the condition once it is deprecated
             processor = AutoProcessor.from_pretrained(
                 quantization_config.processor,
-                trust_remote_code=self.trust_remote_code or quantization_config.trust_remote_code,
+                trust_remote_code=self.trust_remote_code,
             )
             return processor
 
@@ -1114,10 +1124,7 @@ class OVCalibrationDatasetBuilder:
         )
 
         try:
-            # TODO: remove config.trust_remote_code from the condition once it is deprecated
-            processor = AutoProcessor.from_pretrained(
-                config.processor, trust_remote_code=self.trust_remote_code or config.trust_remote_code
-            )
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
 
             num_samples = config.num_samples or 128
             for item in tqdm(islice(dataset, num_samples), total=num_samples, desc="Collecting calibration data"):
@@ -1349,91 +1356,7 @@ class OVQuantizer(OptimumQuantizer):
             dataset_was_built_from_config = True
             calibration_dataset = self.dataset_builder.build_from_quantization_config(quantization_config)
 
-        quantization_configs = {}
-        default_config = None
-        if (
-            isinstance(quantization_config, OVWeightQuantizationConfig)
-            and quantization_config.quant_method != OVQuantizationMethod.HYBRID
-        ):
-            #
-            # Regular (non-hybrid) weight-only quantization
-            #
-            if isinstance(self.model, OVModelForVisualCausalLM):
-                quantization_configs["lm_model"] = quantization_config
-                default_config = OVWeightQuantizationConfig(bits=8, sym=True)
-            else:
-                default_config = quantization_config
-        elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
-            #
-            # Hybrid/Full/Mixed quantization
-            #
-
-            if calibration_dataset is None:
-                raise ValueError("Calibration dataset is required to run data-aware quantization.")
-
-            if (
-                isinstance(quantization_config, OVWeightQuantizationConfig)
-                and quantization_config.quant_method == OVQuantizationMethod.HYBRID
-            ):
-                #
-                # Hybrid quantization
-                #
-                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    if len(calibration_dataset) > 1:
-                        raise ValueError("Calibration datasets for Diffusion models should contain only one value.")
-
-                    # Apply hybrid quantization to diffusion model
-                    diffusion_model_name = next(iter(calibration_dataset))
-                    diffusion_model = getattr(self.model, diffusion_model_name).model
-                    quantization_configs[diffusion_model_name] = _get_hybrid_mixed_quantization_config(
-                        diffusion_model, quantization_config, **kwargs
-                    )
-
-                    # Apply weight-only quantization to all SD OpenVINO models except UNet/Transformer
-                    quantization_config_copy = quantization_config.clone()
-                    quantization_config_copy.dataset = None
-                    quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    default_config = quantization_config_copy
-                else:
-                    # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
-                    quantization_configs["model"] = quantization_config
-            elif isinstance(quantization_config, OVQuantizationConfig):
-                #
-                # Full quantization
-                #
-                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    diffusion_model_name = next(iter(calibration_dataset))
-                    quantization_configs[diffusion_model_name] = quantization_config
-                    default_config = OVWeightQuantizationConfig(bits=8)
-                elif isinstance(self.model, OVModelForVisualCausalLM):
-                    quantization_configs["lm_model"] = quantization_config
-                    vision_embedding_ov_model_names = [
-                        f"{name}_model"
-                        for name, component in self.model.components.items()
-                        if isinstance(component, OVVisionEmbedding)
-                    ]
-                    for ov_model_name in vision_embedding_ov_model_names:
-                        quantization_configs[ov_model_name] = quantization_config
-                    default_config = OVWeightQuantizationConfig(bits=8, sym=True)
-                else:
-                    default_config = quantization_config
-            elif isinstance(quantization_config, OVMixedQuantizationConfig):
-                #
-                # Mixed quantization
-                #
-                if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
-                    raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
-
-                default_config = quantization_config
-            else:
-                raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
-
-        pipeline_quantization_config = (
-            quantization_config
-            if isinstance(quantization_config, OVPipelineQuantizationConfig)
-            else OVPipelineQuantizationConfig(quantization_configs, default_config=default_config)
-        )
-
+        pipeline_quantization_config = self._construct_pipeline_quantization_config(quantization_config)
         for ov_model_name in self.model.ov_models:
             config = pipeline_quantization_config.quantization_configs.get(
                 ov_model_name, pipeline_quantization_config.default_config
@@ -1442,9 +1365,6 @@ class OVQuantizer(OptimumQuantizer):
                 continue
             ov_model = self.model.ov_models[ov_model_name]
             nncf_dataset = calibration_dataset.get(ov_model_name, None) if calibration_dataset else None
-
-            if isinstance(config, OVWeightQuantizationConfig) and config.quant_method == OVQuantizationMethod.HYBRID:
-                config = _get_hybrid_mixed_quantization_config(ov_model, config, **kwargs)
 
             if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
                 # For datasets built from the quantization config, override num_samples per ov model
@@ -1474,11 +1394,12 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.clear_requests()
 
+        self.model._openvino_config = OVConfig(quantization_config=quantization_config)
+        self.model._set_ov_config_parameters()
         if save_directory is not None:
             save_directory = Path(save_directory)
             save_directory.mkdir(parents=True, exist_ok=True)
             self.model.save_pretrained(save_directory)
-            ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.Model, output_path: str):
@@ -1546,6 +1467,116 @@ class OVQuantizer(OptimumQuantizer):
             streaming,
             **dataset_kwargs,
         )
+
+    def _construct_pipeline_quantization_config(
+        self, quantization_config: OVQuantizationConfigBase
+    ) -> OVPipelineQuantizationConfig:
+        """
+        Constructs OVPipelineQuantizationConfig from a given quantization_config by applying default settings for each
+        OpenVINO model in the pipeline.
+
+        Args:
+            quantization_config (`OVQuantizationConfigBase`):
+                The quantization config to construct OVPipelineQuantizationConfig from.
+        Returns:
+            `OVPipelineQuantizationConfig`: The constructed pipeline quantization config.
+        """
+
+        if isinstance(quantization_config, OVPipelineQuantizationConfig):
+            pipeline_quantization_config = quantization_config
+        else:
+            default_config = None
+            quantization_configs = {}
+            if (
+                isinstance(quantization_config, OVWeightQuantizationConfig)
+                and quantization_config.quant_method != OVQuantizationMethod.HYBRID
+            ):
+                #
+                # Regular (non-hybrid) weight-only quantization
+                #
+                if isinstance(self.model, OVModelForVisualCausalLM):
+                    quantization_configs["lm_model"] = quantization_config
+                    default_config = OVWeightQuantizationConfig(bits=8, sym=True)
+                else:
+                    default_config = quantization_config
+            elif not isinstance(quantization_config, OVPipelineQuantizationConfig):
+                #
+                # Hybrid/Full/Mixed quantization
+                #
+
+                if (
+                    isinstance(quantization_config, OVWeightQuantizationConfig)
+                    and quantization_config.quant_method == OVQuantizationMethod.HYBRID
+                ):
+                    #
+                    # Hybrid quantization
+                    #
+                    if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                        # Apply hybrid quantization to diffusion model
+                        diffusion_model_name = "unet" if "unet" in self.model.components else "transformer"
+                        diffusion_model = getattr(self.model, diffusion_model_name).model
+                        quantization_configs[diffusion_model_name] = _get_hybrid_mixed_quantization_config(
+                            diffusion_model, quantization_config
+                        )
+
+                        # Apply weight-only quantization to all SD OpenVINO models except UNet/Transformer
+                        quantization_config_copy = quantization_config.clone()
+                        quantization_config_copy.dataset = None
+                        quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
+                        default_config = quantization_config_copy
+                    else:
+                        # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
+                        if len(self.model.ov_submodels) > 1 or "model" not in self.model.ov_submodels:
+                            raise NotImplementedError(
+                                f"Hybrid quantization is not supported for model type {type(self.model)}"
+                            )
+                        quantization_configs["model"] = quantization_config
+                elif isinstance(quantization_config, (OVQuantizationConfig, OVMixedQuantizationConfig)):
+                    #
+                    # Full & Mixed quantization
+                    #
+                    if is_diffusers_available() and isinstance(self.model, OVDiffusionPipeline):
+                        if isinstance(quantization_config, OVMixedQuantizationConfig):
+                            raise NotImplementedError("Mixed precision quantization isn't supported for diffusers.")
+                        diffusion_model_name = "unet" if "unet" in self.model.components else "transformer"
+                        quantization_configs[diffusion_model_name] = quantization_config
+                        default_config = OVWeightQuantizationConfig(bits=8)
+                    elif isinstance(self.model, OVModelForVisualCausalLM):
+                        quantization_configs["lm_model"] = quantization_config
+                        vision_embedding_ov_model_names = [
+                            f"{name}_model"
+                            for name, component in self.model.components.items()
+                            if isinstance(component, OVVisionEmbedding)
+                        ]
+                        for ov_model_name in vision_embedding_ov_model_names:
+                            quantization_configs[ov_model_name] = quantization_config
+                        default_config = OVWeightQuantizationConfig(bits=8, sym=True)
+                    else:
+                        default_config = quantization_config
+                else:
+                    raise ValueError(
+                        "Expected quantization config to be an instance of `OVQuantizationConfigBase`, "
+                        f"but got {type(quantization_config)}"
+                    )
+
+            pipeline_quantization_config = (
+                quantization_config
+                if isinstance(quantization_config, OVPipelineQuantizationConfig)
+                else OVPipelineQuantizationConfig(quantization_configs, default_config=default_config)
+            )
+
+        quantization_configs = pipeline_quantization_config.quantization_configs
+        for ov_model_name in quantization_configs:
+            q_config = quantization_configs[ov_model_name]
+            if (
+                isinstance(q_config, OVWeightQuantizationConfig)
+                and q_config.quant_method == OVQuantizationMethod.HYBRID
+            ):
+                quantization_configs[ov_model_name] = _get_hybrid_mixed_quantization_config(
+                    self.model.ov_models[ov_model_name], q_config
+                )
+
+        return pipeline_quantization_config
 
 
 def _weight_only_quantization(
@@ -1693,7 +1724,6 @@ def _collect_ops_with_weights(model):
 def _get_hybrid_mixed_quantization_config(
     model: openvino.Model,
     quantization_config: OVWeightQuantizationConfig,
-    **kwargs,
 ) -> OVMixedQuantizationConfig:
     """
     Returns mixed quantization config representing hybrid quantization
@@ -1721,14 +1751,12 @@ def _get_hybrid_mixed_quantization_config(
         ignored_scope=q_config_ignored_scope,
         num_samples=quantization_config.num_samples or 200,
         smooth_quant_alpha=-1,
-        **kwargs,
     )
 
     mixed_quantization_config = OVMixedQuantizationConfig(
         weight_quantization_config=wc_config,
         full_quantization_config=q_config,
         ignored_scope=quantization_config.ignored_scope,
-        **kwargs,
     )
 
     return mixed_quantization_config
@@ -1761,25 +1789,13 @@ def _mixed_quantization(
         The OpenVINO Runtime model with applied quantization.
     """
 
-    def merge_ignored_scopes(
-        ignored_scope_1: Union[Dict[str, List[str]], None], ignored_scope_2: Union[Dict[str, List[str]], None]
-    ) -> Dict[str, List[str]]:
-        if ignored_scope_1 is None:
-            return copy.deepcopy(ignored_scope_2) if ignored_scope_2 is not None else None
-        if ignored_scope_2 is None:
-            return copy.deepcopy(ignored_scope_1)
-        merged_ignored_scope = {}
-        for key in set(ignored_scope_1) | set(ignored_scope_2):
-            merged_ignored_scope[key] = list(set(ignored_scope_1.get(key, []) + ignored_scope_2.get(key, [])))
-        return merged_ignored_scope
-
     wc_config = quantization_config.weight_quantization_config.clone()
-    wc_config.ignored_scope = merge_ignored_scopes(wc_config.ignored_scope, quantization_config.ignored_scope)
+    wc_config.ignored_scope = _merge_ignored_scopes(wc_config.ignored_scope, quantization_config.ignored_scope)
     wc_dataset = dataset if wc_config.bits != 8 else None
     compressed_model = _weight_only_quantization(model, wc_config, wc_dataset, **kwargs)
 
     q_config = quantization_config.full_quantization_config.clone()
-    q_config.ignored_scope = merge_ignored_scopes(q_config.ignored_scope, quantization_config.ignored_scope)
+    q_config.ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, quantization_config.ignored_scope)
     quantized_model = _full_quantization(compressed_model, q_config, dataset, verify_not_optimized=False, **kwargs)
 
     return quantized_model

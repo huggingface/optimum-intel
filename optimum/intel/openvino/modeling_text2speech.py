@@ -393,7 +393,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             except Exception:
                 pass
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         model = _OVModelForSpeechT5ForTextToSpeech(
             encoder=encoder_model,
             decoder=decoder_model,
@@ -412,8 +412,16 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(
+                quantization_config, compile_only, enable_compilation, model_id, trust_remote_code
             )
 
         return model

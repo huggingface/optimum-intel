@@ -146,6 +146,13 @@ if _datasets_available:
     except importlib_metadata.PackageNotFoundError:
         _datasets_available = False
 
+_pillow_available = importlib.util.find_spec("PIL") is not None
+if _pillow_available:
+    try:
+        importlib_metadata.version("pillow")
+    except importlib_metadata.PackageNotFoundError:
+        _pillow_available = False
+
 
 _accelerate_available = importlib.util.find_spec("accelerate") is not None
 _accelerate_version = "N/A"
@@ -311,6 +318,10 @@ def is_timm_available():
 
 def is_datasets_available():
     return _datasets_available
+
+
+def is_pillow_available():
+    return _pillow_available
 
 
 def is_accelerate_available():
@@ -503,6 +514,11 @@ NEURAL_COMPRESSOR_IMPORT_ERROR = """
 DATASETS_IMPORT_ERROR = """
 {0} requires the datasets library but it was not found in your environment. You can install it with pip:
 `pip install datasets`. Please note that you may need to restart your runtime after installation.
+"""
+
+PILLOW_IMPORT_ERROR = """
+{0} requires the pillow library but it was not found in your environment. You can install it with pip:
+`pip install pillow`. Please note that you may need to restart your runtime after installation.
 """
 
 ACCELERATE_IMPORT_ERROR = """

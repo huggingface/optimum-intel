@@ -41,6 +41,7 @@ from .configuration import (
     OVDynamicQuantizationConfig,
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
+    _apply_default_ignored_scope_config,
     _quantization_config_from_dict,
     get_default_quantization_config,
 )
@@ -495,7 +496,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 model_save_dir=model_cache_path.parent,
             )
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             ov_model,
@@ -507,9 +508,15 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -595,26 +602,18 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         )
 
     @staticmethod
-    def _prepare_quantization_config(
+    def _resolve_default_quantization_config(
         model_name_or_path: str,
-        quantization_config: Optional[Union[OVQuantizationConfigBase, Dict]] = None,
-        load_in_8bit: bool = False,
-    ):
-        if not isinstance(quantization_config, (dict, OVQuantizationConfigBase, type(None))):
-            raise TypeError(
-                "Expected `quantization_config` to be either a dictionary, instance of `OVQuantizationConfigBase` object "
-                f"or None, got {type(quantization_config)}."
-            )
-
-        # Return int8 weight-only quantization config if quantization config is not provided and load_in_8bit=True
-        if not quantization_config and load_in_8bit:
-            return OVWeightQuantizationConfig(bits=8)
-
-        # Nothing to do if quantization_config is already an OVQuantizationConfigBase instance or None
-        if isinstance(quantization_config, (OVQuantizationConfigBase, type(None))):
-            return quantization_config
-
-        # Quantization config is a dictionary
+        quantization_config: Union[OVQuantizationConfigBase, Dict],
+    ) -> Union[OVQuantizationConfigBase, Dict]:
+        """
+        Tries to match the given model name or path to a recommended quantization config if available.
+        Arguments:
+            model_name_or_path (`str`):
+                The model name or path.
+            quantization_config (`OVQuantizationConfigBase` or `Dict`):
+                The quantization config to resolve.
+        """
         if quantization_config == {"bits": 4}:
             # If config is given as {"bits": 4}, use the default 4-bit quantization config
             if model_name_or_path in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
@@ -623,12 +622,17 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                     "Please export the model via optimum-cli with `--weight-format int4` argument. This way the "
                     "recommended quantization config will be used."
                 )
-            default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
-            quantization_config = _quantization_config_from_dict(default_config or _DEFAULT_4BIT_WQ_CONFIG)
+            quantization_config = (
+                get_default_quantization_config(model_name_or_path, weight_format="int4") or _DEFAULT_4BIT_WQ_CONFIG
+            )
         else:
-            quantization_config = _quantization_config_from_dict(quantization_config)
-            # Notify user if 4-bit quantization is requested and there is a recommended config for the model
-            if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.bits == 4:
+            # Notify a user if 4-bit quantization is requested and there is a recommended config for the model
+            if (
+                isinstance(quantization_config, OVWeightQuantizationConfig)
+                and quantization_config.bits == 4
+                or isinstance(quantization_config, dict)
+                and quantization_config.get("bits", None) == 4
+            ):
                 default_config = get_default_quantization_config(model_name_or_path, weight_format="int4")
                 if default_config is not None:
                     logger.info(
@@ -637,27 +641,40 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         return quantization_config
 
-    @staticmethod
-    def _apply_quantization(
-        model: "OVBaseModel",
+    def _preprocess_quantization_config(
+        self,
         quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        """
+        Preprocess quantization config before applying quantization.
+        Usually sets tokenizer/processor in quantization config if they are not already set.
+        Arguments:
+            quantization_config (`OVQuantizationConfigBase`):
+                The quantization config to preprocess.
+            model_name_or_path (`str`):
+                The model name or path.
+        """
+        return quantization_config
+
+    def _apply_quantization(
+        self,
+        quantization_config: Union[Dict, OVQuantizationConfigBase],
         compile_only: bool,
         compile_model: bool,
-        model_name_or_path: Optional[str] = None,
+        model_name_or_path: str,
         trust_remote_code: Optional[bool] = False,
     ):
         """
         Apply quantization to the model.
         Arguments:
-            model (`OVBaseModel`):
-                The model to quantize.
             quantization_config (`OVQuantizationConfigBase`):
                 The quantization config to use.
             compile_only (`bool`):
                 Whether the model was initialized with `compile_only=True`.
             compile_model (`bool`):
                 Whether to compile the model after quantization.
-            model_name_or_path (`str`, *optional*):
+            model_name_or_path (`str`):
                 The model name or path used to set tokenizer/processor in quantization config if they are not set.
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
@@ -670,19 +687,20 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                 "quantization is not supported with `compile_only` mode, please initialize model without this option"
             )
 
+        if isinstance(quantization_config, dict):
+            quantization_config = _quantization_config_from_dict(quantization_config)
+
         from optimum.intel.openvino.quantization import OVQuantizer
 
-        quantizer = OVQuantizer(model, trust_remote_code=trust_remote_code)
-        quantization_config_copy = quantization_config.clone()
-        # TODO: remove trust_remote_code from quantization config in v1.27.0
-        quantization_config_copy.trust_remote_code = trust_remote_code
-        if model_name_or_path is not None:
-            quantization_config_copy.tokenizer = str(quantization_config.tokenizer or model_name_or_path)
-            quantization_config_copy.processor = str(quantization_config.processor or model_name_or_path)
-        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+        quantizer = OVQuantizer(self, trust_remote_code=trust_remote_code)
+        quantization_config = self._preprocess_quantization_config(quantization_config, model_name_or_path)
+        quantization_config = quantizer._construct_pipeline_quantization_config(quantization_config)
+        quantization_config = _apply_default_ignored_scope_config(model_name_or_path, quantization_config)
+
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
         if compile_model:
-            model.compile()
+            self.compile()
 
     def _set_ov_config_parameters(self):
         if self.ov_config.get("PERFORMANCE_HINT") is None:

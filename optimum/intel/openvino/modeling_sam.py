@@ -14,7 +14,7 @@ from transformers.modeling_outputs import ModelOutput
 from transformers.models.sam.modeling_sam import SamImageSegmentationOutput, SamPositionalEmbedding
 
 from ...exporters.openvino.utils import save_config
-from .configuration import OVConfig, OVQuantizationConfigBase
+from .configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
 from .utils import (
     ONNX_PROMPT_ENCODER_MASK_DECODER_MODEL_NAME,
@@ -283,7 +283,7 @@ class OVSamModel(OVBaseModel):
                 model_save_dir,
             )
 
-        quantization_config = cls._prepare_quantization_config(model_id, quantization_config, load_in_8bit)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
             vision_encoder_model=vision_encoder_model,
@@ -296,9 +296,15 @@ class OVSamModel(OVBaseModel):
         )
 
         if quantization_config:
-            cls._apply_quantization(
-                model, quantization_config, compile_only, compile_model, model_id, trust_remote_code
-            )
+            if hasattr(config, "name_or_path"):
+                model_id = config.name_or_path
+            else:
+                logger.warning(
+                    "`model_id` could not be determined from the config. In the case there are default quantization "
+                    "configurations for this model, they will not be applied."
+                )
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
@@ -430,3 +436,13 @@ class OVSamModel(OVBaseModel):
             if model_has_dynamic_inputs(ov_model):
                 return True
         return False
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if quantization_config.processor is None:
+            quantization_config = quantization_config.clone()
+            quantization_config.processor = model_name_or_path
+        return quantization_config

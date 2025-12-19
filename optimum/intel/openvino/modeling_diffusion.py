@@ -63,8 +63,8 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_diffusers_version, is_openvino_version
-from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
+from ..utils.import_utils import is_diffusers_version
+from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel, OVModelHostMixin
 from .utils import (
@@ -73,7 +73,6 @@ from .utils import (
     OV_XML_FILE_NAME,
     TemporaryDirectory,
     _print_compiled_model_properties,
-    check_scale_available,
     model_has_dynamic_inputs,
     np_to_pt_generators,
 )
@@ -405,6 +404,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         trust_remote_code: bool = False,
+        export_model_id: Optional[str] = None,
         **kwargs,
     ):
         # same as DiffusionPipeline.from_pretraoned, if called directly, it loads the class in the config
@@ -524,15 +524,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             ov_config = kwargs.get("ov_config", {})
             device = kwargs.get("device", "CPU")
             vae_ov_conifg = {**ov_config}
-            if (
-                "GPU" in device.upper()
-                and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg
-                and is_openvino_version("<=", "2025.0")
-            ):
-                vae_model_path = models["vae_decoder"]
-                required_upcast = check_scale_available(vae_model_path)
-                if required_upcast:
-                    vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
             for name, path in models.items():
                 if name in kwargs:
                     models[name] = kwargs.pop(name)
@@ -555,10 +546,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     models[name] = cls.load_model(path) if path.is_file() else None
 
         name_or_path = config.get("_name_or_path", str(model_id))
-        quantization_config = cls._prepare_quantization_config(name_or_path, quantization_config, load_in_8bit)
-        if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
-            quantization_config = quantization_config.clone()
-            quantization_config.quant_method = OVQuantizationMethod.HYBRID
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         ov_pipeline = ov_pipeline_class(
             **models,
@@ -572,14 +560,21 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         ov_pipeline.register_to_config(_name_or_path=name_or_path)
 
         if quantization_config:
-            if quantization_config.dataset is not None and ov_pipeline_class.export_feature != "text-to-image":
+            quantization_dataset = (
+                quantization_config.dataset
+                if isinstance(quantization_config, OVQuantizationConfigBase)
+                else quantization_config.get("dataset", None)
+            )
+            if quantization_dataset is not None and ov_pipeline.export_feature != "text-to-image":
                 raise NotImplementedError(
                     f"Data-aware quantization is not supported for {cls.__name__} with "
                     f"{ov_pipeline_class.export_feature} task."
                 )
-
-            cls._apply_quantization(
-                ov_pipeline, quantization_config, compile_only, compile_model, trust_remote_code=trust_remote_code
+            # export_model_id is needed because _name_or_path is not necessarily present in the model config
+            model_id = export_model_id or name_or_path
+            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
+            ov_pipeline._apply_quantization(
+                quantization_config, compile_only, compile_model, model_id, trust_remote_code
             )
 
         return ov_pipeline
@@ -654,6 +649,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             quantization_config=quantization_config,
             load_in_8bit=load_in_8bit,
             compile_only=compile_only,
+            export_model_id=model_id,  # needed to resolve default quantization config during export
             **kwargs,
         )
 
@@ -707,6 +703,16 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         if batch_size.is_dynamic:
             return -1
         return batch_size.get_length()
+
+    def _preprocess_quantization_config(
+        self,
+        quantization_config: OVQuantizationConfigBase,
+        model_name_or_path: str,
+    ) -> OVQuantizationConfigBase:
+        if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dataset is not None:
+            quantization_config = quantization_config.clone()
+            quantization_config.quant_method = OVQuantizationMethod.HYBRID
+        return quantization_config
 
     def _reshape_unet(
         self,
@@ -1359,16 +1365,6 @@ class OVModelVaeEncoder(OVPipelinePart):
 
         return ModelOutput(**model_outputs)
 
-    def compile(self):
-        if (
-            "GPU" in self._device
-            and "INFERENCE_PRECISION_HINT" not in self.ov_config
-            and is_openvino_version("<", "2025.0")
-            and check_scale_available(self.model)
-        ):
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super().compile()
-
 
 class OVModelVaeDecoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
@@ -1406,16 +1402,6 @@ class OVModelVaeDecoder(OVPipelinePart):
             return model_outputs
 
         return ModelOutput(**model_outputs)
-
-    def compile(self):
-        if (
-            "GPU" in self._device
-            and "INFERENCE_PRECISION_HINT" not in self.ov_config
-            and is_openvino_version("<", "2025.0")
-            and check_scale_available(self.model)
-        ):
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super().compile()
 
 
 class OVModelVae(OVModelHostMixin):

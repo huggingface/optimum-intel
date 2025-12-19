@@ -100,7 +100,6 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
     _langchain_hf_available,
-    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
@@ -155,10 +154,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         self.assertGreaterEqual(num_blobs, 1)
-        if is_openvino_version("<", "2023.3"):
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
-        else:
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+        self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
 
         # Test compile only
 
@@ -232,9 +228,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
-            # the phi4 auto-processor can't be loaded in offline mode
-            # anymore due to an internal bug in transformers
+        if is_transformers_version(">=", "4.51"):
             model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = get_preprocessor(model_id)
@@ -1534,8 +1528,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
     def test_compare_output_attentions(self, model_arch):
-        if is_openvino_version(">=", "2025.4"):
-            self.skipTest("Skipping until ticket 175062 is resolved.")
+        self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()
@@ -1574,8 +1567,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES)
     def test_compare_output_hidden_states(self, model_arch):
-        if is_openvino_version(">=", "2025.4"):
-            self.skipTest("Skipping until ticket 175062 is resolved.")
+        self.skipTest("Skipping until ticket 175062 is resolved.")
         model_id = MODEL_NAMES[model_arch]
 
         image = self._get_sample_image()

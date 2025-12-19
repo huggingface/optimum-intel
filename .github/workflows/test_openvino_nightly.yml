@@ -43,6 +43,7 @@ jobs:
         nncf-version: ["nncf-stable"]
         test-pattern:
           [
+            "*genai*",
             "*export*",
             "*decoder*",
             "*seq2seq*",
