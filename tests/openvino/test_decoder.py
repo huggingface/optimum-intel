@@ -132,8 +132,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
 
+    if is_transformers_version(">=", "4.55.4"):
+        SUPPORTED_ARCHITECTURES += ("afmoe",)
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
+        "afmoe",
         "chatglm",
         "minicpm",
         "baichuan2",
@@ -157,6 +161,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     )
 
     EXPECTED_NUM_SDPA = {
+        "afmoe": 4,
         "bart": 2,
         "baichuan2": 2,
         "baichuan2-13b": 2,
