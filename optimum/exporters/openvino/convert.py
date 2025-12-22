@@ -412,7 +412,7 @@ def export_pytorch(
         with patcher:
             check_dummy_inputs_are_allowed(model, dummy_inputs)
             input_info = _get_input_info(model, config, dummy_inputs)
-            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "False") == "True"
+            torch_export = os.getenv("OPENVINO_DYNAMO_EXPORT", "false").lower() == "true"
             if torch_export:
                 if hasattr(torch.ops, "_prepare_4d_causal_attention_mask_for_sdpa"):
                     # patch_everywhere breaks torch.ops namespace
