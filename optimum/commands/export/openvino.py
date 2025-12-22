@@ -173,8 +173,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=str,
         default=None,
         help=(
-            "The dataset used for data-aware compression or quantization with NNCF. Can be a dataset name (e.g., 'wikitext') "
-            "or a string with options (e.g., 'wikitext2:seq_len=128'). Currently supported option: seq_len. "
+            "The dataset used for data-aware compression or quantization with NNCF. Can be a dataset name (e.g., 'wikitext2') "
+            "or a string with options (e.g., 'wikitext2:seq_len=128'). The only currently supported option is `seq_len` which represents a length of an input sample sequence (sentence). "
             "For language models you can use the one from the list ['auto','wikitext2','c4','c4-new','gsm8k']. With 'auto' the "
             "dataset will be collected from model's generations. "
             "For diffusion models it should be on of ['conceptual_captions',"
