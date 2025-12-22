@@ -441,28 +441,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         save_config(self.config, save_directory)
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        """
-        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
-        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
-
-        Arguments:
-            save_directory (`str` or `Path`):
-                The directory where to save the model files.
-        """
-        for name, model in self.ov_models.items():
-            dst_path = os.path.join(save_directory, self._ov_model_paths[name])
-            ov.save_model(model, dst_path, compress_to_fp16=False)
-
-        self._save_openvino_config(save_directory)
-        if self.generation_config is not None:
-            try:
-                self.generation_config.save_pretrained(save_directory)
-            except Exception as exception:
-                logger.warning(
-                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
-                )
-
     @classmethod
     def _from_pretrained(
         cls,

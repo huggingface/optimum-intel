@@ -417,20 +417,6 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     def ov_models(self) -> Dict[str, openvino.Model]:
         return {name: getattr(component, "model") for name, component in self.components.items()}
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        for ov_model_name, ov_model in self.ov_models.items():
-            dst_path = os.path.join(save_directory, self._ov_model_paths[ov_model_name])
-            openvino.save_model(ov_model, dst_path, compress_to_fp16=False)
-
-        self._save_openvino_config(save_directory)
-        if self.generation_config is not None:
-            try:
-                self.generation_config.save_pretrained(save_directory)
-            except Exception as exception:
-                logger.warning(
-                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
-                )
-
     @classmethod
     def _from_pretrained(
         cls,

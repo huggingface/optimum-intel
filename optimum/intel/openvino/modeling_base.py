@@ -434,8 +434,10 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only=True` mode, to save your model please initialize your model with compile_only=False"
             )
-        dst_path = os.path.join(save_directory, self._ov_model_paths["model"])
-        openvino.save_model(self.model, dst_path, compress_to_fp16=False)
+        for name, model in self.ov_models.items():
+            dst_path = os.path.join(save_directory, self._ov_model_paths[name])
+            openvino.save_model(model, dst_path, compress_to_fp16=False)
+
         generation_config = getattr(self, "generation_config", None)
         if generation_config is not None:
             try:
