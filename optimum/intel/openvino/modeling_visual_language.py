@@ -41,6 +41,7 @@ from .utils import (
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
     OV_VISION_EMBEDDINGS_MODEL_NAME,
     TemporaryDirectory,
+    classproperty,
 )
 
 
@@ -346,6 +347,17 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     additional_parts = []
     auto_model_class = transformers_auto_class
 
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        model_paths = {
+            "lm_model": OV_LANGUAGE_MODEL_NAME,
+            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
+        }
+        for part in cls.additional_parts:
+            model_paths[f"{part}_model"] = f"openvino_{part}_model.xml"
+        return model_paths
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -429,35 +441,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         """
         save_config(self.config, save_directory)
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        """
-        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
-        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
-
-        Arguments:
-            save_directory (`str` or `Path`):
-                The directory where to save the model files.
-        """
-        dst_file_names = {
-            "lm_model": OV_LANGUAGE_MODEL_NAME,
-            "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
-            "vision_embeddings_model": OV_VISION_EMBEDDINGS_MODEL_NAME,
-        }
-
-        for name, model in self.ov_models.items():
-            dst_file_name = dst_file_names.get(name, f"openvino_{name}.xml")
-            dst_path = os.path.join(save_directory, dst_file_name)
-            ov.save_model(model, dst_path, compress_to_fp16=False)
-
-        self._save_openvino_config(save_directory)
-        if self.generation_config is not None:
-            try:
-                self.generation_config.save_pretrained(save_directory)
-            except Exception as exception:
-                logger.warning(
-                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
-                )
-
     @classmethod
     def _from_pretrained(
         cls,
@@ -519,19 +502,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        model_file_names = {
-            "language_model": OV_LANGUAGE_MODEL_NAME,
-            "language_model_bin": OV_LANGUAGE_MODEL_NAME.replace(".xml", ".bin"),
-            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
-            "text_embeddings_bin": OV_TEXT_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
-            "vision_embeddings": OV_VISION_EMBEDDINGS_MODEL_NAME,
-            "vision_embeddings_bin": OV_VISION_EMBEDDINGS_MODEL_NAME.replace(".xml", ".bin"),
-        }
-
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        for part in model_cls.additional_parts:
-            model_file_names[part] = f"openvino_{part}_model.xml"
-            model_file_names[part + "_bin"] = f"openvino_{part}_model.bin"
+        model_file_names = model_cls._all_ov_model_paths.copy()
+        for k in tuple(model_file_names):
+            model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
         compile_only = kwargs.get("compile_only", False)
         if os.path.isdir(model_id):
             # Load model from a local directory
@@ -552,33 +526,33 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 file_names[name] = model_cache_path
             model_save_dir = Path(model_cache_path).parent
         if not compile_only:
-            language_model = model_cls.load_model(file_names["language_model"])
-            text_embeddings = model_cls.load_model(file_names["text_embeddings"])
-            vision_embeddings = model_cls.load_model(file_names["vision_embeddings"])
+            language_model = model_cls.load_model(file_names["lm_model"])
+            text_embeddings = model_cls.load_model(file_names["text_embeddings_model"])
+            vision_embeddings = model_cls.load_model(file_names["vision_embeddings_model"])
             for part in model_cls.additional_parts:
-                kwargs[part] = model_cls.load_model(file_names[part])
+                kwargs[part] = model_cls.load_model(file_names[f"{part}_model"])
         else:
             language_model = model_cls._compile_model(
-                file_names["language_model"],
+                file_names["lm_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             text_embeddings = model_cls._compile_model(
-                file_names["text_embeddings"],
+                file_names["text_embeddings_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             vision_embeddings = model_cls._compile_model(
-                file_names["vision_embeddings"],
+                file_names["vision_embeddings_model"],
                 kwargs.get("device", "CPU"),
                 kwargs.get("ov_config"),
                 model_save_dir,
             )
             for part in model_cls.additional_parts:
                 kwargs[part] = model_cls._compile_model(
-                    file_names[part],
+                    file_names[f"{part}_model"],
                     kwargs.get("device", "CPU"),
                     kwargs.get("ov_config"),
                     model_save_dir,
@@ -724,27 +698,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 ov_model = getattr(self, ov_model_name.replace("_model", "")).model
             ov_models[ov_model_name] = ov_model
         return ov_models
-
-    @property
-    def lm_model(self) -> ov.Model:
-        logger.warn(
-            "`lm_model` property is deprecated and will be removed in v1.27. Please use `.language_model.model` instead."
-        )
-        return self.language_model.model
-
-    @property
-    def text_embeddings_model(self) -> ov.Model:
-        logger.warn(
-            "`text_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.language_model.text_emb_model` instead."
-        )
-        return self.language_model.text_emb_model
-
-    @property
-    def vision_embeddings_model(self) -> ov.Model:
-        logger.warn(
-            "`vision_embeddings_model` property is deprecated and will be removed in v1.27. Please use `.vision_embeddings.model` instead."
-        )
-        return self.vision_embeddings.model
 
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
