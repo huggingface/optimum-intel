@@ -205,7 +205,7 @@ def main_export(
         device (`str`, defaults to `"cpu"`):
             The device to use to do the export. Defaults to "cpu".
         framework (`Optional[str]`, defaults to `pt`):
-            The framework to use for the ONNX export. Defaults to 'pt' for PyTorch.
+            The framework to use to load the model before conversion. Defaults to 'pt' for PyTorch.
         cache_dir (`Optional[str]`, defaults to `None`):
             Path indicating where to store cache. The default Hugging Face cache path will be used by default.
         trust_remote_code (`bool`, defaults to `False`):
@@ -238,11 +238,11 @@ def main_export(
             Experimental usage: override the default export config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
-            especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
+            especially useful when exporting a custom architecture that needs to be splitted in multiple components (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
-            Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
+            Shapes to use during inference. This argument allows to override the default shapes used during the OpenVINO export.
 
     Example usage:
     ```python
@@ -345,7 +345,7 @@ def main_export(
                 model_type, exporter="openvino", library_name=library_name
             )
             raise ValueError(
-                f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
+                f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the task {task} to be supported in the OpenVINO export for {model_type}."
             )
 
         # some models force flash_attn attention by default that does not support load model on cpu

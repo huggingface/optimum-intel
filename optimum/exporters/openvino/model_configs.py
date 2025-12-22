@@ -14,43 +14,94 @@
 
 import enum
 import logging
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.onnx.config import OnnxConfig, TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    AlbertOnnxConfig,
+    ASTOnnxConfig,
     BartOnnxConfig,
+    BeitOnnxConfig,
+    BertOnnxConfig,
     BlenderbotOnnxConfig,
     BlenderbotSmallOnnxConfig,
     BloomOnnxConfig,
+    CamembertOnnxConfig,
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
     CLIPTextWithProjectionOnnxConfig,
     CLIPVisionModelOnnxConfig,
     CodeGenOnnxConfig,
+    ConvBertOnnxConfig,
+    ConvNextOnnxConfig,
+    Data2VecAudioOnnxConfig,
+    Data2VecTextOnnxConfig,
+    Data2VecVisionOnnxConfig,
+    DebertaOnnxConfig,
+    DebertaV2OnnxConfig,
+    DeiTOnnxConfig,
+    DistilBertOnnxConfig,
+    ElectraOnnxConfig,
+    EsmOnnxConfig,
     FalconOnnxConfig,
+    FlaubertOnnxConfig,
     GemmaOnnxConfig,
     GPT2OnnxConfig,
+    GPTBigCodeOnnxConfig,
     GPTJOnnxConfig,
     GPTNeoOnnxConfig,
     GPTNeoXOnnxConfig,
+    HeliumOnnxConfig,
+    HubertOnnxConfig,
     IBertOnnxConfig,
+    LevitOnnxConfig,
     LlamaOnnxConfig,
     MarianOnnxConfig,
     MistralOnnxConfig,
+    MobileBertOnnxConfig,
+    MobileNetV1OnnxConfig,
+    MobileNetV2OnnxConfig,
+    MobileViTOnnxConfig,
+    MPNetOnnxConfig,
     MPTOnnxConfig,
+    NemotronOnnxConfig,
+    NystromformerOnnxConfig,
+    Olmo2OnnxConfig,
+    OPTOnnxConfig,
     PegasusOnnxConfig,
+    PerceiverOnnxConfig,
     PhiOnnxConfig,
+    Pix2StructOnnxConfig,
+    PoolFormerOnnxConfig,
+    ResNetOnnxConfig,
+    RobertaOnnxConfig,
+    RoFormerOnnxConfig,
+    SamOnnxConfig,
+    SegformerOnnxConfig,
+    SentenceTransformersTransformerOnnxConfig,
+    SEWDOnnxConfig,
+    SEWOnnxConfig,
+    SiglipOnnxConfig,
     SpeechT5OnnxConfig,
+    SqueezeBertOnnxConfig,
+    SwinOnnxConfig,
     T5OnnxConfig,
     UNetOnnxConfig,
+    UniSpeechOnnxConfig,
+    UniSpeechSATOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
     VisionEncoderDecoderOnnxConfig,
     VisionOnnxConfig,
+    ViTOnnxConfig,
+    Wav2Vec2ConformerOnnxConfig,
+    Wav2Vec2OnnxConfig,
+    WavLMOnnxConfig,
     WhisperOnnxConfig,
+    XLMOnnxConfig,
+    XLMRobertaOnnxConfig,
 )
 from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
@@ -79,6 +130,7 @@ from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
     BaichuanModelPatcher,
+    BigBirdPegasusModelPatcher,
     BlenderbotModelPatcher,
     BlenderbotSmallModelPatcher,
     BloomModelPatcher,
@@ -143,6 +195,30 @@ from .model_patcher import (
     XverseModelPatcher,
     Zamba2ModelPatcher,
 )
+
+
+COMMON_TEXT_TASKS = [
+    "feature-extraction",
+    "fill-mask",
+    "multiple-choice",
+    "question-answering",
+    "text-classification",
+    "token-classification",
+]
+
+
+COMMON_TEXT_GENERATION_TASKS = [
+    "feature-extraction",
+    "feature-extraction-with-past",
+    "text-generation",
+    "text-generation-with-past",
+]
+
+COMMON_TEXT2TEXT_GENERATION_TASKS = [
+    *COMMON_TEXT_GENERATION_TASKS,
+    "text2text-generation",
+    "text2text-generation-with-past",
+]
 
 
 logger = logging.getLogger(__name__)
@@ -213,23 +289,6 @@ def init_model_configs():
     if is_diffusers_available() and "text-to-video" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"] = {}
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["text-to-video"]["ltx-video"] = "LTXPipeline"
-
-    supported_model_types = [
-        "_SUPPORTED_MODEL_TYPE",
-        "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
-        "_TIMM_SUPPORTED_MODEL_TYPE",
-        "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
-    ]
-
-    for supported_models_config in supported_model_types:
-        supported_models = getattr(TasksManager, supported_models_config)
-        for model, export_configs in supported_models.items():
-            if "onnx" not in export_configs:
-                continue
-            onnx_config = export_configs["onnx"]
-            supported_models[model]["openvino"] = deepcopy(onnx_config)
-
-        setattr(TasksManager, supported_models_config, supported_models)
 
 
 init_model_configs()
@@ -2220,6 +2279,16 @@ class SanaTransformerOpenVINOConfig(UNetOpenVINOConfig):
         return inputs
 
 
+@register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    pass
+
+
 @register_in_tasks_manager("dcae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class DcaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
@@ -3011,10 +3080,10 @@ class Phi4MMConfigBehavior(str, enum.Enum):
 
 
 @register_in_tasks_manager(
-    "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 @register_in_tasks_manager(
-    "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+    "phi4mm", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
 )
 class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Phi4MMConfigBehavior]
@@ -3237,6 +3306,13 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             input_info = inputs.pop("audio_feature")
             inputs["input"] = input_info
         return inputs
+
+
+# @register_in_tasks_manager(
+#     "phi4_multimodal", *["image-text-to-text", "automatic-speech-recognition"], library_name="transformers"
+# )
+# class Phi4MultimodalOpenVINOConfig(Phi4MMOpenVINOConfig):
+#     MIN_TRANSFORMERS_VERSION = "4.51.0"
 
 
 class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
@@ -3648,6 +3724,22 @@ class BartOpenVINOConfig(BartOnnxConfig):
 
 
 @register_in_tasks_manager(
+    "bigbird_pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BigBirdPegasusOpenVINOConfig(BartOpenVINOConfig):
+    _MODEL_PATCHER = BigBirdPegasusModelPatcher
+
+
+@register_in_tasks_manager(
     "mbart",
     *[
         "feature-extraction",
@@ -3682,11 +3774,12 @@ class M2M100OpenVINOConfig(BartOpenVINOConfig):
 )
 @register_in_tasks_manager("deepseek", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class DeepseekOpenVINOConfig(MiniCPM3OpenVINOConfig):
+    MIN_TRANSFORMERS_VERSION = "4.46.0"
     MAX_TRANSFORMERS_VERSION = "4.53.3"
     _MODEL_PATCHER = DeepseekPatcher
 
 
-@register_in_tasks_manager("got_ocr2", *["image-to-text", "image-text-to-text"], library_name="transformers")
+@register_in_tasks_manager("got_ocr2", *["image-text-to-text"], library_name="transformers")
 class GotOCR2OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.49.0"
 
@@ -4558,3 +4651,325 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
+
+
+@register_in_tasks_manager("olmo2", *COMMON_TEXT_GENERATION_TASKS, library_name="transformers")
+class Olmo2OOpenVINOConfig(Olmo2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("opt", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "question-answering"])
+class OPTOpenVINOConfig(OPTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("helium", *COMMON_TEXT_GENERATION_TASKS)
+class HeliumOpenVINOConfig(HeliumOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("nemotron", *COMMON_TEXT_GENERATION_TASKS)
+class NemotronOpenVINOConfig(NemotronOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "gpt_bigcode", *[*COMMON_TEXT_GENERATION_TASKS, "text-classification", "token-classification"]
+)
+class GPTBigCodeOpenVINOConfig(GPTBigCodeOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "pix2struct",
+    *[
+        "image-to-text",
+        "image-to-text-with-past",
+    ],
+)
+class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("bert", *COMMON_TEXT_TASKS)
+class BertOpenVINOConfig(BertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("albert", *COMMON_TEXT_TASKS)
+class AlbertOpenVINOConfig(AlbertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("nystromformer", *COMMON_TEXT_TASKS)
+class NystromformerOpenVINOConfig(NystromformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("convbert", *COMMON_TEXT_TASKS)
+class ConvBertOpenVINOConfig(ConvBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("electra", *COMMON_TEXT_TASKS)
+class ElectraOpenVINOConfig(ElectraOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("roformer", *COMMON_TEXT_TASKS)
+class RoFormerOpenVINOConfig(RoFormerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("squeezebert", *COMMON_TEXT_TASKS)
+class SqueezeBertOpenVINOConfig(SqueezeBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilebert", *COMMON_TEXT_TASKS)
+class MobileBertOpenVINOConfig(MobileBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("xlm", *COMMON_TEXT_TASKS)
+class XLMOpenVINOConfig(XLMOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("xlm-roberta", *COMMON_TEXT_TASKS)
+class XLMRobertaOpenVINOConfig(XLMRobertaOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("distilbert", *COMMON_TEXT_TASKS)
+class DistilBertOpenVINOConfig(DistilBertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("roberta", *COMMON_TEXT_TASKS)
+class RobertaOpenVINOConfig(RobertaOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("camembert", *COMMON_TEXT_TASKS)
+class CamembertOpenVINOConfig(CamembertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("flaubert", *COMMON_TEXT_TASKS)
+class FlaubertOpenVINOConfig(FlaubertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "deberta",
+    *["feature-extraction", "fill-mask", "text-classification", "token-classification", "question-answering"],
+)
+class DebertaOpenVINOConfig(DebertaOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("deberta-v2", *COMMON_TEXT_TASKS)
+class DebertaV2OpenVINOConfig(DebertaV2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "data2vec-audio",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class Data2VecAudioOpenVINOConfig(Data2VecAudioOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("data2vec-text", *COMMON_TEXT_TASKS)
+class Data2VecTextOpenVINOConfig(Data2VecTextOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("data2vec-vision", *["feature-extraction", "image-classification"])
+class Data2VecVisionOpenVINOConfig(Data2VecVisionOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("perceiver", *["fill-mask", "text-classification", "image-classification"])
+class PerceiverOpenVINOConfig(PerceiverOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("esm", *["feature-extraction", "fill-mask", "text-classification", "token-classification"])
+class EsmOpenVINOConfig(EsmOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mpnet", *COMMON_TEXT_TASKS)
+class MPNetOpenVINOConfig(MPNetOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("beit", *["feature-extraction", "image-classification"])
+class BeitOpenVINOConfig(BeitOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("deit", *["feature-extraction", "image-classification", "masked-im"])
+class DeiTOpenVINOConfig(DeiTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("levit", *["feature-extraction", "image-classification"])
+class LevitOpenVINOConfig(LevitOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilevit", *["feature-extraction", "image-classification", "image-segmentation"])
+class MobileViTOpenVINOConfig(MobileViTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilenet_v1", *["feature-extraction", "image-classification"])
+class MobileNetV1OpenVINOConfig(MobileNetV1OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("mobilenet_v2", *["feature-extraction", "image-classification"])
+class MobileNetV2OpenVINOConfig(MobileNetV2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("poolformer", *["feature-extraction", "image-classification"])
+class PoolFormerOpenVINOConfig(PoolFormerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "segformer", *["feature-extraction", "image-classification", "image-segmentation", "semantic-segmentation"]
+)
+class SegformerOpenVINOConfig(SegformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("swin", *["feature-extraction", "image-classification", "masked-im"])
+class SwinOpenVINOConfig(SwinOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("vit", *["feature-extraction", "image-classification", "masked-im"])
+class ViTOpenVINOConfig(ViTOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("convnext", *["feature-extraction", "image-classification"])
+class ConvNextOpenVINOConfig(ConvNextOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("resnet", *["feature-extraction", "image-classification"])
+class ResNetOpenVINOConfig(ResNetOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "wav2vec2",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class Wav2Vec2OpenVINOConfig(Wav2Vec2OnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "wav2vec2-conformer",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class Wav2Vec2ConformerOpenVINOConfig(Wav2Vec2ConformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("hubert", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class HubertOpenVINOConfig(HubertOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("sew", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class SEWOpenVINOConfig(SEWOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("sew-d", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class SEWDOpenVINOConfig(SEWDOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "unispeech", *["feature-extraction", "automatic-speech-recognition", "audio-classification"]
+)
+class UniSpeechOpenVINOConfig(UniSpeechOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "unispeech-sat",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class UniSpeechSATOpenVINOConfig(UniSpeechSATOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "wavlm",
+    *[
+        "feature-extraction",
+        "automatic-speech-recognition",
+        "audio-classification",
+        "audio-frame-classification",
+        "audio-xvector",
+    ],
+)
+class WavLMOpenVINOConfig(WavLMOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("sam", *["feature-extraction"])
+class SamOpenVINOConfig(SamOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("siglip", *["feature-extraction", "zero-shot-image-classification"])
+class SiglipOpenVINOConfig(SiglipOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "transformer", *["feature-extraction", "sentence-similarity"], library_name="sentence_transformers"
+)
+class SentenceTransformersTransformerOpenVINOConfig(SentenceTransformersTransformerOnnxConfig):
+    pass
+
+
+@register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
+class ASTOpenVINOConfig(ASTOnnxConfig):
+    pass

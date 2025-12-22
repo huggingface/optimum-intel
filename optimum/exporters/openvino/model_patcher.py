@@ -7380,3 +7380,21 @@ class GraniteMoeHybridModelPatcher(ModelPatcher):
             else:
                 continue
             mamba_layer.forward = mamba_layer._orig_forward
+
+
+class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
+            logger.warning(
+                "BigBirdPegasus model is using block sparse attention, which is not supported in ONNX export. "
+                "The model will be exported with original full attention."
+            )
+            self._model.set_attention_type("original_full")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        if self.real_config._behavior == "encoder" and self._model.config.attention_type == "block_sparse":
+            self._model.set_attention_type("block_sparse")
