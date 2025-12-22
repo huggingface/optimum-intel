@@ -51,7 +51,7 @@ jobs:
             "*diffusion*",
             "*quantization*",
           ]
-        export_mode: [ "torch_script", "dynamo_export" ]
+        openvino_dynamo_export: ["False"]
 
         include:
           # stable openvino + nncf develop tests
@@ -62,10 +62,10 @@ jobs:
           - nncf-version: "nncf-develop"
             openvino-version: "openvino-nightly"
             test-pattern: "*{quantization,export}*"
-          - export_mode: "dynamo_export"
-            dynamo_export_bool: "True"
-          - export_mode: "torch_script"
-            dynamo_export_bool: "False"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            openvino_dynamo_export: "True"
+            test-pattern: "*"
 
     runs-on: ubuntu-22.04
 
