@@ -321,7 +321,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
     export_feature = "text2text-generation"
 
     @classproperty
-    def all_ov_model_paths(cls) -> Dict[str, str]:
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
         return {
             "encoder": OV_ENCODER_NAME,
             "decoder": OV_DECODER_NAME,
@@ -419,7 +419,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         for ov_model_name, ov_model in self.ov_models.items():
-            dst_path = os.path.join(save_directory, self.ov_model_paths[ov_model_name])
+            dst_path = os.path.join(save_directory, self._ov_model_paths[ov_model_name])
             openvino.save_model(ov_model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
@@ -454,10 +454,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         generation_config = kwargs.pop("generation_config", None)
         subfolder = kwargs.pop("subfolder", "")
 
-        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else cls.all_ov_model_paths["encoder"]
-        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else cls.all_ov_model_paths["decoder"]
+        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else cls._all_ov_model_paths["encoder"]
+        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else cls._all_ov_model_paths["decoder"]
         default_decoder_with_past_file_name = (
-            ONNX_DECODER_WITH_PAST_NAME if from_onnx else cls.all_ov_model_paths["decoder_with_past"]
+            ONNX_DECODER_WITH_PAST_NAME if from_onnx else cls._all_ov_model_paths["decoder_with_past"]
         )
         encoder_file_name = encoder_file_name or default_encoder_file_name
         decoder_file_name = decoder_file_name or default_decoder_file_name

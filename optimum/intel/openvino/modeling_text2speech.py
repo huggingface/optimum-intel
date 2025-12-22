@@ -186,7 +186,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
     """
 
     @classproperty
-    def all_ov_model_paths(cls) -> Dict[str, str]:
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
         return {
             "encoder": OV_ENCODER_NAME,
             "decoder": OV_DECODER_NAME,
@@ -283,7 +283,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        for ov_model_name, ov_model_path in self.ov_model_paths.items():
+        for ov_model_name, ov_model_path in self._ov_model_paths.items():
             dst_path = os.path.join(save_directory, ov_model_path)
             openvino.save_model(self.ov_models[ov_model_name], dst_path, compress_to_fp16=False)
 
@@ -319,7 +319,7 @@ class _OVModelForSpeechT5ForTextToSpeech(OVModelForTextToSpeechSeq2Seq):
         compile_only = kwargs.pop("compile_only", False)
         enable_compilation = kwargs.pop("compile", True)
 
-        model_file_names = cls.all_ov_model_paths.copy()
+        model_file_names = cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
 

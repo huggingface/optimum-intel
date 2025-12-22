@@ -348,7 +348,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     auto_model_class = transformers_auto_class
 
     @classproperty
-    def all_ov_model_paths(cls) -> Dict[str, str]:
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
         model_paths = {
             "lm_model": OV_LANGUAGE_MODEL_NAME,
             "text_embeddings_model": OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -451,7 +451,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 The directory where to save the model files.
         """
         for name, model in self.ov_models.items():
-            dst_path = os.path.join(save_directory, self.ov_model_paths[name])
+            dst_path = os.path.join(save_directory, self._ov_model_paths[name])
             ov.save_model(model, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
@@ -525,7 +525,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             token = use_auth_token
 
         model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        model_file_names = model_cls.all_ov_model_paths.copy()
+        model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
         compile_only = kwargs.get("compile_only", False)

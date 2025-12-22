@@ -553,10 +553,10 @@ class OVModelIntegrationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(loaded_model.ov_model_paths["encoder"] in folder_contents)
-            self.assertTrue(loaded_model.ov_model_paths["decoder"] in folder_contents)
-            self.assertTrue(loaded_model.ov_model_paths["postnet"] in folder_contents)
-            self.assertTrue(loaded_model.ov_model_paths["vocoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["encoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["decoder"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["postnet"] in folder_contents)
+            self.assertTrue(loaded_model._ov_model_paths["vocoder"] in folder_contents)
             model = OVModelForTextToSpeechSeq2Seq.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
@@ -1641,13 +1641,13 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(loaded_model.text_model.all_ov_model_paths["model"] in folder_contents)
+            self.assertTrue(loaded_model.text_model._all_ov_model_paths["model"] in folder_contents)
             self.assertTrue(
-                loaded_model.text_model.all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
+                loaded_model.text_model._all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
             )
-            self.assertTrue(loaded_model.visual_model.all_ov_model_paths["model"] in folder_contents)
+            self.assertTrue(loaded_model.visual_model._all_ov_model_paths["model"] in folder_contents)
             self.assertTrue(
-                loaded_model.visual_model.all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
+                loaded_model.visual_model._all_ov_model_paths["model"].replace(".xml", ".bin") in folder_contents
             )
             model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
 

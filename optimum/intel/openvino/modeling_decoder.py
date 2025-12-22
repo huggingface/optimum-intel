@@ -270,7 +270,7 @@ class OVBaseDecoderModel(OVModel, PushToHubMixin):
             if self._pkv_precision == Type.f32
             else self._get_model_with_updated_pkv_precision(self.model.clone(), Type.f32)
         )
-        dst_path = os.path.join(save_directory, self.ov_model_paths["model"])
+        dst_path = os.path.join(save_directory, self._ov_model_paths["model"])
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
         if self.generation_config is not None:
@@ -851,7 +851,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     ):
         generation_config = kwargs.pop("generation_config", None)
         model_path = Path(model_id)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls.all_ov_model_paths["model"]
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else cls._all_ov_model_paths["model"]
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(

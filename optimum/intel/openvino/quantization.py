@@ -1410,11 +1410,11 @@ class OVQuantizer(OptimumQuantizer):
 
                     # Unload the model to allow Python's garbage collector to free its memory and file system -- to
                     # delete corresponding model files
-                    self.model.unload_ov_model(quantized_model)
+                    self.model._unload_ov_model(quantized_model)
                     del quantized_model
                     del ov_model
 
-                    ov_model_path = save_directory / Path(self.model.ov_model_paths[ov_model_name])
+                    ov_model_path = save_directory / Path(self.model._ov_model_paths[ov_model_name])
                     if not ov_model_path.exists():
                         raise FileNotFoundError(f"Expected to find model file at {ov_model_path} to overwrite it.")
                     ov_model_path.unlink()
