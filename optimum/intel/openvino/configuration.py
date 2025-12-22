@@ -472,7 +472,8 @@ _DEFAULT_INT8_FQ_CONFIGS = {
     },
 }
 
-
+# Default quantization ignored scope configs. For each model id it is a dict of `{ov_model_name: ignored_scope}`.
+# For possible values of `ov_model_name` please take a look at `_ov_model_names` property of corresponding OVModel class.
 _DEFAULT_IGNORED_SCOPE_CONFIGS = {
     "Qwen/Qwen3-Embedding-0.6B": {
         "model": {
@@ -493,6 +494,8 @@ _DEFAULT_IGNORED_SCOPE_CONFIGS = {
 }
 
 
+# Default dynamic quantization group size configs. For each model id it is a dict of `{ov_model_name: group_size}`.
+# For possible values of `ov_model_name` please take a look at `_ov_model_names` property of corresponding OVModel class.
 _DEFAULT_DYNAMIC_QUANTIZATION_GROUP_SIZE_CONFIGS = {"Qwen/Qwen2.5-Coder-3B-Instruct": {"model": 128}}
 
 
