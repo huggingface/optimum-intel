@@ -39,6 +39,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot",
         "blenderbot-small",
         "bloom",
+        "chatglm",
         "codegen",
         "codegen2",
         "gpt2",
@@ -52,6 +53,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mpt",
         "opt",
         "pegasus",
+        "qwen",
         "phi",
         "internlm2",
         "orion",
@@ -66,6 +68,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
+        "chatglm4",
         "decilm",
         "gemma",
         "olmo",
@@ -128,9 +131,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     if is_transformers_version(">=", "4.55.0"):
         SUPPORTED_ARCHITECTURES += ("gpt_oss", "gpt_oss_mxfp4")
-
-    if is_transformers_version("<", "4.56.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen", "chatglm", "chatglm4")
 
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -650,12 +650,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gen_configs = [
             beam_search_gen_config,
             beam_sample_gen_config,
-            # group_beam_search_gen_config,
-            # constrained_beam_search_gen_config,
+            group_beam_search_gen_config,
+            constrained_beam_search_gen_config,
         ]
-        if is_transformers_version("<", "4.57.0"):
-            # currently broken in transformers == 4.57.*
-            gen_configs.extend([group_beam_search_gen_config, constrained_beam_search_gen_config])
 
         set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
